@@ -10,6 +10,8 @@ out="$(cd "$out" && pwd)"
 version=$(jq -r .version plugins/o-harness/.claude-plugin/plugin.json)
 [ "$version" = "$(jq -r .version plugins/o-harness/.codex-plugin/plugin.json)" ] || {
   echo "package: the Claude and Codex plugin versions differ" >&2; exit 2; }
+# OH activates updates by comparing plain numeric versions; pre-release suffixes would not order.
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "package: version must be X.Y.Z, got $version" >&2; exit 2; }
 
 ./oh build-plugin "$out/claude/o-harness" --host claude >/dev/null
 ./oh build-plugin "$out/codex/o-harness" --host codex >/dev/null

@@ -87,8 +87,8 @@ delete `~/.local/share/o-harness` after uninstalling from both hosts.
 
 ## Releasing (maintainers)
 
-1. Set the same `version` in both `plugins/o-harness/.claude-plugin/plugin.json` and
-   `plugins/o-harness/.codex-plugin/plugin.json`, and merge that change to `main`.
+1. Set the same plain `X.Y.Z` version in both `plugins/o-harness/.claude-plugin/plugin.json`
+   and `plugins/o-harness/.codex-plugin/plugin.json`, and merge that change to `main`.
 2. Tag the merge commit and push the tag:
 
    ```sh
