@@ -46,11 +46,12 @@ def binary_identity(path,root=None):
 
 
 def locate(host,root=None):
-    """Find the native binary behind the host command on PATH; the human still runs trust-host."""
+    """Find the native binary behind the host command on PATH, outside the project."""
     import shutil
     search=subscription_env(root)['PATH'] if root else os.environ.get('PATH','')
     found=shutil.which(host,path=search)
-    if not found:raise Refused(f'{host} was not found on PATH'+(' outside the project' if root else '')+'; pass its absolute native binary path')
+    if not found:raise Refused(f'{host} was not found on PATH'+(' outside the project' if root else '')+
+        f'. Install it, or name its native binary with: oh trust-host {host} <absolute-path>')
     path=Path(found).resolve()
     with path.open('rb') as stream:script=stream.read(2)==b'#!'
     if script and host=='codex':
@@ -60,27 +61,34 @@ def locate(host,root=None):
     return path
 
 
-def trust(host,path=None,root=None):
+def trust(host,path=None,root=None,*,pinned=None):
+    """Record a host binary after the identity and version checks. A named path stays pinned."""
     from .storage import state_home
     if host not in ('codex','claude'):raise Refused('Unsupported host')
     identity=binary_identity(path or locate(host,root),root)
     probe=subprocess.run([identity['path'],'--version'],capture_output=True,text=True,timeout=10,env=subscription_env(root))
     if probe.returncode or ('codex-cli' if host=='codex' else 'Claude Code') not in probe.stdout:raise Refused('Unrecognized host version')
-    atomic_json(state_home()/'hosts'/(host+'.json'),identity)
-    return identity
+    record=identity|{'pinned':path is not None if pinned is None else pinned}
+    atomic_json(state_home()/'hosts'/(host+'.json'),record)
+    return record
 
 
 def executable(host,root=None):
+    """Resolve the host binary on every use. Host CLIs update themselves, so a changed binary is
+    checked and recorded again automatically instead of waiting for a manual trust step."""
     from .storage import state_home,read_json
+    import sys
     if host not in ('codex','claude'):raise Refused('Unsupported host')
     record=state_home()/'hosts'/(host+'.json')
-    if not record.exists():raise Refused(f'{host}: authorize its installed native binary with oh trust-host {host} <absolute-binary-path>')
-    expected=read_json(record)
-    try:current=binary_identity(expected['path'],root)
-    except FileNotFoundError:current=None
-    # Host CLIs update themselves; each new binary needs a fresh, explicit trust.
-    if current!=expected:raise Refused(f'{host} changed since you trusted it. Run: oh trust-host {host}')
-    return expected['path']
+    saved=read_json(record) if record.exists() else None
+    pinned=bool(saved and saved.get('pinned'))
+    path=saved['path'] if pinned else locate(host,root)
+    try:same=saved and binary_identity(path,root)=={'path':saved['path'],'sha256':saved['sha256']}
+    except FileNotFoundError:raise Refused(f'The {host} binary you pinned is gone: {path}. Run: oh trust-host {host}') from None
+    if same:return saved['path']
+    current=trust(host,path,root,pinned=pinned)
+    if saved:print(f'OH: {host} changed; now using {current["path"]}',file=sys.stderr)
+    return current['path']
 
 
 def subscription_env(root=None):

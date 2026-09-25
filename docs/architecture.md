@@ -31,7 +31,7 @@ starts a fresh worker, runs the checks, starts an independent reviewer on the ex
 and commits only the reviewed tree, with an `OH-Evidence` trailer. `oh pr-summary` checks
 that trailer against every commit on the branch.
 
-Workers run through the trusted host CLI with API-key variables removed. They can't write
+Workers run through the checked host CLI with API-key variables removed. They can't write
 OH state or Git internals; reviewers are read-only. Pause and stop share a lock with commit,
 so a stop never leaves a half-recorded task.
 

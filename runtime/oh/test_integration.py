@@ -40,3 +40,33 @@ class IntegrationTest(unittest.TestCase):
             bin_dir=Path(tmp)/'bin';bin_dir.mkdir();(bin_dir/'codex').symlink_to(wrapper)
             with patch.dict(os.environ,{'PATH':str(bin_dir)}):
                 self.assertEqual(locate('codex',Path(tmp)/'elsewhere'),native.resolve())
+
+    def test_host_binary_is_trusted_automatically_and_followed_across_updates(self):
+        from . import hosts
+        from .storage import read_json
+        binaries={'claude':'v1'}
+        def identity(path,root=None):
+            if Path(path).name=='gone':raise FileNotFoundError(path)
+            return {'path':str(path),'sha256':binaries.get(Path(path).name,'pinned')}
+        probe=subprocess.CompletedProcess([],0,'2.1.0 (Claude Code)','')
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp}),\
+             patch.object(hosts,'binary_identity',side_effect=identity),patch.object(hosts,'locate',return_value=Path('/opt/claude')),\
+             patch.object(hosts.subprocess,'run',return_value=probe) as run:
+            record=Path(tmp)/'hosts/claude.json'
+            self.assertEqual(hosts.executable('claude'),'/opt/claude')
+            self.assertEqual(read_json(record)['sha256'],'v1');self.assertFalse(read_json(record)['pinned'])
+            self.assertEqual(hosts.executable('claude'),'/opt/claude');self.assertEqual(run.call_count,1)
+            # A self-updated CLI is checked again and recorded without a manual step.
+            binaries['claude']='v2'
+            self.assertEqual(hosts.executable('claude'),'/opt/claude');self.assertEqual(read_json(record)['sha256'],'v2')
+            self.assertEqual(run.call_count,2)
+            # A version check failure refuses the new binary.
+            binaries['claude']='v3';run.return_value=subprocess.CompletedProcess([],0,'something else','')
+            with self.assertRaises(Refused):hosts.executable('claude')
+            self.assertEqual(read_json(record)['sha256'],'v2')
+            # An explicitly named path stays pinned, and a missing pin is refused clearly.
+            run.return_value=probe
+            hosts.trust('claude',Path('/custom/pinned'))
+            self.assertEqual(hosts.executable('claude'),'/custom/pinned')
+            (record).write_text('{"path":"/custom/gone","sha256":"x","pinned":true}')
+            with self.assertRaises(Refused):hosts.executable('claude')
