@@ -11,88 +11,118 @@
 
 <h1>o-harness</h1>
 
-<p><strong>Your agents. Your standards.</strong></p>
+<h3>Approve the plan. Close the laptop. Come back to reviewed code.</h3>
 
-<p>An agentic development harness for independent developers.</p>
+<p>Your agents. Your standards. A harness for developers who build alone.</p>
 
 </div>
 
-You're one developer with a product to build and an AI subscription. Asking the chat to
-"build X" gets you code fast, but not code you'd stand behind. OH adds the structure a good
-team would bring: every task gets a fresh agent, has to pass your checks, and is reviewed by
-an independent reviewer until it's right. Only then is it committed.
+---
 
-**Plan once, then walk away.** Agree on a plan, approve it once, and OH works through the
-whole batch in order while you do something else. You come back to reviewed commits, ready
-for a pull request, not a chat to babysit.
+You're building a product on your own. Your AI writes code faster than you can read it, so
+every day you pick one of two bad options: **babysit the chat**, or **merge code you never
+really checked.**
 
-**Match it to your subscription.** On a bigger plan, raise the limits so a 15-task design
-runs in one go, with up to 12 review rounds per task approved in advance. OH uses only the
-rounds a task needs, and stops to ask you only when something actually needs you.
+OH is the third option. It gives your agent the process a good engineering team runs on.
+Every task gets a fresh agent. Every change has to pass your tests. Every result goes to an
+independent reviewer that sends it back until it's right. You approve the plan once, and
+OH works through it task by task while you sleep, work, or start on the next idea.
+
+## What a batch looks like
+
+```text
+you   /oh-deliver the 15 tasks from the billing design
+oh    15 tasks ready · up to 12 reviews each · checks: test, lint, typecheck
+      To approve, type:  $o-harness:oh-deliver request:9f3c…
+
+you   $o-harness:oh-deliver request:9f3c…
+
+      ☕  you go live your life
+
+oh    task  1  invoice model     checks ✓   review ✓                       committed
+oh    task  2  invoice PDFs      checks ✓   review ✗ 1 blocker → fixed ✓   committed
+      …
+oh    task 15  receipt emails    checks ✓   review ✓                       committed
+oh    15/15 done  →  continue · pr · stop
+```
+
+<sub>Simplified. Real runs show the same steps with more detail.</sub>
+
+## Why not just keep chatting?
+
+| Chatting with an agent | With OH |
+|---|---|
+| One long chat that gets slower and sloppier | A fresh agent for every task |
+| The agent grades its own homework | A separate reviewer with fresh eyes |
+| "Done" means it looks done | Done means your checks pass and the review is clean |
+| You approve every step | You approve the plan once |
+| Surprise API bills | Your Claude or ChatGPT subscription, nothing else |
+| You hope it's fine | Every commit is linked to its review evidence |
+
+## Get started
+
+```sh
+# Claude Code
+claude plugin marketplace add pmoreiracc/o-harness#dist
+claude plugin install o-harness@o-harness
+
+# Codex
+codex plugin marketplace add pmoreiracc/o-harness --ref dist
+codex plugin add o-harness@o-harness
+```
+
+Open your project in a new session and type `/oh-propose <your idea>` (Codex: `$oh-propose`).
+The first time, OH sets itself up and registers your project with the agent's help.
+[Full install guide](docs/installation.md).
+
+Needs macOS or Linux, Python 3.11+, Git, and Claude Code or Codex on a subscription.
+
+## Turn it up to your plan
+
+By default a batch runs 5 tasks with up to 3 review rounds each. On a bigger subscription,
+let it go further. This runs a 15-task design in one go, with 12 review rounds per task
+approved in advance:
 
 ```json
 {"tasks_per_batch": 15, "review_rounds": 12}
 ```
 
-**Stay in charge.** Nothing starts without your typed approval, the approved scope can't
-grow, and you do the merging. OH runs on your Claude or ChatGPT subscription through the
-official CLIs, never on paid API calls, and adds no OH files to your repository.
+OH only uses the rounds a task needs. It stops early only when something really needs you:
+a finding it won't decide for you, or a task that keeps failing.
+[All settings](docs/configuration.md).
 
-*O* means *the* in Portuguese: **O harness**, the harness. Say “oh”.
+## You stay in charge
 
-## How it works
-
-1. Optionally plan with `/oh-propose` or `/oh-design`. Then run `/oh-deliver` and agree on
-   the tasks with your agent.
-2. Approve that exact batch by typing the trigger OH gives you.
-3. For each task, OH starts a fresh worker, runs your project's checks, gets an independent
-   review, fixes blockers and commits the reviewed result. Other findings wait for you.
-4. When a batch ends, choose **continue** (if tasks remain), **pr** or **stop**. You merge.
-
-Version 0.3. Tested on macOS with Claude Code and Codex; the test suite also runs on Linux.
-Windows isn't supported yet.
-
-## Quick start
-
-You need macOS or Linux, Python 3.11+, Git, and Claude Code or Codex signed in with a
-subscription. To change the limits, see [configuration](docs/configuration.md).
-
-**Claude Code**
-
-```sh
-claude plugin marketplace add pmoreiracc/o-harness#dist
-claude plugin install o-harness@o-harness
-```
-
-**Codex**
-
-```sh
-codex plugin marketplace add pmoreiracc/o-harness --ref dist
-codex plugin add o-harness@o-harness
-```
-
-Then start a new session in your project, run `/oh-propose <idea>` (Codex: `$oh-propose`)
-and follow [first use in a project](docs/installation.md#first-use-in-a-project).
+- **Nothing runs until you type the approval.** The agent can't approve for you.
+- **The approved scope can't grow.** New work needs a new approval.
+- **OH never merges.** You do.
+- **Stop anytime** with `/oh-pause`, `/oh-resume` or `/oh-stop`. Work and evidence are kept.
+- **Your repo stays yours.** OH adds no files to it; its state lives in `~/.local/share/o-harness`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/oh-propose <idea>` | Read-only proposal: options and a recommendation |
-| `/oh-design <idea>` | Read-only, reviewed task plan |
-| `/oh-deliver` | Prepare and run an agreed batch of tasks |
-| `/oh-pause`, `/oh-resume`, `/oh-stop` | Control a running batch |
+| `/oh-propose <idea>` | Options and a recommendation. Read-only. |
+| `/oh-design <idea>` | A reviewed task plan. Read-only. |
+| `/oh-deliver` | Agree on tasks, approve them, and let OH build them |
+| `/oh-pause` · `/oh-resume` · `/oh-stop` | Control a running batch |
 
-If another plugin uses the same short name, use the full name, such as `/o-harness:oh-design`.
+## See how it's going
 
-## Docs
+A local dashboard at <http://localhost:4318> shows tokens per task, review rounds, how often
+the first review passes, and time per task, so you can tell whether a settings change
+actually helped. Opening it never calls a model. [More](docs/analytics.md).
 
-- [Installation and updates](docs/installation.md)
-- [Using OH](docs/usage.md)
-- [Configuration](docs/configuration.md)
-- [Dashboard and data](docs/analytics.md)
-- [Architecture](docs/architecture.md)
-- [Contributing](CONTRIBUTING.md)
+## Learn more
 
-Planned work is tracked in [GitHub Issues](https://github.com/pmoreiracc/o-harness/issues).
-OH is released under the [MIT License](LICENSE).
+[Install and update](docs/installation.md) · [Using OH](docs/usage.md) ·
+[Configuration](docs/configuration.md) · [Dashboard](docs/analytics.md) ·
+[Architecture](docs/architecture.md) · [Contributing](CONTRIBUTING.md)
+
+**Status:** version 0.3. Tested on macOS with Claude Code and Codex; the test suite also runs
+on Linux. Windows support is [coming](https://github.com/pmoreiracc/o-harness/issues/8).
+
+**The name:** *o* means *the* in Portuguese. **O harness**, the harness. Say “oh”.
+
+[MIT License](LICENSE)
