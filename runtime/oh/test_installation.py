@@ -59,6 +59,10 @@ class InstallationTest(unittest.TestCase):
             # An older plugin still installed in another host never downgrades the shared core.
             self.assertEqual(use(2),'3')
             self.assertEqual(use(1),'3')
+            # The same rule holds under the install lock, for hosts racing the launcher's check.
+            older=subprocess.run([str(plugins[2].parent/'core/oh'),'setup','--if-newer'],env=env,capture_output=True,text=True)
+            self.assertEqual(older.returncode,0,older.stderr)
+            self.assertEqual(read_json(base/'state/runtime/active.json')['revision'][0],'3')
 
     def test_bare_choices_never_install_the_bundled_core(self):
         with tempfile.TemporaryDirectory() as tmp:

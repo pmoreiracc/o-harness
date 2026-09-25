@@ -14,10 +14,11 @@
 
 ## Install layout
 
-A built plugin contains the engine. On first use, the plugin's launcher copies it to
-`~/.local/share/o-harness/versions/<commit>` and marks it active. Each run records its
-version and keeps using it until it ends, so an update never changes a running batch.
-Both hosts share the installed engine and the data folder.
+A built plugin contains the engine. On the first OH command, the plugin's launcher copies it
+to `~/.local/share/o-harness/versions/<commit>` and marks it active when its version is
+newer than the active one. Each run records its version and keeps using it until it ends,
+so an update never changes a running batch. Both hosts share the installed engine and the
+data folder.
 
 ## Authority
 

@@ -59,12 +59,22 @@ def verify_package(root):
     return revision
 
 
-def setup(*, development=False):
+def version_key(value):
+    try:return tuple(int(part) for part in str(value).split('.'))
+    except ValueError:return ()
+
+
+def setup(*, development=False, if_newer=False):
     revision=verify_package(HOME)
     if '+worktree.' in revision and not development:
         raise Refused('This is an unreviewed development build. Use setup --development only for an explicit local test; install a reviewed revision for normal work.')
     home=state_home();destination=home/'versions'/revision
+    version=read_json(HOME/'revision.json').get('version')
     with lock(home/'runtime/install.lock'):
+        active=home/'runtime/active.json'
+        # Automatic activation re-checks under the lock, so concurrent hosts never downgrade.
+        if if_newer and active.exists() and version_key(version)<=version_key(read_json(active).get('version')):
+            return {'revision':read_json(active)['revision'],'activated':False}
         if destination.exists():
             if destination.is_symlink() or verify_package(destination)!=revision:
                 raise Refused('Existing shared core is inconsistent; preserve it and reinstall into a clean version directory')
@@ -82,5 +92,5 @@ def setup(*, development=False):
         if launcher.exists() and not launcher.read_bytes().startswith(b'#!/usr/bin/env -S python3 -I\n\"\"\"Resolve bundled setup'):
             raise Refused('Existing OH CLI conflicts with setup; preserve it and select a clean OH data home')
         temporary=launcher.with_suffix('.pending');temporary.write_bytes(content);temporary.chmod(0o755);temporary.replace(launcher)
-        atomic_json(home/'runtime/active.json',{'revision':revision,'version':read_json(HOME/'revision.json').get('version'),'schema_version':1})
+        atomic_json(active,{'revision':revision,'version':version,'schema_version':1})
     return {'core':str(destination),'revision':revision,'cli':str(home/'bin/oh'),'next':'Register the project with oh init, then configure its external checks. Existing runs keep their recorded runtime.'}

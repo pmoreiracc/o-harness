@@ -101,6 +101,6 @@ the built packages to the `dist` branch and creates the GitHub release. Users th
 the update as described above. Always bump the version: hosts only update when it changes.
 
 To try a build locally without releasing, run `integrations/package.sh <empty-folder>`
-from a clean checkout and add that folder as a local marketplace. A build from a checkout
-with uncommitted changes is a development build; install it with `scripts/oh setup
---development` from the installed plugin.
+and add that folder as a local marketplace. OH only switches automatically to a higher
+version, so activate a local build with `scripts/oh setup` from the installed plugin
+(`setup --development` if the checkout had uncommitted changes).

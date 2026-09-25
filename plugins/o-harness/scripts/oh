@@ -33,7 +33,7 @@ else:
         if '+worktree.' not in package['revision'] and package['revision']!=current.get('revision') and (
                 not current or number(package.get('version'))>number(current.get('version'))):
             import subprocess
-            done=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup'],stdin=subprocess.DEVNULL,capture_output=True,text=True)
+            done=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup','--if-newer'],stdin=subprocess.DEVNULL,capture_output=True,text=True)
             if done.returncode:print('OH: automatic setup failed. '+done.stderr.strip(),file=sys.stderr)
     if not active.is_file() and command=='plugin-hook':
         if explicit:print(json.dumps({'authorized':False,'onboarding':'OH is not set up. Run this plugin scripts/oh setup, register the selected checkout with init, then submit a fresh workflow invocation.'}))
