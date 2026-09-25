@@ -16,20 +16,27 @@ if command=='setup':
 else:
     home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
     active=home/'runtime/active.json'
+    payload=None;explicit=True
+    if command=='plugin-hook':
+        # Bare choices such as "continue" only matter to an active run; they never install OH.
+        payload=sys.stdin.read();prompt=json.loads(payload).get('prompt')
+        explicit=isinstance(prompt,str) and prompt.strip()[:1] in ('$','/')
     bundled=plugin/'core/revision.json'
-    if bundled.is_file():
-        # A plugin install or update carries a new core: activate it once, on first use.
-        # A revision that was installed before is never re-selected here, so two hosts on
-        # different plugin versions cannot flip the active core back and forth.
-        revision=json.loads(bundled.read_text())['revision']
-        if Path(revision).name==revision and '+worktree.' not in revision and not (home/'versions'/revision).exists():
+    if explicit and bundled.is_file():
+        # A plugin install or update carries its core. Activate it on first explicit use when it is
+        # newer than the active core, so an older plugin in another host never downgrades OH.
+        def number(value):
+            try:return tuple(int(part) for part in str(value).split('.'))
+            except ValueError:return ()
+        package=json.loads(bundled.read_text())
+        current=json.loads(active.read_text()) if active.is_file() else {}
+        if '+worktree.' not in package['revision'] and package['revision']!=current.get('revision') and (
+                not current or number(package.get('version'))>number(current.get('version'))):
             import subprocess
             done=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup'],stdin=subprocess.DEVNULL,capture_output=True,text=True)
             if done.returncode:print('OH: automatic setup failed. '+done.stderr.strip(),file=sys.stderr)
     if not active.is_file() and command=='plugin-hook':
-        prompt=json.load(sys.stdin).get('prompt')
-        # Bare choices such as "continue" are ordinary prose until OH is set up.
-        if isinstance(prompt,str) and prompt.strip()[:1] in ('$','/'):print(json.dumps({'authorized':False,'onboarding':'OH is not set up. Run this plugin scripts/oh setup, register the selected checkout with init, then submit a fresh workflow invocation.'}))
+        if explicit:print(json.dumps({'authorized':False,'onboarding':'OH is not set up. Run this plugin scripts/oh setup, register the selected checkout with init, then submit a fresh workflow invocation.'}))
         raise SystemExit(0)
     if not active.is_file():
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')
@@ -56,4 +63,7 @@ else:
                     if Path(revision).name!=revision:raise SystemExit('Invalid retained runtime revision')
     entry=home/'versions'/revision/'oh'
 if not entry.is_file():raise SystemExit('Shared OH core is missing. Rebuild/reinstall the plugin, then run setup.')
+if payload is not None:
+    import subprocess
+    raise SystemExit(subprocess.run([sys.executable,'-I',str(entry),*sys.argv[1:]],input=payload,text=True).returncode)
 os.execv(sys.executable,[sys.executable,'-I',str(entry),*sys.argv[1:]])

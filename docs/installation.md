@@ -30,21 +30,24 @@ and creates the `oh` command at `~/.local/share/o-harness/bin/oh`. Add that fold
 
 ## First use in a project
 
-1. Trust your host CLI once, in a terminal. OH finds the binary on your `PATH`:
+1. Start a new agent session in your project and run `/oh-propose <idea>`
+   (Codex: `$oh-propose <idea>`). The first time, OH installs itself and the agent registers
+   the project with `oh init`, saving your project's checks: the commands OH must pass
+   before it commits. Nothing runs yet. Example `checks.json`:
+
+   ```json
+   [{"name": "tests", "command": ["npm", "test"]}]
+   ```
+
+   `oh config` prints the folder where the project's settings and checks are saved.
+2. In a terminal, trust your host CLI once. OH finds the binary on your `PATH`:
 
    ```sh
    oh trust-host claude   # or: oh trust-host codex
    ```
 
-   Run it again after the CLI updates itself; OH refuses a binary it hasn't seen.
-2. Start a new agent session in your project and run `/oh-propose <idea>`
-   (Codex: `$oh-propose <idea>`). The first time, the agent registers the project with
-   `oh init` and saves your project's checks, the commands OH must pass before it commits.
-   You can review them in the folder `oh config` prints. Example `checks.json`:
-
-   ```json
-   [{"name": "tests", "command": ["npm", "test"]}]
-   ```
+   Run it again after the CLI updates itself; OH refuses a binary it hasn't trusted.
+3. Run `/oh-propose <idea>` again.
 
 Registering a project changes nothing in its repository.
 
@@ -67,9 +70,10 @@ Merged changes reach you only when a new version is released.
   codex plugin add o-harness@o-harness
   ```
 
-Start a new session afterwards. OH switches to the new version on first use. Batches
-already in progress finish on the version they started with. A dashboard installed with
-`oh service-install` restarts itself on the new version.
+Start a new session afterwards. The first OH command you run switches to the new version.
+Batches already in progress finish on the version they started with. The dashboard service
+restarts itself on the new version; if you installed it before version 0.3.0, run
+`oh service-install` once more.
 
 ## Uninstall
 

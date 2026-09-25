@@ -23,7 +23,7 @@ def host_hook(root,host,payload,*,verified):
         kind,intent=planning.groups()
         start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
         return checkpoint(root)
-    delivery=re.fullmatch(r'(?:[$/](?:o-harness:)?oh-deliver|oh deliver)\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
+    delivery=re.fullmatch(r'[$/](?:o-harness:)?oh-deliver\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
     if delivery:
         from .prepared import resolve
         prepared=resolve(root,delivery[3],verified,'design') if delivery[3] else None
@@ -52,7 +52,7 @@ def git_branch(root):
 
 def main(argv=None):
     parser=argparse.ArgumentParser(prog='oh')
-    parser.add_argument('--root',type=Path,default=Path.cwd())
+    parser.add_argument('--root',type=Path)
     sub=parser.add_subparsers(dest='command',required=True)
     build=sub.add_parser('build-plugin');build.add_argument('destination',type=Path);build.add_argument('--host',choices=['codex','claude'],required=True)
     install=sub.add_parser('setup');install.add_argument('--development',action='store_true')
@@ -75,7 +75,7 @@ def main(argv=None):
     suggest=sub.add_parser('suggest');suggest.add_argument('--host',choices=['codex','claude'],default='codex')
     deliver=sub.add_parser('deliver');deliver.add_argument('doc');deliver.add_argument('track',nargs='?',default='')
     resource=sub.add_parser('resource');resource.add_argument('path')
-    args=parser.parse_args(argv);root=args.root.resolve()
+    args=parser.parse_args(argv);root=(args.root or Path.cwd()).resolve()
     try:
         if args.command=='build-plugin':
             from .installation import build
@@ -104,7 +104,8 @@ def main(argv=None):
             else:print(render(root,args.base));return
         elif args.command=='trust-host':
             from .hosts import trust
-            result=trust(args.host,args.path,root)
+            # Host trust is machine-wide: the current folder is a project only when --root names it.
+            result=trust(args.host,args.path,args.root.resolve() if args.root else None)
         elif args.command=='init':
             from .registry import register, profile_path
             result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace)
@@ -126,7 +127,7 @@ def main(argv=None):
             materialize(root)
             from .workflow import load_run
             _,state=load_run(root)
-            if state['status']=='paused':raise Refused('Submit oh-resume in the owning host conversation, then run oh resume')
+            if state['status']=='paused':raise Refused('Submit /oh-resume (Codex: $oh-resume) in the owning host conversation, then run oh resume')
             from .runner import run
             result=run(root)
         elif args.command=='host-hook':

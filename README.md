@@ -55,9 +55,8 @@ codex plugin marketplace add pmoreiracc/o-harness --ref dist
 codex plugin add o-harness@o-harness
 ```
 
-Then follow [first use in a project](docs/installation.md#first-use-in-a-project): trust
-your host CLI once, and start a new session in your project with `/oh-propose <idea>`
-(Codex: `$oh-propose`).
+Then start a new session in your project, run `/oh-propose <idea>` (Codex: `$oh-propose`)
+and follow [first use in a project](docs/installation.md#first-use-in-a-project).
 
 ## Commands
 

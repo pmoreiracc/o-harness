@@ -2,9 +2,9 @@
 
 ## Issues
 
-- **Bug:** include the OH version (`oh config` prints it), your host and OS, steps to
-  reproduce, and what you expected. Never post credentials, transcripts or your OH data
-  folder.
+- **Bug:** include the OH version (`version` in `~/.local/share/o-harness/runtime/active.json`),
+  your host and OS, steps to reproduce, and what you expected. Never post credentials,
+  transcripts or your OH data folder.
 - **Feature:** open an issue to agree on the problem and scope before building it. Small
   fixes can go straight to a PR.
 - **Security:** see [SECURITY.md](SECURITY.md). Don't open a public issue.

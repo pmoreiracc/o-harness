@@ -25,6 +25,10 @@ jobs:
             version=$(jq -r .version "plugins/o-harness/.$host-plugin/plugin.json")
             [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::$host plugin version is $version, tag is $GITHUB_REF_NAME"; exit 1; }
           done
+      - name: Check the tag is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
       - run: bash integrations/test.sh native
       - run: bash integrations/test.sh syntax
       - name: Publish the packages to the dist branch

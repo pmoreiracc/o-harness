@@ -41,8 +41,8 @@ You can still code, commit and open PRs without OH at any time.
 If the agent is busy, run `oh --root <project> pause` or `oh --root <project> stop` in a
 terminal. `oh --root <project> status` shows the current run.
 
-If you edit files while paused, OH keeps your edits, and the changed work is reviewed
-again.
+If files change while a batch is paused, OH refuses to resume until you restore them or
+stop the batch. It never discards your edits.
 
 ## Projects
 
@@ -53,8 +53,8 @@ again.
 
 To reuse a project's settings and checks elsewhere, run `oh profile-export <file>` and
 `oh --root <other-checkout> profile-import <file>`. Exports contain no credentials,
-sessions or evidence. Checks are exported only when they run a script tracked in the
-repository, such as `./scripts/check.sh`.
+sessions or evidence. Export fails unless every check runs a script tracked in the
+repository, such as `["./scripts/check.sh"]`.
 
 ## Dashboard
 

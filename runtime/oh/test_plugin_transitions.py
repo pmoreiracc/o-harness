@@ -32,7 +32,7 @@ class PluginTransitions(unittest.TestCase):
 
     def test_unprefixed_prose_is_not_an_invocation(self):
         payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root)}
-        for prompt in ('design a new logo','propose a name','deliver it today','oh-stop','/design a logo','/deliver it'):
+        for prompt in ('design a new logo','propose a name','deliver it today','oh-stop','/design a logo','/deliver it','oh start request:'+'a'*64,'$oh request:'+'a'*64):
             self.assertIsNone(receive(self.root,'codex',payload|{'prompt':prompt}))
         self.assertFalse(pending_file(self.root).exists())
 

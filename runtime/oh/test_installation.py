@@ -36,25 +36,41 @@ class InstallationTest(unittest.TestCase):
             (first/'core/runtime/oh/cli.py').write_text('changed')
             with self.assertRaises(Refused):verify_package(first/'core')
 
-    def test_plugin_update_activates_its_new_core_once(self):
+    @staticmethod
+    def package(path,revision,version):
         from .installation import inventory
-        from .storage import atomic_json,read_json
-        def package(path,revision):
-            build(path,'codex');core=path/'core'
-            atomic_json(core/'revision.json',{'revision':revision})
-            atomic_json(core/'package.json',{'schema_version':1,'revision':revision,'files':inventory(core)})
-            return path/'scripts/oh'
+        from .storage import atomic_json
+        build(path,'codex');core=path/'core'
+        atomic_json(core/'revision.json',{'revision':revision,'version':version})
+        atomic_json(core/'package.json',{'schema_version':1,'revision':revision,'files':inventory(core)})
+        return path/'scripts'
+
+    def test_plugin_update_activates_only_a_newer_core(self):
+        from .storage import read_json
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp);env=os.environ|{'OH_DATA_HOME':str(base/'state')}
-            old=package(base/'v1/o-harness','1'*40);new=package(base/'v2/o-harness','2'*40)
-            def use(launcher):
-                result=subprocess.run([str(launcher),'--root',tmp,'resource','workflows/oh/SKILL.md'],env=env,capture_output=True,text=True)
+            plugins={n:self.package(base/f'v{n}/o-harness',str(n)*40,f'0.{n}.0') for n in (1,2,3)}
+            def use(n):
+                result=subprocess.run([str(plugins[n]/'oh'),'--root',tmp,'resource','workflows/oh/SKILL.md'],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
-                return read_json(base/'state/runtime/active.json')['revision']
-            self.assertEqual(use(old),'1'*40)
-            self.assertEqual(use(new),'2'*40)
-            # An older plugin still installed in another host does not switch back.
-            self.assertEqual(use(old),'2'*40)
+                return read_json(base/'state/runtime/active.json')['revision'][0]
+            self.assertEqual(use(1),'1')
+            self.assertEqual(use(3),'3')
+            # An older plugin still installed in another host never downgrades the shared core.
+            self.assertEqual(use(2),'3')
+            self.assertEqual(use(1),'3')
+
+    def test_bare_choices_never_install_the_bundled_core(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);env=os.environ|{'OH_DATA_HOME':str(base/'state')}
+            scripts=self.package(base/'v1/o-harness','1'*40,'0.1.0')
+            def send(prompt):
+                return subprocess.run(['python3',str(scripts/'human-event.py'),'claude'],input=json.dumps({'prompt':prompt,'cwd':tmp}),
+                    env=env,capture_output=True,text=True,check=True).stdout
+            self.assertEqual(send('continue'),'')
+            self.assertFalse((base/'state').exists())
+            self.assertIn('not registered',send('/oh-propose a plan'))
+            self.assertTrue((base/'state/runtime/active.json').is_file())
 
     def test_ordinary_prompt_hook_has_no_setup_or_project_side_effects(self):
         from .config import HOME

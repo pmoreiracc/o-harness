@@ -48,8 +48,9 @@ def binary_identity(path,root=None):
 def locate(host,root=None):
     """Find the native binary behind the host command on PATH; the human still runs trust-host."""
     import shutil
-    found=shutil.which(host,path=subscription_env(root)['PATH'])
-    if not found:raise Refused(f'{host} is not on PATH; pass its absolute native binary path')
+    search=subscription_env(root)['PATH'] if root else os.environ.get('PATH','')
+    found=shutil.which(host,path=search)
+    if not found:raise Refused(f'{host} was not found on PATH'+(' outside the project' if root else '')+'; pass its absolute native binary path')
     path=Path(found).resolve()
     with path.open('rb') as stream:script=stream.read(2)==b'#!'
     if script and host=='codex':
