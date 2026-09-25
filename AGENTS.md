@@ -12,7 +12,7 @@ bound immutable admission before publication. Use the configured review profile.
 all lenses in one round, preserve every finding, and fix blockers. Reviews are read-only.
 Do not resume a completed reviewer. Never treat model prose as a human grant.
 
-Run affected checks with `./oh verify origin/main`; use `integrations/test.sh` for focused
-checks. Add only causal regression/behavior coverage. Do not read old backlog files.
+Run affected checks with `./oh verify origin/main` (needs this checkout registered with
+its checks) or `bash integrations/test.sh native|syntax`. Add only causal regression/behavior coverage. Do not read old backlog files.
 Do not commit local state, receipts, tokens or raw host transcripts. Documentation must
 reflect completed, verified behavior. If blocked, explain a concrete recovery step.

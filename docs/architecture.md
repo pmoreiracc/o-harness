@@ -1,52 +1,47 @@
 # Architecture
 
-OH separates execution authority, host integration and derived observations.
-
-| Directory | Responsibility |
+| Path | Contents |
 |---|---|
-| `runtime/oh/` | Python state machine, host adapters, verification, collection and HTTP service |
-| `core/` | Extracted review/lifecycle mechanisms and their compatibility tests |
-| `plugins/o-harness/` | Explicit host skills and narrow prompt translation; per-host packages share one core |
-| `adapters/` | Retained compatibility fixtures and translation resources |
-| `workflows/` | Neutral workflow instructions |
-| `prompts/` | Shared independent review contract |
-| `config/` | Defaults and invariants |
-| `dashboard/` | Local static interface; no build-time frontend dependency |
-| `integrations/` | Test entrypoints and historical compatibility resources |
-| `.codex/`, `.claude/`, `.agents/` | OH development host configuration only |
+| `runtime/oh/` | The OH engine: run state, host adapters, checks, reviews, analytics and the dashboard server |
+| `plugins/o-harness/` | The plugin both hosts install: skills, the prompt hook and the launcher |
+| `workflows/` | Instructions the plugin skills load for each workflow |
+| `prompts/` | The shared independent-reviewer prompt |
+| `config/` | Default settings and OH's own invariants |
+| `dashboard/` | Static dashboard files, no build step |
+| `core/` | Bash parsers for projects that plan with numbered design documents |
+| `integrations/` | Test and packaging scripts |
+| `.claude/`, `.codex/` | Settings for developing OH itself |
 
-The coordinator prepares immutable scope. A native user transcript event authorizes it.
-The runner persists a hash-chained journal, selects a bounded worker profile, verifies
-inputs, admits an independent reviewer, and commits only the reviewed final tree.
-Native commits seal their task review history, findings and resolutions with an
-`OH-Evidence` digest. The PR summary is checked against every actual commit, parent and
-tree; editing the summary or adding an unreviewed commit invalidates it.
-Durable attempts retain failures. A restart recovers recorded transitions and never
-creates a new grant. The optional design adapter renders its final lifecycle tree before
-review and verifies that completion commits that exact result.
+## Install layout
 
-Subscription child execution removes API credential fallbacks and uses explicitly
-trusted native host binaries. Workers cannot write OH state or Git administration paths;
-the parent owns commits. Review/analysis hosts are read-only. Provider sandbox support
-is a requirement, not a permission bypass.
+A built plugin contains the engine. On first use, the plugin's launcher copies it to
+`~/.local/share/o-harness/versions/<commit>` and marks it active. Each run records its
+version and keeps using it until it ends, so an update never changes a running batch.
+Both hosts share the installed engine and the data folder.
 
-Product repositories keep their business invariants, documents and normal tests. OH's
-external registry binds canonical checkout/Git identities, configuration and verification
-commands without creating consumer files or Git markers. Immutable installed revisions
-own active runs. Plugin discovery is separate from explicit setup and workflow activation.
+## Authority
 
-Pause/stop and finalization share a lock. Pause drains one step; stop cancels only the
-runner's process group, retaining evidence before reporting completion. Resume validates
-the retained tree and allowance. Propose/design artifacts use the same attempt/review
-engine as implementation; the numbered-design adapter only parses and renders documents.
+Only your own typed message approves work. The prompt hook records where to find it, and
+OH confirms it in the host's saved transcript before starting. Model output, elapsed time
+and restarts never approve anything. Approved scope is fixed when prepared.
 
-SQLite is rebuildable derived data, never approval authority. The collector uses durable
-spooling, event identity deduplication and incremental transcript boundaries. Backup and
-restore take an exclusive snapshot lock; active writers and readers hold shared locks.
-The dashboard reads indexed tables and does not control runs.
+The runner keeps a hash-chained journal per run. For each task it picks a model profile,
+starts a fresh worker, runs the checks, starts an independent reviewer on the exact tree
+and commits only the reviewed tree, with an `OH-Evidence` trailer. `oh pr-summary` checks
+that trailer against every commit on the branch.
 
-One task executes at a time. Future parallelism needs ownership isolation, merge/review
-coordination, resource limits and evidence attribution before enabling concurrent work.
-See [issue 1](https://github.com/pmoreiracc/o-harness/issues/1). Additional hosts implement
-explicit capability and subscription conformance contracts; they are not supported merely
-because they can read a skill file ([issue 4](https://github.com/pmoreiracc/o-harness/issues/4)).
+Workers run through the trusted host CLI with API-key variables removed. They can't write
+OH state or Git internals; reviewers are read-only. Pause and stop share a lock with commit,
+so a stop never leaves a half-recorded task.
+
+## Data
+
+The SQLite analytics database is rebuilt from saved events and never grants anything.
+Backup and restore lock the data folder.
+
+## Not yet supported
+
+- One task runs at a time. Parallel tasks are tracked in
+  [issue 1](https://github.com/pmoreiracc/o-harness/issues/1).
+- Other hosts need a tested adapter first
+  ([issue 4](https://github.com/pmoreiracc/o-harness/issues/4)).

@@ -75,7 +75,10 @@ def executable(host,root=None):
     record=state_home()/'hosts'/(host+'.json')
     if not record.exists():raise Refused(f'{host}: authorize its installed native binary with oh trust-host {host} <absolute-binary-path>')
     expected=read_json(record)
-    if binary_identity(expected['path'],root)!=expected:raise Refused('Host executable changed; authorize the updated installed binary before continuing')
+    try:current=binary_identity(expected['path'],root)
+    except FileNotFoundError:current=None
+    # Host CLIs update themselves; each new binary needs a fresh, explicit trust.
+    if current!=expected:raise Refused(f'{host} changed since you trusted it. Run: oh trust-host {host}')
     return expected['path']
 
 
