@@ -42,6 +42,7 @@ fail visibly; OH never falls back to paid API calls.
 
 ## Start here
 
+- [Installation and versions](docs/installation.md): reinstall walkthrough, upgrades and current limits.
 - [Use OH](docs/usage.md): setup, task batches, choices, and recovery.
 - [Configuration](docs/configuration.md): shared settings, local overrides, and models.
 - [Dashboard and data](docs/analytics.md): metrics, comparisons, suggestions, and privacy.
