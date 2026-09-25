@@ -1,9 +1,12 @@
 {
   "name": "o-harness",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Explicit, independently reviewed workflows with external state and subscription workers.",
   "author": {
     "name": "OH contributors"
   },
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "homepage": "https://github.com/pmoreiracc/o-harness",
+  "repository": "https://github.com/pmoreiracc/o-harness",
+  "license": "MIT"
 }
