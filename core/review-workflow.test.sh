@@ -206,13 +206,7 @@ done
 SER=$(mktemp -d)
 printf '.deliver/\n' > "$SER/.gitignore"
 printf 'one\n' > "$SER/subject.txt"
-(
-  cd "$SER" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/review-series
-) || exit 1
+init_fixture_repo "$SER" feature/review-series || exit 1
 S1=$(review_series_ensure "$SER" feature/review-series 3 2>/dev/null) || S1=""
 printf 'two\n' >> "$SER/subject.txt"
 git -C "$SER" add subject.txt
@@ -330,13 +324,7 @@ else bad "series close and attempt start cannot publish across their lifecycle b
 LOST=$(mktemp -d)
 printf '.deliver/\n' > "$LOST/.gitignore"
 printf 'subject\n' > "$LOST/subject.txt"
-(
-  cd "$LOST" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/lost-stop
-) || exit 1
+init_fixture_repo "$LOST" feature/lost-stop || exit 1
 printf 'snapshot\n' > "$LOST/snapshot.txt"
 LOST_SERIES=$(review_series_ensure "$LOST" feature/lost-stop 3 invariant-reviewer nd/lost-stop 2>/dev/null)
 LOST_FIRST=$(review_attempt_start "$LOST" "$LOST_SERIES" codex lost-reviewer lost-session \
@@ -361,13 +349,7 @@ mkdir -p "$FALSE_CLEAN/core/scripts" "$FALSE_CLEAN/.deliver"
 cp "$ROOT/core/scripts/tree-digest.sh" "$FALSE_CLEAN/core/scripts/tree-digest.sh"
 printf '.deliver/\n' > "$FALSE_CLEAN/.gitignore"
 printf 'subject\n' > "$FALSE_CLEAN/subject.txt"
-(
-  cd "$FALSE_CLEAN" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/false-clean
-) || exit 1
+init_fixture_repo "$FALSE_CLEAN" feature/false-clean || exit 1
 printf 'snapshot\n' > "$FALSE_CLEAN/.deliver/snapshot.txt"
 FALSE_CLEAN_TREE=$(CLAUDE_PROJECT_DIR="$FALSE_CLEAN" "$FALSE_CLEAN/core/scripts/tree-digest.sh")
 FALSE_CLEAN_SERIES=$(review_series_ensure "$FALSE_CLEAN" feature/false-clean 3 invariant-reviewer nd/false-clean 2>/dev/null)
@@ -386,13 +368,7 @@ rm -rf "$FALSE_CLEAN"
 ATT=$(mktemp -d)
 printf '.deliver/\n' > "$ATT/.gitignore"
 printf 'subject\n' > "$ATT/subject.txt"
-(
-  cd "$ATT" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/attempts
-) || exit 1
+init_fixture_repo "$ATT" feature/attempts || exit 1
 printf 'snapshot\n' > "$ATT/snapshot.txt"
 AS=$(review_series_ensure "$ATT" feature/attempts 10 2>/dev/null) || AS=""
 AK="nd/$AS"
@@ -542,13 +518,7 @@ else bad "dashboard correlates non-delivery attempts, salvaged output, lifecycle
 CON=$(mktemp -d)
 printf '.deliver/\n' > "$CON/.gitignore"
 printf 'subject\n' > "$CON/subject.txt"
-(
-  cd "$CON" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/concurrent
-) || exit 1
+init_fixture_repo "$CON" feature/concurrent || exit 1
 printf 'snapshot\n' > "$CON/snapshot.txt"
 CON_SERIES=$(review_series_ensure "$CON" feature/concurrent 3 invariant-reviewer nd/concurrent 2>/dev/null)
 for CON_N in 1 2; do
@@ -581,9 +551,7 @@ printf '.deliver/\n' > "$DET/.gitignore"
 printf 'detached\n' > "$DET/subject.txt"
 (
   cd "$DET" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
+  init_fixture_repo . || exit 1
   git checkout -q --detach HEAD
 ) || exit 1
 DET_ID=$(review_detached_context_for_session "$DET" detached-session-one 1 2>/dev/null) || DET_ID=""
@@ -609,13 +577,7 @@ cp "$ROOT/core/scripts/tree-digest.sh" "$SCOPE_ROOT/core/scripts/tree-digest.sh"
 printf '.deliver/\n' > "$SCOPE_ROOT/.gitignore"
 printf '# Harness backlog\n' > "$SCOPE_ROOT/core/BACKLOG.md"
 printf 'before\n' > "$SCOPE_ROOT/core/subject.sh"
-(
-  cd "$SCOPE_ROOT" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/blocker-scope
-) || exit 1
+init_fixture_repo "$SCOPE_ROOT" feature/blocker-scope || exit 1
 printf 'after\n' >> "$SCOPE_ROOT/core/subject.sh"
 printf 'snapshot\n' > "$SCOPE_ROOT/.deliver/snapshot.txt"
 SCOPE_TREE=$(CLAUDE_PROJECT_DIR="$SCOPE_ROOT" "$SCOPE_ROOT/core/scripts/tree-digest.sh")
@@ -741,13 +703,7 @@ printf '# Harness backlog\n' > "$MIXED_HARNESS/core/BACKLOG.md"
 printf 'old workflow\n' > "$MIXED_HARNESS/.github/workflows/pr.yml"
 printf 'old testing contract\n' > "$MIXED_HARNESS/docs/reference/testing.md"
 printf 'snapshot\n' > "$MIXED_HARNESS/.deliver/snapshot.txt"
-(
-  cd "$MIXED_HARNESS" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/mixed-harness
-) || exit 1
+init_fixture_repo "$MIXED_HARNESS" feature/mixed-harness || exit 1
 printf 'new workflow\n' > "$MIXED_HARNESS/.github/workflows/pr.yml"
 printf 'new testing contract\n' > "$MIXED_HARNESS/docs/reference/testing.md"
 MIXED_TREE=$(CLAUDE_PROJECT_DIR="$MIXED_HARNESS" "$MIXED_HARNESS/core/scripts/tree-digest.sh")
@@ -777,13 +733,7 @@ cp "$ROOT/core/scripts/tree-digest.sh" "$DECLARED_HARNESS/core/scripts/tree-dige
 printf '.deliver/\n' > "$DECLARED_HARNESS/.gitignore"
 printf '# Harness backlog\n' > "$DECLARED_HARNESS/core/BACKLOG.md"
 printf '# Decisions\n' > "$DECLARED_HARNESS/docs/decisions/README.md"
-(
-  cd "$DECLARED_HARNESS" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/layered-verification
-) || exit 1
+init_fixture_repo "$DECLARED_HARNESS" feature/layered-verification || exit 1
 printf '%s\n' '---' 'type: decision' 'status: proposed' 'subject: harness' \
   'date: 2026-09-09' '---' '# Layered local verification' \
   > "$DECLARED_HARNESS/docs/decisions/0052-layered-local-verification.md"
@@ -1164,9 +1114,7 @@ consumer_crash_fixture() { # consumer_crash_fixture <consumer> <mode>
   esac
   (
     cd "$repo" || exit 1
-    git init -q -b main .
-    git add -A
-    git -c user.email=t@t -c user.name=t commit -qm init
+    init_fixture_repo . || exit 1
     git switch -qc "$branch"
   ) || { rm -rf "$repo"; return 1; }
   printf 'snapshot\n' > "$repo/.deliver/snapshot.txt"
@@ -1232,13 +1180,7 @@ cp "$ROOT/core/task-ledger.sh" "$HANDOFF_ROOT/core/task-ledger.sh"
 cp "$ROOT/core/accepted-rounds.sh" "$HANDOFF_ROOT/core/accepted-rounds.sh"
 printf '.deliver/\n' > "$HANDOFF_ROOT/.gitignore"
 printf 'handoff\n' > "$HANDOFF_ROOT/subject.txt"
-(
-  cd "$HANDOFF_ROOT" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/take-over
-) || exit 1
+init_fixture_repo "$HANDOFF_ROOT" feature/take-over || exit 1
 # At a real one-attempt ceiling, no window writer may skip semantic disposition.
 for WINDOW_OUTCOME in concern scope concern+scope blocking blocking+scope ambiguous; do
   git -C "$HANDOFF_ROOT" switch -qc "feature/window-$WINDOW_OUTCOME" || exit 1
@@ -1394,13 +1336,7 @@ printf '%s\n' '---' 'type: plan' 'status: living' 'last-verified: 2026-09-09' '-
   '### M1 — Test' '' '| Slug | Initiative | Depends | Design |' '|---|---|---|---|' \
   '| `sample` | Sample initiative | — | — |' '' '**Done when:** tested.' \
   > "$DESIGN_HANDOFF_ROOT/docs/roadmap.md"
-(
-  cd "$DESIGN_HANDOFF_ROOT" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc design/sample
-) || exit 1
+init_fixture_repo "$DESIGN_HANDOFF_ROOT" design/sample || exit 1
 printf '%s\n' '---' 'type: design' 'status: approved' 'last-verified: 2026-09-09' '---' \
   '# Sample design' '## 7. Tasks' '### Code track' '- [ ] **1.** Sample task.' \
   > "$DESIGN_HANDOFF_ROOT/docs/design/0997-sample.md"
@@ -1440,13 +1376,7 @@ done
 cp "$ROOT/core/scripts/tree-digest.sh" "$ADR_HANDOFF_ROOT/core/scripts/tree-digest.sh"
 printf '.deliver/\n' > "$ADR_HANDOFF_ROOT/.gitignore"
 printf '# Decisions\n' > "$ADR_HANDOFF_ROOT/docs/decisions/README.md"
-(
-  cd "$ADR_HANDOFF_ROOT" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc design/adr-only
-) || exit 1
+init_fixture_repo "$ADR_HANDOFF_ROOT" design/adr-only || exit 1
 printf '%s\n' '---' 'type: decision' 'status: proposed' '---' '# ADR only' '' '## Decision' '' 'Pending human decision.' \
   > "$ADR_HANDOFF_ROOT/docs/decisions/0999-adr-only.md"
 printf '%s\n' '' '| 0999 | ADR only | proposed |' >> "$ADR_HANDOFF_ROOT/docs/decisions/README.md"

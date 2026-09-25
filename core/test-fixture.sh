@@ -20,3 +20,12 @@ copy_harness() ( # copy_harness <source repo> <destination> <repo-relative direc
     done | tar -c --null -T - -f -
   ) | tar -x -f - -C "$destination"
 )
+
+# Common repository setup only; each test owns its subject files and later history.
+init_fixture_repo() { # init_fixture_repo <directory> [branch]
+  local root="$1" branch="${2:-main}"
+  git -C "$root" init -q -b main . &&
+    git -C "$root" add -A &&
+    git -C "$root" -c user.email=t@t -c user.name=t commit -qm init &&
+    { [ "$branch" = main ] || git -C "$root" switch -qc "$branch"; }
+}

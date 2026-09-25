@@ -315,13 +315,7 @@ copy_harness "$PWD" "$RV" core || exit 1
 printf 'subject\n' > "$RV/subject.txt"
 printf '{"continuation_window_tasks":1,"review_window_rounds":2}\n' > "$RV/core/delivery-policy.json"
 printf '.deliver/\n' > "$RV/.gitignore"
-(
-  cd "$RV" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/claude-attempt
-)
+init_fixture_repo "$RV" feature/claude-attempt || exit 1
 claude_start_payload() {
   jq -cn --arg session "$1" '{hook_event_name:"PreToolUse",tool_name:"Agent",session_id:$session,
     tool_input:{subagent_type:"invariant-reviewer"}}'

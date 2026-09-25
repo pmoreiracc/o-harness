@@ -6,135 +6,15 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd) || exit 1
 FIX=$(mktemp -d) || exit 1
 trap 'rm -rf "$FIX"' EXIT
 REPO="$FIX/repo"
-mkdir -p "$REPO/core/scripts" "$REPO/core/hooks" "$REPO/.codex/hooks" "$REPO/bin"
+mkdir -p "$REPO/core/scripts" "$REPO/core/hooks" "$REPO/.codex/hooks" "$REPO/adapters/codex" "$REPO/bin"
 pass=0 fail=0
 check() {
   local label="$1"; shift
   if "$@"; then pass=$((pass+1)); printf '  ok    %s\n' "$label"
   else fail=$((fail+1)); printf '  FAIL  %s\n' "$label"; fi
 }
-# ADR-0052 / testing.md §6: product tests exercise GitHub's merge ref; history validation
-# needs the authored head. Keep this cheap wiring proof in the suite selected by either YAML.
-product_wiring() { awk '
-  # These entry points use GitHub default execution settings, not inherited overrides.
-  /^["\047]?defaults["\047]?[[:space:]]*:/ { gated_selection = 1 }
-  /^  [[:alnum:]_-]+:/ {
-    verify = ($0 == "  verify:"); select = ($0 == "  select:")
-    steps = block = options = outputs = selection = 0
-  }
-  (verify || select) && /^    [[:alnum:]_-]+:/ {
-    steps = ($0 == "    steps:"); outputs = ($0 == "    outputs:")
-    block = options = selection = 0
-  }
-  select && outputs && $0 == "      product: ${{ steps.selection.outputs.product }}" { product_output++ }
-  select && steps && /^      - / { selection = ($0 == "      - id: selection") }
-  selection && $0 == "        run: core/scripts/verify-change.sh origin/${{ github.base_ref }} plan >> \"$GITHUB_OUTPUT\"" { plan++ }
-  select && (/^    ["\047]?(defaults|if|continue-on-error)["\047]?[[:space:]]*:/ ||
-    (selection && /^        ["\047]?(shell|working-directory|if|continue-on-error)["\047]?[[:space:]]*:/)) { gated_selection = 1 }
-  verify && $0 == "    needs: select" { dependency = 1 }
-  verify && $0 == "    if: needs.select.outputs.product == \0471\047" { conditional = 1 }
-  verify && steps && $0 == "      - uses: actions/checkout@v4" { checkout++; block = 1; next }
-  block && /^      - / { block = options = 0 }
-  block && /^        [[:alnum:]_-]+:/ { options = ($0 == "        with:") }
-  options && /^          ref:/ { explicit_ref = 1 }
-  END { exit !(plan == 1 && product_output == 1 && !gated_selection && dependency &&
-    conditional && checkout == 1 && !explicit_ref) }
-' "$1"; }
-process_wiring() { awk '
-  /^["\047]?defaults["\047]?[[:space:]]*:/ { gated = 1 }
-  function close_step() {
-    if (runner_step) { runner++; if (step_condition) gated = 1 }
-    runner_step = step_condition = 0
-  }
-  /^  [[:alnum:]_-]+:/ {
-    close_step(); verify = ($0 == "  verify:"); steps = block = options = 0
-  }
-  verify && /^    [[:alnum:]_-]+:/ {
-    close_step(); steps = ($0 == "    steps:"); block = options = 0
-  }
-  verify && /^    ["\047]?(defaults|if|continue-on-error)["\047]?[[:space:]]*:/ { gated = 1 }
-  steps && /^      - / { close_step(); block = options = 0 }
-  steps && $0 == "      - uses: actions/checkout@v4" { checkout++; block = 1; next }
-  block && /^      - / { block = options = 0 }
-  block && /^        [[:alnum:]_-]+:/ { options = ($0 == "        with:") }
-  options && $0 == "          ref: ${{ github.event.pull_request.head.sha }}" { head++ }
-  steps && /^        ["\047]?(shell|working-directory|if|continue-on-error)["\047]?[[:space:]]*:/ { step_condition = 1 }
-  steps && $0 == "        run: core/scripts/verify-change.sh origin/${{ github.base_ref }} ci" { runner_step = 1 }
-  END { close_step(); exit !(checkout == 1 && head == 1 && runner == 1 && !gated) }
-' "$1"; }
-check 'product verification consumes the selector output and keeps the merge ref' \
-  product_wiring "$ROOT/.github/workflows/pr.yml"
-check 'process CI unconditionally runs the shared verifier on authored history' \
-  process_wiring "$ROOT/.github/workflows/delivery.yml"
-commented_wiring() {
-  awk '
-    /^          ref:/ || /^        run: .* ci$/ {
-      print "# " $0
-      if ($0 ~ /run:/) print "        run: \"true\""
-      next
-    }
-    { print }
-  ' "$ROOT/.github/workflows/delivery.yml" > "$FIX/commented.yml"
-  ! process_wiring "$FIX/commented.yml"
-}
-displaced_wiring() {
-  awk -v location="$1" '
-    /^          ref:/ { next }
-    { print }
-    (location == "step" && /^      - name: Select verification$/) ||
-    (location == "input" && /^          fetch-depth: 0$/) {
-      print "        env:"
-      print "          ref: ${{ github.event.pull_request.head.sha }}"
-    }
-  ' "$ROOT/.github/workflows/delivery.yml" > "$FIX/displaced.yml"
-  ! process_wiring "$FIX/displaced.yml"
-}
-commented_product() {
-  sed '/^    if: needs.select.outputs.product/s/^/# /' \
-    "$ROOT/.github/workflows/pr.yml" > "$FIX/product-comment.yml"
-  ! product_wiring "$FIX/product-comment.yml"
-}
-disconnected_product() {
-  sed '/^    needs: select$/d' "$ROOT/.github/workflows/pr.yml" > "$FIX/product-disconnected.yml"
-  ! product_wiring "$FIX/product-disconnected.yml"
-}
-conditional_process() {
-  sed '/^  verify:$/a\
-    if: false
-' "$ROOT/.github/workflows/delivery.yml" > "$FIX/process-conditional.yml"
-  ! process_wiring "$FIX/process-conditional.yml"
-}
-overridden_shell() {
-  local workflow="$1" location="$2" predicate job
-  if [ "$workflow" = pr ]; then predicate=product_wiring; job=select
-  else predicate=process_wiring; job=verify; fi
-  awk -v location="$location" -v job="$job" '
-    location == "workflow" && /^jobs:$/ {
-      print "defaults: {run: {shell: \"echo {0}\"}}"
-    }
-    { print }
-    location == "job" && $0 == "  " job ":" {
-      print "    defaults: {run: {shell: \"echo {0}\"}}"
-    }
-    location == "step" && /^        run: .*verify-change.sh/ &&
-      ((job == "select" && / plan /) || (job == "verify" && / ci$/)) {
-      print "        shell: echo {0}"
-    }
-  ' "$ROOT/.github/workflows/$workflow.yml" > "$FIX/overridden.yml"
-  ! "$predicate" "$FIX/overridden.yml"
-}
-check 'commented process gates cannot satisfy active workflow wiring' commented_wiring
-check 'an authored-head value outside checkout cannot satisfy its ref contract' displaced_wiring step
-check 'a checkout environment variable cannot satisfy its ref input' displaced_wiring input
-check 'a commented product condition cannot satisfy selection wiring' commented_product
-check 'product verification cannot silently lose its selector dependency' disconnected_product
-check 'process verification cannot be skipped by a job condition' conditional_process
-for workflow in pr delivery; do
-  for location in step job workflow; do
-    check "$workflow rejects a $location shell override that bypasses verification" \
-      overridden_shell "$workflow" "$location"
-  done
-done
+# Product CI wiring belongs to the product repository. Keep selector behavior tests
+# against a temporary consumer, independent of OH workflow filenames.
 cp "$ROOT/core/scripts/verify-change.sh" "$REPO/core/scripts/verify-change.sh"
 for suite in core/scripts/verify-change.test.sh core/hooks/test.sh adapters/codex/test.sh \
   core/scripts/test.sh core/review-workflow.test.sh; do

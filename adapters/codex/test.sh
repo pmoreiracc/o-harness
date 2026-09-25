@@ -254,13 +254,7 @@ printf 'subject\n' > "$CX/subject.txt"
 printf '.deliver/\n' > "$CX/.gitignore"
 # One exhausted window proves host dispatch; core transitions live in the shared suite.
 printf '{"continuation_window_tasks":1,"review_window_rounds":1}\n' > "$CX/core/delivery-policy.json"
-(
-  cd "$CX" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/codex-attempt
-)
+init_fixture_repo "$CX" feature/codex-attempt || exit 1
 cx_payload() {
   jq -cn --arg id "$1" --arg event "$2" --arg message "${3:-}" '{
     hook_event_name:$event,agent_type:"invariant-reviewer",agent_id:$id,
@@ -330,13 +324,7 @@ PF=$(mktemp -d)
 copy_harness "$ROOT" "$PF" core adapters .codex || exit 1
 printf 'fallback\n' > "$PF/subject.txt"
 printf '.deliver/\n' > "$PF/.gitignore"
-(
-  cd "$PF" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/codex-fallback
-)
+init_fixture_repo "$PF" feature/codex-fallback || exit 1
 PF_ID=77777777-7777-4777-8777-777777777777
 cx_payload "$PF_ID" SubagentStart | CLAUDE_PROJECT_DIR="$PF" CODEX_HOOK=1 \
   "$PF/core/hooks/review-start.sh" >/dev/null 2>&1
@@ -388,13 +376,7 @@ PI=$(mktemp -d)
 copy_harness "$ROOT" "$PI" core adapters .codex || exit 1
 printf 'interrupted fallback\n' > "$PI/subject.txt"
 printf '.deliver/\n' > "$PI/.gitignore"
-(
-  cd "$PI" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/codex-interrupted
-)
+init_fixture_repo "$PI" feature/codex-interrupted || exit 1
 PI_ID=99999999-9999-4999-8999-999999999999
 cx_payload "$PI_ID" SubagentStart | CLAUDE_PROJECT_DIR="$PI" CODEX_HOOK=1 \
   "$PI/core/hooks/review-start.sh" >/dev/null 2>&1
@@ -452,13 +434,7 @@ copy_harness "$ROOT" "$CH" core adapters .codex || exit 1
 printf 'cross-host recovery\n' > "$CH/subject.txt"
 printf '.deliver/\n' > "$CH/.gitignore"
 printf '#!/usr/bin/env bash\nexit 79\n' > "$CH/core/scripts/review-retain.sh"
-(
-  cd "$CH" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
-  git switch -qc feature/cross-host-recovery
-)
+init_fixture_repo "$CH" feature/cross-host-recovery || exit 1
 CH_START=$(jq -cn '{tool_name:"Agent",session_id:"ended-claude-session",
   tool_input:{subagent_type:"invariant-reviewer"}}')
 printf '%s' "$CH_START" | CLAUDE_PROJECT_DIR="$CH" CODEX_HOOK= \
@@ -536,9 +512,7 @@ printf 'detached\n' > "$DH/subject.txt"
 printf '.deliver/\n' > "$DH/.gitignore"
 (
   cd "$DH" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
+  init_fixture_repo . || exit 1
   git checkout -q --detach HEAD
 )
 DH_SESSION=44444444-4444-4444-8444-444444444444
@@ -600,9 +574,7 @@ EOF
 printf '.deliver/\n' > "$DX/.gitignore"
 (
   cd "$DX" || exit 1
-  git init -q -b main .
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -qm init
+  init_fixture_repo . || exit 1
   git update-ref refs/remotes/origin/main HEAD
   CLAUDE_PROJECT_DIR="$DX" "$DX/core/scripts/start.sh" 0998 >/dev/null 2>&1
   printf 'implementation\n' > subject.txt
@@ -892,7 +864,7 @@ for DD_ACTION in 'accept concerns' 'grant next review window' 'stop and take it 
   copy_harness "$ROOT" "$DR" core adapters .codex || exit 1
   printf '.deliver/\n' > "$DR/.gitignore"
   printf '{"continuation_window_tasks":1,"review_window_rounds":1}\n' > "$DR/core/delivery-policy.json"
-  (cd "$DR" && git init -q -b main . && git add -A && git -c user.email=t@t -c user.name=t commit -qm init && git switch -qc feature/desktop)
+  init_fixture_repo "$DR" feature/desktop || exit 1
   cx_payload desktop-reviewer SubagentStart | CLAUDE_PROJECT_DIR="$DR" CODEX_HOOK=1 "$DR/core/hooks/review-start.sh" >/dev/null 2>&1
   cx_payload desktop-reviewer SubagentStop '[CONCERN] Narrow this claim' | CLAUDE_PROJECT_DIR="$DR" CODEX_HOOK=1 "$DR/core/hooks/review-receipt.sh" >/dev/null 2>&1
   if [ "$DD_ACTION" = 'accept concerns' ]; then
