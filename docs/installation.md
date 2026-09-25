@@ -43,10 +43,11 @@ and creates the `oh` command at `~/.local/share/o-harness/bin/oh`. Add that fold
    `oh config` prints the folder where the project's settings and checks are saved.
 2. Run `/oh-propose <idea>` again.
 
-OH finds your `claude` or `codex` binary on `PATH` each time it starts a worker. It only
-runs a native binary owned by you or the system, outside temporary and project folders,
-that reports itself as Claude Code or Codex and is signed in with a subscription. When
-the CLI updates itself, OH checks the new binary the same way and says so. To use a
+OH finds your `claude` or `codex` binary on `PATH` each time it starts a worker. It starts
+workers only with a native binary owned by you or the system, outside temporary and project
+folders, that reports itself as Claude Code or Codex (OH runs `--version` to check) and is
+signed in with a subscription. When the CLI updates itself, OH checks the new binary the
+same way and prints a notice. To use a
 binary that isn't on your `PATH`, pin it with `oh trust-host claude <absolute-path>`.
 
 Registering a project changes nothing in its repository.

@@ -82,12 +82,24 @@ def executable(host,root=None):
     record=state_home()/'hosts'/(host+'.json')
     saved=read_json(record) if record.exists() else None
     pinned=bool(saved and saved.get('pinned'))
-    path=saved['path'] if pinned else locate(host,root)
+    legacy=bool(saved) and 'pinned' not in saved
+    path=saved['path'] if pinned else None
+    if not pinned:
+        try:path=locate(host,root);binary_identity(path,root)
+        except Refused:
+            # A record from before automatic trust keeps working where PATH has no usable host.
+            if not legacy:raise
+            path=saved['path'];pinned=True
     try:same=saved and binary_identity(path,root)=={'path':saved['path'],'sha256':saved['sha256']}
     except FileNotFoundError:raise Refused(f'The {host} binary you pinned is gone: {path}. Run: oh trust-host {host}') from None
-    if same:return saved['path']
+    if same:
+        if legacy:atomic_json(record,saved|{'pinned':pinned})
+        return saved['path']
     current=trust(host,path,root,pinned=pinned)
-    if saved:print(f'OH: {host} changed; now using {current["path"]}',file=sys.stderr)
+    if legacy and current['path']!=saved['path']:
+        print(f'OH: {host} now follows your PATH: {current["path"]}. To keep using {saved["path"]}, '
+              f'run: oh trust-host {host} {saved["path"]}',file=sys.stderr)
+    elif saved:print(f'OH: {host} changed; now using {current["path"]}',file=sys.stderr)
     return current['path']
 
 

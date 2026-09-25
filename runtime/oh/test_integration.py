@@ -70,3 +70,22 @@ class IntegrationTest(unittest.TestCase):
             self.assertEqual(hosts.executable('claude'),'/custom/pinned')
             (record).write_text('{"path":"/custom/gone","sha256":"x","pinned":true}')
             with self.assertRaises(Refused):hosts.executable('claude')
+
+    def test_trust_records_from_before_automatic_trust_keep_working(self):
+        from . import hosts
+        from .storage import atomic_json,read_json
+        identity=lambda path,root=None:{'path':str(path),'sha256':'same'}
+        probe=subprocess.CompletedProcess([],0,'codex-cli 0.154.0','')
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp}),\
+             patch.object(hosts,'binary_identity',side_effect=identity),patch.object(hosts.subprocess,'run',return_value=probe):
+            record=Path(tmp)/'hosts/codex.json'
+            atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
+            # PATH has no usable codex: the old record stays in use, now as a pin.
+            with patch.object(hosts,'locate',side_effect=Refused('not found')):
+                self.assertEqual(hosts.executable('codex'),'/opt/native/codex')
+            self.assertTrue(read_json(record)['pinned'])
+            atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
+            # PATH has another codex: OH follows it and says how to keep the old one.
+            with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err:
+                self.assertEqual(hosts.executable('codex'),'/usr/local/bin/codex')
+            self.assertIn('oh trust-host codex /opt/native/codex',''.join(c.args[0] for c in err.write.call_args_list))
