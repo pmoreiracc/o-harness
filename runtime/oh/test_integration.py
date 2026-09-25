@@ -30,3 +30,13 @@ class IntegrationTest(unittest.TestCase):
             self.git(root,'commit','-qm','Release ordinary work')
             self.assertEqual(self.git(root,'log','-1','--format=%s'),'Release ordinary work')
             self.assertFalse((root/'.oh').exists())
+
+    def test_trust_host_finds_the_native_codex_binary_behind_an_npm_wrapper(self):
+        from .hosts import locate
+        with tempfile.TemporaryDirectory() as tmp:
+            package=Path(tmp)/'lib/node_modules/@openai/codex'
+            wrapper=package/'bin/codex.js';wrapper.parent.mkdir(parents=True);wrapper.write_text('#!/usr/bin/env node\n');wrapper.chmod(0o755)
+            native=package/'node_modules/@openai/codex-test/vendor/arch/bin/codex';native.parent.mkdir(parents=True);native.write_bytes(b'\x7fELF');native.chmod(0o755)
+            bin_dir=Path(tmp)/'bin';bin_dir.mkdir();(bin_dir/'codex').symlink_to(wrapper)
+            with patch.dict(os.environ,{'PATH':str(bin_dir)}):
+                self.assertEqual(locate('codex',Path(tmp)/'elsewhere'),native.resolve())

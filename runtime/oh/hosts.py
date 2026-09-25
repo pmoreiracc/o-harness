@@ -45,10 +45,24 @@ def binary_identity(path,root=None):
     return {'path':str(path),'sha256':sha}
 
 
-def trust(host,path,root=None):
+def locate(host,root=None):
+    """Find the native binary behind the host command on PATH; the human still runs trust-host."""
+    import shutil
+    found=shutil.which(host,path=subscription_env(root)['PATH'])
+    if not found:raise Refused(f'{host} is not on PATH; pass its absolute native binary path')
+    path=Path(found).resolve()
+    with path.open('rb') as stream:script=stream.read(2)==b'#!'
+    if script and host=='codex':
+        # npm installs a Node wrapper; its native binary is vendored beside it.
+        vendored=sorted(path.parent.parent.glob('node_modules/@openai/codex-*/vendor/*/bin/codex'))
+        if len(vendored)==1:path=vendored[0].resolve()
+    return path
+
+
+def trust(host,path=None,root=None):
     from .storage import state_home
     if host not in ('codex','claude'):raise Refused('Unsupported host')
-    identity=binary_identity(path,root)
+    identity=binary_identity(path or locate(host,root),root)
     probe=subprocess.run([identity['path'],'--version'],capture_output=True,text=True,timeout=10,env=subscription_env(root))
     if probe.returncode or ('codex-cli' if host=='codex' else 'Claude Code') not in probe.stdout:raise Refused('Unrecognized host version')
     atomic_json(state_home()/'hosts'/(host+'.json'),identity)
