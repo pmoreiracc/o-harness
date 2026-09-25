@@ -144,7 +144,7 @@ def _run(root,invoke):
             raise Refused('Execute tasks on a short-lived branch, not main or detached HEAD')
         if git(root,'branch','--show-current')!=state['branch']:
             raise Refused('Run belongs to another branch; return to its checkout')
-        from .initial import incarnation
+        from .branches import incarnation
         if incarnation(root,state['branch'])!=state['incarnation']:
             raise Refused('This branch was recreated; its old run cannot grant authority')
         from .config import version

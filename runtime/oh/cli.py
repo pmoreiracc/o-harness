@@ -65,13 +65,9 @@ def main(argv=None):
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?',default='origin/main');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
     publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?',default='origin/main');publication.add_argument('--validate-event',type=Path)
     trusted=sub.add_parser('trust-host');trusted.add_argument('host',choices=['codex','claude']);trusted.add_argument('path',type=Path)
-    init=sub.add_parser('init');init.add_argument('--name',required=True);init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--import-legacy',action='store_true');init.add_argument('--kind',choices=['harness','product'],default='product')
+    init=sub.add_parser('init');init.add_argument('--name',required=True);init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
-    initial_check=sub.add_parser('initial-check');initial_check.add_argument('doc');initial_check.add_argument('task')
-    setup=sub.add_parser('configure-hosts');setup.add_argument('--development',action='store_true')
-    git_hook=sub.add_parser('git-hook');git_hook.add_argument('name',choices=['pre-push','commit-msg','prepare-commit-msg']);git_hook.add_argument('args',nargs=argparse.REMAINDER)
-    adapter=sub.add_parser('adapter');adapter.add_argument('entry');adapter.add_argument('args',nargs=argparse.REMAINDER)
     sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('config');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
     hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
     serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4318)
@@ -79,12 +75,8 @@ def main(argv=None):
     suggest=sub.add_parser('suggest');suggest.add_argument('--host',choices=['codex','claude'],default='codex')
     deliver=sub.add_parser('deliver');deliver.add_argument('doc');deliver.add_argument('track',nargs='?',default='')
     resource=sub.add_parser('resource');resource.add_argument('path')
-    hook_dispatch=sub.add_parser('hook');hook_dispatch.add_argument('--host',choices=['codex','claude'],required=True);hook_dispatch.add_argument('entry');hook_dispatch.add_argument('args',nargs=argparse.REMAINDER)
-    legacy=sub.add_parser('legacy');legacy.add_argument('entry');legacy.add_argument('args',nargs=argparse.REMAINDER)
     args=parser.parse_args(argv);root=args.root.resolve()
     try:
-        if args.command in ('initial-check','configure-hosts','git-hook','adapter','hook','legacy'):
-            raise Refused('Repository adapters and the old execution loop are retired. Use the user-level plugin and the native run command; old in-flight runs require their retained runtime.')
         if args.command=='build-plugin':
             from .installation import build
             result=build(args.destination,args.host)
@@ -106,50 +98,22 @@ def main(argv=None):
             print(json.dumps(result,indent=2))
             raise SystemExit(1 if any(x['returncode'] for x in result) else 0)
         elif args.command=='pr-summary':
-            from .storage import git
-            from .publication import has_native_history
-            if has_native_history(root,args.base):
-                from .publication import render,validate_event
-                if args.validate_event:result=validate_event(root,read_json(args.validate_event),args.base)
-                else:print(render(root,args.base));return
-            else:
-                from .legacy import execute
-                response=execute(root,'scripts/review-pr-summary.sh',['--validate-event',args.validate_event,args.base] if args.validate_event else [])
-                print(response.stdout,end='');print(response.stderr,end='',file=sys.stderr);raise SystemExit(response.returncode)
+            from .publication import has_native_history,render,validate_event
+            if not has_native_history(root,args.base):raise Refused('This branch has no OH-reviewed commits to summarize')
+            if args.validate_event:result=validate_event(root,read_json(args.validate_event),args.base)
+            else:print(render(root,args.base));return
         elif args.command=='trust-host':
             from .hosts import trust
             result=trust(args.host,args.path,root)
         elif args.command=='init':
             from .registry import register, profile_path
-            previous=read_json(root/'.oh/project.json') if args.import_legacy else None
-            result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,imported=previous,replace=args.replace)
-            if args.import_legacy:
-                for name in ('checks.json','config.json','config.local.json'):
-                    source=root/'.oh'/name;destination=profile_path(root,name)
-                    if source.exists():
-                        value=read_json(source)
-                        if destination.exists() and read_json(destination)!=value:
-                            raise Refused('Existing external settings differ; resolve the import explicitly')
-                        if not destination.exists():atomic_json(destination,value,immutable=True)
+            result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace)
         elif args.command=='backup':
             from .backup import backup
             result=backup(args.destination)
         elif args.command=='restore':
             from .backup import restore
             result=restore(args.source)
-        elif args.command=='initial-check':
-            from .initial import covers
-            raise SystemExit(0 if covers(root,args.doc,args.task) else 3)
-        elif args.command=='configure-hosts':
-            from .integration import generate
-            result=generate(root,consumer=not args.development)
-        elif args.command in ('git-hook','adapter'):
-            import subprocess
-            from .legacy import environment
-            base=HOME/('integrations/git' if args.command=='git-hook' else 'adapters/codex')
-            entry=(base/(args.name if args.command=='git-hook' else args.entry)).resolve()
-            if not entry.is_relative_to(base):raise Refused('Invalid adapter path')
-            raise SystemExit(subprocess.call(['/bin/bash',str(entry),*args.args],cwd=root,env=environment(root)))
         elif args.command=='config':
             from .registry import profile_path
             result={'effective':load(root),'profile_directory':str(profile_path(root).parent),'precedence':['packaged defaults','external global defaults','project config','personal project config'],'version':__import__('oh.config',fromlist=['version']).version()}
@@ -205,21 +169,6 @@ def main(argv=None):
             path=(HOME/args.path).resolve()
             if not path.is_relative_to(HOME):raise Refused('Resource outside OH')
             print(path.read_text());return
-        elif args.command=='hook':
-            from .hook import dispatch
-            result=dispatch(root,args.host,args.entry,args.args,json.load(sys.stdin))
-        elif args.command=='legacy':
-            # Compatibility delivery profile, retained while consumers migrate together.
-            import subprocess
-            entry=(HOME/'core'/args.entry).resolve()
-            if not entry.is_relative_to(HOME/'core') or not entry.is_file():raise Refused('Unknown core entry point')
-            from .legacy import environment
-            env=environment(root)
-            code=subprocess.call(['/bin/bash',str(entry),*args.args],cwd=root,env=env)
-            if code==0 and args.entry=='scripts/start.sh':
-                from .initial import bind
-                bind(root)
-            raise SystemExit(code)
         if result is not None:print(json.dumps(result,indent=2))
     except (Refused,FileNotFoundError,ValueError,KeyError) as exc:
         print(f'OH: {exc}',file=sys.stderr);raise SystemExit(2)

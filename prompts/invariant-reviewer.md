@@ -113,22 +113,9 @@ VERDICT: findings — N blocking, M concerns, K scope
 
 VERDICT: clean — <one line on what you checked and could not break>
 
-Before returning, use the advisory checker without creating a repository file:
-
-    core/scripts/review-check.sh <<'REVIEW'
-    <paste the complete draft here>
-    REVIEW
-
-It reports presentation and coverage problems before you submit. Fix them when possible, but
-the host will retain your raw output and compute the outcome from recognizable severity
-markers even when presentation remains imperfect. There is no correction handshake and no
-second submission from this reviewer.
-
 Never edit a repository file. Never run a command that writes repository or external state —
 and *writes* is not only files. The repository state is off limits too: HEAD, the index, the
-working tree, the stash, and branches. The one permitted write is the quoted-heredoc
-`review-check.sh` invocation above: the shell and script may hold that draft in scratch files
-under `/tmp`, and nowhere else.
+working tree, the stash, and branches.
 Never `git checkout`, `switch`, `reset`, `stash`, `restore`, or anything that moves them —
 even to read another ref's copy of a file, and even when you mean to move back. Read other
 versions in place instead: `git show <ref>:<path>` for a file at a ref, `git diff <ref>` to

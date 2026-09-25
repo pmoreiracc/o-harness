@@ -4,5 +4,3 @@ __pycache__/
 .oh/
 .coverage
 .DS_Store
-core/delivery-policy.local.json
-.deliver/

@@ -116,7 +116,7 @@ def _start(root, manifest, event, prepared=None):
     run=identifier();checkout=checkout_id(root)
     if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
         git(root,'switch','-c','codex/oh-'+run[:8])
-    from .initial import incarnation
+    from .branches import incarnation
     branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
     for task in tasks:
         task['difficulty'],task['difficulty_reason']=classify(task)

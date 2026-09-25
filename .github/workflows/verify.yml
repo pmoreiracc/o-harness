@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [native, syntax, guards, adapters, delivery, review]
+        suite: [native, syntax]
     steps:
       - uses: actions/checkout@v4
         with:

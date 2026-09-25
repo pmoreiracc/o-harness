@@ -8,7 +8,7 @@ class BranchIdentityTest(unittest.TestCase):
     setUp=fixtures.WorkflowTest.setUp
     git=fixtures.WorkflowTest.git
     def test_external_identity_survives_appends_and_rejects_recreation_with_identical_creation_record(self):
-        from .initial import incarnation
+        from .branches import incarnation
         path=self.root/'.git/logs/refs/heads/work'
         first=path.read_text().splitlines()[0]
         original=incarnation(self.root,'work',create=True)
