@@ -191,23 +191,10 @@ else
   fail=$((fail+1)); printf '  FAIL  %s (want exit 2, got %s)\n' "an unrecognised patch envelope fails closed" "$got"
 fi
 
-check() { # check <label> <command...>
-  local label="$1"
-  shift
-  if "$@" >/dev/null 2>&1; then
-    pass=$((pass+1)); printf '  ok    %s\n' "$label"
-  else
-    fail=$((fail+1)); printf '  FAIL  %s\n' "$label"
-  fi
-}
-
 ROOT="$HARNESS_ROOT"
 rm -rf "$PRODUCT_FIXTURE"
-echo "Codex discovery contract"
-# Executable generated-discovery behavior is covered by native integration tests. Avoid
-# asserting prose from the superseded manually coordinated workflow.
-check "generated hooks retain required lifecycle boundaries" jq -e '.hooks.PreToolUse and .hooks.PostToolUse and .hooks.SubagentStart and .hooks.SubagentStop and .hooks.UserPromptSubmit' .codex/hooks.json
-check "human choices use the neutral pending-event recorder" jq -e '.hooks.UserPromptSubmit | (length==1) and (.[0].hooks[0].command | contains("user-prompt-submit"))' .codex/hooks.json
+# This suite retains legacy adapter behavior. Current user-plugin discovery is covered
+# by the native installation/prompt tests and native-host conformance.
 
 codex_assert() {
   if eval "$2"; then pass=$((pass+1)); printf '  ok    %s\n' "$1"
