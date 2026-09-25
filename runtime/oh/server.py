@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import secrets
 import threading
@@ -127,10 +128,20 @@ def serve(port=4318):
     server.token=secrets.token_urlsafe(32);server.collector_error=None
     server.analysis_lock=threading.Lock();server.analysis_error=None;server.analysis_result=None
     stop=threading.Event()
+    from .storage import state_home
+    # Only the service started through bin/oh can restart onto a newer core; an older
+    # registration that names one version directly would restart into the same version.
+    follows=os.environ.get('OH_SERVICE_FOLLOWS_ACTIVE')=='1' and HOME.parent==state_home()/'versions'
+    def active():
+        try:return json.loads((state_home()/'runtime/active.json').read_text())['revision']
+        except (OSError,ValueError,KeyError):return HOME.name
     def collector():
         while not stop.is_set():
             try:collect();server.collector_error=None
             except Exception as exc:server.collector_error=str(exc)
+            # After an upgrade the service exits; launchd restarts it through bin/oh on the active core.
+            if follows and active()!=HOME.name:
+                print('OH dashboard: a newer core is active; restarting',flush=True);server.shutdown();return
             stop.wait(1)
     threading.Thread(target=collector,daemon=True).start()
     print(f'OH dashboard: http://localhost:{server.server_port}',flush=True)

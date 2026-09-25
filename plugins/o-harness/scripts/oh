@@ -16,10 +16,20 @@ if command=='setup':
 else:
     home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
     active=home/'runtime/active.json'
+    bundled=plugin/'core/revision.json'
+    if bundled.is_file():
+        # A plugin install or update carries a new core: activate it once, on first use.
+        # A revision that was installed before is never re-selected here, so two hosts on
+        # different plugin versions cannot flip the active core back and forth.
+        revision=json.loads(bundled.read_text())['revision']
+        if Path(revision).name==revision and '+worktree.' not in revision and not (home/'versions'/revision).exists():
+            import subprocess
+            done=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup'],stdin=subprocess.DEVNULL,capture_output=True,text=True)
+            if done.returncode:print('OH: automatic setup failed. '+done.stderr.strip(),file=sys.stderr)
     if not active.is_file() and command=='plugin-hook':
         prompt=json.load(sys.stdin).get('prompt')
         # Bare choices such as "continue" are ordinary prose until OH is set up.
-        if isinstance(prompt,str) and prompt.strip()[:1] in ('$','/'):print(json.dumps({'authorized':False,'onboarding':'Run this plugin scripts/oh setup explicitly, register the selected checkout with init, then submit a fresh workflow invocation.'}))
+        if isinstance(prompt,str) and prompt.strip()[:1] in ('$','/'):print(json.dumps({'authorized':False,'onboarding':'OH is not set up. Run this plugin scripts/oh setup, register the selected checkout with init, then submit a fresh workflow invocation.'}))
         raise SystemExit(0)
     if not active.is_file():
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')

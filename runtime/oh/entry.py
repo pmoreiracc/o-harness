@@ -10,8 +10,9 @@ PREFIX=r'[$/](?:o-harness:)?'
 def command(prompt):
     if not isinstance(prompt,str):return None
     prompt=prompt.strip()
-    match=re.fullmatch(PREFIX+r'(oh-(?:start|pause|resume|stop)|propose|design|deliver)(?:\s+(.*))?',prompt,re.S)
-    if match:return match[1],match[2] or ''
+    match=re.fullmatch(PREFIX+r'oh-(start|pause|resume|stop|propose|design|deliver)(?:\s+(.*))?',prompt,re.S)
+    # Workflow skills are invoked as oh-propose/oh-design/oh-deliver; internally they keep their workflow names.
+    if match:return (match[1] if match[1] in ('propose','design','deliver') else 'oh-'+match[1]),match[2] or ''
     if prompt in CHOICES:return 'choice',prompt
     if re.fullmatch(r'(?:oh start|[$/]oh)\s+request:[0-9a-f]{64}',prompt):
         return 'deliver',prompt.rsplit(' ',1)[-1]

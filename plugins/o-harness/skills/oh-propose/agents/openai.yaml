@@ -1,5 +1,5 @@
 interface:
-  display_name: "deliver"
+  display_name: "oh-propose"
   short_description: "Explicit OH workflow or run control"
 policy:
   allow_implicit_invocation: false

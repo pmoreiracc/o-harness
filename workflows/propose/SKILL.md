@@ -12,4 +12,4 @@ The literal human invocation binds this read-only workflow and its requested int
 Run `--root <checkout> run` to verify the native human event and execute the shared runner.
 Do not create implementation scope or run your own worker/review loop. Read the saved
 artifact referenced by the checkpoint, summarize it briefly, and end at the decision
-boundary. A later deliver invocation must authorize the exact implementation plan.
+boundary. A later oh-deliver invocation must authorize the exact implementation plan.

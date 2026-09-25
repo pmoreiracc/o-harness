@@ -1,5 +1,5 @@
 ---
-name: deliver
+name: oh-deliver
 description: Execute an agreed OH task batch only when explicitly invoked.
 disable-model-invocation: true
 ---

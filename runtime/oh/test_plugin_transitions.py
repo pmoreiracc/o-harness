@@ -20,7 +20,7 @@ class PluginTransitions(unittest.TestCase):
     fake=fixtures.WorkflowTest.fake
 
     def test_first_use_and_unprepared_work_do_not_block_a_later_exact_trigger(self):
-        payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root),'prompt':'$o-harness:deliver implement the agreed change'}
+        payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root),'prompt':'$o-harness:oh-deliver implement the agreed change'}
         hook=HOME/'plugins/o-harness/scripts/human-event.py'
         result=subprocess.run(['python3',str(hook),'codex'],input=json.dumps(payload),text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
@@ -28,11 +28,11 @@ class PluginTransitions(unittest.TestCase):
         self.assertFalse(receive(self.root,'codex',payload)['authorized'])
         self.assertFalse(pending_file(self.root).exists())
         self.assertFalse(receive(self.root,'codex',payload|{'prompt':'$o-harness:oh-start'})['authorized'])
-        self.assertTrue(receive(self.root,'codex',payload|{'turn_id':'2','prompt':'$o-harness:deliver request:'+'a'*64})['pending'])
+        self.assertTrue(receive(self.root,'codex',payload|{'turn_id':'2','prompt':'$o-harness:oh-deliver request:'+'a'*64})['pending'])
 
     def test_unprefixed_prose_is_not_an_invocation(self):
         payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root)}
-        for prompt in ('design a new logo','propose a name','deliver it today','oh-stop'):
+        for prompt in ('design a new logo','propose a name','deliver it today','oh-stop','/design a logo','/deliver it'):
             self.assertIsNone(receive(self.root,'codex',payload|{'prompt':prompt}))
         self.assertFalse(pending_file(self.root).exists())
 
@@ -43,7 +43,7 @@ class PluginTransitions(unittest.TestCase):
                 return subprocess.run(['python3',str(hook),'claude'],input=json.dumps({'prompt':prompt,'cwd':str(self.root)}),
                     text=True,capture_output=True,env=os.environ|{'OH_DATA_HOME':home},check=True).stdout
             self.assertEqual(send('continue'),'')
-            self.assertIn('onboarding',send('/o-harness:propose a plan'))
+            self.assertIn('onboarding',send('/oh-propose a plan'))
 
     def test_launcher_pins_only_unfinished_runs_after_an_upgrade(self):
         home=Path(os.environ['OH_DATA_HOME']);key=digest(str(self.root.resolve()))

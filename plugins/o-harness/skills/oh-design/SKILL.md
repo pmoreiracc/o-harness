@@ -1,5 +1,5 @@
 ---
-name: design
+name: oh-design
 description: Prepare an independently reviewed OH task plan only when explicitly invoked.
 disable-model-invocation: true
 ---

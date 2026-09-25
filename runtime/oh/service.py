@@ -21,7 +21,7 @@ def install():
     value={'Label':LABEL,'ProgramArguments':[sys.executable,'-I',str(launcher),'serve'],
       'WorkingDirectory':str(state_home()),'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':10,
       'StandardOutPath':str(logs/'dashboard.log'),'StandardErrorPath':str(logs/'dashboard-error.log'),
-      'EnvironmentVariables':{'PATH':os.environ.get('PATH','/usr/bin:/bin'),'OH_DATA_HOME':str(state_home())}}
+      'EnvironmentVariables':{'PATH':os.environ.get('PATH','/usr/bin:/bin'),'OH_DATA_HOME':str(state_home()),'OH_SERVICE_FOLLOWS_ACTIVE':'1'}}
     previous=path.read_bytes() if path.exists() else None
     domain=f'gui/{os.getuid()}'
     running=subprocess.run(['launchctl','print',domain+'/'+LABEL],capture_output=True).returncode==0

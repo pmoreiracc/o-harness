@@ -26,7 +26,7 @@ def prepare(root,manifest=None,doc=None,track=''):
         data=project_design(root,doc,track)
         value.update(kind='design',doc=doc,track=track,manifest=data)
     key=digest(value);atomic_json(directory(root)/(key+'.json'),value,immutable=True)
-    trigger=('$o-harness:deliver request:'+key if manifest is not None else '$o-harness:deliver '+doc+(' '+track if track else '')+' request:'+key)
+    trigger=('$o-harness:oh-deliver request:'+key if manifest is not None else '$o-harness:oh-deliver '+doc+(' '+track if track else '')+' request:'+key)
     return {'request':key,'trigger':trigger,'tasks_per_batch':value['snapshot']['config']['tasks_per_batch'],'review_rounds':value['snapshot']['config']['review_rounds']}
 
 

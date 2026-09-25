@@ -1,5 +1,5 @@
 ---
-name: propose
+name: oh-propose
 description: Prepare an OH proposal only when explicitly invoked.
 disable-model-invocation: true
 ---
