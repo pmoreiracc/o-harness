@@ -74,22 +74,33 @@ task_project_ids "$TSV" "$OWNER" "$4"
     return grant
 
 
-def incarnation(root,branch):
+def incarnation(root,branch,*,create=False):
     path=Path(git(root,'rev-parse','--path-format=absolute','--git-path','logs/refs/heads/'+branch))
     if path.is_symlink():raise Refused('Branch reflog cannot be a symlink')
-    with path.open('rb') as stream:first=stream.readline().decode()
-    stat=path.stat()
-    return digest({'first':first,'inode':stat.st_ino,'birth':getattr(stat,'st_birthtime',None)})
+    lines=path.read_text().splitlines()
+    markers=[line for line in lines if re.search(r'\tOH incarnation: [0-9a-f-]{36}$',line)]
+    if not markers and create:
+        head=git(root,'rev-parse','refs/heads/'+branch)
+        try:git(root,'reflog','write','refs/heads/'+branch,head,head,'OH incarnation: '+identifier())
+        except subprocess.CalledProcessError as exc:
+            raise Refused('OH requires Git with reflog write support (Git 2.55 is verified). Upgrade Git before starting this run; the retained scope is unchanged and no task execution started.') from exc
+        return incarnation(root,branch)
+    if not markers:raise Refused('Branch incarnation marker is missing; a recreated branch cannot reuse the old grant')
+    # A retained nonce survives ordinary appends but disappears with branch deletion.
+    # Filesystem inode reuse and Git timestamps at one-second resolution are irrelevant.
+    return digest({'first':lines[0],'marker':markers[0]})
 
 
 @state_writer
 def bind(root):
     directory,grant=load(root)
     branch=git(root,'branch','--show-current')
-    if branch!=grant['branch'] or git(root,'rev-parse','HEAD')!=grant['base']:
-        raise Refused('Initial grant does not match the newly created delivery branch')
-    value={'incarnation':incarnation(root,branch),'grant':grant['hash']}
+    if branch!=grant['branch']:
+        raise Refused('Initial grant belongs to another delivery branch')
     path=directory/'branch.json'
+    if not path.exists() and git(root,'rev-parse','HEAD')!=grant['base']:
+        raise Refused('Initial grant does not match the newly created delivery branch')
+    value={'incarnation':incarnation(root,branch,create=not path.exists()),'grant':grant['hash']}
     if path.exists():
         if read_json(path)!=value:raise Refused('The delivery branch was recreated; its old grant cannot be reused')
     else:atomic_json(path,value,immutable=True)

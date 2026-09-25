@@ -106,3 +106,45 @@ class InitialGrantTest(unittest.TestCase):
         self.assertEqual(chosen.returncode,0,chosen.stderr)
         result=run(self.root,'0900',call=lambda *a,**k:self.fail('accepted review must not start another model'))
         self.assertEqual(result['status'],'checkpoint',result);self.assertEqual(len(result['completed_now']),1)
+
+    def test_branch_nonce_survives_appends_and_rejects_recreation_with_identical_creation_record(self):
+        from .initial import incarnation
+        self.git('switch','-c','work');path=self.root/'.git/logs/refs/heads/work'
+        first=path.read_text().splitlines()[0]
+        original=incarnation(self.root,'work',create=True)
+        self.git('commit','--allow-empty','-qm','ordinary commit')
+        self.assertEqual(incarnation(self.root,'work'),original)
+        self.git('switch','main');self.git('branch','-D','work');self.git('switch','-c','work')
+        # Force the exact timestamp/identity bytes that made the Linux failure possible.
+        path.write_text(first+'\n')
+        with self.assertRaises(Refused):incarnation(self.root,'work')
+        self.assertNotEqual(incarnation(self.root,'work',create=True),original)
+
+    def _binding_failure_recovery(self,phase):
+        from . import initial
+        from .design_runner import run
+        atomic_json(self.root/'.oh/checks.json',[{'name':'fixture','command':['python3','-c','pass']}])
+        atomic_json(self.root/'.oh/config.json',{'tasks_per_batch':1})
+        self.git('add','.');self.git('commit','-qm','checks');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        grant=record(self.root,'0900','',self.event);self.design_calls=[]
+        original_git=initial.git;original_json=initial.atomic_json
+        def unavailable(root,*args):
+            if args[:2]==('reflog','write'):raise subprocess.CalledProcessError(1,args)
+            return original_git(root,*args)
+        def interrupted(path,value,**kwargs):
+            if Path(path).name=='branch.json':raise RuntimeError('binding interrupted')
+            return original_json(path,value,**kwargs)
+        with patch('oh.initial.git',side_effect=unavailable if phase=='marker' else original_git),patch('oh.initial.atomic_json',side_effect=interrupted if phase=='binding' else original_json):
+            with self.assertRaises(Refused if phase=='marker' else RuntimeError):run(self.root,'0900',call=self.fake)
+        self.assertEqual(self.design_calls,[]);self.assertEqual(self.git('branch','--show-current'),'deliver/0900')
+        result=run(self.root,'0900',call=self.fake)
+        self.assertEqual(result['status'],'checkpoint',result)
+        self.assertEqual(self.design_calls,['implementation','review'])
+        self.assertEqual(load(self.root)[1]['hash'],grant['hash'])
+        self.assertEqual(load(self.root)[1]['tasks'],['1'])
+
+    def test_missing_marker_recovers_after_git_capability_is_restored(self):
+        self._binding_failure_recovery('marker')
+
+    def test_crash_after_marker_recovers_without_replenishing_scope(self):
+        self._binding_failure_recovery('binding')

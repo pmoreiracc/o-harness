@@ -170,6 +170,15 @@ task_fresh_branch_incarnation_valid() {
   [ "$head" = "$trunk" ] || return 1
   reflog=$(git -C "$root" reflog show --format='%H%x09%gs' -n 1 \
     "refs/heads/$branch" 2>/dev/null) || return 1
+  case "${reflog#*$'\t'}" in
+    'OH incarnation: '*)
+      # OH's unique no-movement marker follows the canonical branch creation.
+      # A commit/reset beneath it still fails the ordinary creation checks below.
+      printf '%s' "${reflog#*$'\t'}" | grep -Eq '^OH incarnation: [0-9a-f-]{36}$' || return 1
+      reflog=$(git -C "$root" reflog show --format='%H%x09%gs' -n 2 \
+        "refs/heads/$branch" 2>/dev/null | tail -n 1) || return 1
+      ;;
+  esac
   start_sha="${reflog%%$'\t'*}"
   start_subject="${reflog#*$'\t'}"
   [ "$start_subject" != "$reflog" ] || return 1

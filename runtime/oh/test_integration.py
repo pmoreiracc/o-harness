@@ -135,3 +135,17 @@ class IntegrationTest(unittest.TestCase):
             with patch('pathlib.Path.home',return_value=home):
                 with self.assertRaises(SystemExit) as failure:runpy.run_path(str(root/'.oh/setup.py'))
             self.assertIn('Preserve it',str(failure.exception));self.assertTrue(broken.is_symlink())
+
+    @unittest.skipUnless(os.uname().sysname=='Darwin','macOS read-only sandbox regression')
+    def test_legacy_series_lookup_does_not_write_heredoc_scratch_files(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
+            root=Path(tmp)/'consumer';root.mkdir();self.git(root,'init','-qb','work');self.git(root,'config','user.name','Fixture');self.git(root,'config','user.email','fixture@example.invalid')
+            atomic_json(root/'.oh/project.json',{'id':identifier(),'name':'Fixture','kind':'product'})
+            self.git(root,'add','.');self.git(root,'commit','-qm','base')
+            from .legacy import environment
+            env=environment(root)
+            start='source "$OH_HOME/core/review-workflow.sh"; review_series_ensure "$OH_PROJECT_ROOT" work 3 invariant-reviewer nd/fixture'
+            series=subprocess.check_output(['/bin/bash','-c',start],env=env,text=True).strip()
+            command='source "$OH_HOME/core/review-workflow.sh"; review_series_current "$OH_PROJECT_ROOT" work'
+            result=subprocess.run(['/usr/bin/sandbox-exec','-p','(version 1)(allow default)(deny file-write*)(allow file-write* (literal "/dev/null"))','/bin/bash','-c',command],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(result.stdout.strip(),series)

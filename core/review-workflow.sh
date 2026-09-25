@@ -555,9 +555,7 @@ review_series_current() {
       echo "review-series: ambiguous open series $seen and $id; preserve both records and resolve the current context." >&2; return 1;
     }
     seen="$id"
-  done <<EOF
-$contexts
-EOF
+  done < <(printf '%s\n' "$contexts")
   [ -n "$seen" ] || return 1
   printf '%s' "$seen"
 }

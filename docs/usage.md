@@ -95,3 +95,8 @@ script is needed. `./oh serve` runs the server in the foreground for development
 
 The service runs a specific installed OH revision. After upgrading a product pin, reinstall
 the service from the desired installed revision. Its logs live in the OH data directory.
+
+Task grants require Git with `reflog write` support; Git 2.55 is verified. OH records a
+unique branch marker so deleting and recreating a branch cannot reuse an old grant,
+even when the filesystem reuses an inode within the same second. Removing or expiring
+that marker invalidates the grant; preserve the evidence and prepare a new run.

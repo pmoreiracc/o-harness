@@ -31,7 +31,7 @@ def run(root,doc,track='',host=None,call=invoke):
         if git(root,'branch','--show-current')=='main':
             result=execute(root,'scripts/start.sh',[doc]+([track] if track else []))
             if result.returncode:raise Refused(result.stderr)
-            bind(root)
+        bind(root)
         if not (directory/'telemetry.json').exists():
             best_effort('run.started',p,run_id,name=read_json(Path(root)/'.oh/project.json')['name'],
               work_kind='product',host=host,version=grant['harness_version'],config_hash=grant['config_hash'])

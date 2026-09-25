@@ -102,7 +102,7 @@ def _start(root, manifest, event, prepared=None):
     if git(root,'branch','--show-current') in ('main','master'):
         git(root,'switch','-c','codex/oh-'+run[:8])
     from .initial import incarnation
-    branch_incarnation=incarnation(root,git(root,'branch','--show-current'))
+    branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
     for task in tasks:
         task['difficulty'],task['difficulty_reason']=classify(task)
     data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],

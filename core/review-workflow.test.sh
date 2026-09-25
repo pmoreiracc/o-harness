@@ -1482,11 +1482,8 @@ jq -cn --arg body "$ADR_HANDOFF" --arg head "$ADR_LATER_HEAD" \
 CLAUDE_PROJECT_DIR="$ADR_HANDOFF_ROOT" "$ROOT/core/scripts/review-pr-summary.sh" \
   --validate-event "$FIX/adr-later-event.json" main >/dev/null 2>&1
 ADR_LATER_RC=$?
-ADR_STEP_FOUR=$(sed -n '/^4\. \*\*Stop if a decision/,/^5\. \*\*Write the doc/p' "$ROOT/workflows/design/SKILL.md")
-if [ "$ADR_VALIDATE_RC" = 0 ] && [ "$ADR_LATER_RC" -ne 0 ] \
-   && printf '%s' "$ADR_STEP_FOUR" | grep -qF 'invariant-reviewer' \
-   && printf '%s' "$ADR_STEP_FOUR" | grep -qF 'review-finish.sh' \
-   && printf '%s' "$ADR_STEP_FOUR" | grep -qF 'review-pr-summary.sh'; then
+# The neutral skill delegates product ADR policy; verify behavior, not old skill wording.
+if [ "$ADR_VALIDATE_RC" = 0 ] && [ "$ADR_LATER_RC" -ne 0 ]; then
   ok "the ADR-only design exit reviews, prepares, seals, and invalidates a later commit"
 else bad "the ADR-only design exit reviews, prepares, seals, and invalidates a later commit"; fi
 rm -rf "$ADR_HANDOFF_ROOT"
