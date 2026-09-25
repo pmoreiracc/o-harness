@@ -1,0 +1,49 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+concurrency: release
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - name: Check the tag matches both plugin versions
+        run: |
+          for host in claude codex; do
+            version=$(jq -r .version "plugins/o-harness/.$host-plugin/plugin.json")
+            [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::$host plugin version is $version, tag is $GITHUB_REF_NAME"; exit 1; }
+          done
+      - run: bash integrations/test.sh native
+      - run: bash integrations/test.sh syntax
+      - name: Publish the packages to the dist branch
+        run: |
+          out="$RUNNER_TEMP/dist"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin dist >/dev/null; then
+            git fetch origin dist
+            git worktree add -B dist "$out" FETCH_HEAD
+            git -C "$out" rm -rq .
+          else
+            git worktree add --orphan -b dist "$out"
+          fi
+          bash integrations/package.sh "$out"
+          git -C "$out" add -A
+          git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $GITHUB_REF_NAME ($(git rev-parse --short HEAD))"
+          git -C "$out" push origin dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
