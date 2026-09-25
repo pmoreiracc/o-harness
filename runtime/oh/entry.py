@@ -4,7 +4,7 @@ from .storage import Refused
 
 CHOICES={'continue','pr','stop','resume','retry','grant review','fix concerns','fix scope',
          'fix findings','accept concerns','route scope','accept concerns and route scope'}
-PREFIX=r'[$/]?(?:o-harness:)?'
+PREFIX=r'[$/](?:o-harness:)?'
 
 
 def command(prompt):

@@ -5,7 +5,6 @@ from pathlib import Path
 import plistlib
 import subprocess
 import sys
-from .config import HOME
 from .storage import Refused,state_home
 
 LABEL='dev.o-harness.dashboard'
@@ -13,11 +12,14 @@ LABEL='dev.o-harness.dashboard'
 
 def install():
     if sys.platform!='darwin':raise Refused('Local auto-start currently supports macOS; run oh serve under your service manager on other systems')
+    # The stable launcher resolves the active core, so a restart picks up an upgrade.
+    launcher=state_home()/'bin/oh'
+    if not launcher.is_file():raise Refused('OH is not set up. Run the plugin scripts/oh setup first.')
     path=Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist'
     path.parent.mkdir(parents=True,exist_ok=True)
     logs=state_home()/'logs';logs.mkdir(exist_ok=True)
-    value={'Label':LABEL,'ProgramArguments':[sys.executable,'-I',str(HOME/'oh'),'serve'],
-      'WorkingDirectory':str(HOME),'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':10,
+    value={'Label':LABEL,'ProgramArguments':[sys.executable,'-I',str(launcher),'serve'],
+      'WorkingDirectory':str(state_home()),'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':10,
       'StandardOutPath':str(logs/'dashboard.log'),'StandardErrorPath':str(logs/'dashboard-error.log'),
       'EnvironmentVariables':{'PATH':os.environ.get('PATH','/usr/bin:/bin'),'OH_DATA_HOME':str(state_home())}}
     previous=path.read_bytes() if path.exists() else None

@@ -17,7 +17,9 @@ else:
     home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
     active=home/'runtime/active.json'
     if not active.is_file() and command=='plugin-hook':
-        print(json.dumps({'authorized':False,'onboarding':'Run this plugin scripts/oh setup explicitly, register the selected checkout with init, then submit a fresh workflow invocation.'}))
+        prompt=json.load(sys.stdin).get('prompt')
+        # Bare choices such as "continue" are ordinary prose until OH is set up.
+        if isinstance(prompt,str) and prompt.strip()[:1] in ('$','/'):print(json.dumps({'authorized':False,'onboarding':'Run this plugin scripts/oh setup explicitly, register the selected checkout with init, then submit a fresh workflow invocation.'}))
         raise SystemExit(0)
     if not active.is_file():
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')

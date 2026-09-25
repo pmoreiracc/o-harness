@@ -1,8 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
-.oh/*.local.json
-.oh/runtime/
+.oh/
 .coverage
 .DS_Store
 core/delivery-policy.local.json

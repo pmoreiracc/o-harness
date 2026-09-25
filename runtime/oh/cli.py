@@ -16,14 +16,14 @@ from .workflow import active_file, checkpoint, choose, human_event, start
 def host_hook(root,host,payload,*,verified):
     prompt=payload.get('prompt','').strip()
     import re
-    prompt=re.sub(r'^[$/]?(?:o-harness:)?(oh-(?:pause|resume|stop))$',lambda m:m[1],prompt)
+    prompt=re.sub(r'^[$/](?:o-harness:)?(oh-(?:pause|resume|stop))$',lambda m:m[1],prompt)
     prompt={'oh-pause':'pause','oh-stop':'stop','oh-resume':'resume'}.get(prompt,prompt)
-    planning=re.fullmatch(r'[$/]?(?:o-harness:)?(?:oh-start\s+)?(propose|design)\s+(.+)',prompt,re.S)
+    planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+)?(propose|design)\s+(.+)',prompt,re.S)
     if planning:
         kind,intent=planning.groups()
         start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
         return checkpoint(root)
-    delivery=re.fullmatch(r'(?:[$/]?(?:o-harness:)?deliver|oh deliver)\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
+    delivery=re.fullmatch(r'(?:[$/](?:o-harness:)?deliver|oh deliver)\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
     if delivery:
         from .prepared import resolve
         prepared=resolve(root,delivery[3],verified,'design') if delivery[3] else None

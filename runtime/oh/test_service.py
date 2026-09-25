@@ -7,9 +7,13 @@ from unittest.mock import patch
 from .storage import Refused
 from .service import install,LABEL
 
+def launcher(tmp):
+    path=Path(tmp)/'state/bin/oh';path.parent.mkdir(parents=True);path.write_text('')
+
 class ServiceTest(unittest.TestCase):
     def test_failed_upgrade_restores_prior_registration_and_running_service(self):
         with tempfile.TemporaryDirectory() as tmp,patch('oh.service.sys.platform','darwin'),patch('pathlib.Path.home',return_value=Path(tmp)),patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
+            launcher(tmp)
             path=Path(tmp)/'Library/LaunchAgents'/f'{LABEL}.plist';path.parent.mkdir(parents=True);original=b'prior service registration';path.write_bytes(original)
             calls=[]
             def launch(args,**kwargs):
@@ -26,6 +30,7 @@ class ServiceTest(unittest.TestCase):
     def test_partial_bootstrap_is_removed_before_restoring_prior_state(self):
         for previous in (False,True):
             with self.subTest(previous=previous),tempfile.TemporaryDirectory() as tmp,patch('oh.service.sys.platform','darwin'),patch('pathlib.Path.home',return_value=Path(tmp)),patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
+                launcher(tmp)
                 path=Path(tmp)/'Library/LaunchAgents'/f'{LABEL}.plist';path.parent.mkdir(parents=True)
                 if previous:path.write_bytes(b'prior')
                 state={'loaded':'prior' if previous else None,'failed':False}

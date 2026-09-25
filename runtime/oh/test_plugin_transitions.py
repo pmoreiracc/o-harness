@@ -27,8 +27,23 @@ class PluginTransitions(unittest.TestCase):
         self.assertIn('onboarding',result.stdout)
         self.assertFalse(receive(self.root,'codex',payload)['authorized'])
         self.assertFalse(pending_file(self.root).exists())
-        self.assertFalse(receive(self.root,'codex',payload|{'prompt':'oh-start'})['authorized'])
+        self.assertFalse(receive(self.root,'codex',payload|{'prompt':'$o-harness:oh-start'})['authorized'])
         self.assertTrue(receive(self.root,'codex',payload|{'turn_id':'2','prompt':'$o-harness:deliver request:'+'a'*64})['pending'])
+
+    def test_unprefixed_prose_is_not_an_invocation(self):
+        payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root)}
+        for prompt in ('design a new logo','propose a name','deliver it today','oh-stop'):
+            self.assertIsNone(receive(self.root,'codex',payload|{'prompt':prompt}))
+        self.assertFalse(pending_file(self.root).exists())
+
+    def test_bare_choices_get_no_onboarding_before_setup(self):
+        hook=HOME/'plugins/o-harness/scripts/human-event.py'
+        with __import__('tempfile').TemporaryDirectory() as home:
+            def send(prompt):
+                return subprocess.run(['python3',str(hook),'claude'],input=json.dumps({'prompt':prompt,'cwd':str(self.root)}),
+                    text=True,capture_output=True,env=os.environ|{'OH_DATA_HOME':home},check=True).stdout
+            self.assertEqual(send('continue'),'')
+            self.assertIn('onboarding',send('/o-harness:propose a plan'))
 
     def test_launcher_pins_only_unfinished_runs_after_an_upgrade(self):
         home=Path(os.environ['OH_DATA_HOME']);key=digest(str(self.root.resolve()))

@@ -10,7 +10,7 @@ OH separates execution authority, host integration and derived observations.
 | `adapters/` | Retained compatibility fixtures and translation resources |
 | `workflows/` | Neutral workflow instructions |
 | `prompts/` | Shared independent review contract |
-| `config/` | Defaults, invariants and extraction provenance |
+| `config/` | Defaults and invariants |
 | `dashboard/` | Local static interface; no build-time frontend dependency |
 | `integrations/` | Test entrypoints and historical compatibility resources |
 | `.codex/`, `.claude/`, `.agents/` | OH development host configuration only |
