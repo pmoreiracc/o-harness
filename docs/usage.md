@@ -1,102 +1,105 @@
-# Use OH
+# Using OH
 
-## Local setup
+Install the **o-harness** plugin at user scope in Codex or Claude Code. Installation makes
+its explicit skills available; opening a project or asking an ordinary coding question
+never activates OH. Both hosts use one local core and data store. No product repository
+files, Git hooks, API keys or separately billed API calls are needed.
 
-This release targets a single developer's local machine. You need Python 3.11+, Git,
-Bash, jq, Node 22, and a subscription-authenticated Codex CLI or Claude Code CLI.
-The macOS service runs independently of your product's application or Docker stack.
-Other operating systems can run the foreground server; their service setup is not automated.
+## First setup
 
-A consumer keeps `.oh/project.json`, `.oh/checks.json`, a full revision in
-`.oh/harness.lock.json`, and the small `.oh/oh` and `.oh/setup.py` bootstraps.
-`setup.py` installs the committed pin into `~/.local/share/o-harness/versions/REVISION`.
-Run `python3 -I .oh/setup.py` from an integrated project. The GitHub repository must be
-accessible with your existing Git credentials. Never put a token in the lock file.
+This is an early local plugin distribution. Build each host package from a reviewed clean
+OH checkout with `./oh build-plugin <new-directory>/o-harness --host codex` (or `claude`).
+Install the package through that host's native user plugin manager. A polished public
+installer is tracked in [issue 2](https://github.com/pmoreiracc/o-harness/issues/2).
 
-The first integration copies the templates from `integrations/project/`, registers a
-stable project ID with `oh init --name NAME`, supplies the project's required checks,
-and commits the pin before normal execution. Public self-service onboarding remains
-[issue 2](https://github.com/pmoreiracc/o-harness/issues/2).
+Run the installed plugin's `scripts/oh setup` explicitly. It verifies the bundled core,
+installs an immutable version and creates `~/.local/share/o-harness/bin/oh`. Add that
+single directory to your PATH if you want the short `oh` command. Development packages
+require `setup --development`; do not distribute them as reviewed releases.
 
-Trust the installed native host binary once with `.oh/oh trust-host codex ABSOLUTE_PATH`
-or `.oh/oh trust-host claude ABSOLUTE_PATH`. OH records its path and SHA-256; PATH lookup,
-project-local wrappers and temporary binaries cannot silently choose the executable.
-A damaged pinned installation is never reported as installed: setup names the directory
-to preserve separately, after which rerunning setup reinstalls the committed revision.
-A host update requires trusting its new installed binary. Sign in through the host's
-subscription login; API credentials are not used by OH child execution.
+Authorize the installed native binary with `oh trust-host codex <absolute-binary-path>`
+or `oh trust-host claude <absolute-binary-path>`. OH validates the binary and requires
+subscription login. A changed binary needs renewed trust. It never copies credentials.
+Plugin prompt hooks require the host's normal trust approval; installation alone does
+not authorize hook execution. Codex Desktop also supports a bounded native-turn fallback.
 
-Run `.oh/oh configure-hosts` to generate thin host discovery. Existing conflicting files
-are preserved and reported. Previously generated files may be updated or retired only
-while their bytes still match the ownership record. Do not hand-edit generated files;
-keep product policies in `.oh/policy/` and settings in `.oh/config.json`.
+For each checkout, `oh --root <checkout> init --name <name>` registers an external profile.
+`oh config` reports its directory. The agent can inspect existing scripts and configure
+ordinary product checks there. Registration does not grant implementation work. Existing
+project instructions and business policies remain authoritative.
 
-For OH development itself, use `./oh` and `./oh configure-hosts --development`.
+## Workflows
 
-## One conversation, several tasks
+Explicitly invoke **propose**, **design** or **deliver**. Hosts may display namespaced
+commands, for example `$o-harness:deliver` or `/o-harness:deliver`. **oh-start** is an
+optional general entry, not a required on-switch. Propose and design are read-only,
+independently reviewed artifacts saved outside the product. They do not authorize coding.
 
-The coordinator prepares `.oh/runtime/tasks.json` from the work you agreed to:
+For delivery, the coordinator prepares the agreed task list externally and presents its
+exact request trigger. Submit it once to authorize that scope. Prepared scope cannot be
+expanded after your response. The runner selects difficulty profiles, starts fresh workers
+and reviewers, runs checks, records findings and commits the reviewed final tree. Do not
+run another agent loop in the parent conversation.
 
-```json
-{
-  "tasks": [
-    {"id": "1", "title": "Fix empty-state copy", "instructions": "Use the approved wording in the empty state.", "paths": ["web/empty-state.tsx"]}
-  ]
-}
-```
+At a batch boundary choose **continue / PR / stop**; at completion choose **PR / stop**.
+Initial and continued batches use the same configured count. PR preparation retains the
+review evidence and remains subject to human merge. Normal coding, commits and PRs outside
+OH remain available at any time; they are not counted as OH performance.
 
-The agent runs `.oh/oh prepare .oh/runtime/tasks.json` and shows you the exact returned
-trigger, such as `$oh request:HASH` in Codex or `/oh request:HASH` in Claude.
-Preparation seals the task list, required checks, effective settings, checkout and base.
-It does not start a model or grant work. Your subsequent native human turn authorizes
-that request. Editing a manifest or local settings afterwards cannot widen it.
-A changed base needs preparation again. Do not type the placeholder `HASH` literally.
+## Pause, resume and stop
 
-After that trigger the agent runs `.oh/oh run`. The deterministic runner owns the loop;
-you do not select a model or open a separate conversation for each task. Dependencies
-must refer to earlier tasks. Each task gets its own worker and fresh independent reviewer.
-The coordinator keeps summaries short and waits for completion events.
+- **oh-pause** drains the current worker or check, then prevents another step or commit.
+  PAUSING means work is still draining; PAUSED means it is quiet.
+- **oh-resume** validates the same checkout and retained work, then continues with remaining
+  allowances. A paused batch checkpoint stays a checkpoint until you choose continue.
+- **oh-stop** interrupts owned processes, force-kills after a grace period if necessary,
+  and ends the run. It keeps files, commits, partial work and receipts. STOPPING is not STOPPED.
+  Stopped runs cannot resume; further work needs newly authorized scope.
 
-At a non-final batch boundary, **continue** grants the next configured number, **PR** publishes
-completed work for your review, and **stop** retains the current state. No automatic merge. The agent includes `.oh/oh pr-summary` output in the PR body;
-CI can check commit/body consistency with `.oh/oh pr-summary --validate-event EVENT_JSON BASE_REF`.
-The command supports native commit evidence and the optional legacy design profile.
-Local export requires the retained journal and your recorded PR choice. The portable
-summary is not a signed identity attestation; CI does not independently authenticate
-the reviewer or replace human merge review.
-After the final task, show exactly **PR** or **stop**; do not automatically publish.
-At a spent review window, **grant review** grants another configured review window or
-**stop** ends execution. Blocking findings require a fix and a new review. Nonblocking
-findings may be accepted or routed only through their displayed human choices.
+If a busy host cannot dispatch a skill, run `oh --root <checkout> pause` or `stop` directly
+in a terminal. Resume requires the owning conversation's explicit human event; the CLI
+verifies that event. `oh status` reports the actual run and evidence. Neither elapsed time
+nor natural-language model prose renews task or review allowances.
 
-An interrupted process resumes with the same `.oh/oh run`; no allowance is replenished.
-A deliberately stopped native run needs **resume**. A failure checkpoint offers **retry**
-for one bounded recovery window. Read `.oh/oh status` for the retained state and evidence.
-Do not delete receipts or edit a journal to bypass a refusal.
+Manual edits while paused are preserved and may invalidate the retained review. Reconcile
+and re-review changed work instead of deleting evidence. Branch recreation or reflog
+replacement invalidates the old binding. OH reads filesystem birth identity and Git's
+existing reflog; it writes no OH marker into `.git`. Unsupported filesystems fail visibly.
 
-## Optional product design workflow
+## Projects and upgrades
 
-Generic projects receive only the neutral OH skill. A product can explicitly select
-`"design_profile": "consumer-v1"` in `.oh/project.json` and own its design, proposal and
-delivery policies in `.oh/policy/{design,propose,deliver}.md`. The current design adapter
-supports the extracted numbered Markdown task grammar. It is optional, not a requirement
-for new OH consumers. Geoffrey owns its ADR and product rules; OH does not impose them.
+Sibling worktrees can attach to one project with `init --attach <project-id>`; each has
+separate checkout authority. Clones receive separate identities. A moved checkout needs
+`init --reattach <checkout-id>`. A replaced checkout at an old path needs `init --replace`;
+its old identity is archived and its grants are never reused. These actions grant no tasks.
 
-Before a new design run, the agent uses `.oh/oh prepare-design DOC [TRACK]` and presents
-the returned request trigger. `.oh/oh deliver DOC [TRACK]` then starts or resumes the
-retained run. Exact initial task IDs and settings stay fixed through recovery.
+Use `oh profile-export <new-file-outside-product>` to share effective configuration and
+check definitions. `oh --root <new-checkout> profile-import <file>` creates fresh identities
+and grants no work. Exports exclude host trust, sessions, evidence, and credentials.
+Portable checks require existing tracked ordinary scripts in the exporting/importing checkout;
+missing files and symlinks are refused. Direct invocation requires executable permissions
+and an explicit relative path such as `./checks.sh`, so it never searches PATH for the script.
+Scripts can run directly or through bash, sh, python3,
+or node, with `{base}`, `{mode}`, or standard OH check-mode arguments. Toolchain probes
+support known tools with `--version`. Arbitrary arguments, flags, environment assignments,
+and inline programs are refused on both export and import. Wrap complex commands in a
+repository script that reads credentials locally. This restriction applies only to sharing
+profiles; local verification commands remain unrestricted. Modes, input paths, affected-path
+patterns and timeouts are preserved. Whole-state backup is separate.
 
-## Dashboard service
+The optional external `design_profile: consumer-v1` supports approved numbered product
+Markdown designs through `prepare-design <number> [track]`. It uses the same runner and
+reviews the final rendered lifecycle tree. Generic OH imposes no ADR process.
 
-Run `.oh/oh service-install` once on macOS. It installs a LaunchAgent that starts at login
-and restarts the server if it exits. Open http://localhost:4318 whenever you want; no report
-script is needed. `./oh serve` runs the server in the foreground for development.
-`.oh/oh service-uninstall` stops the service and removes its registration, preserving data.
+Install an updated host plugin, then run its explicit setup. Active runs retain their old
+core; do not remove installed versions while those runs exist. Removing either host plugin
+through its native manager leaves the shared core, other host, dashboard and evidence intact.
 
-The service runs a specific installed OH revision. After upgrading a product pin, reinstall
-the service from the desired installed revision. Its logs live in the OH data directory.
+## Dashboard
 
-Task grants require Git with `reflog write` support; Git 2.55 is verified. OH records a
-unique branch marker so deleting and recreating a branch cannot reuse an old grant,
-even when the filesystem reuses an inode within the same second. Removing or expiring
-that marker invalidates the grant; preserve the evidence and prepare a new run.
+Run `oh service-install` once on macOS, then open [localhost:4318](http://localhost:4318).
+The service starts at login and restarts after exits. Reinstall the service after selecting
+a reviewed core upgrade. `oh serve` runs it in the foreground on other platforms; automatic
+service installation currently supports macOS. `oh service-uninstall` preserves all data.
+Opening the dashboard makes no model call. Improvement suggestions are saved and on-demand.
+See [analytics](analytics.md) for coverage, comparisons, backup and privacy.

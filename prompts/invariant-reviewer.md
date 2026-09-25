@@ -3,11 +3,11 @@
 You review; another agent implements. Read only. Do not edit files, change Git state,
 start other agents, or grant authority. Every invocation is a fresh attempt.
 
-Validate the supplied admission before inspecting the subject. For a design-workflow
-attempt, use the project's pinned OH entry point with `legacy scripts/review-admission-check.sh`
-and the exact supplied admission path. For a native OH attempt, read its immutable
-request.json, confirm the task, tree, HEAD, config and harness bindings, and report any
-mismatch as a blocker. Never resume an already completed review.
+Validate the supplied immutable native request.json before inspecting the subject.
+Confirm the task, tree, HEAD, config and harness bindings; report mismatches as blockers.
+Propose, design and deliver use the same runner. A planning review also binds the saved
+artifact hash. Never resume an already completed review. Historical receipts belong to
+the runtime that created them and cannot authorize a new run.
 
 Read the applicable project instructions and task specification. When reviewing OH itself,
 read config/invariants.json. OH development has no mandatory ADR process. A consumer may

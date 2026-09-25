@@ -6,13 +6,14 @@ OH separates execution authority, host integration and derived observations.
 |---|---|
 | `runtime/oh/` | Python state machine, host adapters, verification, collection and HTTP service |
 | `core/` | Extracted review/lifecycle mechanisms and their compatibility tests |
-| `adapters/` | Codex and Claude translation glue |
-| `workflows/` | Neutral agent entry contracts; optional consumer policy discovery |
+| `plugins/o-harness/` | Explicit host skills and narrow prompt translation; per-host packages share one core |
+| `adapters/` | Retained compatibility fixtures and translation resources |
+| `workflows/` | Neutral workflow instructions |
 | `prompts/` | Shared independent review contract |
 | `config/` | Defaults, invariants and extraction provenance |
 | `dashboard/` | Local static interface; no build-time frontend dependency |
-| `integrations/` | Consumer bootstrap, Git hooks and test entrypoints |
-| `.codex/`, `.claude/`, `.agents/` | Generated host discovery only |
+| `integrations/` | Test entrypoints and historical compatibility resources |
+| `.codex/`, `.claude/`, `.agents/` | OH development host configuration only |
 
 The coordinator prepares immutable scope. A native user transcript event authorizes it.
 The runner persists a hash-chained journal, selects a bounded worker profile, verifies
@@ -29,12 +30,15 @@ trusted native host binaries. Workers cannot write OH state or Git administratio
 the parent owns commits. Review/analysis hosts are read-only. Provider sandbox support
 is a requirement, not a permission bypass.
 
-Product repositories keep their own invariants, verification commands and optional design
-policies. They consume an exact clean OH commit. Updating a pin is reviewed like a
-normal dependency change. Git hooks use the previous committed runtime while the update
-is being committed; first adoption only permits a clean installed runtime matching the
-staged pin. Hook paths are local to each worktree, so a migrated checkout does not change
-an older sibling's enforcement.
+Product repositories keep their business invariants, documents and normal tests. OH's
+external registry binds canonical checkout/Git identities, configuration and verification
+commands without creating consumer files or Git markers. Immutable installed revisions
+own active runs. Plugin discovery is separate from explicit setup and workflow activation.
+
+Pause/stop and finalization share a lock. Pause drains one step; stop cancels only the
+runner's process group, retaining evidence before reporting completion. Resume validates
+the retained tree and allowance. Propose/design artifacts use the same attempt/review
+engine as implementation; the numbered-design adapter only parses and renders documents.
 
 SQLite is rebuildable derived data, never approval authority. The collector uses durable
 spooling, event identity deduplication and incremental transcript boundaries. Backup and

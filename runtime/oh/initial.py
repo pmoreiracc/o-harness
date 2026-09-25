@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from .registry import profile_path
+
+
+from .storage import checkout_file
+
 from .storage import state_writer
 
 from pathlib import Path
@@ -10,7 +15,7 @@ from .config import HOME,snapshot
 from .storage import Refused,atomic_json,checkout_id,digest,git,identifier,project,read_json,state_home
 
 
-def pointer(root):return Path(git(root,'rev-parse','--absolute-git-dir'))/'oh-design-run.json'
+def pointer(root):return checkout_file(root, 'oh-design-run.json')
 
 
 def load(root):
@@ -66,7 +71,7 @@ task_project_ids "$TSV" "$OWNER" "$4"
     branch='deliver/'+doc+('-'+track if len(owners)>1 and not finalizing else '')
     grant={'run':run,'doc':doc,'track':track,'branch':branch,'base':git(root,'rev-parse','HEAD'),
       'design_blob':git(root,'rev-parse','origin/main:'+relative),'tasks':ids,'project':p['id'],
-      'checkout':checkout,'human':event,'checks':prepared['project_checks'] if prepared else (read_json(Path(root)/'.oh/checks.json') if (Path(root)/'.oh/checks.json').exists() else []),**config}
+      'checkout':checkout,'human':event,'checks':prepared['project_checks'] if prepared else (read_json(profile_path(root, 'checks.json')) if profile_path(root, 'checks.json').exists() else []),**config}
     grant['hash']=digest(grant)
     directory=state_home()/'projects'/p['id']/'design-runs'/run
     atomic_json(directory/'initial.json',grant,immutable=True)
@@ -75,20 +80,22 @@ task_project_ids "$TSV" "$OWNER" "$4"
 
 
 def incarnation(root,branch,*,create=False):
+    """Read Git's own reflog identity; never write an OH marker in a consumer."""
     path=Path(git(root,'rev-parse','--path-format=absolute','--git-path','logs/refs/heads/'+branch))
-    if path.is_symlink():raise Refused('Branch reflog cannot be a symlink')
-    lines=path.read_text().splitlines()
-    markers=[line for line in lines if re.search(r'\tOH incarnation: [0-9a-f-]{36}$',line)]
-    if not markers and create:
-        head=git(root,'rev-parse','refs/heads/'+branch)
-        try:git(root,'reflog','write','refs/heads/'+branch,head,head,'OH incarnation: '+identifier())
-        except subprocess.CalledProcessError as exc:
-            raise Refused('OH requires Git with reflog write support (Git 2.55 is verified). Upgrade Git before starting this run; the retained scope is unchanged and no task execution started.') from exc
-        return incarnation(root,branch)
-    if not markers:raise Refused('Branch incarnation marker is missing; a recreated branch cannot reuse the old grant')
-    # A retained nonce survives ordinary appends but disappears with branch deletion.
-    # Filesystem inode reuse and Git timestamps at one-second resolution are irrelevant.
-    return digest({'first':lines[0],'marker':markers[0]})
+    if path.is_symlink() or not path.is_file():raise Refused('Branch reflog is unavailable; enable Git reflogs and start a new run')
+    st=path.stat()
+    if hasattr(st,'st_birthtime'):
+        birth=getattr(st,'st_birthtime_ns',round(st.st_birthtime*1_000_000_000))
+    else:
+        # Linux statx supplies nanosecond creation identity where ordinary stat does not.
+        import ctypes,struct
+        libc=ctypes.CDLL(None,use_errno=True);buffer=ctypes.create_string_buffer(256)
+        statx=getattr(libc,'statx',None)
+        if statx is None or statx(-100,os.fsencode(path),256,0x800,buffer)!=0 or not struct.unpack_from('I',buffer.raw)[0]&0x800:
+            raise Refused('This filesystem cannot distinguish a recreated branch safely. Use a filesystem with birth-time support and start a new run.')
+        seconds,nanoseconds=struct.unpack_from('qI',buffer.raw,80);birth=seconds*1_000_000_000+nanoseconds
+    with path.open('rb') as stream:first=stream.readline().decode()
+    return digest({'device':st.st_dev,'inode':st.st_ino,'birth':birth,'first':first})
 
 
 @state_writer

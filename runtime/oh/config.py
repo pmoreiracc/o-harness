@@ -49,8 +49,10 @@ def validate(value):
 def load(root):
     defaults = read_json(HOME / 'config/defaults.json')
     config = deepcopy(defaults)
-    for filename in ('config.json', 'config.local.json'):
-        path = Path(root) / '.oh' / filename
+    from .registry import profile_path
+    from .storage import state_home
+    for path in (state_home() / 'settings/defaults.json', profile_path(root, 'config.json'),
+                 profile_path(root, 'config.local.json')):
         if path.exists():
             merge(config, read_json(path))
     validate(config)
@@ -58,6 +60,8 @@ def load(root):
 
 
 def version():
+    if (HOME/'revision.json').is_file():
+        return read_json(HOME/'revision.json')['revision']
     revision=git(HOME, 'rev-parse', 'HEAD')
     if git(HOME,'status','--porcelain'):
         from .verification import tree

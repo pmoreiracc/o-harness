@@ -25,7 +25,7 @@ Make room for bigger ideas. Keep care and craft in the work. Build software you 
 
 **Why OH?** In Portuguese, *o* means *the*. **O harness. The harness.** A small Brazilian signature. Call it **“oh.”**
 
-**Early implementation.** OH runs sequential task batches through Codex or Claude Code subscriptions, with independent reviews and a local analytics dashboard. Public installation and parallel task execution are still planned.
+**Early implementation.** Install once as a user-level plugin; products need no OH files. OH runs sequential task batches through Codex or Claude Code subscriptions, with independent reviews and a local analytics dashboard. Public installation and parallel task execution are still planned.
 
 ## How it works
 

@@ -1,3 +1,4 @@
+from .registry import register, profile_path
 import json
 import os
 from pathlib import Path
@@ -23,9 +24,9 @@ class WorkflowTest(unittest.TestCase):
         self.env=patch.dict(os.environ,{'OH_DATA_HOME':str(Path(self.temp.name)/'state')});self.env.start();self.addCleanup(self.env.stop)
         self.git('init','-q','-b','main');self.git('config','user.name','OH Test');self.git('config','user.email','test@example.invalid')
         self.project_id=identifier()
-        atomic_json(self.root/'.oh/project.json',{'id':self.project_id,'name':'Fixture','kind':'product'})
-        atomic_json(self.root/'.oh/checks.json',[{'name':'fixture','command':['python3','-c','pass']}])
-        (self.root/'.gitignore').write_text('.oh/*.local.json\n.oh/runtime/\n')
+        register(self.root,'Fixture',imported={'id':self.project_id})
+        atomic_json(profile_path(self.root,'checks.json'),[{'name':'fixture','command':['python3','-c','pass']}])
+        (self.root/'product.txt').write_text('fixture')
         self.git('add','.');self.git('commit','-qm','init');self.git('switch','-qc','work')
         self.tasks=[{'id':str(i),'title':f'Task {i}','instructions':'Implement behavior','needs':[] if i==1 else [str(i-1)]} for i in range(1,7)]
         self.calls=[]
@@ -46,7 +47,7 @@ class WorkflowTest(unittest.TestCase):
         result=run(self.root,self.fake)
         self.assertEqual((result['completed'],result['status']),(5,'checkpoint'))
         self.assertEqual(len(self.calls),10)
-        atomic_json(self.root/'.oh/config.local.json',{'tasks_per_batch':1,'review_rounds':10})
+        atomic_json(profile_path(self.root,'config.local.json'),{'tasks_per_batch':1,'review_rounds':10})
         run(self.root,self.fake);self.assertEqual(len(self.calls),10)
         choose(self.root,'continue',self.event('2','continue'))
         waiting=[json.loads(p.read_text()) for p in (Path(self.temp.name)/'state/spool').glob('*.json') if json.loads(p.read_text())['kind']=='phase.finished' and json.loads(p.read_text())['payload'].get('phase')=='waiting']
@@ -100,7 +101,7 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(Refused):journal.records()
 
     def test_config_unknown_fields_fail_closed_and_no_false_zero(self):
-        atomic_json(self.root/'.oh/config.local.json',{'taskz':10})
+        atomic_json(profile_path(self.root,'config.local.json'),{'taskz':10})
         with self.assertRaises(Refused):load(self.root)
         self.assertEqual(usage_values({}),{'input':None,'cached':None,'output':None,'reasoning':None})
         with self.assertRaises(Refused):usage_values({'input':10,'cached':11})
@@ -193,7 +194,7 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(Refused):run(self.root,self.fake)
 
     def test_failed_review_then_verification_failure_consumes_worker_allowance(self):
-        atomic_json(self.root/'.oh/config.local.json',{'max_escalations':0})
+        atomic_json(profile_path(self.root,'config.local.json'),{'max_escalations':0})
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         def failed_review(*args,**kwargs):
             value=self.fake(*args,**kwargs)

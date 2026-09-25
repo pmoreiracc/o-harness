@@ -1,3 +1,4 @@
+from .registry import register
 import json
 import os
 from pathlib import Path
@@ -28,26 +29,6 @@ class IntegrationTest(unittest.TestCase):
             (root/'.oh/harness.lock.json').write_text('{}')
             second=subprocess.run([str(root/'.oh/oh'),'status'],cwd=root,env=env,capture_output=True,text=True)
             self.assertNotEqual(second.returncode,0);self.assertIn('uncommitted',second.stderr)
-    def test_generated_discovery_delegates_to_one_neutral_entrypoint(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);atomic_json(root/'.oh/project.json',{'id':identifier(),'kind':'product','name':'Fixture'})
-            generate(root)
-            for file,host in [('.codex/hooks.json','codex'),('.claude/settings.json','claude')]:
-                hooks=json.loads((root/file).read_text())['hooks']
-                self.assertTrue(all('.oh/oh' in h['command'] and '--host '+host in h['command'] for groups in hooks.values() for g in groups for h in g['hooks']))
-            self.assertTrue((root/'.agents/skills/oh/SKILL.md').is_file())
-    def test_existing_discovery_conflict_refuses_without_partial_changes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);atomic_json(root/'.oh/project.json',{'id':identifier(),'kind':'product','name':'Fixture'})
-            atomic_json(root/'.claude/settings.json',{'permissions':{'deny':['Bash(rm:*)']}})
-            original=(root/'.claude/settings.json').read_bytes()
-            with self.assertRaises(Refused):generate(root)
-            self.assertEqual((root/'.claude/settings.json').read_bytes(),original)
-            self.assertFalse((root/'.codex/config.toml').exists())
-            (root/'.claude/settings.json').unlink();generate(root);generate(root)
-            (root/'.codex/config.toml').write_text('model = "custom"')
-            with self.assertRaises(Refused):generate(root)
-            self.assertEqual((root/'.codex/config.toml').read_text(),'model = "custom"')
 
     def test_path_spoof_cannot_select_host_executable(self):
         from .hosts import executable,trust
@@ -59,23 +40,6 @@ class IntegrationTest(unittest.TestCase):
     @staticmethod
     def git(root,*args):return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.DEVNULL,text=True).strip()
 
-    def test_discovery_rejects_parent_symlinks_and_retires_only_unchanged_owned_files(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp)/'consumer';external=Path(tmp)/'external';external.mkdir()
-            atomic_json(root/'.oh/project.json',{'id':identifier(),'kind':'product','name':'Fixture'})
-            (root/'.codex').symlink_to(external,target_is_directory=True)
-            with self.assertRaises(Refused):generate(root)
-            self.assertEqual(list(external.iterdir()),[]);self.assertFalse((root/'.claude').exists())
-            (root/'.codex').unlink();generate(root)
-            self.assertFalse((root/'.agents/skills/design').exists())
-            from .storage import read_json
-            identity=read_json(root/'.oh/project.json');identity['design_profile']='consumer-v1';atomic_json(root/'.oh/project.json',identity)
-            for name in ('design','propose','deliver'):atomic_json(root/'.oh/policy'/f'{name}.md',{'policy':'fixture'})
-            generate(root);retired=root/'.agents/skills/design/SKILL.md';original=retired.read_text();retired.write_text('my edit')
-            del identity['design_profile'];atomic_json(root/'.oh/project.json',identity)
-            with self.assertRaises(Refused):generate(root)
-            self.assertEqual(retired.read_text(),'my edit')
-            retired.write_text(original);generate(root);self.assertFalse(retired.exists())
 
     def test_first_pin_and_pin_upgrade_commit_use_installed_hook_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,12 +76,14 @@ class IntegrationTest(unittest.TestCase):
     def test_generic_deliver_branch_does_not_require_numbered_product_design(self):
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
             root=Path(tmp)/'consumer';root.mkdir();self.git(root,'init','-qb','deliver/release');self.git(root,'config','user.name','Fixture');self.git(root,'config','user.email','fixture@example.invalid')
-            atomic_json(root/'.oh/project.json',{'id':identifier(),'name':'Generic','kind':'product'})
+            register(root,'Generic');(root/'product.txt').write_text('fixture')
             self.git(root,'add','.');self.git(root,'commit','-qm','initial')
-            message=Path(tmp)/'message';message.write_text('Release ordinary work\n')
-            from .legacy import environment
-            result=subprocess.run(['/bin/bash',str(HOME/'integrations/git/commit-msg'),str(message)],cwd=root,env=environment(root),capture_output=True,text=True)
-            self.assertEqual(result.returncode,0,result.stderr)
+            # Ordinary work does not install or call OH Git hooks.
+            (root/'manual.txt').write_text('normal coding')
+            self.git(root,'add','manual.txt')
+            self.git(root,'commit','-qm','Release ordinary work')
+            self.assertEqual(self.git(root,'log','-1','--format=%s'),'Release ordinary work')
+            self.assertFalse((root/'.oh').exists())
 
     def test_setup_refuses_existing_corrupt_install_with_recovery(self):
         import runpy
@@ -140,7 +106,7 @@ class IntegrationTest(unittest.TestCase):
     def test_legacy_series_lookup_does_not_write_heredoc_scratch_files(self):
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
             root=Path(tmp)/'consumer';root.mkdir();self.git(root,'init','-qb','work');self.git(root,'config','user.name','Fixture');self.git(root,'config','user.email','fixture@example.invalid')
-            atomic_json(root/'.oh/project.json',{'id':identifier(),'name':'Fixture','kind':'product'})
+            register(root,'Fixture');(root/'product.txt').write_text('fixture')
             self.git(root,'add','.');self.git(root,'commit','-qm','base')
             from .legacy import environment
             env=environment(root)

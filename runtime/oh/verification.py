@@ -48,9 +48,12 @@ def tree(root, paths=None):
     return digest(sorted(records))
 
 
-def verify(root, checks, project_id):
+def verify(root, checks, project_id, *, controlled=False):
     results = []
     for check in checks:
+        if controlled:
+            from .controls import check as control_check
+            control_check(root)
         if not isinstance(check.get('command'), list) or not check['command'] or not all(isinstance(x,str) for x in check['command']):
             raise Refused('Verification commands must be nonempty argument arrays')
         # An omitted dependency list conservatively fingerprints the entire checkout.
@@ -61,7 +64,9 @@ def verify(root, checks, project_id):
         versions=[]
         if isinstance(toolchain,list) and all(isinstance(cmd,list) and cmd and all(isinstance(x,str) for x in cmd) for cmd in toolchain):
             for command in toolchain:
-                probe=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=10,check=True)
+                from .processes import capture
+                probe,cancellation=capture(root,command,controlled=controlled,timeout=10)
+                if cancellation or probe.returncode:raise Refused('Verification toolchain probe failed or was cancelled: '+probe.stderr[-1000:])
                 versions.append(probe.stdout+probe.stderr)
         fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],
             'environment':dict(os.environ),'platform':os.uname(), 'toolchain':versions,
@@ -73,13 +78,13 @@ def verify(root, checks, project_id):
             results.append(read_json(cache) | {'reused':True})
             continue
         start=time.monotonic()
-        output=subprocess.run(check['command'],cwd=root,capture_output=True,text=True,
-                              timeout=check.get('timeout_seconds',900))
+        from .processes import capture
+        output,cancellation=capture(root,check['command'],controlled=controlled,timeout=check.get('timeout_seconds',900))
         result={'name':check['name'],'fingerprint':fingerprint,'returncode':output.returncode,
                 'duration_ms':round((time.monotonic()-start)*1000),'reused':False,
-                'output':(output.stdout+'\n'+output.stderr)[-12000:]}
+                'output':(output.stdout+'\n'+output.stderr)[-12000:], 'cancellation':cancellation}
         results.append(result)
-        if output.returncode:
+        if cancellation or output.returncode:
             return results
         if reusable:
             atomic_json(cache,result)

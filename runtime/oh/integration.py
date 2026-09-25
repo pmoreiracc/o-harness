@@ -83,6 +83,7 @@ Run the project entry point `{entry} resource prompts/invariant-reviewer.md` and
 
 
 def generate(root,*,consumer=True):
+    if consumer:raise Refused('Repository-local OH integration is retired. Install the user-level OH plugin instead.')
     root=Path(root).resolve();manifest=root/'.oh/discovery.json'
     def safe(name):
         relative=Path(name)

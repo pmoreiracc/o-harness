@@ -1,0 +1,9 @@
+{
+  "name": "o-harness",
+  "version": "0.2.0",
+  "description": "Explicit, independently reviewed workflows with external state and subscription workers.",
+  "author": {
+    "name": "OH contributors"
+  },
+  "skills": "./skills/"
+}

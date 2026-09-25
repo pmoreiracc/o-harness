@@ -138,23 +138,20 @@ def git(root, *args):
 
 
 def checkout_id(root):
-    # Worktree-specific Git administrative directory survives a filesystem move.
-    directory = Path(git(root, 'rev-parse', '--absolute-git-dir'))
-    path = directory / 'oh-checkout-id'
-    if path.exists():
-        return validate_id(read_json(path)['id'])
-    with lock(directory / 'oh-identity.lock'):
-        if not path.exists():
-            atomic_json(path, {'id': identifier()}, immutable=True)
-        return validate_id(read_json(path)['id'])
+    from .registry import lookup
+    return lookup(root)['checkout']
+
+
+def checkout_file(root, name):
+    from .registry import checkout_state
+    if not name or Path(name).name != name:
+        raise Refused('Invalid checkout state filename')
+    return checkout_state(root) / name
 
 
 def project(root):
-    value = read_json(Path(root) / '.oh/project.json')
-    validate_id(value['id'])
-    if value.get('kind') not in ('product', 'harness'):
-        raise Refused('Project kind must be product or harness')
-    return value
+    from .registry import profile
+    return profile(root)
 
 
 class Journal:

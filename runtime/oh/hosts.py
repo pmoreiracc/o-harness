@@ -149,33 +149,15 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
     args=command(host,profile,root,role,schema_path,context['compact_tokens'])
     started=time.monotonic();final='';usage_seen=False;structured=None;failed=False
     with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
-        child=subprocess.Popen(args,cwd=root,env=subscription_env(root)|{'OH_CHILD_ATTEMPT':context['attempt']},stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE,stderr=error,start_new_session=True)
-        timed_out=threading.Event()
-        def terminate():
-            timed_out.set()
-            try:os.killpg(child.pid,signal.SIGTERM)
-            except ProcessLookupError:pass
-            def force():
-                if child.poll() is None:
-                    try:os.killpg(child.pid,signal.SIGKILL)
-                    except ProcessLookupError:pass
-            killer=threading.Timer(5,force);killer.daemon=True;killer.start()
-        timer=threading.Timer(timeout,terminate);timer.start()
-        monitoring=threading.Event()
-        def monitor_stop():
-            from .authority import pending_file,materialize
-            from .storage import read_json
-            while not monitoring.wait(1):
-                pending=pending_file(root)
-                if not pending.exists():continue
-                try:
-                    if read_json(pending)['event']['prompt']=='stop':
-                        materialize(root);terminate();return
-                except (OSError,Refused,ValueError,KeyError):continue
-        monitor=threading.Thread(target=monitor_stop,daemon=True);monitor.start()
-        try:
-            child.stdin.write(prompt.encode());child.stdin.close()
+        from .processes import launch
+        controlled=context.get('controlled',False)
+        with launch(root,args,controlled=controlled,timeout=timeout,cwd=root,
+                    env=subscription_env(root)|{'OH_CHILD_ATTEMPT':context['attempt']},
+                    stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error) as (child,cancelled,reason):
+            try:
+                child.stdin.write(prompt.encode());child.stdin.close()
+            except BrokenPipeError:
+                failed=True
             turn=0
             for line in child.stdout:
                 raw.write(line)
@@ -193,17 +175,12 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
                     failed=bool(event.get('is_error'))
                 if event.get('type') in ('turn.failed','error'):failed=True
             raw.flush();os.fsync(raw.fileno())
-            status=child.wait(timeout=10)
-        finally:
-            monitoring.set();monitor.join(timeout=2)
-            timer.cancel()
-            if child.poll() is None:
-                os.killpg(child.pid,signal.SIGKILL);child.wait()
+        status=child.returncode
     if schema and structured is None:
         try:structured=json.loads(final)
         except ValueError:pass
     return {'returncode':status,'text':final,'structured':structured,'usage_observed':usage_seen,
-            'duration_ms':round((time.monotonic()-started)*1000),'failed':failed or status!=0 or timed_out.is_set()}
+            'duration_ms':round((time.monotonic()-started)*1000),'failed':failed or status!=0 or cancelled.is_set(),'cancellation':reason}
 
 
 def review_result(result):

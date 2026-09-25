@@ -1,3 +1,4 @@
+from .registry import register, profile_path
 import json
 from pathlib import Path
 import tempfile
@@ -39,12 +40,15 @@ class AuthorityTest(unittest.TestCase):
         import subprocess
         with tempfile.TemporaryDirectory() as name,patch('pathlib.Path.home',return_value=Path(name)),patch.dict(os.environ,{'CODEX_THREAD_ID':'session','OH_DATA_HOME':name+'/state'}):
             home=Path(name);root=home/'project';root.mkdir();subprocess.run(['git','init','-q',str(root)],check=True)
-            atomic_json(root/'.oh/project.json',{'id':identifier(),'kind':'product','name':'fixture'})
+            register(root,'fixture')
             path=home/'.codex/sessions/session.jsonl';path.parent.mkdir(parents=True)
             records=[{'type':'session_meta','payload':{'id':'session','cwd':str(root),'source':'vscode','originator':'Codex Desktop'}},
               {'type':'event_msg','payload':{'type':'task_started','turn_id':'one'}},
-              {'type':'event_msg','payload':{'type':'user_message','message':'$oh .oh/tasks.json'}}]
+              {'type':'event_msg','payload':{'type':'user_message','message':'$o-harness:design Describe the next change'}}]
             def save():path.write_text(''.join(json.dumps(x)+'\n' for x in records))
+            records[-1]['payload']['message']='$o-harness:deliver implement a new idea'
+            save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
+            records[-1]['payload']['message']='$o-harness:design Describe the next change'
             save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()
             records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'two'}},{'type':'event_msg','payload':{'type':'user_message','message':'Discuss a different subject'}}]
             save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
@@ -61,16 +65,16 @@ class AuthorityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
             root=Path(tmp)/'consumer';root.mkdir()
             for args in [('init','-qb','main'),('config','user.name','Fixture'),('config','user.email','fixture@example.invalid')]:subprocess.run(['git','-C',str(root),*args],check=True)
-            atomic_json(root/'.oh/project.json',{'id':identifier(),'kind':'product','name':'Fixture'})
-            (root/'.gitignore').write_text('.oh/runtime/\n.oh/*.local.json\n')
-            atomic_json(root/'.oh/checks.json',[{'name':'check','command':['true']}])
+            register(root,'Fixture')
+            (root/'product.txt').write_text('fixture')
+            atomic_json(profile_path(root,'checks.json'),[{'name':'check','command':['true']}])
             subprocess.run(['git','-C',str(root),'add','.'],check=True);subprocess.run(['git','-C',str(root),'commit','-qm','base'],check=True)
             tasks={'tasks':[{'id':'1','title':'Fix','instructions':'Fix agreed behavior'}],'checks':[]}
-            atomic_json(root/'.oh/runtime/tasks.json',tasks)
-            request=prepare(root,'.oh/runtime/tasks.json')
+            atomic_json(profile_path(root).parent/'tasks.json',tasks)
+            request=prepare(root,str(profile_path(root).parent/'tasks.json'))
             event={'host':'codex','session':'s','turn':'t','prompt':request['trigger'],'at':(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()}
-            atomic_json(root/'.oh/runtime/tasks.json',{'tasks':tasks['tasks']+[{'id':'2','title':'Extra','instructions':'Unapproved'}]})
-            atomic_json(root/'.oh/config.local.json',{'tasks_per_batch':99,'review_rounds':99})
+            atomic_json(profile_path(root).parent/'tasks.json',{'tasks':tasks['tasks']+[{'id':'2','title':'Extra','instructions':'Unapproved'}]})
+            atomic_json(profile_path(root,'config.local.json'),{'tasks_per_batch':99,'review_rounds':99})
             with self.assertRaises(Refused):resolve(root,'request:'+request['request'],event|{'at':'2000-01-01T00:00:00+00:00'},'tasks')
             host_hook(root,'codex',{'prompt':request['trigger']},verified=event)
             _,run=load_run(root);self.assertEqual(len(run['tasks']),1);self.assertEqual(run['config']['tasks_per_batch'],5);self.assertEqual(run['config']['review_rounds'],3)

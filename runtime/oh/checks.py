@@ -6,8 +6,9 @@ from .verification import verify
 
 
 def selected(root,base='origin/main',mode='review'):
-    path=Path(root)/'.oh/checks.json'
-    if not path.is_file():raise Refused('Register required checks in .oh/checks.json before executing tasks')
+    from .registry import profile_path
+    path=profile_path(root, 'checks.json')
+    if not path.is_file():raise Refused('Register project checks in the external OH profile before executing tasks')
     return resolve(root,read_json(path),base,mode)
 
 

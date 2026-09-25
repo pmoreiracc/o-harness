@@ -1,3 +1,4 @@
+from .storage import checkout_file
 
 from .storage import state_writer
 """A hook payload is a locator. Only a native user transcript record grants work."""
@@ -8,7 +9,7 @@ import re
 from .storage import Refused,atomic_json,digest,git,lock,read_json,state_home
 
 
-def pending_file(root):return Path(git(root,'rev-parse','--absolute-git-dir'))/'oh-pending-human.json'
+def pending_file(root):return checkout_file(root, 'oh-pending-human.json')
 
 
 def stage(root,host,payload):
@@ -35,8 +36,11 @@ def attest(host,payload,root=None):
     if len(paths)!=1 or not paths[0].is_relative_to(allowed) or not paths[0].is_file():
         raise Refused('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
     path=paths[0];matches=[];times=[];turn=None;session=None;source=None
-    with path.open() as stream:
-        for line in stream:
+    with path.open('rb') as stream:
+        first=stream.readline()
+        stream.seek(max(len(first),path.stat().st_size-8*1024*1024))
+        import itertools
+        for line in itertools.chain([first],stream):
             try:x=json.loads(line)
             except ValueError:continue
             p=x.get('payload',{})
@@ -54,7 +58,7 @@ def attest(host,payload,root=None):
                     text='\n'.join(c.get('text','') for c in p.get('content',[]) if c.get('type') in ('input_text','text'))
                 else:continue
             else:
-                if x.get('type')!='user' or x.get('isSidechain') or x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk':continue
+                if x.get('type')!='user' or x.get('isSidechain') or x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk' or x.get('entrypoint')=='sdk-cli':continue
                 if x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
                 if root is not None and Path(x.get('cwd','')).resolve()!=Path(root).resolve():raise Refused('Human turn belongs to another project checkout')
                 message=x.get('message',{})
@@ -84,20 +88,13 @@ def materialize(root):
         if used.exists():path.unlink();return read_json(used)['result']
         from .cli import host_hook
         result=host_hook(root,locator['host'],locator['payload'],verified=event)
-        if result is None:
-            from .hook import dispatch_legacy_choice
-            result=dispatch_legacy_choice(root,locator['host'],locator['payload'])
+        if result is None:raise Refused('This input is not a supported native OH transition')
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
         from .workflow import active_file,load_run
         if active_file(root).exists():
             _,run=load_run(root)
             if run['status']=='running':register(root,locator['host'],locator['payload']|{'transcript_path':event['transcript_path']},run['id'],run['project'])
-        else:
-            from .initial import pointer,load
-            if pointer(root).exists():
-                directory,run=load(root)
-                if not (directory/'stopped.json').exists():register(root,locator['host'],locator['payload']|{'transcript_path':event['transcript_path']},run['run'],run['project'])
         path.unlink()
         return result
 
@@ -125,12 +122,13 @@ def desktop_pending(root):
             if item.get('type')=='event_msg' and payload.get('type')=='task_started':turn=payload.get('turn_id');prompt=None
             if item.get('type')=='event_msg' and payload.get('type')=='user_message':prompt=payload.get('message')
     if not turn or not isinstance(prompt,str):return
-    choices={'continue','resume','retry','pr','stop','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope','dismiss scope','accept concerns and dismiss scope','grant next review window','stop and take it over','stop and escalate to the pr','review again'}
+    from .entry import command
     text=prompt.strip()
-    if text not in choices and not re.fullmatch(r'(?:oh start|\$oh|/oh)\s+\S+|(?:\$deliver|/deliver|oh deliver)\s+[0-9]{4}(?:\s+[a-zA-Z0-9_-]+)?(?:\s+request:[0-9a-f]{64})?',text):return
+    if not command(text):return
     payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':text,'transcript_path':str(path)}
     attest('codex',payload,root)
     source=digest({'host':'codex','session':session,'turn':turn,'prompt':text})
     from .storage import project
     if (state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')).exists():return
-    stage(root,'codex',payload)
+    from .entry import receive
+    receive(root,'codex',payload)
