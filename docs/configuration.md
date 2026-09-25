@@ -11,7 +11,14 @@ one before it, key by key:
 `oh config` prints the effective settings and the project's OH folder. Unknown keys and
 out-of-range values are rejected. Set `OH_DATA_HOME` to move the data folder.
 
-Example project `config.json`:
+For example, on a larger subscription you can let OH run 15 tasks in a row with up to 12
+review rounds each, for all projects, in `~/.local/share/o-harness/settings/defaults.json`:
+
+```json
+{"tasks_per_batch": 15, "review_rounds": 12}
+```
+
+Or change one project's `config.json`:
 
 ```json
 {"tasks_per_batch": 3, "models": {"claude": {"review": {"model": "opus", "effort": "max"}}}}

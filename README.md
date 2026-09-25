@@ -17,29 +17,45 @@
 
 </div>
 
-OH gives an independent developer the support of a careful engineering team: AI agents do
-the work, independent reviews check it, and you decide what ships.
+You're one developer with a product to build and an AI subscription. Asking the chat to
+"build X" gets you code fast, but not code you'd stand behind. OH adds the structure a good
+team would bring: every task gets a fresh agent, has to pass your checks, and is reviewed by
+an independent reviewer until it's right. Only then is it committed.
+
+**Plan once, then walk away.** Agree on a plan, approve it once, and OH works through the
+whole batch in order while you do something else. You come back to reviewed commits, ready
+for a pull request, not a chat to babysit.
+
+**Match it to your subscription.** On a bigger plan, raise the limits so a 15-task design
+runs in one go, with up to 12 review rounds per task approved in advance. OH uses only the
+rounds a task needs, and stops to ask you only when something actually needs you.
+
+```json
+{"tasks_per_batch": 15, "review_rounds": 12}
+```
+
+**Stay in charge.** Nothing starts without your typed approval, the approved scope can't
+grow, and you do the merging. OH runs on your Claude or ChatGPT subscription through the
+official CLIs, never on paid API calls, and adds no OH files to your repository.
 
 *O* means *the* in Portuguese: **O harness**, the harness. Say “oh”.
 
-> **Early preview.** Tested on macOS with Claude Code and Codex. Expect rough edges.
-
 ## How it works
 
-1. You agree on a batch of tasks with your agent.
-2. You approve that exact batch by typing the trigger OH gives you.
+1. Optionally plan with `/oh-propose` or `/oh-design`. Then run `/oh-deliver` and agree on
+   the tasks with your agent.
+2. Approve that exact batch by typing the trigger OH gives you.
 3. For each task, OH starts a fresh worker, runs your project's checks, gets an independent
-   review, fixes blockers and commits the reviewed result.
-4. At the end of the batch you choose **continue**, **PR** or **stop**. You merge.
+   review, fixes blockers and commits the reviewed result. Other findings wait for you.
+4. When a batch ends, choose **continue** (if tasks remain), **pr** or **stop**. You merge.
 
-OH runs on your Claude or ChatGPT subscription through the official CLIs. It never falls
-back to paid API calls. Nothing is added to your product repository; OH keeps its state in
-`~/.local/share/o-harness`.
+Version 0.3. Tested on macOS with Claude Code and Codex; the test suite also runs on Linux.
+Windows isn't supported yet.
 
 ## Quick start
 
 You need macOS or Linux, Python 3.11+, Git, and Claude Code or Codex signed in with a
-subscription.
+subscription. To change the limits, see [configuration](docs/configuration.md).
 
 **Claude Code**
 
