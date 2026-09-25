@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "tasks_per_batch": 5,
+  "review_rounds": 3,
+  "max_escalations": 1,
+  "context": {"handoff_chars": 12000, "result_chars": 4000, "compact_at_tokens": 60000},
+  "models": {
+    "codex": {
+      "simple": {"model": "gpt-5.6-luna", "effort": "high"},
+      "standard": {"model": "gpt-5.6-sol", "effort": "medium"},
+      "complex": {"model": "gpt-6-astra", "effort": "high"},
+      "review": {"model": "gpt-5.6-sol", "effort": "high"},
+      "orchestrator": {"model": "gpt-6-astra", "effort": "high"}
+    },
+    "claude": {
+      "simple": {"model": "haiku", "effort": "high"},
+      "standard": {"model": "sonnet", "effort": "medium"},
+      "complex": {"model": "opus", "effort": "high"},
+      "review": {"model": "opus", "effort": "high"},
+      "orchestrator": {"model": "opus", "effort": "high"}
+    }
+  }
+}

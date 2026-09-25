@@ -1,0 +1,1 @@
+REVIEW REFUSED — no valid harness review admission. Parent: inspect review-admission-check.sh diagnostics, repair the named prerequisite, and admit a fresh reviewer within this series/window. No review occurred.

@@ -1,0 +1,37 @@
+#!/usr/bin/env -S python3 -I
+"""Pinned project entry point. The implementation lives in the OH repository."""
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+root=Path(__file__).resolve().parents[1]
+try:
+    clean_env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
+    hook=len(sys.argv)>2 and sys.argv[1]=='git-hook' and sys.argv[2] in ('pre-push','commit-msg','prepare-commit-msg')
+    result=subprocess.run(['git','-C',str(root),'show','HEAD:.oh/harness.lock.json'],env=clean_env,text=True,capture_output=True)
+    current=(root/'.oh/harness.lock.json').read_text()
+    if result.returncode:
+        if not hook:raise ValueError('Commit the initial OH pin before using the runtime')
+        # First-adoption hooks use the staged pin, not a mutable working-file choice.
+        selected=subprocess.check_output(['git','-C',str(root),'show',':.oh/harness.lock.json'],env=clean_env,text=True)
+    else:
+        selected=result.stdout
+        if not hook and current!=selected:raise ValueError('The OH pin has uncommitted edits; commit its reviewed update before switching runtimes')
+    lock=json.loads(selected)
+    revision=lock['revision'];repository=lock['repository']
+    if not re.fullmatch(r'[0-9a-f]{40}',revision):raise ValueError('Expected a full pinned Git revision')
+    if not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git',repository):
+        raise ValueError('Expected a canonical GitHub repository URL')
+    home=Path(os.environ.get('OH_HOME',str(Path.home()/'.local/share/o-harness/versions'/revision)))
+    if not (home/'.git').exists():
+        raise ValueError('Pinned OH is not installed. Run the project setup command to install revision '+revision)
+    actual=subprocess.check_output(['git','-C',str(home),'rev-parse','HEAD'],text=True,env=clean_env).strip()
+    if actual!=revision:raise ValueError('OH installation does not match the pinned revision')
+    dirty=subprocess.check_output(['git','-C',str(home),'status','--porcelain','--untracked-files=all'],text=True,env=clean_env).strip()
+    if dirty:raise ValueError('Pinned OH installation was modified; restore or reinstall that revision')
+    os.execv(sys.executable,[sys.executable,'-I',str(home/'oh'),'--root',str(root),*sys.argv[1:]])
+except (OSError,ValueError,KeyError,subprocess.CalledProcessError) as exc:
+    print('OH: '+str(exc),file=sys.stderr);sys.exit(2)

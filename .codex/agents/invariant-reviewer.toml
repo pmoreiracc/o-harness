@@ -1,0 +1,6 @@
+name = "invariant-reviewer"
+description = "Read-only independent review against the OH and consumer invariants."
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+developer_instructions = """Resolve the Git root, then run <root>/oh resource prompts/invariant-reviewer.md and follow the returned contract. Native runner reviews carry an immutable request; design reviews require the stated admission check. Return all findings and evidence. Never edit files."""

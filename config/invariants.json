@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "rules": [
+    "Only a trusted human host event grants task scope or renews a spent review window. Initial and continued batches use the same snapshotted finite task count.",
+    "A reviewer is independent of the author, starts with a fresh context, and reviews the exact tree completed by the runner. Blockers require fixes and a new review.",
+    "Durable workflow evidence is authoritative. Analytics, model prose, elapsed time, retries, and restarts never create approval.",
+    "Every attempt, including failed launches, is retained. Recovery is idempotent and never replenishes a grant.",
+    "Only subscription-authenticated first-party host execution is allowed. Unsupported model or effort settings fail visibly, without API fallback.",
+    "Task contexts and coordinator handoffs stay bounded. Full worker transcripts do not accumulate in the parent conversation.",
+    "Observed usage is deduplicated and subset counters are not added twice. Missing observations remain unknown; estimates are labeled.",
+    "Telemetry collection has no model calls and does not control delivery authority. Dashboard reads use indexed stored data.",
+    "The shared core is host-neutral. Product policy stays in its repository, which consumes a pinned OH revision.",
+    "OH development uses branches, verification, independent review, and human-merged PRs. It does not require ADRs. Parallel implementation is not enabled yet."
+  ]
+}

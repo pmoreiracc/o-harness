@@ -1,0 +1,260 @@
+[
+  {
+    "name": "native",
+    "command": [
+      "bash",
+      "integrations/test.sh",
+      "native"
+    ],
+    "inputs": [
+      "."
+    ],
+    "toolchain": [
+      [
+        "python3",
+        "--version"
+      ],
+      [
+        "node",
+        "--version"
+      ],
+      [
+        "git",
+        "--version"
+      ],
+      [
+        "bash",
+        "--version"
+      ],
+      [
+        "jq",
+        "--version"
+      ]
+    ]
+  },
+  {
+    "name": "syntax",
+    "command": [
+      "bash",
+      "integrations/test.sh",
+      "syntax"
+    ],
+    "inputs": [
+      "."
+    ],
+    "toolchain": [
+      [
+        "python3",
+        "--version"
+      ],
+      [
+        "node",
+        "--version"
+      ],
+      [
+        "git",
+        "--version"
+      ],
+      [
+        "bash",
+        "--version"
+      ],
+      [
+        "jq",
+        "--version"
+      ]
+    ]
+  },
+  {
+    "name": "guards",
+    "command": [
+      "bash",
+      "integrations/test.sh",
+      "guards"
+    ],
+    "inputs": [
+      "."
+    ],
+    "toolchain": [
+      [
+        "python3",
+        "--version"
+      ],
+      [
+        "node",
+        "--version"
+      ],
+      [
+        "git",
+        "--version"
+      ],
+      [
+        "bash",
+        "--version"
+      ],
+      [
+        "jq",
+        "--version"
+      ]
+    ],
+    "when": [
+      "core/*",
+      "adapters/*",
+      "workflows/*",
+      "prompts/*",
+      "integrations/*",
+      "runtime/*",
+      "config/*",
+      ".oh/*",
+      ".codex/*",
+      ".claude/*",
+      ".agents/*",
+      ".github/*",
+      "oh"
+    ]
+  },
+  {
+    "name": "adapters",
+    "command": [
+      "bash",
+      "integrations/test.sh",
+      "adapters"
+    ],
+    "inputs": [
+      "."
+    ],
+    "toolchain": [
+      [
+        "python3",
+        "--version"
+      ],
+      [
+        "node",
+        "--version"
+      ],
+      [
+        "git",
+        "--version"
+      ],
+      [
+        "bash",
+        "--version"
+      ],
+      [
+        "jq",
+        "--version"
+      ]
+    ],
+    "when": [
+      "core/*",
+      "adapters/*",
+      "workflows/*",
+      "prompts/*",
+      "integrations/*",
+      "runtime/*",
+      "config/*",
+      ".oh/*",
+      ".codex/*",
+      ".claude/*",
+      ".agents/*",
+      ".github/*",
+      "oh"
+    ]
+  },
+  {
+    "name": "delivery",
+    "command": [
+      "bash",
+      "integrations/test.sh",
+      "delivery"
+    ],
+    "inputs": [
+      "."
+    ],
+    "toolchain": [
+      [
+        "python3",
+        "--version"
+      ],
+      [
+        "node",
+        "--version"
+      ],
+      [
+        "git",
+        "--version"
+      ],
+      [
+        "bash",
+        "--version"
+      ],
+      [
+        "jq",
+        "--version"
+      ]
+    ],
+    "when": [
+      "core/*",
+      "adapters/*",
+      "workflows/*",
+      "prompts/*",
+      "integrations/*",
+      "runtime/*",
+      "config/*",
+      ".oh/*",
+      ".codex/*",
+      ".claude/*",
+      ".agents/*",
+      ".github/*",
+      "oh"
+    ]
+  },
+  {
+    "name": "review",
+    "command": [
+      "bash",
+      "integrations/test.sh",
+      "review"
+    ],
+    "inputs": [
+      "."
+    ],
+    "toolchain": [
+      [
+        "python3",
+        "--version"
+      ],
+      [
+        "node",
+        "--version"
+      ],
+      [
+        "git",
+        "--version"
+      ],
+      [
+        "bash",
+        "--version"
+      ],
+      [
+        "jq",
+        "--version"
+      ]
+    ],
+    "when": [
+      "core/*",
+      "adapters/*",
+      "workflows/*",
+      "prompts/*",
+      "integrations/*",
+      "runtime/*",
+      "config/*",
+      ".oh/*",
+      ".codex/*",
+      ".claude/*",
+      ".agents/*",
+      ".github/*",
+      "oh"
+    ]
+  }
+]

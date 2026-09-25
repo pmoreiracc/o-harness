@@ -1,0 +1,10 @@
+# Prefix rules cannot constrain later flags or refspecs. State-changing Git and GitHub
+# commands therefore remain approval-gated; only read-only metadata commands are allowed.
+
+prefix_rule(
+    pattern = ["gh", "pr", "view"],
+    decision = "allow",
+    justification = "Reading pull-request state verifies the human merge boundary.",
+    match = ["gh pr view 32 --json state"],
+    not_match = ["gh pr merge 32"],
+)
