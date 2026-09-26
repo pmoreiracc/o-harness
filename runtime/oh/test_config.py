@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -39,7 +40,7 @@ class ConfigTest(unittest.TestCase):
         for bad,words in (({'tasks_per_batch':0},'tasks_per_batch must be whole number from 1 to 100'),({'taskz':1},'Unknown setting: taskz'),
                           ({'models':{'codex':{'review':{'effort':'huge'}}}},'models.codex.review.effort must be one of')):
             self.commit(json.dumps(bad))
-            with self.assertRaisesRegex(Refused,str(repo)+r' \(last commit\).*'+words):load(self.root)
+            with self.assertRaisesRegex(Refused,re.escape(str(repo)+' (last commit)')+'.*'+re.escape(words)):load(self.root)
         self.commit('{"tasks_per_batch": 3,')
         with self.assertRaisesRegex(Refused,'not valid JSON'):load(self.root)
 

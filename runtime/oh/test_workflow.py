@@ -138,6 +138,7 @@ class WorkflowTest(unittest.TestCase):
         from .backup import backup
         backup(Path(self.temp.name)/'backup')
 
+    @unittest.skipIf(os.name=='nt','Windows has no executable bit for Git to record')
     def test_a_task_cannot_change_only_the_mode_of_the_settings(self):
         self.tamper(lambda root:os.chmod(root/'oh.json',0o755),committed='{"tasks_per_batch": 5}\n')
         self.assertEqual(self.git('ls-tree','HEAD','oh.json').split()[0],'100644')
@@ -146,7 +147,7 @@ class WorkflowTest(unittest.TestCase):
         # A CRLF blob committed before the repository adopted text=auto: Git keeps it as it is.
         (self.root/'oh.json').write_bytes(b'{"tasks_per_batch": 5}\r\n')
         self.git('-c','core.autocrlf=false','add','.');self.git('-c','core.autocrlf=false','commit','-qm','crlf settings')
-        (self.root/'.gitattributes').write_text('* text=auto\n');self.git('add','.');self.git('commit','-qm','attributes')
+        (self.root/'.gitattributes').write_bytes(b'* text=auto\n');self.git('add','.');self.git('commit','-qm','attributes')
         self.git('config','core.autocrlf','input')
         self.assertEqual(self.git('status','--porcelain'),'')
         first=self.tamper(lambda root:None,caught=False)
