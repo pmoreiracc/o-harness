@@ -1,0 +1,325 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/pmoreiracc/o-harness/main/config/oh.schema.json",
+  "title": "OH settings (oh.json)",
+  "description": "Project settings for OH. Run `oh config` to list them, or change one with /oh-config.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Lets editors show these descriptions"
+    },
+    "tasks_per_batch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Tasks one approval covers; each \"continue\" approves this many more",
+      "default": 5
+    },
+    "review_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Review rounds a task may use before OH asks you",
+      "default": 3
+    },
+    "max_escalations": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2,
+      "description": "Retries on the complex model after a failed attempt, before OH asks you",
+      "default": 1
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "handoff_chars": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000,
+          "description": "Maximum task handoff text sent to a worker",
+          "default": 12000
+        },
+        "result_chars": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000,
+          "description": "Maximum feedback text kept in model prompts",
+          "default": 4000
+        },
+        "compact_at_tokens": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000,
+          "description": "Context size at which Codex workers compact (Codex only)",
+          "default": 60000
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claude": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "simple": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Claude model for small, bounded tasks",
+                  "default": "haiku"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "xhigh"
+                  ],
+                  "description": "Claude reasoning effort for small, bounded tasks",
+                  "default": "high"
+                }
+              }
+            },
+            "standard": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Claude model for ordinary tasks",
+                  "default": "sonnet"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "xhigh"
+                  ],
+                  "description": "Claude reasoning effort for ordinary tasks",
+                  "default": "medium"
+                }
+              }
+            },
+            "complex": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Claude model for cross-cutting or safety-sensitive tasks, and retries after a failure",
+                  "default": "opus"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "xhigh"
+                  ],
+                  "description": "Claude reasoning effort for cross-cutting or safety-sensitive tasks, and retries after a failure",
+                  "default": "high"
+                }
+              }
+            },
+            "review": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Claude model for independent reviews",
+                  "default": "opus"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "xhigh"
+                  ],
+                  "description": "Claude reasoning effort for independent reviews",
+                  "default": "high"
+                }
+              }
+            },
+            "orchestrator": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Claude model for the session you talk to (a recommendation only)",
+                  "default": "opus"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "xhigh"
+                  ],
+                  "description": "Claude reasoning effort for the session you talk to (a recommendation only)",
+                  "default": "high"
+                }
+              }
+            }
+          }
+        },
+        "codex": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "simple": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Codex model for small, bounded tasks",
+                  "default": "gpt-5.6-luna"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "ultra",
+                    "xhigh"
+                  ],
+                  "description": "Codex reasoning effort for small, bounded tasks",
+                  "default": "high"
+                }
+              }
+            },
+            "standard": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Codex model for ordinary tasks",
+                  "default": "gpt-5.6-sol"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "ultra",
+                    "xhigh"
+                  ],
+                  "description": "Codex reasoning effort for ordinary tasks",
+                  "default": "medium"
+                }
+              }
+            },
+            "complex": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Codex model for cross-cutting or safety-sensitive tasks, and retries after a failure",
+                  "default": "gpt-6-astra"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "ultra",
+                    "xhigh"
+                  ],
+                  "description": "Codex reasoning effort for cross-cutting or safety-sensitive tasks, and retries after a failure",
+                  "default": "high"
+                }
+              }
+            },
+            "review": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Codex model for independent reviews",
+                  "default": "gpt-5.6-sol"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "ultra",
+                    "xhigh"
+                  ],
+                  "description": "Codex reasoning effort for independent reviews",
+                  "default": "high"
+                }
+              }
+            },
+            "orchestrator": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "description": "Codex model for the session you talk to (a recommendation only)",
+                  "default": "gpt-6-astra"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "low",
+                    "max",
+                    "medium",
+                    "ultra",
+                    "xhigh"
+                  ],
+                  "description": "Codex reasoning effort for the session you talk to (a recommendation only)",
+                  "default": "high"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

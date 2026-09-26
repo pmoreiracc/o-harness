@@ -1,28 +1,47 @@
 # Configuration
 
-Settings live in OH's data folder, never in your repository. Each file below overrides the
-one before it, key by key:
+The easy way: `/oh-config` (Codex: `$oh-config`). With nothing after it, it lists every
+setting with its value and meaning. Or say what you want, for example
+`/oh-config let OH run 15 tasks per batch`; it shows the change and asks you to confirm.
+
+## Where settings live
+
+A project keeps its settings in one place:
+
+- **`oh.json` in the repository root**, shared with everyone who works on the repo. Its
+  `$schema` line makes VS Code, Cursor and JetBrains explain each key, suggest allowed
+  values and underline mistakes. Commit it: OH starts a batch only from a clean checkout.
+- **Or privately**, in `config.json` in the project's OH folder, for repos where you don't
+  want OH files.
+
+Each layer below overrides the one before it, key by key:
 
 1. Built-in defaults (`config/defaults.json` in this repository)
 2. `~/.local/share/o-harness/settings/defaults.json`, for all your projects
-3. `config.json` in the project's OH folder
+3. The project's settings: `oh.json` or the private `config.json` (never both)
 4. `config.local.json` in the project's OH folder, for personal overrides
 
-`oh config` prints the effective settings and the project's OH folder. Unknown keys and
-out-of-range values are rejected. Set `OH_DATA_HOME` to move the data folder.
-
-For example, on a larger subscription you can let OH run 15 tasks in a row with up to 12
-review rounds each, for all projects, in `~/.local/share/o-harness/settings/defaults.json`:
+For example, to let OH run 15 tasks in a row with up to 12 review rounds each:
 
 ```json
-{"tasks_per_batch": 15, "review_rounds": 12}
+{
+  "$schema": "https://raw.githubusercontent.com/pmoreiracc/o-harness/main/config/oh.schema.json",
+  "tasks_per_batch": 15,
+  "review_rounds": 12
+}
 ```
 
-Or change one project's `config.json`:
+From a terminal:
 
-```json
-{"tasks_per_batch": 3, "models": {"claude": {"review": {"model": "opus", "effort": "max"}}}}
-```
+- `oh config` lists every setting with its value, where it comes from, the allowed values
+  and its meaning.
+- `oh config set <key> <value>` changes a project setting. It creates `oh.json` if you pass
+  `--location repo`, or keeps settings private with `--location private`.
+- `oh config unset <key>` goes back to the default.
+
+OH checks every settings file each time it reads it. An unknown key, a bad value or broken
+JSON stops OH with the file and key named. A task can't change `oh.json`. Settings are
+captured when a batch is prepared, so a change applies to the next batch.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -49,9 +68,6 @@ that profile's model. Reviews and the coordinating session have their own profil
 If your subscription doesn't offer a model or effort, the task fails with a clear error;
 OH never switches to paid API calls. OH doesn't change the model of the session you are
 talking to; the orchestrator profile is only a recommendation for it.
-
-Settings are captured when a batch is prepared. Changes apply to the next batch, not to
-one already approved.
 
 ## Checks
 

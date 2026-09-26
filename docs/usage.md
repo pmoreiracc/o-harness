@@ -22,8 +22,8 @@ fresh worker implements it, your project checks run, an independent reviewer che
 exact result, blockers get fixed, and the reviewed tree is committed. Workers can't write
 OH's state or Git internals.
 
-A batch has 5 tasks and each task gets up to 3 review rounds by default
-([configuration](configuration.md)). If a task still has findings after its review rounds,
+A batch has 5 tasks and each task gets up to 3 review rounds by default; change that with
+`/oh-config` ([configuration](configuration.md)). If a task still has findings after its review rounds,
 OH pauses and lists the choices you can type. At the end of a batch, type **continue**,
 **pr** or **stop**. **pr** lets the agent push the branch and open a pull request with the
 review summary; you merge it.

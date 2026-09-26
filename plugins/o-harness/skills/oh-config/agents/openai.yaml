@@ -1,0 +1,5 @@
+interface:
+  display_name: "oh-config"
+  short_description: "Show or change OH settings"
+policy:
+  allow_implicit_invocation: false

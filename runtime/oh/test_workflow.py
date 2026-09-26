@@ -103,6 +103,21 @@ class WorkflowTest(unittest.TestCase):
         path.write_text(json.dumps(value))
         with self.assertRaises(Refused):journal.records()
 
+    def test_a_task_cannot_change_the_settings_that_govern_later_batches(self):
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        def worker(host,root,profile,prompt,role,directory,context,**kw):
+            if role!='review':
+                settings=Path(root)/'oh.json'
+                if 'cannot change oh.json' in prompt:settings.unlink(missing_ok=True)
+                else:settings.write_text('{"tasks_per_batch": 100}')
+            return self.fake(host,root,profile,prompt,role,directory,context,**kw)
+        run(self.root,worker)
+        _,state=load_run(self.root)
+        first=[a for a in state['attempts'] if a['role']=='implementation'][0]
+        self.assertEqual(first['outcome'],'verification_failed');self.assertIn('oh.json',first['summary'])
+        self.assertEqual(state['status'],'completed')
+        self.assertNotIn('oh.json',self.git('ls-tree','-r','--name-only','HEAD').split())
+
     def test_config_unknown_fields_fail_closed_and_no_false_zero(self):
         atomic_json(profile_path(self.root,'config.local.json'),{'taskz':10})
         with self.assertRaises(Refused):load(self.root)

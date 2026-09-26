@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import shlex
 import sys
-from .config import HOME, load
+from .config import HOME
 from .storage import Refused, atomic_json, checkout_id, digest, identifier, project, read_json, state_home
 from .workflow import active_file, checkpoint, choose, human_event, start
 
@@ -68,7 +68,9 @@ def main(argv=None):
     init=sub.add_parser('init');init.add_argument('--name',required=True);init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
-    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('config');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
+    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
+    settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
+    settings.add_argument('--location',choices=['repo','private'])
     hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
     serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4318)
     sub.add_parser('service-install');sub.add_parser('service-uninstall')
@@ -116,8 +118,10 @@ def main(argv=None):
             from .backup import restore
             result=restore(args.source)
         elif args.command=='config':
-            from .registry import profile_path
-            result={'effective':load(root),'profile_directory':str(profile_path(root).parent),'precedence':['packaged defaults','external global defaults','project config','personal project config'],'version':__import__('oh.config',fromlist=['version']).version()}
+            from .config import change,describe
+            if not args.action:result=describe(root)
+            elif not args.key or (args.action=='set')!=(args.value is not None):raise Refused('Use: oh config set <key> <value>, or oh config unset <key>')
+            else:result=change(root,args.key,args.value if args.action=='set' else None,location=args.location)
         elif args.command=='status':result=checkpoint(root)
         elif args.command in ('pause','stop'):
             from .controls import request

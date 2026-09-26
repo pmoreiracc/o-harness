@@ -197,6 +197,11 @@ def _run(root,invoke):
                 if work['outcome']!='implemented':continue
             apply_pending(root)
             if reduce(journal.records())['status']!='running':return checkpoint(root)
+            if state.get('workflow','deliver')=='deliver' and git(root,'status','--porcelain','--','oh.json'):
+                # Settings change only through `oh config`; a task never changes what governs later batches.
+                journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
+                    'summary':'A task cannot change oh.json. Restore it; settings change only through oh config.'})
+                continue
             if task.get('transition'):
                 with lock(checkout_file(root,'oh-control.lock')):
                     from .controls import check
