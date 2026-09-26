@@ -52,6 +52,10 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     print(f"OH task {task['id']}: {role} · {profile['model']} / {profile['effort']}",flush=True)
     attempt_id=identifier();before=tree(root)
     git_tree=candidate_tree(root) if role=='review' else None
+    if git_tree and state.get('workflow','deliver')=='deliver':
+        from .config import tree_changes_settings
+        # Never admit a review of settings changes; the next run restores oh.json and reviews again.
+        if tree_changes_settings(root,git_tree):raise Refused('oh.json changed just before the review; run OH again and it restores the committed file')
     directory=journal.path/'attempts'/attempt_id
     data={'id':attempt_id,'task':task['id'],'role':role,'profile':profile,'tree':before,
           'head':git(root,'rev-parse','HEAD'),'config_hash':state['config_hash'],
@@ -222,6 +226,7 @@ def _run(root,invoke):
             apply_pending(root)
             from .controls import check
             check(root)
+            if state.get('workflow','deliver')=='deliver':settings_restored(root,journal)
             review=attempt(root,journal,state,task,'review',profiles['review'],json.dumps(check_results)[:4000],invoke)
             if review['outcome']=='clean':
                 complete_reviewed(root,journal,state,task,review)
@@ -232,25 +237,27 @@ def _run(root,invoke):
             # Blocking or failed review starts a fresh repair/review only within the same grant.
 
 
-def settings_touched(root,journal,work,task_id,actor):
-    # Runs read settings from the last commit, so the only way to change them is a commit; OH never
-    # commits a task's change to oh.json under any name the file system resolves to it.
-    from .config import restore_settings,settings_changed
-    if not settings_changed(root,candidate_tree(root)):return False
-    restore_settings(root,Path(work['evidence']))
+def settings_touched(root,journal,work,task_id,moment):
+    # Runs read settings only from the committed oh.json, so the one thing to prevent is committing
+    # a change to it. OH can't tell who changed it, so the attempt fails without blaming anyone.
+    from .config import restore_settings,settings_edited
+    if not settings_edited(root):return False
+    kept=restore_settings(root,Path(work['evidence']))
     journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
-        'summary':f'{actor.capitalize()} changed oh.json, which tasks cannot do; OH restored it and kept a copy in the attempt evidence. Settings change only through oh config.'})
+        'summary':f'oh.json changed while {moment} ran. Tasks and checks can\'t change settings, so OH restored the committed file'
+                  +(' and kept a copy in the attempt evidence' if kept else '')+'.'})
     return True
 
 
 def settings_restored(root,journal):
-    # A change no attempt of this run made (a hand edit, or one left by an interrupted attempt) is
-    # never committed or charged to a task: OH keeps a copy and restores the committed file.
-    from .config import restore_settings,settings_changed
-    if not settings_changed(root,candidate_tree(root)):return
+    # A change made outside any attempt (a hand edit, or one left by an interrupted attempt) is never
+    # committed or charged to a task.
+    from .config import restore_settings,settings_edited
+    if not settings_edited(root):return
     keep=journal.path/'settings-restored'/identifier()
-    restore_settings(root,keep)
-    journal.append('settings.restored',{'copy':str(keep),'summary':'oh.json changed during this run; OH restored the committed file and kept a copy. Change settings after the run ends.'})
+    kept=restore_settings(root,keep)
+    journal.append('settings.restored',({'copy':kept} if kept else {})|{'summary':'oh.json changed during this run; OH restored the committed file'
+        +(' and kept a copy' if kept else '')+'. Change settings after the run ends.'})
 
 
 def apply_pending(root):
@@ -295,8 +302,8 @@ def complete_reviewed(root,journal,state,task,review):
         if not already:
             if head!=review.get('head'):raise Refused('HEAD differs from the reviewed parent')
             if review['tree']!=tree(root) or candidate_tree(root)!=expected:raise Refused('The retained review does not cover the current tree')
-            from .config import settings_changed
-            if settings_changed(root,expected):raise Refused('The reviewed tree changes oh.json; OH never commits a task that changes settings')
+            from .config import tree_changes_settings
+            if tree_changes_settings(root,expected):raise Refused('The reviewed tree changes oh.json; OH never commits a task that changes settings')
             git(root,'add','--all')
             if git(root,'write-tree')!=expected:raise Refused('The staged tree differs from the reviewed Git tree')
             if not intent:

@@ -117,26 +117,29 @@ class WorkflowTest(unittest.TestCase):
         first=[a for a in state['attempts'] if a['role']=='implementation'][0]
         self.assertEqual(state['status'],'completed')
         if caught:
-            self.assertEqual(first['outcome'],'verification_failed');self.assertIn('The task changed oh.json',first['summary'])
-            self.assertTrue(list(Path(first['evidence']).glob('changed-*')))
-        self.assertNotIn('100',self.git('show','HEAD:oh.json') if committed else '')
+            self.assertEqual(first['outcome'],'verification_failed');self.assertIn('oh.json changed while the task ran',first['summary'])
         self.assertEqual(load(self.root)['tasks_per_batch'],5)
-        return state
+        return first
 
-    def test_a_task_cannot_edit_the_committed_settings(self):
-        self.tamper(lambda root:(root/'oh.json').write_text('{"tasks_per_batch": 100}'),committed='{"tasks_per_batch": 5}\n')
+    def test_a_task_cannot_commit_a_change_to_the_settings(self):
+        first=self.tamper(lambda root:(root/'oh.json').write_text('{"tasks_per_batch": 100,'),committed='{"tasks_per_batch": 5}\n')
         self.assertEqual((self.root/'oh.json').read_text(),'{"tasks_per_batch": 5}\n')
+        self.assertEqual((Path(first['evidence'])/'changed-oh.json.txt').read_text(),'{"tasks_per_batch": 100,')
+        from .backup import backup
+        backup(Path(self.temp.name)/'backup')  # a kept copy of a broken file never breaks backups
 
-    def test_a_task_cannot_add_settings_under_another_case(self):
-        self.tamper(lambda root:(root/'OH.json').write_text('{"tasks_per_batch": 100}'))
-        self.assertNotIn('OH.json',os.listdir(self.root))
+    def test_a_task_cannot_add_settings_or_hide_them_in_a_directory(self):
+        first=self.tamper(lambda root:((root/'oh.json').mkdir(),(root/'oh.json'/'notes.txt').write_text('x')))
+        self.assertFalse((self.root/'oh.json').exists())
+        self.assertEqual((Path(first['evidence'])/'changed-oh.json.d'/'notes.txt').read_text(),'x')
 
-    def test_a_task_cannot_add_settings_under_a_unicode_alias(self):
-        self.tamper(lambda root:(root/'oh.j\u017fon').write_text('{"tasks_per_batch": 100}'))
-        self.assertNotIn('oh.j\u017fon',os.listdir(self.root))
-
-    def test_settings_git_ignores_never_reach_a_run(self):
-        self.tamper(lambda root:((root/'.gitignore').write_text('oh.json\n'),(root/'oh.json').write_text('{"tasks_per_batch": 100}')),caught=False)
+    def test_files_that_are_never_committed_as_oh_json_are_harmless(self):
+        for name,change in (('ignored',lambda root:((root/'.gitignore').write_text('oh.json\n'),(root/'oh.json').write_text('{"tasks_per_batch": 100}'))),
+                            ('alias',lambda root:(root/'oh.j\u017fon').write_text('{"tasks_per_batch": 100}'))):
+            with self.subTest(name):
+                self.setUp()
+                first=self.tamper(change,caught=False)
+                self.assertEqual(first['outcome'],'implemented')
 
     def test_a_check_that_writes_settings_fails_and_the_file_is_restored(self):
         start(self.root,{'tasks':self.tasks[:1],'checks':[{'name':'writer','command':['python3','-c',
@@ -144,7 +147,7 @@ class WorkflowTest(unittest.TestCase):
         run(self.root,self.fake)
         _,state=load_run(self.root)
         failed=[a for a in state['attempts'] if a.get('outcome')=='verification_failed']
-        self.assertTrue(failed and 'A check changed oh.json' in failed[0]['summary'])
+        self.assertTrue(failed and 'oh.json changed while a check ran' in failed[0]['summary'])
         self.assertFalse((self.root/'oh.json').exists())
 
     def test_a_hand_edit_during_a_run_is_kept_aside_without_charging_a_task(self):
@@ -159,7 +162,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertFalse([a for a in state['attempts'] if a.get('outcome')=='verification_failed'])
         self.assertFalse((self.root/'oh.json').exists())
         restored=[r for r in journal.records() if r['kind']=='settings.restored']
-        self.assertEqual(json.loads((Path(restored[0]['data']['copy'])/'changed-oh.json').read_text()),{'tasks_per_batch':9})
+        self.assertEqual(json.loads(Path(restored[0]['data']['copy']).read_text()),{'tasks_per_batch':9})
 
     def test_a_failed_attempt_never_leaves_a_settings_change_behind(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
@@ -174,7 +177,7 @@ class WorkflowTest(unittest.TestCase):
         run(self.root,worker)
         _,state=load_run(self.root)
         self.assertEqual(state['status'],'completed');self.assertFalse((self.root/'oh.json').exists())
-        self.assertIn('The task changed oh.json',state['attempts'][0]['summary'])
+        self.assertIn('oh.json changed while the task ran',state['attempts'][0]['summary'])
 
     def test_config_unknown_fields_fail_closed_and_no_false_zero(self):
         atomic_json(profile_path(self.root,'config.local.json'),{'taskz':10})

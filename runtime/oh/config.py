@@ -99,45 +99,87 @@ def settings_names(names):
     return sorted(n for n in names if unicodedata.normalize('NFKC', n).casefold() == 'oh.json')
 
 
-def committed_entries(root, treeish='HEAD'):
-    """Root entries of a Git tree that name oh.json, as {name: (mode, object id)}."""
-    import os
+def committed_entry(root, treeish='HEAD'):
+    """The exact `oh.json` entry of a Git tree as (mode, object id), or None."""
     import subprocess
-    try:raw = subprocess.check_output(['git', '-C', str(root), 'ls-tree', '-z', treeish], stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:return {}  # no commit yet
-    entries = {}
+    from .storage import git_bytes
+    try:raw = git_bytes(root, 'ls-tree', '-z', treeish, quiet=True)
+    except subprocess.CalledProcessError:return None  # no commit yet
     for entry in raw.split(b'\0'):
         if entry:
             meta, name = entry.split(b'\t', 1)
-            mode, _, oid = meta.decode().split()
-            entries[os.fsdecode(name)] = (mode, oid)
-    return {name: entries[name] for name in settings_names(entries)}
+            if name == b'oh.json':
+                mode, _, oid = meta.decode().split()
+                return mode, oid
+    return None
 
 
 def committed_settings(root):
-    """oh.json exactly as in the last commit. OH never reads it from the working tree, so no
-    uncommitted, ignored or renamed file can change a run's settings."""
-    entries = committed_entries(root)
-    if not entries:return None
+    """oh.json exactly as in the last commit. Runs read nothing else from the repository, so no
+    uncommitted, ignored or differently named file can change a run's settings."""
+    entry = committed_entry(root)
+    if not entry:return None
     label = f'{Path(root) / "oh.json"} (last commit)'
-    if list(entries) != ['oh.json']:raise Refused(f'Rename {", ".join(entries)} to oh.json in the repository')
-    mode, oid = entries['oh.json']
-    if mode not in ('100644', '100755'):raise Refused(f'{label} must be a regular file')
-    try:value = json.loads(git(root, 'cat-file', 'blob', oid))
+    if entry[0] not in ('100644', '100755'):raise Refused(f'{label} must be a regular file')
+    try:value = json.loads(git(root, 'cat-file', 'blob', entry[1]))
     except ValueError as exc:raise Refused(f'{label} is not valid JSON: {exc}') from None
     if not isinstance(value, dict):raise Refused(f'{label} must contain a JSON object')
     return {k: v for k, v in value.items() if k != '$schema'}
 
 
+def settings_edited(root):
+    """Whether committing the checkout now would change the committed oh.json. Cheap: one file."""
+    import os
+    import subprocess
+    from .storage import git_bytes
+    path, entry = Path(root) / 'oh.json', committed_entry(root)
+    if 'oh.json' not in os.listdir(root):return entry is not None
+    if entry is None:
+        try:git_bytes(root, 'check-ignore', '-q', '--', 'oh.json', quiet=True);return False  # never committed
+        except subprocess.CalledProcessError:return True
+    if path.is_symlink() or not path.is_file():return True
+    return git(root, 'hash-object', '--', 'oh.json') != entry[1]
+
+
+def tree_changes_settings(root, tree):
+    return committed_entry(root, tree) != committed_entry(root)
+
+
+def restore_settings(root, keep):
+    """Undo a change to oh.json, keeping a copy (never named .json, so backups don't parse it).
+    Returns the copy's path, or None when nothing was kept."""
+    import shutil
+    path, kept = Path(root) / 'oh.json', None
+    if path.is_symlink() or path.is_file():
+        Path(keep).mkdir(parents=True, exist_ok=True)
+        if not path.is_symlink():kept = Path(keep) / 'changed-oh.json.txt';shutil.copyfile(path, kept)
+        path.unlink()
+    elif path.is_dir():
+        kept = Path(keep) / 'changed-oh.json.d';shutil.copytree(path, kept, symlinks=True);shutil.rmtree(path)
+    if committed_entry(root):git(root, 'checkout', 'HEAD', '--', 'oh.json')
+    return str(kept) if kept else None
+
+
+def settings_location(root):
+    """Where a run's project settings come from: the committed oh.json or the private file; never both."""
+    from .registry import profile_path
+    private = profile_path(root, 'config.json')
+    if committed_entry(root) and private.exists():
+        raise Refused(f'Project settings exist in both {Path(root) / "oh.json"} (committed) and {private}; delete the one you don\'t want')
+    if committed_entry(root):return Path(root) / 'oh.json', 'repo'
+    if private.exists():return private, 'private'
+    return None, None
+
+
 def project_file(root):
-    """Project settings live in oh.json in the repository or, for private projects, in OH's folder; never both."""
+    """The file `oh config` edits: the working tree's oh.json, or the private file."""
     import os
     from .registry import profile_path
     repo, private = Path(root) / 'oh.json', profile_path(root, 'config.json')
     names = settings_names(os.listdir(root))
     if names and names != ['oh.json']:raise Refused(f'Rename {", ".join(str(Path(root) / n) for n in names)} to oh.json')
     if repo.is_symlink():raise Refused(f'{repo} must be a regular file, not a symlink')
-    in_repo = bool(names or committed_entries(root))
+    in_repo = bool(names or committed_entry(root))
     if in_repo and private.exists():
         raise Refused(f'Project settings exist in both {repo} and {private}; delete the one you don\'t want')
     if in_repo:return repo, 'repo'
@@ -159,7 +201,7 @@ def load(root, *, origin=None, replace=None):
     config = validate(deepcopy(read_json(HOME / 'config/defaults.json')))
     from .registry import profile_path
     from .storage import state_home
-    project, location = project_file(root)
+    project, location = settings_location(root)
     layers = [('global', state_home() / 'settings/defaults.json', None)]
     if replace:layers.append(('project', replace[0], replace[1]))
     elif location == 'repo':layers.append(('project', f'{project} (last commit)', committed_settings(root) or {}))
@@ -176,11 +218,10 @@ def load(root, *, origin=None, replace=None):
 
 def uncommitted(root):
     """Whether the working tree's oh.json differs from the committed one OH actually uses."""
-    path = Path(root) / 'oh.json'
-    entries = committed_entries(root)
-    if not path.exists():return bool(entries)
-    if 'oh.json' not in entries:return True
-    committed = git(root, 'cat-file', 'blob', entries['oh.json'][1])
+    path, entry = Path(root) / 'oh.json', committed_entry(root)
+    if not path.is_file():return entry is not None
+    if entry is None:return True
+    committed = git(root, 'cat-file', 'blob', entry[1])
     return path.read_bytes().replace(b'\r\n', b'\n').strip() != committed.encode().strip()
 
 
@@ -279,25 +320,6 @@ def write_settings(path, data, location):
         replace(temporary, path)
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
-
-
-def settings_changed(root, tree):
-    """Whether a candidate Git tree changes oh.json, under any name the file system may resolve to it."""
-    return committed_entries(root, tree) != committed_entries(root)
-
-
-def restore_settings(root, keep):
-    """Undo a task's change to oh.json: keep a copy as evidence, then put back exactly what is committed."""
-    import os
-    import shutil
-    root = Path(root)
-    for name in settings_names(os.listdir(root)):
-        path = root / name
-        if path.is_file() and not path.is_symlink():
-            Path(keep).mkdir(parents=True, exist_ok=True);shutil.copyfile(path, Path(keep) / ('changed-' + name))
-        if path.is_dir() and not path.is_symlink():shutil.rmtree(path)
-        else:path.unlink()
-    for name in committed_entries(root):git(root, 'checkout', 'HEAD', '--', name)
 
 
 def version():

@@ -45,6 +45,10 @@ class ConfigTest(unittest.TestCase):
 
     def test_runs_use_the_committed_settings_only(self):
         self.commit('{"tasks_per_batch": 7}')
+        other=self.root.parent/'other';subprocess.run(['git','clone','-q',str(self.root),str(other)],check=True)
+        (other/'oh.json').write_text('{"tasks_per_batch": 42}')
+        subprocess.run(['git','-C',str(other),'-c','user.name=x','-c','user.email=x@example.invalid','commit','-qam','other'],check=True)
+        with patch.dict(os.environ,{'GIT_DIR':str(other/'.git')}):self.assertEqual(load(self.root)['tasks_per_batch'],7)
         for text in ('{"tasks_per_batch": 100}','{"tasks_per_batch": 7}\r\n','not json'):
             (self.root/'oh.json').write_text(text)
             self.assertEqual(load(self.root)['tasks_per_batch'],7)
@@ -74,6 +78,9 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse((self.root/'oh.json').exists());self.assertEqual(load(self.root)['review_rounds'],4)
         self.assertEqual(describe(self.root)['location'],'private')
         (self.root/'oh.json').write_text('{}')
+        self.assertEqual(load(self.root)['review_rounds'],4)  # an uncommitted file never decides a run's settings
+        with self.assertRaisesRegex(Refused,'both'):change(self.root,'review_rounds','5')
+        self.commit()
         with self.assertRaisesRegex(Refused,'both'):load(self.root)
 
 
@@ -95,10 +102,11 @@ class ConfigTest(unittest.TestCase):
     def test_settings_files_must_be_plain_and_exactly_named(self):
         for alias in ('OH.json','oh.j\u017fon'):
             (self.root/alias).write_text('{"tasks_per_batch": 9}')
-            with self.assertRaisesRegex(Refused,'Rename'):load(self.root)
+            with self.assertRaisesRegex(Refused,'Rename'):describe(self.root)
+            self.assertEqual(load(self.root)['tasks_per_batch'],5)
             (self.root/alias).unlink()
         (self.root/'team.json').write_text('{}');(self.root/'oh.json').symlink_to('team.json')
-        with self.assertRaisesRegex(Refused,'symlink'):load(self.root)
+        with self.assertRaisesRegex(Refused,'symlink'):change(self.root,'review_rounds','4')
 
     def test_importing_a_profile_keeps_a_committed_oh_json_as_the_only_project_settings(self):
         from .profiles import export_profile,import_profile

@@ -108,8 +108,10 @@ def import_profile(root,source):
     # Publish profile resources before registering the checkout. Failure leaves inert data,
     # never an active binding with missing checks or old authority.
     # A committed oh.json already carries this repository's settings; a private copy would conflict with it.
-    from .config import committed_entries
-    if not (Path(root)/'oh.json').exists() and not committed_entries(root):atomic_json(target/'config.json',value['config'],immutable=True)
+    from .config import committed_entry
+    skipped=bool(committed_entry(root))
+    if not skipped:atomic_json(target/'config.json',value['config'],immutable=True)
     atomic_json(target/'checks.json',value['checks'],immutable=True)
     result=register(root,value['profile']['name'],value['profile']['kind'],imported=value['profile']|{'id':project_id})
-    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False}
+    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False,
+            **({'settings':'Kept the committed oh.json; the profile\'s settings were not imported'} if skipped else {})}

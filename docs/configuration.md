@@ -41,11 +41,14 @@ From a terminal:
 - `oh config unset <key>` goes back to the default.
 
 OH checks every settings file each time it reads it. An unknown key, a bad value or broken
-JSON stops OH with the file and key named. Tasks and checks can't change `oh.json`: OH
-restores it, keeps a copy with the attempt's evidence and fails that attempt. Settings are
-captured when a run is prepared, so a change applies to the next run you start; **continue**
-keeps the settings the run was approved with. Change `oh.json` after a run ends; an edit made
-during a run is set aside (a copy is kept) so it can't be committed with a task.
+JSON stops OH with the file and key named. Settings are captured when a run is prepared, so
+a change applies to the next run you start; **continue** keeps the settings the run was
+approved with.
+
+OH never commits a change to `oh.json` as part of a task. If the file in the run's checkout
+changes while a task or check runs, OH restores the committed version, keeps a copy with the
+attempt's evidence and fails that attempt, whoever made the edit. Between attempts, an edit is
+restored the same way without failing anything. So change `oh.json` after a run ends.
 
 | Setting | Default | Meaning |
 |---|---|---|
