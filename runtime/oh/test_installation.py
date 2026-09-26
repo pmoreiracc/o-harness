@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -23,10 +24,10 @@ class InstallationTest(unittest.TestCase):
             env=os.environ|{'OH_DATA_HOME':str(base/'state')}
             entry=first/'core/oh'
             for _ in range(2):
-                result=subprocess.run([str(entry),'setup','--development'],cwd=consumer,env=env,capture_output=True,text=True)
+                result=subprocess.run([sys.executable,'-I',str(entry),'setup','--development'],cwd=consumer,env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
             launcher=base/'state/bin/oh'
-            status=subprocess.run([str(launcher),'resource','workflows/deliver/SKILL.md'],cwd=consumer,env=env,capture_output=True,text=True)
+            status=subprocess.run([sys.executable,'-I',str(launcher),'resource','workflows/deliver/SKILL.md'],cwd=consumer,env=env,capture_output=True,text=True)
             self.assertEqual(status.returncode,0,status.stderr)
             self.assertTrue((first/'core/dashboard/app.js').is_file())
             self.assertEqual([p.name for p in consumer.iterdir()],['manual.txt'])
@@ -51,7 +52,7 @@ class InstallationTest(unittest.TestCase):
             base=Path(tmp);env=os.environ|{'OH_DATA_HOME':str(base/'state')}
             plugins={n:self.package(base/f'v{n}/o-harness',str(n)*40,f'0.{n}.0') for n in (1,2,3)}
             def use(n):
-                result=subprocess.run([str(plugins[n]/'oh'),'--root',tmp,'resource','workflows/oh/SKILL.md'],env=env,capture_output=True,text=True)
+                result=subprocess.run([sys.executable,'-I',str(plugins[n]/'oh'),'--root',tmp,'resource','workflows/oh/SKILL.md'],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 return read_json(base/'state/runtime/active.json')['revision'][0]
             self.assertEqual(use(1),'1')
@@ -60,7 +61,7 @@ class InstallationTest(unittest.TestCase):
             self.assertEqual(use(2),'3')
             self.assertEqual(use(1),'3')
             # The same rule holds under the install lock, for hosts racing the launcher's check.
-            older=subprocess.run([str(plugins[2].parent/'core/oh'),'setup','--if-newer'],env=env,capture_output=True,text=True)
+            older=subprocess.run([sys.executable,'-I',str(plugins[2].parent/'core/oh'),'setup','--if-newer'],env=env,capture_output=True,text=True)
             self.assertEqual(older.returncode,0,older.stderr)
             self.assertEqual(read_json(base/'state/runtime/active.json')['revision'][0],'3')
 
@@ -69,7 +70,7 @@ class InstallationTest(unittest.TestCase):
             base=Path(tmp);env=os.environ|{'OH_DATA_HOME':str(base/'state')}
             scripts=self.package(base/'v1/o-harness','1'*40,'0.1.0')
             def send(prompt):
-                return subprocess.run(['python3',str(scripts/'human-event.py'),'claude'],input=json.dumps({'prompt':prompt,'cwd':tmp}),
+                return subprocess.run([sys.executable,str(scripts/'human-event.py'),'claude'],input=json.dumps({'prompt':prompt,'cwd':tmp}),
                     env=env,capture_output=True,text=True,check=True).stdout
             self.assertEqual(send('continue'),'')
             self.assertFalse((base/'state').exists())
@@ -80,7 +81,7 @@ class InstallationTest(unittest.TestCase):
         from .config import HOME
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            result=subprocess.run(['python3',str(HOME/'plugins/o-harness/scripts/human-event.py'),'codex'],
+            result=subprocess.run([sys.executable,str(HOME/'plugins/o-harness/scripts/human-event.py'),'codex'],
                 input=json.dumps({'prompt':'Fix the button styling','cwd':tmp}),cwd=root,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stdout,'')

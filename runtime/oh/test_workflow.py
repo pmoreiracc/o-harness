@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -239,7 +240,7 @@ class WorkflowTest(unittest.TestCase):
         self.git('commit','--allow-empty','-qm','unreviewed extra')
         event=Path(self.temp.name)/'pr.json';event.write_text(json.dumps({'pull_request':{'head':{'sha':self.git('rev-parse','HEAD'),'ref':'deliver/release'},'body':''}}))
         for args in [[],['--validate-event',str(event)]]:
-            result=subprocess.run([str(HOME/'oh'),'--root',str(self.root),'pr-summary',*args],capture_output=True,text=True)
+            result=subprocess.run([sys.executable,'-I',str(HOME/'oh'),'--root',str(self.root),'pr-summary',*args],capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0,result.stdout)
             self.assertNotIn('Review history',result.stdout)
 
