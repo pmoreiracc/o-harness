@@ -72,6 +72,7 @@ def main(argv=None):
     sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
     settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
     settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
+    planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check'])
     hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
     serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4318)
     sub.add_parser('service-install');sub.add_parser('service-uninstall')
@@ -131,6 +132,10 @@ def main(argv=None):
             elif args.action=='open':result=open_settings(root)
             elif not args.key or (args.action=='set')!=(args.value is not None):raise Refused('Use: oh config set <key> <value>, or oh config unset <key>')
             else:result=change(root,args.key,args.value if args.action=='set' else None,scope='global' if args.everywhere else None)
+        elif args.command=='plans':
+            from .plans import check,layout
+            where=layout(root)
+            result=check(root,where) if args.action=='check' else {k:str(v) for k,v in where.items()}
         elif args.command=='status':result=checkpoint(root)
         elif args.command in ('pause','stop'):
             from .controls import request

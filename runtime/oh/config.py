@@ -15,6 +15,7 @@ EFFORTS = {'codex': {'low', 'medium', 'high', 'xhigh', 'max', 'ultra'},
 
 
 MODEL = r'[A-Za-z0-9][A-Za-z0-9._:/-]*'
+PLAN_PATH = r'^(?!.*(^|/)\.\.?(/|$))[A-Za-z0-9_-][A-Za-z0-9._/-]*'  # relative, no . or .. parts
 ROLE_MEANING = {'simple': 'small, bounded tasks', 'standard': 'ordinary tasks',
                 'complex': 'cross-cutting or safety-sensitive tasks, and retries after a failure',
                 'review': 'independent reviews', 'orchestrator': 'the session you talk to (a recommendation only)'}
@@ -33,7 +34,12 @@ def rules():
               ('max_escalations', number(0, 2), 'Retries on the complex model after a failed attempt, before OH asks you'),
               ('context.handoff_chars', number(1000, 100000), 'Maximum task handoff text sent to a worker'),
               ('context.result_chars', number(1000, 100000), 'Maximum feedback text kept in model prompts'),
-              ('context.compact_at_tokens', number(1000, 100000), 'Context size at which Codex workers compact (Codex only)')]
+              ('context.compact_at_tokens', number(1000, 100000), 'Context size at which Codex workers compact (Codex only)'),
+              ('plans.location', {'type': 'string', 'enum': ['ask', 'private', 'repo']},
+               'Where roadmaps, design docs and decisions live: repo (committed in the repository), private (OH\'s folder), or ask'),
+              ('plans.roadmap', {'type': 'string', 'pattern': PLAN_PATH + r'\.md$'}, 'Roadmap file, relative to where plans live'),
+              ('plans.designs', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Design docs folder, relative to where plans live'),
+              ('plans.decisions', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Decision records (ADRs) folder, relative to where plans live')]
     for host in ('claude', 'codex'):
         for role in ROLES:
             result.append((f'models.{host}.{role}.model', {'type': 'string', 'pattern': '^' + MODEL + '$'},
@@ -85,6 +91,7 @@ def allowed(spec):
     if 'enum' in spec:return 'one of: ' + ', '.join(spec['enum'])
     if spec['type'] == 'integer':return f'whole number from {spec["minimum"]} to {spec["maximum"]}'
     if spec['type'] == 'array':return 'a list of checks, each with a name and a command'
+    if spec['pattern'].startswith(PLAN_PATH):return 'a relative path with no . or .. parts' + (', ending in .md' if spec['pattern'].endswith(r'\.md$') else '')
     return 'a model name your subscription offers'
 
 
@@ -98,7 +105,7 @@ def validate(value):
 def check(key, spec, item):
     if spec['type'] == 'integer':valid = type(item) is int and spec['minimum'] <= item <= spec['maximum']
     elif 'enum' in spec:valid = item in spec['enum']
-    else:valid = isinstance(item, str) and bool(re.fullmatch(MODEL, item))
+    else:valid = isinstance(item, str) and bool(re.fullmatch(spec['pattern'], item))
     if not valid:raise Refused(f'{key} must be {allowed(spec)}; got {json.dumps(item)}')
 
 
