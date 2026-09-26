@@ -16,6 +16,8 @@ from .workflow import human_event, start, choose, load_run, reduce
 from .runner import run
 from .telemetry import collect, connect, analytics, emit, usage_values
 from .verification import tree, verify
+# POSIX users run OH's scripts directly, so tests do too; Windows needs the interpreter.
+RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class WorkflowTest(unittest.TestCase):
@@ -240,7 +242,7 @@ class WorkflowTest(unittest.TestCase):
         self.git('commit','--allow-empty','-qm','unreviewed extra')
         event=Path(self.temp.name)/'pr.json';event.write_text(json.dumps({'pull_request':{'head':{'sha':self.git('rev-parse','HEAD'),'ref':'deliver/release'},'body':''}}))
         for args in [[],['--validate-event',str(event)]]:
-            result=subprocess.run([sys.executable,'-I',str(HOME/'oh'),'--root',str(self.root),'pr-summary',*args],capture_output=True,text=True)
+            result=subprocess.run([*RUN,str(HOME/'oh'),'--root',str(self.root),'pr-summary',*args],capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0,result.stdout)
             self.assertNotIn('Review history',result.stdout)
 

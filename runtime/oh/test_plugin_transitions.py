@@ -13,6 +13,8 @@ from .config import HOME
 from .storage import atomic_json,digest,read_json,Refused
 from .workflow import start
 from .runner import run
+# POSIX users run OH's scripts directly, so tests do too; Windows needs the interpreter.
+RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class PluginTransitions(unittest.TestCase):
@@ -58,7 +60,7 @@ class PluginTransitions(unittest.TestCase):
         journal=home/'projects'/self.project_id/'runs/fixture'
         atomic_json(journal/'000001.json',{'kind':'run.started','data':{'harness_version':'v1'}})
         entry=HOME/'plugins/o-harness/scripts/oh'
-        def call():return subprocess.check_output([sys.executable,'-I',str(entry),'--root',str(self.root),'start'],text=True).strip()
+        def call():return subprocess.check_output([*RUN,str(entry),'--root',str(self.root),'start'],text=True).strip()
         self.assertEqual(call(),'v1')
         for terminal in ('completed','stopped','pr'):
             atomic_json(journal/'000002.json',{'kind':'transition','data':{'events':[{'kind':'run.status','data':{'status':terminal}}]}})

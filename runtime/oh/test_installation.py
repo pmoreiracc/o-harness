@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import patch
 from .installation import build, verify_package
 from .storage import Refused
+# POSIX users run OH's scripts directly, so tests do too; Windows needs the interpreter.
+RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class InstallationTest(unittest.TestCase):
@@ -24,10 +26,10 @@ class InstallationTest(unittest.TestCase):
             env=os.environ|{'OH_DATA_HOME':str(base/'state')}
             entry=first/'core/oh'
             for _ in range(2):
-                result=subprocess.run([sys.executable,'-I',str(entry),'setup','--development'],cwd=consumer,env=env,capture_output=True,text=True)
+                result=subprocess.run([*RUN,str(entry),'setup','--development'],cwd=consumer,env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
             launcher=base/'state/bin/oh'
-            status=subprocess.run([sys.executable,'-I',str(launcher),'resource','workflows/deliver/SKILL.md'],cwd=consumer,env=env,capture_output=True,text=True)
+            status=subprocess.run([*RUN,str(launcher),'resource','workflows/deliver/SKILL.md'],cwd=consumer,env=env,capture_output=True,text=True)
             self.assertEqual(status.returncode,0,status.stderr)
             self.assertTrue((first/'core/dashboard/app.js').is_file())
             self.assertEqual([p.name for p in consumer.iterdir()],['manual.txt'])
@@ -52,7 +54,7 @@ class InstallationTest(unittest.TestCase):
             base=Path(tmp);env=os.environ|{'OH_DATA_HOME':str(base/'state')}
             plugins={n:self.package(base/f'v{n}/o-harness',str(n)*40,f'0.{n}.0') for n in (1,2,3)}
             def use(n):
-                result=subprocess.run([sys.executable,'-I',str(plugins[n]/'oh'),'--root',tmp,'resource','workflows/oh/SKILL.md'],env=env,capture_output=True,text=True)
+                result=subprocess.run([*RUN,str(plugins[n]/'oh'),'--root',tmp,'resource','workflows/oh/SKILL.md'],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 return read_json(base/'state/runtime/active.json')['revision'][0]
             self.assertEqual(use(1),'1')
@@ -61,7 +63,7 @@ class InstallationTest(unittest.TestCase):
             self.assertEqual(use(2),'3')
             self.assertEqual(use(1),'3')
             # The same rule holds under the install lock, for hosts racing the launcher's check.
-            older=subprocess.run([sys.executable,'-I',str(plugins[2].parent/'core/oh'),'setup','--if-newer'],env=env,capture_output=True,text=True)
+            older=subprocess.run([*RUN,str(plugins[2].parent/'core/oh'),'setup','--if-newer'],env=env,capture_output=True,text=True)
             self.assertEqual(older.returncode,0,older.stderr)
             self.assertEqual(read_json(base/'state/runtime/active.json')['revision'][0],'3')
 

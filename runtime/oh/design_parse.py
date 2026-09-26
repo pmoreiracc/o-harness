@@ -1,5 +1,6 @@
 """Numbered design documents and the roadmap: the task list parser and the lifecycle renderer.
-Output and messages match the former core/scripts/plan.sh, roadmap.sh and freeze.sh."""
+Output and messages match the former core/scripts/plan.sh, roadmap.sh and freeze.sh, except that long
+titles are cut by characters where macOS awk cut by bytes."""
 from datetime import date
 from pathlib import Path
 import re
@@ -11,7 +12,8 @@ SPACE='[ \t\n\r\f\v]'
 
 
 def lines(path):
-    text=Path(path).read_bytes().decode()
+    try:text=Path(path).read_bytes().decode()
+    except UnicodeDecodeError:raise Refused(f'{Path(path).name} is not valid UTF-8') from None
     rows=text.split('\n')
     return rows[:-1] if rows[-1]=='' else rows
 

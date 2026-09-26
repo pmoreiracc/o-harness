@@ -56,10 +56,13 @@ def spawn(command,**kwargs):
     # Start suspended and resume only inside a job object, so no descendant can be born outside it.
     child=subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP|0x4,**kwargs)  # CREATE_SUSPENDED
     job=_kernel32.CreateJobObjectW(None,None)
-    if job and not _kernel32.AssignProcessToJobObject(job,int(child._handle)):
-        _kernel32.CloseHandle(job);job=None
+    if not job or not _kernel32.AssignProcessToJobObject(job,int(child._handle)):
+        # Without the job, descendants of an exited leader could outlive stop(); refuse instead.
+        if job:_kernel32.CloseHandle(job)
+        child.kill();child.wait()
+        raise OSError('Could not contain '+str(command[0])+' in a job object')
     child.oh_job=job
-    if job:weakref.finalize(child,_kernel32.CloseHandle,job)
+    weakref.finalize(child,_kernel32.CloseHandle,job)
     if _ntdll.NtResumeProcess(int(child._handle)):
         stop(child,force=True);child.wait()
         raise OSError('Could not start '+str(command[0]))
@@ -69,12 +72,11 @@ def spawn(command,**kwargs):
 def stop(child,*,force=False):
     """Ask the child's process group to end, or end it and all descendants at once with force."""
     if WINDOWS:
-        if not force:
-            # Reaches only the child's own group; without a shared console there is nothing to ask.
+        # CTRL_BREAK to a group whose leader has exited can reach every process on the console, OH included.
+        if not force and child.poll() is None:
             try:os.kill(child.pid,signal.CTRL_BREAK_EVENT)
             except OSError:pass
-        elif child.oh_job:_kernel32.TerminateJobObject(child.oh_job,1)
-        else:subprocess.run(['taskkill','/T','/F','/PID',str(child.pid)],capture_output=True)
+        elif force:_kernel32.TerminateJobObject(child.oh_job,1)
         return
     try:os.killpg(child.pid,signal.SIGKILL if force else signal.SIGTERM)
     except ProcessLookupError:pass

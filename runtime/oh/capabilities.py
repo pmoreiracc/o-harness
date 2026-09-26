@@ -16,7 +16,11 @@ def codex_models():
     def send(value):child.stdin.write(json.dumps(value)+'\n');child.stdin.flush()
     # A reader thread instead of select(), which Windows supports only on sockets, not pipes.
     lines=queue.Queue()
-    threading.Thread(target=lambda:[lines.put(line) for line in iter(child.stdout.readline,'')]+[lines.put('')],daemon=True).start()
+    def read():
+        try:
+            for line in iter(child.stdout.readline,''):lines.put(line)
+        finally:lines.put('')
+    threading.Thread(target=read,daemon=True).start()
     models={};deadline=time.monotonic()+20
     try:
         send({'id':1,'method':'initialize','params':{'clientInfo':{'name':'o-harness','version':'0.1'}}})
