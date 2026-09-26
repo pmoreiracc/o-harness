@@ -218,15 +218,6 @@ def load(root, *, origin=None, replace=None):
     return config
 
 
-def uncommitted(root):
-    """Whether the working tree's oh.json differs from the committed one OH actually uses."""
-    path, entry = Path(root) / 'oh.json', committed_entry(root)
-    if not path.is_file():return entry is not None
-    if entry is None:return True
-    committed = git(root, 'cat-file', 'blob', entry[1])
-    return path.read_bytes().replace(b'\r\n', b'\n').strip() != committed.encode().strip()
-
-
 def describe(root):
     from .registry import profile_path
     defaults, origin = read_json(HOME / 'config/defaults.json'), {}
@@ -241,10 +232,11 @@ def describe(root):
               'precedence': ['packaged defaults', 'global settings', 'project settings (committed oh.json, or private)',
                              'personal project settings']}
     if problem:
-        used = {'repo': 'the committed oh.json', 'private': 'the private config.json'}.get(settings_location(root)[1], 'the defaults')
+        used = {'repo': 'the committed oh.json', 'private': 'the private config.json'}.get(settings_location(root)[1], 'no project settings')
         result['note'] = f'{problem}. Runs are unaffected: they use {used}.'
-    elif location == 'repo' and uncommitted(root):
-        result['note'] = 'oh.json has uncommitted changes. OH uses the last committed version until you commit it.'
+    elif location == 'repo' and settings_edited(root):
+        result['note'] = ('oh.json has uncommitted changes. OH uses the last committed version until you commit it.'
+                          if committed_entry(root) else 'oh.json is not committed yet. OH ignores it until you commit it.')
     return result
 
 

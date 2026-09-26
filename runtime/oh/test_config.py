@@ -53,7 +53,7 @@ class ConfigTest(unittest.TestCase):
             (self.root/'oh.json').write_text(text)
             self.assertEqual(load(self.root)['tasks_per_batch'],7)
         self.assertIn('uncommitted',describe(self.root)['note'])
-        (self.root/'oh.json').write_text('{"tasks_per_batch": 7}\r\n')
+        self.git('checkout','--','oh.json')
         self.assertNotIn('note',describe(self.root))
 
     def test_change_is_the_only_writer_and_never_writes_an_invalid_file(self):
