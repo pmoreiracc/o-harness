@@ -8,7 +8,6 @@
 | `prompts/` | The shared independent-reviewer prompt |
 | `config/` | Default settings and OH's own invariants |
 | `dashboard/` | Static dashboard files, no build step |
-| `core/` | Bash parsers for projects that plan with numbered design documents |
 | `integrations/` | Test and packaging scripts |
 | `.claude/`, `.codex/` | Settings for developing OH itself |
 

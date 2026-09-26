@@ -32,11 +32,6 @@ def build(destination, host):
     shutil.copy2(source/'scripts/oh',core/'launcher')
     for directory in ('runtime','config','prompts','workflows','dashboard'):
         shutil.copytree(HOME/directory,core/directory,ignore=shutil.ignore_patterns('__pycache__','test_*.py'))
-    # These are document parsing/rendering resources, not a second execution loop.
-    (core/'core/scripts').mkdir(parents=True)
-    shutil.copy2(HOME/'core/lib.sh',core/'core/lib.sh')
-    for name in ('plan.sh','freeze.sh','roadmap.sh'):
-        shutil.copy2(HOME/'core/scripts'/name,core/'core/scripts'/name)
     atomic_json(core/'revision.json',{'revision':revision,'version':read_json(source/'.claude-plugin/plugin.json')['version']})
     atomic_json(core/'package.json',{'schema_version':1,'revision':revision,'files':inventory(core)})
     hooks=read_json(destination/'hooks/hooks.json')
