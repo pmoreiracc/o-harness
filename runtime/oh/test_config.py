@@ -102,7 +102,8 @@ class ConfigTest(unittest.TestCase):
     def test_settings_files_must_be_plain_and_exactly_named(self):
         for alias in ('OH.json','oh.j\u017fon'):
             (self.root/alias).write_text('{"tasks_per_batch": 9}')
-            with self.assertRaisesRegex(Refused,'Rename'):describe(self.root)
+            self.assertIn('Rename',describe(self.root)['note'])
+            with self.assertRaisesRegex(Refused,'Rename'):change(self.root,'review_rounds','4',location='repo')
             self.assertEqual(load(self.root)['tasks_per_batch'],5)
             (self.root/alias).unlink()
         (self.root/'team.json').write_text('{}');(self.root/'oh.json').symlink_to('team.json')

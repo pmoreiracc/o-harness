@@ -129,9 +129,28 @@ class WorkflowTest(unittest.TestCase):
         backup(Path(self.temp.name)/'backup')  # a kept copy of a broken file never breaks backups
 
     def test_a_task_cannot_add_settings_or_hide_them_in_a_directory(self):
-        first=self.tamper(lambda root:((root/'oh.json').mkdir(),(root/'oh.json'/'notes.txt').write_text('x')))
+        def change(root):
+            (root/'oh.json').mkdir();(root/'oh.json'/'broken.json').write_text('{');(root/'oh.json'/'link').symlink_to('broken.json')
+        first=self.tamper(change)
         self.assertFalse((self.root/'oh.json').exists())
-        self.assertEqual((Path(first['evidence'])/'changed-oh.json.d'/'notes.txt').read_text(),'x')
+        import tarfile
+        with tarfile.open(Path(first['evidence'])/'changed-oh.json.tar') as archive:self.assertIn('oh.json/broken.json',archive.getnames())
+        from .backup import backup
+        backup(Path(self.temp.name)/'backup')
+
+    def test_a_task_cannot_change_only_the_mode_of_the_settings(self):
+        self.tamper(lambda root:os.chmod(root/'oh.json',0o755),committed='{"tasks_per_batch": 5}\n')
+        self.assertEqual(self.git('ls-tree','HEAD','oh.json').split()[0],'100644')
+
+    def test_line_ending_rules_never_look_like_a_settings_change(self):
+        # A CRLF blob committed before the repository adopted text=auto: Git keeps it as it is.
+        (self.root/'oh.json').write_bytes(b'{"tasks_per_batch": 5}\r\n')
+        self.git('-c','core.autocrlf=false','add','.');self.git('-c','core.autocrlf=false','commit','-qm','crlf settings')
+        (self.root/'.gitattributes').write_text('* text=auto\n');self.git('add','.');self.git('commit','-qm','attributes')
+        self.git('config','core.autocrlf','input')
+        self.assertEqual(self.git('status','--porcelain'),'')
+        first=self.tamper(lambda root:None,caught=False)
+        self.assertEqual(first['outcome'],'implemented')
 
     def test_files_that_are_never_committed_as_oh_json_are_harmless(self):
         for name,change in (('ignored',lambda root:((root/'.gitignore').write_text('oh.json\n'),(root/'oh.json').write_text('{"tasks_per_batch": 100}'))),

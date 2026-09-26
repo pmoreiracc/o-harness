@@ -241,10 +241,12 @@ def review_limit(state,task):
 
 def checkpoint(root):
     journal,state=load_run(root)
+    restored=[r['data'] for r in journal.records() if r['kind']=='settings.restored']
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
-            'config_hash':state['config_hash'],'version':state['harness_version']}
+            'config_hash':state['config_hash'],'version':state['harness_version']}|(
+            {'settings_restored':restored} if restored else {})
 
 
 @state_writer

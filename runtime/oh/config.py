@@ -128,17 +128,9 @@ def committed_settings(root):
 
 
 def settings_edited(root):
-    """Whether committing the checkout now would change the committed oh.json. Cheap: one file."""
-    import os
-    import subprocess
-    from .storage import git_bytes
-    path, entry = Path(root) / 'oh.json', committed_entry(root)
-    if 'oh.json' not in os.listdir(root):return entry is not None
-    if entry is None:
-        try:git_bytes(root, 'check-ignore', '-q', '--', 'oh.json', quiet=True);return False  # never committed
-        except subprocess.CalledProcessError:return True
-    if path.is_symlink() or not path.is_file():return True
-    return git(root, 'hash-object', '--', 'oh.json') != entry[1]
+    """Whether committing the checkout now would change the committed oh.json. Asks Git about that
+    one path, so line-ending rules, modes and ignore rules agree exactly with what a commit takes."""
+    return bool(git(root, 'status', '--porcelain', '--untracked-files=all', '--', ':(literal)oh.json'))
 
 
 def tree_changes_settings(root, tree):
@@ -146,16 +138,23 @@ def tree_changes_settings(root, tree):
 
 
 def restore_settings(root, keep):
-    """Undo a change to oh.json, keeping a copy (never named .json, so backups don't parse it).
-    Returns the copy's path, or None when nothing was kept."""
+    """Undo a change to oh.json, keeping a copy that backups never parse (a .txt file, or a .tar of a
+    directory). Returns the copy's path, or None when nothing could be kept."""
     import shutil
+    import tarfile
     path, kept = Path(root) / 'oh.json', None
-    if path.is_symlink() or path.is_file():
-        Path(keep).mkdir(parents=True, exist_ok=True)
-        if not path.is_symlink():kept = Path(keep) / 'changed-oh.json.txt';shutil.copyfile(path, kept)
-        path.unlink()
-    elif path.is_dir():
-        kept = Path(keep) / 'changed-oh.json.d';shutil.copytree(path, kept, symlinks=True);shutil.rmtree(path)
+    Path(keep).mkdir(parents=True, exist_ok=True)
+    try:
+        if path.is_file() and not path.is_symlink():
+            kept = Path(keep) / 'changed-oh.json.txt';shutil.copyfile(path, kept)
+        elif path.is_dir() and not path.is_symlink():
+            kept = Path(keep) / 'changed-oh.json.tar'
+            with tarfile.open(kept, 'w') as archive:archive.add(path, arcname='oh.json')
+    except (OSError, tarfile.TarError):
+        if kept:kept.unlink(missing_ok=True)
+        kept = None  # the restore matters more than the copy
+    if path.is_dir() and not path.is_symlink():shutil.rmtree(path)
+    elif path.is_symlink() or path.exists():path.unlink()
     if committed_entry(root):git(root, 'checkout', 'HEAD', '--', 'oh.json')
     return str(kept) if kept else None
 
@@ -229,7 +228,8 @@ def describe(root):
     from .registry import profile_path
     defaults, origin = read_json(HOME / 'config/defaults.json'), {}
     effective = load(root, origin=origin)
-    path, location = project_file(root)
+    try:path, location = project_file(root);problem = None
+    except Refused as exc:path, location, problem = None, None, str(exc)
     result = {'file': str(path) if path else None, 'location': location, 'schema': SCHEMA_URL,
               'settings': [{'key': key, 'value': lookup_key(effective, key), 'default': lookup_key(defaults, key),
                             'source': origin.get(key, 'default'), 'allowed': allowed(spec), 'meaning': meaning}
@@ -237,7 +237,8 @@ def describe(root):
               'effective': effective, 'profile_directory': str(profile_path(root).parent), 'version': version(),
               'precedence': ['packaged defaults', 'global settings', 'project settings (committed oh.json, or private)',
                              'personal project settings']}
-    if location == 'repo' and uncommitted(root):
+    if problem:result['note'] = problem + '. Runs are unaffected: they use the committed oh.json only.'
+    elif location == 'repo' and uncommitted(root):
         result['note'] = 'oh.json has uncommitted changes. OH uses the last committed version until you commit it.'
     return result
 

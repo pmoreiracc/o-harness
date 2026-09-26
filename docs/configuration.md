@@ -47,8 +47,9 @@ approved with.
 
 OH never commits a change to `oh.json` as part of a task. If the file in the run's checkout
 changes while a task or check runs, OH restores the committed version, keeps a copy with the
-attempt's evidence and fails that attempt, whoever made the edit. Between attempts, an edit is
-restored the same way without failing anything. So change `oh.json` after a run ends.
+attempt's evidence and fails that attempt, whoever made the edit. An edit made between
+attempts is restored without failing anything; its copy is kept in the run's folder and listed
+by `oh status`. So change `oh.json` after a run ends.
 
 | Setting | Default | Meaning |
 |---|---|---|
