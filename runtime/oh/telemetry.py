@@ -354,7 +354,8 @@ def rebuild():
                 if readable:
                     with connect() as db:db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             for suffix in ('-wal','-shm'):Path(str(old)+suffix).unlink(missing_ok=True)
-            os.replace(temporary/'analytics.sqlite3',old)
+            from .system import replace
+            replace(temporary/'analytics.sqlite3',old)
             from .backup import sync_parent
             sync_parent(old)
             return {'status':'rebuilt','events':len(events),'authority':'preserved'}

@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from .config import HOME, version
 from .storage import Refused, atomic_json, lock, read_json, state_home
+from .system import replace
 
 
 def inventory(root):
@@ -91,6 +92,6 @@ def setup(*, development=False, if_newer=False):
         content=(destination/'launcher').read_bytes()
         if launcher.exists() and not launcher.read_bytes().startswith(b'#!/usr/bin/env -S python3 -I\n\"\"\"Resolve bundled setup'):
             raise Refused('Existing OH CLI conflicts with setup; preserve it and select a clean OH data home')
-        temporary=launcher.with_suffix('.pending');temporary.write_bytes(content);temporary.chmod(0o755);temporary.replace(launcher)
+        temporary=launcher.with_suffix('.pending');temporary.write_bytes(content);temporary.chmod(0o755);replace(temporary,launcher)
         atomic_json(active,{'revision':revision,'version':version,'schema_version':1})
     return {'core':str(destination),'revision':revision,'cli':str(home/'bin/oh'),'next':'Register the project with oh init, then configure its external checks. Existing runs keep their recorded runtime.'}
