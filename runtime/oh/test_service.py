@@ -50,7 +50,7 @@ class ServiceTest(unittest.TestCase):
 
     def test_slow_teardown_restarts_the_prior_service_or_says_it_is_stopped(self):
         # launchd releases the old label only after `clears` polls, or never; bootout itself may report failure mid-teardown.
-        for clears,refused in ((40,None),(2,36),(None,None)):
+        for clears,refused in ((40,None),(2,36),(None,None),(None,36)):
             with self.subTest(clears=clears,refused=refused),tempfile.TemporaryDirectory() as tmp,patch('oh.service.sys.platform','darwin'),patch('pathlib.Path.home',return_value=Path(tmp)),patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
                 path=self.installed(tmp);state={'label':True,'alive':b'prior','polls':None};waited=[]
                 def launch(args,**kwargs):
@@ -69,7 +69,7 @@ class ServiceTest(unittest.TestCase):
                     with self.assertRaises(Refused) as caught:install()
                 self.assertEqual(path.read_bytes(),b'prior');self.assertLessEqual(sum(waited),10)
                 if clears is None:
-                    self.assertIn('was stopped',str(caught.exception));self.assertNotIn('restored',str(caught.exception))
+                    self.assertIn('launchctl bootstrap',str(caught.exception));self.assertNotIn('restored',str(caught.exception))
                 else:self.assertEqual(state['alive'],b'prior')
 
     def test_rollback_that_cannot_remove_the_replacement_fails_within_bound(self):
@@ -81,7 +81,7 @@ class ServiceTest(unittest.TestCase):
                 # The old label clears after the first bootout; the failed replacement then stays listed.
                 return subprocess.CompletedProcess(args,1 if args[1]=='print' and calls.count('bootout')==1 and 'bootstrap' not in calls else 0)
             with patch('oh.service.subprocess.run',side_effect=launch),patch('oh.service.time.sleep',side_effect=waited.append):
-                with self.assertRaisesRegex(Refused,'could not remove.*still listed'):install()
+                with self.assertRaisesRegex(Refused,'could not remove.*still listed.*then launchctl bootstrap'):install()
             self.assertEqual(path.read_bytes(),b'prior');self.assertLessEqual(sum(waited),5)
 
     def test_partial_bootstrap_is_removed_before_restoring_prior_state(self):
