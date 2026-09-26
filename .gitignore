@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+.oh/
+.coverage
+.DS_Store

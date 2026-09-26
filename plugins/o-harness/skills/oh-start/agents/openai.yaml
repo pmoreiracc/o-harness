@@ -1,0 +1,5 @@
+interface:
+  display_name: "oh-start"
+  short_description: "Explicit OH workflow or run control"
+policy:
+  allow_implicit_invocation: false

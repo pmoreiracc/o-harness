@@ -1,0 +1,7 @@
+#!/usr/bin/env -S python3 -I
+import sys
+sys.dont_write_bytecode = True
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'runtime'))
+from oh.cli import main
+main()
