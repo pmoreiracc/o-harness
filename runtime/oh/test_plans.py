@@ -149,8 +149,24 @@ class PlansTest(unittest.TestCase):
                 where['roadmap'].write_text(clean.replace('|---|---|---|---|\n','|---|---|---|---|\n\n'+example,1))
                 with self.assertRaisesRegex(Refused,'inside a code block'):plans.add_initiative(self.root,where,'M1','a','A',[])
                 with self.assertRaisesRegex(Refused,'inside a code block'):plans.verify_roadmap(self.root,where)
-        where['roadmap'].write_text(clean.replace('# Fixture — Roadmap\n','# Fixture — Roadmap\n\n```md\nplain example\n```\n'))
+        # Outside every milestone the parser reads nothing, so examples there are fine, headings and tables included.
+        where['roadmap'].write_text(clean.replace('# Fixture — Roadmap\n','# Fixture — Roadmap\n\n```md\n## 1. Problem\n```\n')
+            +'\n## Deliberately deferred\n\n```md\n| Thing | Until |\n```\n')
         plans.add_initiative(self.root,where,'M1','a','A',[])
+        self.assertEqual(plans.verify_roadmap(self.root,where),{'initiatives':1,'milestones':1})
+
+    def test_the_checks_read_milestones_exactly_as_the_parser_does(self):
+        where=self.repo()
+        with self.assertRaisesRegex(Refused,'Start the roadmap first'):plans.add_initiative(self.root,where,'M1','a','A',[])
+        plans.start_roadmap(where,'Fixture');plans.add_milestone(self.root,where,'M1','One','Done')
+        plans.add_initiative(self.root,where,'M1','a','A',[])
+        text=where['roadmap'].read_text().replace('| `a` | A | — |','| `a` | A | `M2` |')
+        where['roadmap'].write_text(text+'\n### M2\u00a0— Two\n\n**Done when:** x\n\n| Slug | Initiative | Depends | Design |\n|---|---|---|---|\n')
+        with self.assertRaisesRegex(Refused,'neither a slug nor a milestone'):plans.verify_roadmap(self.root,where)
+
+    def test_design_numbers_stay_four_digits(self):
+        where=self.repo();where['designs'].mkdir(parents=True);(where['designs']/'9999-last.md').write_text('x')
+        with self.assertRaisesRegex(Refused,'every four-digit number'):plans.write_design(self.root,where,'next','Next','x','draft')
 
     def test_a_draft_is_written_while_the_roadmap_is_still_empty(self):
         where=self.repo();plans.start_roadmap(where,'Fixture')

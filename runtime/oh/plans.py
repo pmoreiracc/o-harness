@@ -14,7 +14,8 @@ from .storage import Refused
 
 SLUG = r'[a-z0-9]+(-[a-z0-9]+)*'
 TABLE = ['| Slug | Initiative | Depends | Design |', '|---|---|---|---|']
-MILESTONE = re.compile(r'###\s+(M[0-9]+)(\s|$)')
+WS = '[ \t\n\r\f\v]'  # ASCII whitespace, as the shared parser reads it (C locale)
+MILESTONE = re.compile(r'###' + WS + r'+(M[0-9]+)(' + WS + '|$)')
 DEFAULTS = {'roadmap': 'docs/roadmap.md', 'designs': 'docs/design', 'decisions': 'docs/decisions'}
 
 
@@ -125,13 +126,15 @@ def initiatives(root, where):
     """[(slug, milestone, depends, design)] from the roadmap in document order, refusing one that doesn't parse.
     The shared parser (Geoffrey's roadmap.sh) reads code blocks too, so a roadmap whose code blocks look like
     milestones, rows or bars is refused: OH's writers and checks and the parser then always agree."""
-    rows_all = rows_of(where['roadmap'])[0]
-    seen_milestone = False
+    if not Path(where['roadmap']).is_file():raise Refused('Start the roadmap first')
+    rows_all, section = rows_of(where['roadmap'])[0], False
     for (index, line), inside in zip(enumerate(rows_all), fenced(rows_all)):
-        if MILESTONE.match(line):seen_milestone = True
-        if inside and (re.match(r'#{2,3}\s', line) or seen_milestone and (line.startswith(('|', '**Done when:**', 'Delivered as ')))):
-            raise Refused(f'{where["roadmap"].name} line {index + 1} is inside a code block but reads as roadmap structure; '
-                          'move the example out of the milestones or indent it')
+        # Follow the parser's own section state: inside a milestone it reads headings, rows and bars.
+        heading, milestone = re.match(r'#{2,3}' + WS, line), MILESTONE.match(line)
+        if inside and (milestone or section and (heading or line.startswith(('|', '**Done when:**', 'Delivered as ')))):
+            raise Refused(f'{where["roadmap"].name} line {index + 1} is inside a code block within a milestone but reads as '
+                          'roadmap structure; move the example out of the milestone or indent it')
+        section = bool(milestone) or (section and not heading)
     rows = roadmap(root, '', where).strip('\n')
     return [tuple(row.split(US)) for row in rows.split('\n') if row]
 
@@ -164,8 +167,8 @@ def add_milestone(root, where, milestone, title, done_when):
     starts = [i for i, line in visible if MILESTONE.match(line)]
     # After the last milestone's section, before the next level-2 heading such as "Deliberately deferred";
     # the first milestone goes before the first level-2 heading after the title.
-    after = starts[-1] if starts else next((i for i, line in visible if re.match(r'#\s', line)), -1)
-    at = next((i for i, line in visible if i > after and re.match(r'##\s', line)), len(rows))
+    after = starts[-1] if starts else next((i for i, line in visible if re.match(r'#' + WS, line)), -1)
+    at = next((i for i, line in visible if i > after and re.match(r'##' + WS, line)), len(rows))
     front = next((i for i in range(1, len(rows)) if rows[i] == '---'), -1) if rows and rows[0] == '---' else -1
     while at > max(after, front) + 1 and rows[at - 1].strip() in ('', '---'):at -= 1
     block = ['', '---', '', f'### {milestone} — {title}', '', f'**Done when:** {done_when}', '', *TABLE]
@@ -199,7 +202,7 @@ def add_initiative(root, where, milestone, slug, text, depends):
     for index, line in outside(rows):
         match = MILESTONE.match(line)
         if match:current = match[1];continue
-        if re.match(r'#{2,3}\s', line):current = '';continue
+        if re.match(r'#{2,3}' + WS, line):current = '';continue
         if current == milestone and line.startswith('|'):last = index
     if last is None:raise Refused(f'{milestone} has no initiative table')
     rows.insert(last + 1, f'| `{slug}` | {text} | {cell} | — |')
@@ -233,6 +236,7 @@ def claim(root, where, slug, number):
 
 def next_number(folder):
     numbers = [int(p.name[:4]) for p in Path(folder).glob('[0-9][0-9][0-9][0-9]-*.md')]
+    if max(numbers, default=0) >= 9999:raise Refused(f'{folder} has used every four-digit number')
     return f'{max(numbers, default=0) + 1:04}'
 
 
@@ -264,7 +268,7 @@ def write_decision(root, where, title, context, alternatives, consequences, deci
     if log.exists():
         rows, ending = rows_of(log)
         visible = outside(rows)
-        log_heading = next((i for i, line in visible if re.match(r'##\s+The log\s*$', line)), -1)
+        log_heading = next((i for i, line in visible if re.match(r'##' + WS + r'+The log' + WS + '*$', line)), -1)
         headers = [i for i, line in visible if re.match(r'\|\s*#\s*\|\s*Decision\s*\|', line)]
         header = next((i for i in headers if i > log_heading), headers[0] if headers else None)
         if header is None:raise Refused(f'{log} has no decision log table (a "| # | Decision | Date | Status |" header)')
@@ -295,7 +299,7 @@ def verify_roadmap(root, where):
     for _, line in outside(rows_of(where['roadmap'])[0]):
         match = MILESTONE.match(line)
         if match:current = match[1];bars.setdefault(current, False);continue
-        if re.match(r'#{2,3}\s', line):current = None;continue
+        if re.match(r'#{2,3}' + WS, line):current = None;continue
         if current and line.startswith('**Done when:**'):bars[current] = True
     problems += [f'{m} has no "Done when:"' for m, shipped in found if not shipped and not bars.get(m)]
     graph = {}
@@ -330,7 +334,7 @@ def status_of(path):
     rows = rows_of(path)[0]
     if not rows or rows[0] != '---':return ''
     for line in rows[1:]:
-        if re.match(r'---\s*$', line):break
+        if re.match('---' + WS + '*$', line):break
         if line.startswith('status:'):return line[len('status:'):].strip()
     return ''
 
@@ -365,10 +369,10 @@ def verify_design(root, where, number=None, orphans=True):
                 if need not in ids:problems.append(f'{doc.name}: task {task} depends on task {need}, which does not exist')
             if blocked:
                 section = re.fullmatch(r'§([0-9]+)', blocked)
-                heading = section and next((h for h in sections if re.match(rf'## {section[1]}\.\s', h)), None)
+                heading = section and next((h for h in sections if re.match(rf'## {section[1]}\.' + WS, h)), None)
                 if not section:problems.append(f'{doc.name}: task {task} is blocked on "{blocked}", not a section like §5')
                 elif not heading:problems.append(f'{doc.name}: task {task} is blocked on §{section[1]}, which the doc lacks')
-                elif not re.match(rf'## {section[1]}\.\s+Open', heading):
+                elif not re.match(rf'## {section[1]}\.' + WS + '+Open', heading):
                     problems.append(f'{doc.name}: task {task} is blocked on §{section[1]}, which is not an open-questions section')
         if cyclic({t[0]: {d for d in t[3].split(',') if d in ids} for t in tasks}):
             problems.append(f'{doc.name}: task dependencies form a cycle')
