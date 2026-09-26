@@ -5,9 +5,23 @@ from pathlib import Path
 import plistlib
 import subprocess
 import sys
+import time
 from .storage import Refused,state_home
 
 LABEL='dev.o-harness.dashboard'
+
+
+def gone(target,tries=30,pause=0.1):
+    # bootout returns before launchd finishes teardown; bootstrapping the label before then fails with EIO.
+    for _ in range(tries):
+        if subprocess.run(['launchctl','print',target],capture_output=True).returncode:return True
+        time.sleep(pause)
+    return False
+
+
+def said(result,fallback=''):
+    stderr=getattr(result,'stderr',None)
+    return (stderr.decode(errors='replace').strip() if isinstance(stderr,bytes) else '') or fallback
 
 
 def install():
@@ -23,8 +37,8 @@ def install():
       'StandardOutPath':str(logs/'dashboard.log'),'StandardErrorPath':str(logs/'dashboard-error.log'),
       'EnvironmentVariables':{'PATH':os.environ.get('PATH','/usr/bin:/bin'),'OH_DATA_HOME':str(state_home()),'OH_SERVICE_FOLLOWS_ACTIVE':'1'}}
     previous=path.read_bytes() if path.exists() else None
-    domain=f'gui/{os.getuid()}'
-    running=subprocess.run(['launchctl','print',domain+'/'+LABEL],capture_output=True).returncode==0
+    domain=f'gui/{os.getuid()}';target=domain+'/'+LABEL
+    running=subprocess.run(['launchctl','print',target],capture_output=True).returncode==0
     if running and previous is None:raise Refused('The running dashboard has no saved registration; restore its plist before upgrading')
     def publish(data):
         temporary=path.with_suffix('.pending')
@@ -36,28 +50,30 @@ def install():
     replacement_attempted=False
     try:
         publish(plistlib.dumps(value))
-        if running:subprocess.run(['launchctl','bootout',domain+'/'+LABEL],check=True,capture_output=True)
+        if running:
+            subprocess.run(['launchctl','bootout',target],check=True,capture_output=True)
+            if not gone(target):raise OSError('launchd still lists '+target+' after bootout')
         replacement_attempted=True
         subprocess.run(['launchctl','bootstrap',domain,str(path)],check=True,capture_output=True)
     except (OSError,subprocess.CalledProcessError) as exc:
         # Failed bootstrap can still leave the replacement registered. A label's
         # existence cannot tell us whether it is the old or new service.
-        present=replacement_attempted and subprocess.run(['launchctl','print',domain+'/'+LABEL],capture_output=True).returncode==0
+        present=replacement_attempted and subprocess.run(['launchctl','print',target],capture_output=True).returncode==0
         if present:
-            stopped=subprocess.run(['launchctl','bootout',domain+'/'+LABEL],capture_output=True)
-            if stopped.returncode:
+            stopped=subprocess.run(['launchctl','bootout',target],capture_output=True)
+            if stopped.returncode or not gone(target):
                 if previous is not None:publish(previous)
-                raise Refused('Dashboard rollback could not remove the current registration. Run launchctl bootout '+domain+'/'+LABEL+' and restore the saved registration before reinstalling.') from exc
+                raise Refused('Dashboard rollback could not remove the current registration ('+said(stopped,'exit '+str(stopped.returncode) if stopped.returncode else 'still listed after bootout')+'). Run launchctl bootout '+target+' and restore the saved registration before reinstalling.') from exc
         if previous is None:
             path.unlink(missing_ok=True)
             from .backup import sync_parent
             sync_parent(path)
         else:
             publish(previous)
-            if running and (replacement_attempted or subprocess.run(['launchctl','print',domain+'/'+LABEL],capture_output=True).returncode!=0):
+            if running and (replacement_attempted or subprocess.run(['launchctl','print',target],capture_output=True).returncode!=0):
                 recovery=subprocess.run(['launchctl','bootstrap',domain,str(path)],capture_output=True)
-                if recovery.returncode:raise Refused('Dashboard install failed; prior registration restored but could not restart. Run launchctl bootstrap '+domain+' '+str(path)+' after repairing launchd: '+recovery.stderr.decode(errors='replace')) from exc
-        raise Refused('Dashboard install failed; previous registration and running service were restored when present') from exc
+                if recovery.returncode:raise Refused('Dashboard install failed; prior registration restored but could not restart. Run launchctl bootstrap '+domain+' '+str(path)+' after repairing launchd: '+said(recovery,'exit '+str(recovery.returncode))) from exc
+        raise Refused('Dashboard install failed ('+said(exc,str(exc))+'); previous registration and running service were restored when present') from exc
     return {'url':'http://localhost:4318','service':str(path)}
 
 
