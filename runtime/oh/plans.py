@@ -1,14 +1,15 @@
 """Roadmaps, design docs and decision records as plain documents in a project's plans location.
 
-Models write prose; this module owns every structural edit (rows, numbers, links, logs). Each
-edit is all or nothing: if a document would break a rule afterwards, every file it touched is
-put back byte for byte. The formats follow Geoffrey's documents."""
+Models write prose; this module owns every structural edit (rows, numbers, links, logs). Adding a
+milestone, an initiative, a claim, a design doc or a decision is all or nothing: if a document would
+break a rule afterwards, every file the edit touched is put back byte for byte. The formats follow
+Geoffrey's documents."""
 import contextlib
 from datetime import date
 import os
 from pathlib import Path
 import re
-from .design_parse import US, design_file, fm_value, link_prefix, lines, plan, roadmap
+from .design_parse import US, design_file, link_prefix, plan, roadmap
 from .storage import Refused
 
 SLUG = r'[a-z0-9]+(-[a-z0-9]+)*'
@@ -35,11 +36,12 @@ def layout(root, location=None):
     base = Path(root) if location == 'repo' else state_home() / 'projects' / project(root)['id'] / 'plans'
     where = {'location': location, 'base': base, 'roadmap': base / settings['roadmap'],
              'designs': base / settings['designs'], 'decisions': base / settings['decisions']}
-    designs, decisions = where['designs'], where['decisions']
+    def folded(path):return Path(os.path.realpath(path).casefold())  # case-insensitive file systems share folders
+    designs, decisions = folded(where['designs']), folded(where['decisions'])
     if designs.is_relative_to(decisions) or decisions.is_relative_to(designs):
         raise Refused('plans.designs and plans.decisions overlap; give design docs and decisions separate folders')
     for key in ('designs', 'decisions'):
-        if where['roadmap'].parent.is_relative_to(where[key]):
+        if folded(where['roadmap'].parent).is_relative_to(folded(where[key])):
             raise Refused(f'plans.roadmap is inside plans.{key}; keep the roadmap outside the numbered folders')
     return where
 
@@ -56,12 +58,33 @@ def raw(path):
 
 
 def rows_of(path):
-    """A document's lines without line endings, and the line ending it uses."""
+    """A document's lines without line endings, and the line ending most of its lines use."""
     data = Path(path).read_bytes().decode()
-    ending = '\r\n' if '\r\n' in data else '\n'
     rows = data.split('\n')
-    rows = [r[:-1] if r.endswith('\r') else r for r in (rows[:-1] if rows[-1] == '' else rows)]
-    return rows, ending
+    rows = rows[:-1] if rows[-1] == '' else rows
+    crlf = sum(r.endswith('\r') for r in rows)
+    return [r[:-1] if r.endswith('\r') else r for r in rows], '\r\n' if crlf * 2 > len(rows) else '\n'
+
+
+def fenced(rows):
+    """For each line, whether it belongs to a fenced code block (CommonMark: a closing fence uses the
+    opener's character, is at least as long, and has nothing after it)."""
+    result, opener = [], None
+    for line in rows:
+        marker = re.match(r' {0,3}(`{3,}|~{3,})(.*)$', line)
+        if opener is None:
+            if marker and not (marker[1][0] == '`' and '`' in marker[2]):
+                opener = marker[1];result.append(True);continue
+            result.append(False)
+        else:
+            result.append(True)
+            if marker and marker[1][0] == opener[0] and len(marker[1]) >= len(opener) and not marker[2].strip():opener = None
+    return result
+
+
+def outside(rows):
+    """(index, line) for lines outside fenced code blocks."""
+    return [(i, line) for (i, line), inside in zip(enumerate(rows), fenced(rows)) if not inside]
 
 
 def write(path, text):
@@ -84,13 +107,17 @@ def write_rows(path, rows, ending):
 @contextlib.contextmanager
 def all_or_nothing(*paths):
     """Restore every listed file (or its absence) byte for byte if the edit fails."""
-    before = {Path(p): raw(p) for p in paths}
-    try:yield
-    except BaseException:
-        for path, data in before.items():
-            if data is None:path.unlink(missing_ok=True)
-            else:write(path, data)
-        raise
+    from .storage import snapshot_guard, state_home
+    # Plans in OH's folder are OH state: hold the state guard so a backup never sees half an edit.
+    guard = snapshot_guard() if any(Path(p).resolve().is_relative_to(state_home().resolve()) for p in paths) else contextlib.nullcontext()
+    with guard:
+        before = {Path(p): raw(p) for p in paths}
+        try:yield
+        except BaseException:
+            for path, data in before.items():
+                if data is None:path.unlink(missing_ok=True)
+                else:write(path, data)
+            raise
 
 
 def initiatives(root, where):
@@ -101,7 +128,7 @@ def initiatives(root, where):
 
 def milestones(where):
     """[(id, shipped)] in document order."""
-    return [(match[1], '✅' in line) for line in rows_of(where['roadmap'])[0] if (match := MILESTONE.match(line))]
+    return [(match[1], '✅' in line) for _, line in outside(rows_of(where['roadmap'])[0]) if (match := MILESTONE.match(line))]
 
 
 def start_roadmap(where, title):
@@ -123,9 +150,12 @@ def add_milestone(root, where, milestone, title, done_when):
     if milestones(where):initiatives(root, where)  # an existing roadmap must parse before it grows
     if milestone in [m for m, _ in milestones(where)]:raise Refused(f'The roadmap already has {milestone}')
     rows, ending = rows_of(where['roadmap'])
-    starts = [i for i, line in enumerate(rows) if MILESTONE.match(line)]
-    # After the last milestone's section, before the next level-2 heading such as "Deliberately deferred".
-    at = next((i for i in range(starts[-1] + 1, len(rows)) if re.match(r'##\s', rows[i])), len(rows)) if starts else len(rows)
+    visible = outside(rows)
+    starts = [i for i, line in visible if MILESTONE.match(line)]
+    # After the last milestone's section, before the next level-2 heading such as "Deliberately deferred";
+    # the first milestone goes before the first level-2 heading after the title.
+    after = starts[-1] if starts else next((i for i, line in visible if re.match(r'#\s', line)), -1)
+    at = next((i for i, line in visible if i > after and re.match(r'##\s', line)), len(rows))
     while at > 0 and rows[at - 1].strip() in ('', '---'):at -= 1
     block = ['', '---', '', f'### {milestone} — {title}', '', f'**Done when:** {done_when}', '', *TABLE]
     block += [''] if at < len(rows) and rows[at].strip() else []
@@ -155,7 +185,7 @@ def add_initiative(root, where, milestone, slug, text, depends):
     cell = ', '.join(f'`{d}`' for d in depends) if depends else '—'
     rows, ending = rows_of(where['roadmap'])
     current, last = '', None
-    for index, line in enumerate(rows):
+    for index, line in outside(rows):
         match = MILESTONE.match(line)
         if match:current = match[1];continue
         if re.match(r'#{2,3}\s', line):current = '';continue
@@ -178,7 +208,7 @@ def claim(root, where, slug, number):
     path = design_file(root, number, where)
     if not path or not re.fullmatch(number + '-' + SLUG + r'\.md', Path(path).name):raise Refused(f'No design doc {number}-<slug>.md')
     rows, ending = rows_of(where['roadmap']);changed = 0
-    for index, line in enumerate(rows):
+    for index, line in outside(rows):
         if line.startswith(f'| `{slug}` |'):
             cells = line.split('|')
             if len(cells) != 6 or cells[4].strip() != '—':raise Refused(f"'{slug}' row has an unexpected design cell")
@@ -203,8 +233,10 @@ def write_design(root, where, slug, title, body, status):
     title = one_line(title, 'The design title')
     number = next_number(where['designs'])
     path = Path(where['designs']) / f'{number}-{slug}.md'
-    write(path, f'---\ntype: design\nstatus: {status}\nlast-verified: {date.today().isoformat()}\n---\n\n'
-          f'# {number} — {title}\n\n{body.strip()}\n')
+    with all_or_nothing(path):
+        write(path, f'---\ntype: design\nstatus: {status}\nlast-verified: {date.today().isoformat()}\n---\n\n'
+              f'# {number} — {title}\n\n{body.strip()}\n')
+        verify_design(root, where, number, orphans=False)  # the roadmap names it only after claim
     return number, path
 
 
@@ -220,7 +252,10 @@ def write_decision(root, where, title, context, alternatives, consequences, deci
     row = f'| [{number}](./{number}-{slug}.md) | {title} | {today} | {status} |'
     if log.exists():
         rows, ending = rows_of(log)
-        header = next((i for i, line in enumerate(rows) if re.match(r'\|\s*#\s*\|\s*Decision\s*\|', line)), None)
+        visible = outside(rows)
+        log_heading = next((i for i, line in visible if re.match(r'##\s+The log\s*$', line)), -1)
+        headers = [i for i, line in visible if re.match(r'\|\s*#\s*\|\s*Decision\s*\|', line)]
+        header = next((i for i in headers if i > log_heading), headers[0] if headers else None)
         if header is None:raise Refused(f'{log} has no decision log table (a "| # | Decision | Date | Status |" header)')
         end = header + 1
         while end + 1 < len(rows) and rows[end + 1].startswith('|'):end += 1
@@ -276,18 +311,20 @@ def cyclic(graph):
 
 def headings(path):
     """Level-2 headings outside fenced code blocks."""
-    found, fence = [], None
-    for line in rows_of(path)[0]:
-        marker = re.match(r'\s{0,3}(```+|~~~+)', line)
-        if marker:
-            if fence is None:fence = marker[1][0] * 3
-            elif line.strip().startswith(fence):fence = None
-            continue
-        if fence is None and line.startswith('## '):found.append(line)
-    return found
+    return [line for _, line in outside(rows_of(path)[0]) if line.startswith('## ')]
 
 
-def verify_design(root, where, number=None):
+def status_of(path):
+    """A document's frontmatter status, whatever its line endings."""
+    rows = rows_of(path)[0]
+    if not rows or rows[0] != '---':return ''
+    for line in rows[1:]:
+        if re.match(r'---\s*$', line):break
+        if line.startswith('status:'):return line[len('status:'):].strip()
+    return ''
+
+
+def verify_design(root, where, number=None, orphans=True):
     """Whether approved and frozen design docs can be delivered (verify-design.sh): structure, not editorial
     quality. Drafts may have loose ends, and abandoned docs are records."""
     folder, problems = Path(where['designs']), []
@@ -301,12 +338,13 @@ def verify_design(root, where, number=None):
     for doc in wellformed:
         n = doc.name[:4]
         if number and n != number:continue
-        status = fm_value(str(doc), 'status')
+        status = status_of(doc)
         if status not in ('draft', 'approved', 'frozen', 'abandoned'):
             problems.append(f"{doc.name} has status '{status or 'missing'}'");continue
         if status in ('draft', 'abandoned'):continue
         try:tasks = [row.split(US) for row in plan(root, n, where).strip('\n').split('\n')]
         except Refused as exc:problems.append(f'{doc.name} does not parse: {str(exc).strip()}');continue
+        if any(len(t) != 6 for t in tasks):problems.append(f'{doc.name} does not parse: a task title contains a control character');continue
         ids = {t[0] for t in tasks}
         sections = headings(doc)
         for task, _, _, needs, blocked, _ in tasks:
@@ -324,7 +362,7 @@ def verify_design(root, where, number=None):
         pending = [t[0] for t in tasks if t[1] == 'pending']
         if status == 'frozen' and pending:problems.append(f'{doc.name} is frozen with pending tasks: {" ".join(pending)}')
         if status == 'approved' and not pending:problems.append(f'{doc.name} is approved but every task is done; finalize it')
-        if status == 'approved' and has_roadmap and n not in named:problems.append(f'{doc.name} is approved but no roadmap row names it')
+        if orphans and status == 'approved' and has_roadmap and n not in named:problems.append(f'{doc.name} is approved but no roadmap row names it')
     if problems:raise Refused('Design docs break their rules:\n' + ''.join(f'  {p}\n' for p in problems))
     return {'designs': len(docs)}
 

@@ -29,6 +29,8 @@ class PlansTest(unittest.TestCase):
         subprocess.run(['git','init','-q',str(self.root)],check=True)
         register(self.root,'Fixture')
 
+    def approve(self,path):path.write_text(path.read_text().replace('status: draft','status: approved'))
+
     def repo(self,**folders):
         change(self.root,'plans.location','repo',location='private')
         for key,value in folders.items():change(self.root,'plans.'+key,value)
@@ -83,7 +85,7 @@ class PlansTest(unittest.TestCase):
                            (TASKS.replace('*Blocked on §3.*','Depends on task 1.'),'cycle')):
             with self.subTest(words):
                 for doc in where['designs'].glob('*.md'):doc.unlink()
-                plans.write_design(self.root,where,'store','The store',body,'approved')
+                self.approve(plans.write_design(self.root,where,'store','The store',body,'draft')[1])
                 with self.assertRaisesRegex(Refused,words):plans.verify_design(self.root,where)
 
     def test_a_failed_edit_leaves_every_file_exactly_as_it_was(self):
@@ -122,6 +124,38 @@ class PlansTest(unittest.TestCase):
         log=(where['decisions']/'README.md').read_text()
         self.assertLess(log.index('[0002]'),log.index('## Superseded'))
 
+    def test_code_blocks_never_receive_new_structure(self):
+        where=self.repo();plans.start_roadmap(where,'Fixture')
+        text=where['roadmap'].read_text()+'\n## Deliberately deferred\n\n| Idea | Why |\n|---|---|\n'
+        where['roadmap'].write_text(text)
+        plans.add_milestone(self.root,where,'M1','Slice','Done')  # the first milestone goes before later sections
+        self.assertLess(where['roadmap'].read_text().index('### M1'),where['roadmap'].read_text().index('## Deliberately'))
+        where['roadmap'].write_text(where['roadmap'].read_text().replace('|---|---|---|---|\n','|---|---|---|---|\n\nExample:\n\n```md\n## Not a section\n```\n',1))
+        plans.add_milestone(self.root,where,'M2','Next','Done');plans.add_initiative(self.root,where,'M1','a','A',[])
+        text=where['roadmap'].read_text()
+        self.assertLess(text.index('```\n'),text.index('### M2'));self.assertLess(text.index('| `a` |'),text.index('```md'))
+        where['decisions'].mkdir(parents=True)
+        (where['decisions']/'README.md').write_text('# D\n\nFormat:\n\n```md\n| # | Decision | Date | Status |\n|---|---|---|---|\n| [0000](./x.md) | Example | - | - |\n```\n\n'
+            '## The log\n\n| # | Decision | Date | Status |\n|---|---|---|---|\n')
+        plans.write_decision(self.root,where,'B','C','A','C','Do B.')
+        log=(where['decisions']/'README.md').read_text()
+        self.assertGreater(log.index('[0001]'),log.index('## The log'))
+
+    def test_quoted_fences_and_windows_line_endings_are_read_correctly(self):
+        where=self.repo()
+        nested=TASKS.replace('## 3. Open — the storage choice','````md\n```md\n## 3. Open — example\n```\n````\n\n## 3. Scope')
+        path=plans.write_design(self.root,where,'store','Store',TASKS,'approved')[1]
+        path.write_bytes(path.read_bytes().replace(b'\n',b'\r\n'))
+        self.assertEqual(plans.verify_design(self.root,where,orphans=False),{'designs':1})
+        path.write_text(path.read_text().replace('## 3. Open — the storage choice',nested.split('## 4.')[0].strip()))
+        with self.assertRaisesRegex(Refused,'not an open-questions section'):plans.verify_design(self.root,where,orphans=False)
+
+    def test_a_new_design_that_breaks_the_task_rules_is_never_written(self):
+        where=self.repo()
+        for body in (TASKS.replace('task 2','task 9'),TASKS.replace('Build the index','Build\x1fthe index')):
+            with self.assertRaises(Refused):plans.write_design(self.root,where,'store','Store',body,'approved')
+        self.assertEqual(list(where['designs'].glob('*.md')),[])
+
     def test_roadmap_checks_match_geoffreys_on_duplicates_and_milestone_cycles(self):
         where=self.repo();plans.start_roadmap(where,'Fixture')
         plans.add_milestone(self.root,where,'M1','One','Done');plans.add_milestone(self.root,where,'M2','Two','Done')
@@ -139,7 +173,7 @@ class PlansTest(unittest.TestCase):
         path.write_text(path.read_text().replace('status: draft','status: abandoned'))
         self.assertEqual(plans.verify_design(self.root,where),{'designs':2})
         fenced=TASKS.replace('## 3. Open — the storage choice','```md\n## 3. Open — example\n```\n\n## 3. Scope')
-        plans.write_design(self.root,where,'store','Store',fenced,'approved')
+        self.approve(plans.write_design(self.root,where,'store','Store',fenced,'draft')[1])
         with self.assertRaisesRegex(Refused,'not an open-questions section'):plans.verify_design(self.root,where)
 
     def test_plans_settings_stay_inside_their_location(self):
