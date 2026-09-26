@@ -40,8 +40,10 @@ From a terminal:
 - `oh config unset <key>` goes back to the default.
 
 OH checks every settings file each time it reads it. An unknown key, a bad value or broken
-JSON stops OH with the file and key named. A task can't change `oh.json`. Settings are
-captured when a batch is prepared, so a change applies to the next batch.
+JSON stops OH with the file and key named. Tasks and checks can't change `oh.json`: OH
+restores it and fails that attempt. Settings are captured when a run is prepared, so a change
+applies to the next run you start; **continue** keeps the settings the run was approved with.
+While a run is active, change `oh.json` only after it ends.
 
 | Setting | Default | Meaning |
 |---|---|---|

@@ -60,4 +60,36 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'both'):load(self.root)
 
 
+    def test_the_writer_repairs_broken_files_and_skips_no_op_writes(self):
+        repo=self.root/'oh.json';repo.write_text('{"tasks_per_batch": 0, "retired": 1}')
+        change(self.root,'tasks_per_batch','5')
+        with self.assertRaisesRegex(Refused,'Unknown setting: retired'):load(self.root)
+        change(self.root,'retired',None)
+        self.assertEqual(load(self.root)['tasks_per_batch'],5)
+        written=repo.read_text()
+        self.assertTrue(change(self.root,'tasks_per_batch','5')['unchanged']);self.assertTrue(change(self.root,'review_rounds',None)['unchanged'])
+        self.assertEqual(repo.read_text(),written)
+        with self.assertRaisesRegex(Refused,'unset'):change(self.root,'models.claude.review.model','null')
+        self.assertEqual(oct(repo.stat().st_mode&0o777),oct(0o666&~self.umask()))
+
+    def umask(self):
+        mask=os.umask(0);os.umask(mask);return mask
+
+    def test_settings_files_must_be_plain_and_exactly_named(self):
+        (self.root/'OH.json').write_text('{"tasks_per_batch": 9}')
+        with self.assertRaisesRegex(Refused,'Rename'):load(self.root)
+        (self.root/'OH.json').unlink()
+        (self.root/'team.json').write_text('{}');(self.root/'oh.json').symlink_to('team.json')
+        with self.assertRaisesRegex(Refused,'symlink'):load(self.root)
+
+    def test_importing_a_profile_keeps_a_committed_oh_json_as_the_only_project_settings(self):
+        from .profiles import export_profile,import_profile
+        (self.root/'oh.json').write_text('{"tasks_per_batch": 9}')
+        exported=Path(self.root.parent)/'profile.json';export_profile(self.root,exported)
+        clone=self.root.parent/'clone';subprocess.run(['git','init','-q',str(clone)],check=True)
+        (clone/'oh.json').write_text('{"tasks_per_batch": 9}')
+        import_profile(clone,exported)
+        self.assertEqual((describe(clone)['location'],load(clone)['tasks_per_batch']),('repo',9))
+
+
 if __name__=='__main__':unittest.main()

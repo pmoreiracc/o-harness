@@ -5,7 +5,7 @@ description: Explicit OH workflow through the shared external runner.
 Use the absolute `<plugin>/scripts/oh` entry supplied by the invoking skill. Resolve the
 selected Git checkout. Run `--root <checkout> config`; if unregistered, perform explicit
 one-time `init --name <name>` and save appropriate ordinary project checks in the returned
-external profile directory. No OH files, hooks or settings belong in the product.
+external profile directory. OH requires no files, hooks or settings in the product; an `oh.json` exists only when the user chose it through `oh config`.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
 For already prepared scope, run `--root <checkout> start` to verify the native human

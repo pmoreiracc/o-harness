@@ -10,6 +10,10 @@
       "type": "string",
       "description": "Lets editors show these descriptions"
     },
+    "schema_version": {
+      "const": 1,
+      "description": "Settings format version; optional"
+    },
     "tasks_per_batch": {
       "type": "integer",
       "minimum": 1,

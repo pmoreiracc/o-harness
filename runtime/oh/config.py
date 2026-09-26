@@ -66,13 +66,15 @@ def allowed(spec):
 def validate(value):
     if type(value['schema_version']) is not int or value['schema_version'] != 1:
         raise Refused('Unsupported configuration version')
-    for key, spec, _ in rules():
-        item = lookup_key(value, key)
-        if spec['type'] == 'integer':valid = type(item) is int and spec['minimum'] <= item <= spec['maximum']
-        elif 'enum' in spec:valid = item in spec['enum']
-        else:valid = isinstance(item, str) and bool(re.fullmatch(MODEL, item))
-        if not valid:raise Refused(f'{key} must be {allowed(spec)}; got {json.dumps(item)}')
+    for key, spec, _ in rules():check(key, spec, lookup_key(value, key))
     return value
+
+
+def check(key, spec, item):
+    if spec['type'] == 'integer':valid = type(item) is int and spec['minimum'] <= item <= spec['maximum']
+    elif 'enum' in spec:valid = item in spec['enum']
+    else:valid = isinstance(item, str) and bool(re.fullmatch(MODEL, item))
+    if not valid:raise Refused(f'{key} must be {allowed(spec)}; got {json.dumps(item)}')
 
 
 def schema():
@@ -81,7 +83,8 @@ def schema():
     root = {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': SCHEMA_URL, 'title': 'OH settings (oh.json)',
             'description': 'Project settings for OH. Run `oh config` to list them, or change one with /oh-config.',
             'type': 'object', 'additionalProperties': False,
-            'properties': {'$schema': {'type': 'string', 'description': 'Lets editors show these descriptions'}}}
+            'properties': {'$schema': {'type': 'string', 'description': 'Lets editors show these descriptions'},
+                           'schema_version': {'const': 1, 'description': 'Settings format version; optional'}}}
     for key, spec, meaning in rules():
         node = root
         for part in key.split('.')[:-1]:
@@ -93,24 +96,30 @@ def schema():
 def project_file(root):
     """Project settings live in oh.json in the repository or, for private projects, in OH's folder; never both."""
     from .registry import profile_path
+    import os
     repo, private = Path(root) / 'oh.json', profile_path(root, 'config.json')
+    for name in os.listdir(root):
+        if name.lower() == 'oh.json' and name != 'oh.json':raise Refused(f'Rename {Path(root) / name} to oh.json')
+    if repo.is_symlink():raise Refused(f'{repo} must be a regular file, not a symlink')
     if repo.exists() and private.exists():
-        raise Refused(f'Project settings exist in both {repo} and {private}; keep only one')
+        raise Refused(f'Project settings exist in both {repo} and {private}; delete the one you don\'t want')
     if repo.exists():return repo, 'repo'
     if private.exists():return private, 'private'
     return None, None
 
 
 def read_settings(path):
+    if Path(path).is_symlink():raise Refused(f'{path} must be a regular file, not a symlink')
     try:value = json.loads(Path(path).read_text())
     except ValueError as exc:raise Refused(f'{path} is not valid JSON: {exc}') from None
+    except OSError as exc:raise Refused(f'Cannot read {path}: {exc.strerror}') from None
     if not isinstance(value, dict):raise Refused(f'{path} must contain a JSON object')
     return {k: v for k, v in value.items() if k != '$schema'}
 
 
 def load(root, *, origin=None, replace=None):
     """Effective settings. `replace` substitutes one file's content, to validate a change before writing it."""
-    config = deepcopy(read_json(HOME / 'config/defaults.json'))
+    config = validate(deepcopy(read_json(HOME / 'config/defaults.json')))
     from .registry import profile_path
     from .storage import state_home
     project, _ = project_file(root)
@@ -141,56 +150,120 @@ def describe(root):
 def change(root, key, raw=None, *, location=None):
     """The only writer of project settings: an unknown key or invalid value never reaches the file."""
     specs = {k: spec for k, spec, _ in rules()}
-    if key not in specs:raise Refused(f'Unknown setting: {key}. Run oh config to list the settings')
     from .registry import profile_path
     path, current = project_file(root)
+    data = read_settings(path) if path else {}
+    parts = key.split('.')
+    if key not in specs and not (raw is None and present(data, parts)):
+        raise Refused(f'Unknown setting: {key}. Run oh config to list the settings')
+    if raw is None and not present(data, parts):return {'setting': key, 'unchanged': True, 'note': 'Not set in the project settings'}
     if path is None:
         if location not in ('repo', 'private'):
-            if raw is None:return {'setting': key, 'unchanged': True}
             raise Refused('This project has no settings file yet. Choose --location repo (oh.json in the repository) '
                           'or --location private (OH\'s folder, nothing in the repository)')
         path, current = (Path(root) / 'oh.json', 'repo') if location == 'repo' else (profile_path(root, 'config.json'), 'private')
     elif location and location != current:
         raise Refused(f'Project settings already live in {path}; change them there')
-    data = read_settings(path) if path.exists() else {}
-    before = lookup_key(load(root), key)
-    node, parts = data, key.split('.')
+    if current == 'repo':
+        from .workflow import active_file, load_run
+        if active_file(root).exists() and load_run(root)[1]['status'] not in ('stopped', 'pr', 'completed'):
+            raise Refused('A run is active in this checkout; change oh.json after it ends, or stop it first')
+    try:before, whole = lookup_key(load(root), key), True
+    except (Refused, KeyError):before, whole = None, False  # a broken file is repaired one setting at a time
+    node = data
     if raw is None:
         trail = []
-        for part in parts[:-1]:
-            if not isinstance(node.get(part), dict):node = None;break
-            trail.append((node, part));node = node[part]
-        if node is not None:node.pop(parts[-1], None)
+        for part in parts[:-1]:trail.append((node, part));node = node[part]
+        node.pop(parts[-1])
         for parent, part in reversed(trail):
             if not parent[part]:parent.pop(part)
     else:
         try:value = json.loads(raw)
         except ValueError:value = raw
+        if value is None:raise Refused(f'Use oh config unset {key} to go back to the default')
         if specs[key]['type'] == 'string' and not isinstance(value, str):value = raw
         for part in parts[:-1]:
             if not isinstance(node.get(part), dict):node[part] = {}
             node = node[part]
+        if node.get(parts[-1]) == value and path.exists():
+            return {'setting': key, 'unchanged': True, 'file': str(path)}
         node[parts[-1]] = value
-    after = lookup_key(load(root, replace=(path, data)), key)
+    origin, after = {}, None
+    if whole:
+        # A valid file stays valid: the whole result is checked before anything is written.
+        effective = load(root, origin=origin, replace=(path, data))
+        after = lookup_key(effective, key) if key in specs else None
+    elif raw is not None:
+        check(key, specs[key], value);after = value  # never adds an invalid value to a file being repaired
     write_settings(path, data, current)
-    return {'setting': key, 'from': before, 'to': after, 'file': str(path),
-            'note': ('Commit oh.json; OH starts a batch only from a clean checkout. ' if current == 'repo' else '')
-                    + 'Applies to the next batch you approve; a batch already approved keeps its settings'}
+    note = 'Applies to the next run you start; continuing a run keeps the settings it was approved with.'
+    if current == 'repo':note = 'Commit oh.json; OH starts a run only from a clean checkout. ' + note
+    if origin.get(key) == 'personal':note += ' Your personal config.local.json overrides this value.'
+    return {'setting': key, 'from': before, 'to': after, 'file': str(path), 'note': note}
+
+
+def present(data, parts):
+    for part in parts:
+        if not isinstance(data, dict) or part not in data:return False
+        data = data[part]
+    return True
+
+
+def schema_link():
+    """Pin editors to the schema of the installed release, so they check the rules this OH applies."""
+    release = read_json(HOME / 'revision.json').get('version') if (HOME / 'revision.json').is_file() else None
+    return SCHEMA_URL.replace('/main/', f'/v{release}/') if release else SCHEMA_URL
 
 
 def write_settings(path, data, location):
     import os
     import tempfile
     from .system import replace
-    body = ({'$schema': SCHEMA_URL} | data) if location == 'repo' else data
+    body = ({'$schema': schema_link()} | data) if location == 'repo' else data
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.oh-settings-', dir=path.parent)
     try:
         with os.fdopen(fd, 'w') as stream:
             stream.write(json.dumps(body, indent=2) + '\n');stream.flush();os.fsync(stream.fileno())
+        if location == 'repo':
+            mask = os.umask(0);os.umask(mask);os.chmod(temporary, 0o666 & ~mask)  # a shared repository file
         replace(temporary, path)
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
+
+
+def settings_drift(root):
+    """How the working tree's oh.json differs from the last commit, or None. Case variants, ignored
+    or untracked copies, symlinks and edits all count, so no task or check changes later runs' settings."""
+    import os
+    root = Path(root)
+    committed = {}
+    for line in git(root, 'ls-tree', 'HEAD').splitlines():
+        meta, name = line.split('\t', 1)
+        if name.lower() == 'oh.json':committed[name] = meta.split()
+    present_names = sorted(n for n in os.listdir(root) if n.lower() == 'oh.json')
+    if present_names != sorted(committed):return 'oh.json differs from the last commit'
+    for name in present_names:
+        mode, kind, blob = committed[name]
+        if (root / name).is_symlink() or not (root / name).is_file() or (mode, kind) != ('100644', 'blob'):
+            return f'{name} must be a regular file'
+        if git(root, 'hash-object', '--no-filters', '--', name) != blob:return f'{name} differs from the last commit'
+    return None
+
+
+def restore_settings(root):
+    """Put oh.json back exactly as committed after a task or check changed it."""
+    import os
+    import shutil
+    root = Path(root)
+    committed = [line.split('\t', 1)[1] for line in git(root, 'ls-tree', 'HEAD').splitlines()
+                 if line.split('\t', 1)[1].lower() == 'oh.json']
+    for name in os.listdir(root):
+        if name.lower() == 'oh.json':
+            path = root / name
+            if path.is_dir() and not path.is_symlink():shutil.rmtree(path)
+            else:path.unlink()
+    for name in committed:git(root, 'checkout', 'HEAD', '--', name)
 
 
 def version():
