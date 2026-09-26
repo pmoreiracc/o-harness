@@ -83,7 +83,7 @@ class PluginTransitions(unittest.TestCase):
         self.assertTrue(manifests[1][0]['git_tree'])
 
     def tracked_script(self):
-        script=self.root/'checks.sh';script.write_text('#!/bin/sh\nexit 0\n')
+        script=self.root/'checks.sh';script.write_text('#!/bin/sh\nexit 0\n',newline='\n')
         self.git('add','checks.sh');self.git('commit','-qm','Add verification script')
         return script
 
