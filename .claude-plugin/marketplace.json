@@ -1,0 +1,7 @@
+{
+  "name": "o-harness",
+  "owner": {"name": "OH contributors"},
+  "description": "OH: explicit, independently reviewed agent workflows.",
+  "plugins": [{"name": "o-harness", "source": "./claude/o-harness",
+    "description": "Explicit, independently reviewed workflows with external state and subscription workers."}]
+}

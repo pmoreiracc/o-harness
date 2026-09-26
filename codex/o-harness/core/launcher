@@ -1,0 +1,69 @@
+#!/usr/bin/env -S python3 -I
+"""Resolve bundled setup or the explicitly installed shared core, never the product cwd."""
+import json
+import os
+from pathlib import Path
+import sys
+sys.dont_write_bytecode = True
+plugin=Path(__file__).resolve().parents[1]
+import argparse
+parser=argparse.ArgumentParser(add_help=False)
+parser.add_argument('--root',default=os.getcwd())
+options,remaining=parser.parse_known_args()
+command=remaining[0] if remaining else ''
+if command=='setup':
+    entry=plugin/'core/oh'
+else:
+    home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
+    active=home/'runtime/active.json'
+    payload=None;explicit=True
+    if command=='plugin-hook':
+        # Bare choices such as "continue" only matter to an active run; they never install OH.
+        payload=sys.stdin.read();prompt=json.loads(payload).get('prompt')
+        explicit=isinstance(prompt,str) and prompt.strip()[:1] in ('$','/')
+    bundled=plugin/'core/revision.json'
+    if explicit and bundled.is_file():
+        # A plugin install or update carries its core. Activate it on first explicit use when it is
+        # newer than the active core, so an older plugin in another host never downgrades OH.
+        def number(value):
+            try:return tuple(int(part) for part in str(value).split('.'))
+            except ValueError:return ()
+        package=json.loads(bundled.read_text())
+        current=json.loads(active.read_text()) if active.is_file() else {}
+        if '+worktree.' not in package['revision'] and package['revision']!=current.get('revision') and (
+                not current or number(package.get('version'))>number(current.get('version'))):
+            import subprocess
+            done=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup','--if-newer'],stdin=subprocess.DEVNULL,capture_output=True,text=True)
+            if done.returncode:print('OH: automatic setup failed. '+done.stderr.strip(),file=sys.stderr)
+    if not active.is_file() and command=='plugin-hook':
+        if explicit:print(json.dumps({'authorized':False,'onboarding':'OH is not set up. Run this plugin scripts/oh setup, register the selected checkout with init, then submit a fresh workflow invocation.'}))
+        raise SystemExit(0)
+    if not active.is_file():
+        raise SystemExit('OH is not set up. Run this plugin command with setup first.')
+    revision=json.loads(active.read_text())['revision']
+    if Path(revision).name!=revision:raise SystemExit('Invalid installed OH revision')
+    if command in ('run','start','deliver','resume','pause','stop','plugin-hook'):
+        import hashlib
+        key=hashlib.sha256(json.dumps(str(Path(options.root).resolve()),ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+        locator=home/'registry/checkouts'/(key+'.json')
+        if locator.is_file():
+            checkout=json.loads(locator.read_text())
+            active_run=home/'checkout-state'/checkout['checkout']/'oh-active-run.json'
+            if active_run.is_file():
+                binding=json.loads(active_run.read_text())
+                start=home/'projects'/binding['project']/'runs'/binding['run']/'000001.json'
+                status='running'
+                for record in sorted(start.parent.glob('[0-9]*.json'),reverse=True):
+                    value=json.loads(record.read_text())
+                    events=value['data'].get('events',[]) if value['kind']=='transition' else [value]
+                    found=next((e['data']['status'] for e in reversed(events) if e['kind']=='run.status'),None)
+                    if found is not None:status=found;break
+                if status not in ('stopped','completed','pr'):
+                    revision=json.loads(start.read_text())['data']['harness_version']
+                    if Path(revision).name!=revision:raise SystemExit('Invalid retained runtime revision')
+    entry=home/'versions'/revision/'oh'
+if not entry.is_file():raise SystemExit('Shared OH core is missing. Rebuild/reinstall the plugin, then run setup.')
+if payload is not None:
+    import subprocess
+    raise SystemExit(subprocess.run([sys.executable,'-I',str(entry),*sys.argv[1:]],input=payload,text=True).returncode)
+os.execv(sys.executable,[sys.executable,'-I',str(entry),*sys.argv[1:]])

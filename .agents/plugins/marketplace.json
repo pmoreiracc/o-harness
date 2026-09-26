@@ -1,0 +1,6 @@
+{
+  "name": "o-harness",
+  "interface": {"displayName": "OH"},
+  "plugins": [{"name": "o-harness", "source": {"source": "local", "path": "./codex/o-harness"},
+    "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Productivity"}]
+}

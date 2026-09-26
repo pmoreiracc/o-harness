@@ -1,0 +1,1 @@
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"command":"python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/human-event.py\" codex","timeout":15,"type":"command"}]}]}}
