@@ -2,8 +2,8 @@
 
 ## Requirements
 
-- macOS or Linux. Native Windows support is in progress and has not been tested on a
-  real Windows machine yet. The dashboard auto-start service is macOS only; on other
+- macOS or Linux. Native Windows support is in progress: CI runs the tests on Windows,
+  but no real Claude Code or Codex run has been done there yet. The dashboard auto-start service is macOS only; on other
   systems run `oh serve` yourself.
 - Python 3.11+ as `python3`, and Git.
 - Claude Code signed in with a Claude subscription, or Codex signed in with ChatGPT.

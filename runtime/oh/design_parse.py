@@ -1,6 +1,7 @@
 """Numbered design documents and the roadmap: the task list parser and the lifecycle renderer.
-Output and messages match the former core/scripts/plan.sh, roadmap.sh and freeze.sh, except that long
-titles are cut by characters where macOS awk cut by bytes."""
+Output and messages match the former core/scripts/plan.sh, roadmap.sh and freeze.sh run in the C locale:
+whitespace and case folding are ASCII only. Under a UTF-8 locale macOS awk also treated U+00A0 as space and
+lowercased non-ASCII capitals, and it cut long titles by bytes where this cuts by characters."""
 from datetime import date
 from pathlib import Path
 import re
