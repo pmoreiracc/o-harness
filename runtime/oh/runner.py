@@ -161,10 +161,7 @@ def _run(root,invoke):
                 if state['status']=='running':
                     status(journal,state,'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint')
                 return checkpoint(root)
-            if state.get('workflow','deliver')=='deliver':
-                from .config import settings_drift
-                drift=settings_drift(root)
-                if drift:raise Refused(drift+'. Restore it, or stop this run; change settings after a run ends.')
+            if state.get('workflow','deliver')=='deliver':settings_restored(root,journal)
             task_id=task['id'];task_start=time.monotonic()
             previous=[a for a in state['attempts'] if a['task']==task_id]
             if task_id not in state['task_started']:
@@ -198,10 +195,11 @@ def _run(root,invoke):
                 parent=state['summaries'][-1].get('commit',state['base']) if state['summaries'] else state['base']
                 if git(root,'rev-parse','HEAD')!=parent:raise Refused('HEAD changed outside the runner; restore the recorded task parent')
                 work=attempt(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
+                # Checked whatever the outcome, so a failed or paused attempt never leaves a settings change behind.
+                if state.get('workflow','deliver')=='deliver' and settings_touched(root,journal,work,task_id,'the task'):continue
                 if work['outcome']!='implemented':continue
             apply_pending(root)
             if reduce(journal.records())['status']!='running':return checkpoint(root)
-            if state.get('workflow','deliver')=='deliver' and settings_changed(root,journal,work,task_id,'the task'):continue
             if task.get('transition'):
                 with lock(checkout_file(root,'oh-control.lock')):
                     from .controls import check
@@ -212,7 +210,7 @@ def _run(root,invoke):
             from .checks import resolve
             checks=resolve(root,state['project_checks']+state['checks'],state['base']) if state.get('workflow','deliver')=='deliver' else []
             check_results=verify(root,checks,state['project'],controlled=True)
-            if checks and settings_changed(root,journal,work,task_id,'a check'):continue
+            if checks and settings_touched(root,journal,work,task_id,'a check'):continue
             journal.append('verification',{'task':task_id,'tree':tree(root),'checks':check_results})
             best_effort('phase.finished',state['project'],state['id'],task_id,phase='verification',
                         duration_ms=sum(r['duration_ms'] for r in check_results if not r['reused']),
@@ -234,14 +232,25 @@ def _run(root,invoke):
             # Blocking or failed review starts a fresh repair/review only within the same grant.
 
 
-def settings_changed(root,journal,work,task_id,actor):
-    # Settings change only through `oh config`; a task or its checks never change what governs later runs.
-    from .config import restore_settings,settings_drift
-    if not settings_drift(root):return False
-    restore_settings(root)
+def settings_touched(root,journal,work,task_id,actor):
+    # Runs read settings from the last commit, so the only way to change them is a commit; OH never
+    # commits a task's change to oh.json under any name the file system resolves to it.
+    from .config import restore_settings,settings_changed
+    if not settings_changed(root,candidate_tree(root)):return False
+    restore_settings(root,Path(work['evidence']))
     journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
-        'summary':f'{actor.capitalize()} changed oh.json, which tasks cannot do; OH restored it. Settings change only through oh config.'})
+        'summary':f'{actor.capitalize()} changed oh.json, which tasks cannot do; OH restored it and kept a copy in the attempt evidence. Settings change only through oh config.'})
     return True
+
+
+def settings_restored(root,journal):
+    # A change no attempt of this run made (a hand edit, or one left by an interrupted attempt) is
+    # never committed or charged to a task: OH keeps a copy and restores the committed file.
+    from .config import restore_settings,settings_changed
+    if not settings_changed(root,candidate_tree(root)):return
+    keep=journal.path/'settings-restored'/identifier()
+    restore_settings(root,keep)
+    journal.append('settings.restored',{'copy':str(keep),'summary':'oh.json changed during this run; OH restored the committed file and kept a copy. Change settings after the run ends.'})
 
 
 def apply_pending(root):
@@ -286,8 +295,8 @@ def complete_reviewed(root,journal,state,task,review):
         if not already:
             if head!=review.get('head'):raise Refused('HEAD differs from the reviewed parent')
             if review['tree']!=tree(root) or candidate_tree(root)!=expected:raise Refused('The retained review does not cover the current tree')
-            from .config import settings_drift
-            if settings_drift(root):raise Refused('oh.json changed after the review; restore it before OH commits this task')
+            from .config import settings_changed
+            if settings_changed(root,expected):raise Refused('The reviewed tree changes oh.json; OH never commits a task that changes settings')
             git(root,'add','--all')
             if git(root,'write-tree')!=expected:raise Refused('The staged tree differs from the reviewed Git tree')
             if not intent:

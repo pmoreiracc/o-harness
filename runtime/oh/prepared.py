@@ -12,8 +12,6 @@ def directory(root):return state_home()/'projects'/project(root)['id']/'prepared
 @state_writer
 def prepare(root,manifest=None,doc=None,track=''):
     if (manifest is None)==(doc is None):raise Refused('Prepare either tasks or one design')
-    from .config import settings_drift
-    if settings_drift(root):raise Refused(settings_drift(root)+'; commit oh.json before preparing a run')
     value={'created':now(),'project':project(root)['id'],'checkout':checkout_id(root),'base':git(root,'rev-parse','HEAD'),
            'snapshot':snapshot(root),'project_checks':read_json(profile_path(root, 'checks.json')) if profile_path(root, 'checks.json').exists() else []}
     if manifest is not None:

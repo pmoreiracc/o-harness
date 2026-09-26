@@ -103,7 +103,7 @@ class WorkflowTest(unittest.TestCase):
         path.write_text(json.dumps(value))
         with self.assertRaises(Refused):journal.records()
 
-    def tamper(self,change,committed=None):
+    def tamper(self,change,committed=None,caught=True):
         if committed:(self.root/'oh.json').write_text(committed);self.git('add','oh.json');self.git('commit','-qm','settings')
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         calls=[]
@@ -115,20 +115,28 @@ class WorkflowTest(unittest.TestCase):
         run(self.root,worker)
         _,state=load_run(self.root)
         first=[a for a in state['attempts'] if a['role']=='implementation'][0]
-        self.assertEqual(first['outcome'],'verification_failed');self.assertIn('The task changed oh.json',first['summary'])
         self.assertEqual(state['status'],'completed')
-        self.assertEqual([n for n in os.listdir(self.root) if n.lower()=='oh.json'],['oh.json'] if committed else [])
-        if committed:self.assertEqual((self.root/'oh.json').read_text(),committed)
+        if caught:
+            self.assertEqual(first['outcome'],'verification_failed');self.assertIn('The task changed oh.json',first['summary'])
+            self.assertTrue(list(Path(first['evidence']).glob('changed-*')))
+        self.assertNotIn('100',self.git('show','HEAD:oh.json') if committed else '')
         self.assertEqual(load(self.root)['tasks_per_batch'],5)
+        return state
 
     def test_a_task_cannot_edit_the_committed_settings(self):
         self.tamper(lambda root:(root/'oh.json').write_text('{"tasks_per_batch": 100}'),committed='{"tasks_per_batch": 5}\n')
+        self.assertEqual((self.root/'oh.json').read_text(),'{"tasks_per_batch": 5}\n')
 
     def test_a_task_cannot_add_settings_under_another_case(self):
         self.tamper(lambda root:(root/'OH.json').write_text('{"tasks_per_batch": 100}'))
+        self.assertNotIn('OH.json',os.listdir(self.root))
 
-    def test_a_task_cannot_add_settings_git_ignores(self):
-        self.tamper(lambda root:((root/'.gitignore').write_text('oh.json\n'),(root/'oh.json').write_text('{"tasks_per_batch": 100}')))
+    def test_a_task_cannot_add_settings_under_a_unicode_alias(self):
+        self.tamper(lambda root:(root/'oh.j\u017fon').write_text('{"tasks_per_batch": 100}'))
+        self.assertNotIn('oh.j\u017fon',os.listdir(self.root))
+
+    def test_settings_git_ignores_never_reach_a_run(self):
+        self.tamper(lambda root:((root/'.gitignore').write_text('oh.json\n'),(root/'oh.json').write_text('{"tasks_per_batch": 100}')),caught=False)
 
     def test_a_check_that_writes_settings_fails_and_the_file_is_restored(self):
         start(self.root,{'tasks':self.tasks[:1],'checks':[{'name':'writer','command':['python3','-c',
@@ -139,16 +147,34 @@ class WorkflowTest(unittest.TestCase):
         self.assertTrue(failed and 'A check changed oh.json' in failed[0]['summary'])
         self.assertFalse((self.root/'oh.json').exists())
 
-    def test_settings_changed_by_hand_mid_run_stop_it_without_charging_a_task(self):
-        start(self.root,{'tasks':self.tasks},self.event())
+    def test_a_hand_edit_during_a_run_is_kept_aside_without_charging_a_task(self):
+        journal,_=start(self.root,{'tasks':self.tasks},self.event())
         run(self.root,self.fake)
         from .config import change
         with self.assertRaisesRegex(Refused,'run is active'):change(self.root,'tasks_per_batch','9',location='repo')
         (self.root/'oh.json').write_text('{"tasks_per_batch": 9}')
         choose(self.root,'continue',self.event(turn='2',prompt='continue'))
-        with self.assertRaisesRegex(Refused,'oh.json'):run(self.root,self.fake)
+        run(self.root,self.fake)
         _,state=load_run(self.root)
         self.assertFalse([a for a in state['attempts'] if a.get('outcome')=='verification_failed'])
+        self.assertFalse((self.root/'oh.json').exists())
+        restored=[r for r in journal.records() if r['kind']=='settings.restored']
+        self.assertEqual(json.loads((Path(restored[0]['data']['copy'])/'changed-oh.json').read_text()),{'tasks_per_batch':9})
+
+    def test_a_failed_attempt_never_leaves_a_settings_change_behind(self):
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        calls=[]
+        def worker(host,root,profile,prompt,role,directory,context,**kw):
+            if role!='review':
+                calls.append(1)
+                if len(calls)==1:
+                    (Path(root)/'oh.json').write_text('{"tasks_per_batch": 100}')
+                    return {'failed':True,'returncode':1,'duration_ms':10,'text':'gave up','structured':None,'usage_observed':False}
+            return self.fake(host,root,profile,prompt,role,directory,context,**kw)
+        run(self.root,worker)
+        _,state=load_run(self.root)
+        self.assertEqual(state['status'],'completed');self.assertFalse((self.root/'oh.json').exists())
+        self.assertIn('The task changed oh.json',state['attempts'][0]['summary'])
 
     def test_config_unknown_fields_fail_closed_and_no_false_zero(self):
         atomic_json(profile_path(self.root,'config.local.json'),{'taskz':10})

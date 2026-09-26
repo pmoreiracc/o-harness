@@ -10,7 +10,8 @@ A project keeps its settings in one place:
 
 - **`oh.json` in the repository root**, shared with everyone who works on the repo. Its
   `$schema` line makes VS Code, Cursor and JetBrains explain each key, suggest allowed
-  values and underline mistakes. Commit it: OH starts a batch only from a clean checkout.
+  values and underline mistakes. OH uses the version in your last commit, so commit a change
+  for it to apply.
 - **Or privately**, in `config.json` in the project's OH folder, for repos where you don't
   want OH files.
 
@@ -18,7 +19,7 @@ Each layer below overrides the one before it, key by key:
 
 1. Built-in defaults (`config/defaults.json` in this repository)
 2. `~/.local/share/o-harness/settings/defaults.json`, for all your projects
-3. The project's settings: `oh.json` or the private `config.json` (never both)
+3. The project's settings: the committed `oh.json`, or the private `config.json` (never both)
 4. `config.local.json` in the project's OH folder, for personal overrides
 
 For example, to let OH run 15 tasks in a row with up to 12 review rounds each:
@@ -41,9 +42,10 @@ From a terminal:
 
 OH checks every settings file each time it reads it. An unknown key, a bad value or broken
 JSON stops OH with the file and key named. Tasks and checks can't change `oh.json`: OH
-restores it and fails that attempt. Settings are captured when a run is prepared, so a change
-applies to the next run you start; **continue** keeps the settings the run was approved with.
-While a run is active, change `oh.json` only after it ends.
+restores it, keeps a copy with the attempt's evidence and fails that attempt. Settings are
+captured when a run is prepared, so a change applies to the next run you start; **continue**
+keeps the settings the run was approved with. Change `oh.json` after a run ends; an edit made
+during a run is set aside (a copy is kept) so it can't be committed with a task.
 
 | Setting | Default | Meaning |
 |---|---|---|

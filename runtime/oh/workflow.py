@@ -113,9 +113,6 @@ def _start(root, manifest, event, prepared=None):
     if workflow=='deliver' and not required and not manifest.get('checks'):raise Refused('Configure required verification in the external OH project profile before starting paid work')
     if git(root,'status','--porcelain'):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
-    from .config import settings_drift
-    if workflow=='deliver' and settings_drift(root):
-        raise Refused(settings_drift(root)+'; commit oh.json before a run, or keep settings private with oh config --location private')
     run=identifier();checkout=checkout_id(root)
     if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
         git(root,'switch','-c','codex/oh-'+run[:8])
