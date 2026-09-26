@@ -19,8 +19,8 @@ class DesignAdapterTest(unittest.TestCase):
         atomic_json(profile_path(self.root,'config.json'),{'tasks_per_batch':1})
         directory=self.root/'docs/design';directory.mkdir(parents=True)
         self.design=directory/'0900-fixture.md'
-        self.design.write_text('---\ntype: design\nstatus: approved\nlast-verified: 2026-09-25\n---\n# Fixture\n## Tasks\n### Code track\n- [ ] **1.** Implement first behavior.\n- [ ] **2.** Implement second behavior. *Depends on task 1.*\n')
-        (self.root/'docs/roadmap.md').write_text('### M1 — Fixture\n\n| Slug | Initiative | Depends | Design |\n|---|---|---|---|\n| `fixture` | Fixture | — | [0900](./design/0900-fixture.md) |\n')
+        self.design.write_text('---\ntype: design\nstatus: approved\nlast-verified: 2026-09-25\n---\n# Fixture\n## Tasks\n### Code track\n- [ ] **1.** Implement first behavior.\n- [ ] **2.** Implement second behavior. *Depends on task 1.*\n',newline='\n')
+        (self.root/'docs/roadmap.md').write_text('### M1 — Fixture\n\n| Slug | Initiative | Depends | Design |\n|---|---|---|---|\n| `fixture` | Fixture | — | [0900](./design/0900-fixture.md) |\n',newline='\n')
         self.git('add','.');self.git('commit','-qm','approved design')
         self.git('update-ref','refs/remotes/origin/main','HEAD')
 
@@ -43,9 +43,9 @@ class DesignAdapterTest(unittest.TestCase):
         self.assertEqual([x[0] for x in self.calls],['implementation','review','implementation','review'])
 
     def test_unapproved_or_blocked_design_cannot_become_native_task_scope(self):
-        self.design.write_text(self.design.read_text().replace('status: approved','status: draft'))
+        self.design.write_text(self.design.read_text().replace('status: approved','status: draft'),newline='\n')
         self.git('add','.');self.git('commit','-qm','draft');self.git('update-ref','refs/remotes/origin/main','HEAD')
         with self.assertRaises(Refused):manifest(self.root,'0900')
-        self.design.write_text(self.design.read_text().replace('status: draft','status: approved').replace('Implement first behavior.','Implement first behavior. *Blocked on upstream.*'))
+        self.design.write_text(self.design.read_text().replace('status: draft','status: approved').replace('Implement first behavior.','Implement first behavior. *Blocked on upstream.*'),newline='\n')
         self.git('add','.');self.git('commit','-qm','blocked');self.git('update-ref','refs/remotes/origin/main','HEAD')
         with self.assertRaises(Refused):manifest(self.root,'0900')

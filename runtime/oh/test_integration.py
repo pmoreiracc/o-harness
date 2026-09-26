@@ -31,6 +31,7 @@ class IntegrationTest(unittest.TestCase):
             self.assertEqual(self.git(root,'log','-1','--format=%s'),'Release ordinary work')
             self.assertFalse((root/'.oh').exists())
 
+    @unittest.skipIf(os.name=='nt','POSIX npm layout: a symlinked Node wrapper')
     def test_trust_host_finds_the_native_codex_binary_behind_an_npm_wrapper(self):
         from .hosts import locate
         with tempfile.TemporaryDirectory() as tmp:
@@ -41,6 +42,17 @@ class IntegrationTest(unittest.TestCase):
             with patch.dict(os.environ,{'PATH':str(bin_dir)}):
                 self.assertEqual(locate('codex',Path(tmp)/'elsewhere'),native.resolve())
 
+    @unittest.skipUnless(os.name=='nt','Windows npm layout: a .cmd shim beside node_modules')
+    def test_trust_host_finds_the_native_codex_binary_behind_the_windows_npm_shim(self):
+        from .hosts import locate
+        with tempfile.TemporaryDirectory() as tmp:
+            npm=Path(tmp)/'npm';npm.mkdir();(npm/'codex.cmd').write_text('@ECHO off\r\nnode "%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n')
+            package=npm/'node_modules/@openai/codex';(package/'bin').mkdir(parents=True);(package/'bin/codex.js').write_text('#!/usr/bin/env node\n')
+            native=package/'node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+            native.parent.mkdir(parents=True);native.write_bytes(b'MZ')
+            with patch.dict(os.environ,{'PATH':str(npm)}):
+                self.assertEqual(locate('codex',Path(tmp)/'elsewhere'),native.resolve())
+
     def test_host_binary_is_trusted_automatically_and_followed_across_updates(self):
         from . import hosts
         from .storage import read_json
@@ -49,16 +61,17 @@ class IntegrationTest(unittest.TestCase):
             if Path(path).name=='gone':raise FileNotFoundError(path)
             return {'path':str(path),'sha256':binaries.get(Path(path).name,'pinned')}
         probe=subprocess.CompletedProcess([],0,'2.1.0 (Claude Code)','')
+        opt,pinned=str(Path('/opt/claude')),str(Path('/custom/pinned'))
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp}),\
              patch.object(hosts,'binary_identity',side_effect=identity),patch.object(hosts,'locate',return_value=Path('/opt/claude')),\
              patch.object(hosts.subprocess,'run',return_value=probe) as run:
             record=Path(tmp)/'hosts/claude.json'
-            self.assertEqual(hosts.executable('claude'),'/opt/claude')
+            self.assertEqual(hosts.executable('claude'),opt)
             self.assertEqual(read_json(record)['sha256'],'v1');self.assertFalse(read_json(record)['pinned'])
-            self.assertEqual(hosts.executable('claude'),'/opt/claude');self.assertEqual(run.call_count,1)
+            self.assertEqual(hosts.executable('claude'),opt);self.assertEqual(run.call_count,1)
             # A self-updated CLI is checked again and recorded without a manual step.
             binaries['claude']='v2'
-            self.assertEqual(hosts.executable('claude'),'/opt/claude');self.assertEqual(read_json(record)['sha256'],'v2')
+            self.assertEqual(hosts.executable('claude'),opt);self.assertEqual(read_json(record)['sha256'],'v2')
             self.assertEqual(run.call_count,2)
             # A version check failure refuses the new binary.
             binaries['claude']='v3';run.return_value=subprocess.CompletedProcess([],0,'something else','')
@@ -67,7 +80,7 @@ class IntegrationTest(unittest.TestCase):
             # An explicitly named path stays pinned, and a missing pin is refused clearly.
             run.return_value=probe
             hosts.trust('claude',Path('/custom/pinned'))
-            self.assertEqual(hosts.executable('claude'),'/custom/pinned')
+            self.assertEqual(hosts.executable('claude'),pinned)
             (record).write_text('{"path":"/custom/gone","sha256":"x","pinned":true}')
             with self.assertRaises(Refused):hosts.executable('claude')
 
@@ -87,5 +100,5 @@ class IntegrationTest(unittest.TestCase):
             atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
             # PATH has another codex: OH follows it and says how to keep the old one.
             with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err:
-                self.assertEqual(hosts.executable('codex'),'/usr/local/bin/codex')
+                self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
             self.assertIn('oh trust-host codex /opt/native/codex',''.join(c.args[0] for c in err.write.call_args_list))

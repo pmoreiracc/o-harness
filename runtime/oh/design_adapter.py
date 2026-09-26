@@ -1,9 +1,7 @@
 """Geoffrey document format only; execution and grants belong to the common runner."""
-import os
 from pathlib import Path
 import re
-import subprocess
-from .config import HOME
+from .design_parse import freeze_render, plan
 from .storage import Refused, git, project
 
 
@@ -17,16 +15,15 @@ def document(root, doc):
 def manifest(root, doc, track=''):
     if project(root).get('design_profile')!='consumer-v1':
         raise Refused('This project has no Geoffrey document profile; use a generic task plan')
-    path=document(root,doc);relative=str(path.relative_to(root))
+    path=document(root,doc);relative=path.relative_to(root).as_posix()
     approved=git(root,'show','origin/main:'+relative)
     if not re.search(r'^status:\s*approved\s*$',approved,re.M):
         raise Refused('The design must be approved on main before delivery')
     if git(root,'hash-object','--no-filters','--',relative)!=git(root,'rev-parse','origin/main:'+relative):
         raise Refused('Prepare the design against its approved main revision')
-    result=subprocess.run([str(HOME/'core/scripts/plan.sh'),doc],cwd=root,
-        env=os.environ|{'CLAUDE_PROJECT_DIR':str(root)},capture_output=True,text=True)
-    if result.returncode:raise Refused(result.stderr[-2000:])
-    rows=[line.split('\x1f') for line in result.stdout.splitlines() if line]
+    try:output=plan(root,doc)
+    except Refused as exc:raise Refused(str(exc)[-2000:]) from None
+    rows=[line.split('\x1f') for line in output.splitlines() if line]
     if any(len(row)!=6 for row in rows):raise Refused('Malformed design task projection')
     tracks={row[2] for row in rows}
     if not track:
@@ -61,10 +58,9 @@ def render(root, task):
     if transition.get('profile')!='consumer-v1' or project(root).get('design_profile')!='consumer-v1':
         raise Refused('Unsupported document transition profile')
     path=document(root,transition['doc'])
-    if str(path.relative_to(root))!=task.get('design'):raise Refused('Transition does not match the admitted design')
+    if path.relative_to(root).as_posix()!=task.get('design'):raise Refused('Transition does not match the admitted design')
     # Pure renderer only: it neither consumes a receipt nor runs a legacy delivery loop.
-    result=subprocess.run(['/bin/bash','-c','source "$1"; freeze_render "$2" "$3"','oh-render',
-        str(HOME/'core/scripts/freeze.sh'),transition['doc'],'' if transition['task']=='finalize' else transition['task']],
-        cwd=root,env=os.environ|{'CLAUDE_PROJECT_DIR':str(root),'OH_HOME':str(HOME)},capture_output=True,text=True)
-    if result.returncode:raise Refused('Cannot render final design lifecycle: '+result.stderr[-2000:])
-    if path.read_text()!=result.stdout:path.write_text(result.stdout)
+    try:text=freeze_render(root,transition['doc'],'' if transition['task']=='finalize' else transition['task'])
+    except Refused as exc:raise Refused('Cannot render final design lifecycle: '+str(exc)[-2000:]) from None
+    text=text.replace('\r\n','\n').replace('\r','\n')  # newlines as the former text-mode subprocess read them
+    if path.read_text()!=text:path.write_text(text,newline='\n')

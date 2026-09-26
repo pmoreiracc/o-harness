@@ -1,7 +1,9 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 from . import test_workflow as fixtures
@@ -11,6 +13,8 @@ from .config import HOME
 from .storage import atomic_json,digest,read_json,Refused
 from .workflow import start
 from .runner import run
+# POSIX users run OH's scripts directly, so tests do too; Windows needs the interpreter.
+RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class PluginTransitions(unittest.TestCase):
@@ -22,7 +26,7 @@ class PluginTransitions(unittest.TestCase):
     def test_first_use_and_unprepared_work_do_not_block_a_later_exact_trigger(self):
         payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root),'prompt':'$o-harness:oh-deliver implement the agreed change'}
         hook=HOME/'plugins/o-harness/scripts/human-event.py'
-        result=subprocess.run(['python3',str(hook),'codex'],input=json.dumps(payload),text=True,capture_output=True)
+        result=subprocess.run([sys.executable,str(hook),'codex'],input=json.dumps(payload),text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('onboarding',result.stdout)
         self.assertFalse(receive(self.root,'codex',payload)['authorized'])
@@ -40,7 +44,7 @@ class PluginTransitions(unittest.TestCase):
         hook=HOME/'plugins/o-harness/scripts/human-event.py'
         with __import__('tempfile').TemporaryDirectory() as home:
             def send(prompt):
-                return subprocess.run(['python3',str(hook),'claude'],input=json.dumps({'prompt':prompt,'cwd':str(self.root)}),
+                return subprocess.run([sys.executable,str(hook),'claude'],input=json.dumps({'prompt':prompt,'cwd':str(self.root)}),
                     text=True,capture_output=True,env=os.environ|{'OH_DATA_HOME':home},check=True).stdout
             self.assertEqual(send('continue'),'')
             self.assertIn('onboarding',send('/oh-propose a plan'))
@@ -56,7 +60,7 @@ class PluginTransitions(unittest.TestCase):
         journal=home/'projects'/self.project_id/'runs/fixture'
         atomic_json(journal/'000001.json',{'kind':'run.started','data':{'harness_version':'v1'}})
         entry=HOME/'plugins/o-harness/scripts/oh'
-        def call():return subprocess.check_output([str(entry),'--root',str(self.root),'start'],text=True).strip()
+        def call():return subprocess.check_output([*RUN,str(entry),'--root',str(self.root),'start'],text=True).strip()
         self.assertEqual(call(),'v1')
         for terminal in ('completed','stopped','pr'):
             atomic_json(journal/'000002.json',{'kind':'transition','data':{'events':[{'kind':'run.status','data':{'status':terminal}}]}})
@@ -81,7 +85,7 @@ class PluginTransitions(unittest.TestCase):
         self.assertTrue(manifests[1][0]['git_tree'])
 
     def tracked_script(self):
-        script=self.root/'checks.sh';script.write_text('#!/bin/sh\nexit 0\n')
+        script=self.root/'checks.sh';script.write_text('#!/bin/sh\nexit 0\n',newline='\n')
         self.git('add','checks.sh');self.git('commit','-qm','Add verification script')
         return script
 
@@ -103,7 +107,7 @@ class PluginTransitions(unittest.TestCase):
         self.assertEqual(read_json(profile_path(clone,'checks.json')),value['checks'])
         self.assertFalse(pending_file(clone).exists())
         self.assertFalse((clone/'.oh').exists())
-        subprocess.run(['bash','checks.sh','main'],cwd=clone,check=True)
+        subprocess.run([shutil.which('bash'),'checks.sh','main'],cwd=clone,check=True)
         with self.assertRaises(Refused):import_profile(clone,destination)
 
     def test_portable_checks_refuse_secret_arguments_and_invalid_supported_fields(self):
@@ -135,6 +139,7 @@ class PluginTransitions(unittest.TestCase):
                 with self.assertRaises(Refused):import_profile(self.root,target)
                 target.unlink()
 
+    @unittest.skipIf(os.name=='nt','Windows runs no script directly by its executable bit and shebang')
     def test_portable_scripts_must_exist_be_tracked_and_not_follow_symlinks(self):
         from .profiles import portable_command
         script=self.tracked_script()
@@ -158,6 +163,7 @@ class PluginTransitions(unittest.TestCase):
         script.unlink()
         with self.assertRaises(Refused):portable_command(['./checks.sh'],self.root)
 
+    @unittest.skipIf(os.name=='nt','Windows runs no script directly by its executable bit and shebang')
     def test_imported_direct_script_runs_the_tracked_file_even_with_a_path_collision(self):
         from .profiles import export_profile,import_profile
         from .registry import profile_path

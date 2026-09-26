@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -10,6 +9,10 @@ import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from .system import lock_file, replace, sync_directory, unlock_file
+
+
+NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)  # Windows has no O_NOFOLLOW
 
 
 class Refused(RuntimeError):
@@ -63,13 +66,13 @@ def snapshot_guard(*,exclusive=False):
         if exclusive and not held[key]:raise Refused('Finish active OH work before taking a backup')
         yield;return
     path=home.parent/('.oh-snapshot-'+digest(key)+'.lock')
-    fd=os.open(path,os.O_RDONLY if path.exists() and not exclusive else os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+    fd=os.open(path,os.O_RDONLY if path.exists() and not exclusive else os.O_RDWR|os.O_CREAT|NOFOLLOW,0o600)
     try:
-        try:fcntl.flock(fd,(fcntl.LOCK_EX|fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
+        try:lock_file(fd,shared=not exclusive,wait=not exclusive)
         except BlockingIOError:raise Refused('OH is writing state. Finish or stop the active run, then retry the backup or restore.')
         _snapshot_local.held=held|{key:exclusive}
         try:yield
-        finally:_snapshot_local.held=held
+        finally:_snapshot_local.held=held;unlock_file(fd)
     finally:os.close(fd)
 
 
@@ -96,12 +99,8 @@ def atomic_json(path, value, *, immutable=False):
             os.link(temporary, path)  # atomic create; never overwrite evidence
             os.unlink(temporary)
         else:
-            os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+            replace(temporary, path)
+        sync_directory(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -118,16 +117,16 @@ def read_json(path):
 def lock(path, *, wait=True):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as stream:
         try:
-            fcntl.flock(stream, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+            lock_file(fd, wait=wait)
         except BlockingIOError:
             raise Refused('This checkout already has an active OH runner')
         try:
             yield
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            unlock_file(fd)
 
 
 def git(root, *args):

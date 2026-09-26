@@ -15,6 +15,7 @@ def result(args,code,kwargs,stderr=b'Bootstrap failed: 5: Input/output error'):
 def launcher(tmp):
     path=Path(tmp)/'state/bin/oh';path.parent.mkdir(parents=True);path.write_text('')
 
+@unittest.skipIf(os.name=='nt','The launchd service is macOS only')
 class ServiceTest(unittest.TestCase):
     def installed(self,tmp):
         launcher(tmp)
