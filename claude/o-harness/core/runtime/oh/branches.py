@@ -11,6 +11,8 @@ def incarnation(root,branch,*,create=False):
     st=path.stat()
     if hasattr(st,'st_birthtime'):
         birth=getattr(st,'st_birthtime_ns',round(st.st_birthtime*1_000_000_000))
+    elif os.name=='nt':
+        birth=st.st_ctime_ns  # creation time on Windows before Python 3.12 added st_birthtime
     else:
         # Linux statx supplies nanosecond creation identity where ordinary stat does not.
         import ctypes,struct

@@ -1,5 +1,5 @@
+import contextlib
 from pathlib import Path
-import os
 import shutil
 import sqlite3
 import tempfile
@@ -8,6 +8,7 @@ import json
 import stat
 from .storage import Refused, state_home, snapshot_guard,atomic_json,read_json
 from .telemetry import connect
+from .system import replace, sync_directory, sync_file
 
 
 def inventory(source):
@@ -43,24 +44,18 @@ def validate(source,*,manifest=True):
             previous=value['hash']
     database=source/'analytics.sqlite3'
     if not database.is_file():raise Refused('Backup has no analytics database')
-    with sqlite3.connect('file:'+str(database)+'?mode=ro&immutable=1',uri=True) as db:
+    with contextlib.closing(sqlite3.connect('file:'+str(database)+'?mode=ro&immutable=1',uri=True)) as db:
         if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise Refused('Backup database failed integrity validation')
 
 
 def sync_parent(path):
-    fd=os.open(path.parent,os.O_RDONLY)
-    try:os.fsync(fd)
-    finally:os.close(fd)
+    sync_directory(path.parent)
 
 
 def durable(directory):
     for path in directory.rglob('*'):
-        if path.is_file():
-            with path.open('rb') as stream:os.fsync(stream.fileno())
-    for path in [p for p in directory.rglob('*') if p.is_dir()]+[directory]:
-        fd=os.open(path,os.O_RDONLY)
-        try:os.fsync(fd)
-        finally:os.close(fd)
+        if path.is_file():sync_file(path)
+    for path in [p for p in directory.rglob('*') if p.is_dir()]+[directory]:sync_directory(path)
 
 
 def backup(destination):
@@ -95,7 +90,7 @@ def restore(source):
         try:
             shutil.copytree(source,temporary,dirs_exist_ok=True)
             validate(temporary);(temporary/'backup.json').unlink();durable(temporary)
-            os.replace(temporary,home);sync_parent(home)
+            replace(temporary,home);sync_parent(home)
         finally:
             if temporary.exists():shutil.rmtree(temporary)
     return {'restored':str(home)}

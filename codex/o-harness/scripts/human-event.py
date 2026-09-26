@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-payload=json.load(sys.stdin)
+payload=json.loads(sys.stdin.buffer.read())
 prompt=payload.get('prompt','')
 if not isinstance(prompt,str):raise SystemExit(0)
 prompt=prompt.strip()
@@ -16,8 +16,9 @@ if prompt not in choices and not re.match(r'^(?:[$/](?:o-harness:)?oh-(?:start|p
 if os.environ.get('OH_CHILD_ATTEMPT'):raise SystemExit(0)
 entry=Path(__file__).resolve().with_name('oh')
 host=sys.argv[1]
-result=subprocess.run([str(entry),'--root',payload.get('cwd',os.getcwd()),'plugin-hook','--host',host],
-    input=json.dumps(payload),text=True,capture_output=True)
+# Run the launcher with this interpreter; Windows cannot execute its shebang.
+result=subprocess.run([sys.executable,'-I',str(entry),'--root',payload.get('cwd',os.getcwd()),'plugin-hook','--host',host],
+    input=json.dumps(payload),capture_output=True,encoding='utf-8',errors='replace')
 if result.returncode:
     print(result.stderr,file=sys.stderr)
     raise SystemExit(2)

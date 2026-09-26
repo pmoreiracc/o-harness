@@ -1,6 +1,6 @@
 {
   "name": "o-harness",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Explicit, independently reviewed workflows with external state and subscription workers.",
   "author": {
     "name": "OH contributors"

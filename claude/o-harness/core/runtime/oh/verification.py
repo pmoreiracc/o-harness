@@ -8,6 +8,7 @@ import stat
 import subprocess
 import time
 from .storage import Refused, atomic_json, digest, git, read_json, state_home
+from .system import uname
 
 
 def tree(root, paths=None):
@@ -69,7 +70,7 @@ def verify(root, checks, project_id, *, controlled=False):
                 if cancellation or probe.returncode:raise Refused('Verification toolchain probe failed or was cancelled: '+probe.stderr[-1000:])
                 versions.append(probe.stdout+probe.stderr)
         fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],
-            'environment':dict(os.environ),'platform':os.uname(), 'toolchain':versions,
+            'environment':dict(os.environ),'platform':uname(), 'toolchain':versions,
             'check':check,'engine':1})
         cache = state_home() / 'verification' / project_id / (fingerprint+'.json')
         # No cache without an explicit dependency AND toolchain contract.
