@@ -59,7 +59,8 @@ def raw(path):
 
 def rows_of(path):
     """A document's lines without line endings, and the line ending most of its lines use."""
-    data = Path(path).read_bytes().decode()
+    try:data = Path(path).read_bytes().decode()
+    except UnicodeDecodeError:raise Refused(f'{Path(path).name} is not valid UTF-8') from None
     rows = data.split('\n')
     rows = rows[:-1] if rows[-1] == '' else rows
     crlf = sum(r.endswith('\r') for r in rows)
@@ -121,7 +122,16 @@ def all_or_nothing(*paths):
 
 
 def initiatives(root, where):
-    """[(slug, milestone, depends, design)] from the roadmap in document order, refusing one that doesn't parse."""
+    """[(slug, milestone, depends, design)] from the roadmap in document order, refusing one that doesn't parse.
+    The shared parser (Geoffrey's roadmap.sh) reads code blocks too, so a roadmap whose code blocks look like
+    milestones, rows or bars is refused: OH's writers and checks and the parser then always agree."""
+    rows_all = rows_of(where['roadmap'])[0]
+    seen_milestone = False
+    for (index, line), inside in zip(enumerate(rows_all), fenced(rows_all)):
+        if MILESTONE.match(line):seen_milestone = True
+        if inside and (re.match(r'#{2,3}\s', line) or seen_milestone and (line.startswith(('|', '**Done when:**', 'Delivered as ')))):
+            raise Refused(f'{where["roadmap"].name} line {index + 1} is inside a code block but reads as roadmap structure; '
+                          'move the example out of the milestones or indent it')
     rows = roadmap(root, '', where).strip('\n')
     return [tuple(row.split(US)) for row in rows.split('\n') if row]
 
@@ -136,7 +146,7 @@ def start_roadmap(where, title):
     title = one_line(title, 'The roadmap title')
     if title.startswith('#'):raise Refused('The roadmap title can\'t start with #')
     if Path(where['roadmap']).exists():raise Refused(f'{where["roadmap"]} already exists')
-    write(where['roadmap'], f'---\ntype: plan\nstatus: living\nlast-verified: {date.today().isoformat()}\n---\n\n'
+    with all_or_nothing(where['roadmap']):write(where['roadmap'], f'---\ntype: plan\nstatus: living\nlast-verified: {date.today().isoformat()}\n---\n\n'
           f'# {title} — Roadmap\n\nOne row is one initiative, the unit a design doc covers. **Depends** names only work '
           'that genuinely has to come first.\n')
 
@@ -156,7 +166,8 @@ def add_milestone(root, where, milestone, title, done_when):
     # the first milestone goes before the first level-2 heading after the title.
     after = starts[-1] if starts else next((i for i, line in visible if re.match(r'#\s', line)), -1)
     at = next((i for i, line in visible if i > after and re.match(r'##\s', line)), len(rows))
-    while at > 0 and rows[at - 1].strip() in ('', '---'):at -= 1
+    front = next((i for i in range(1, len(rows)) if rows[i] == '---'), -1) if rows and rows[0] == '---' else -1
+    while at > max(after, front) + 1 and rows[at - 1].strip() in ('', '---'):at -= 1
     block = ['', '---', '', f'### {milestone} — {title}', '', f'**Done when:** {done_when}', '', *TABLE]
     block += [''] if at < len(rows) and rows[at].strip() else []
     with all_or_nothing(where['roadmap']):
@@ -281,7 +292,7 @@ def verify_roadmap(root, where):
     problems += [f'duplicate slug {s}' for s in sorted({s for s in slugs if slugs.count(s) > 1})]
     problems += [f'duplicate milestone id {m}' for m in sorted({m for m in ids if ids.count(m) > 1})]
     current, bars = None, {}
-    for line in rows_of(where['roadmap'])[0]:
+    for _, line in outside(rows_of(where['roadmap'])[0]):
         match = MILESTONE.match(line)
         if match:current = match[1];bars.setdefault(current, False);continue
         if re.match(r'#{2,3}\s', line):current = None;continue
@@ -330,11 +341,13 @@ def verify_design(root, where, number=None, orphans=True):
     folder, problems = Path(where['designs']), []
     docs = [d for d in (sorted(folder.glob('*.md')) if folder.exists() else []) if d.name.lower() != 'readme.md']
     wellformed = [d for d in docs if re.fullmatch(r'[0-9]{4}-' + SLUG + r'\.md', d.name)]
-    problems += [f'{d.name} is not named NNNN-<slug>.md' for d in docs if d not in wellformed]
     numbers = [d.name[:4] for d in wellformed]
-    problems += [f'two design docs share number {n}' for n in sorted({n for n in numbers if numbers.count(n) > 1})]
+    if number is None:  # one doc's check (e.g. while writing it) never fails on its neighbours
+        problems += [f'{d.name} is not named NNNN-<slug>.md' for d in docs if d not in wellformed]
+        problems += [f'two design docs share number {n}' for n in sorted({n for n in numbers if numbers.count(n) > 1})]
+    elif numbers.count(number) > 1:problems.append(f'two design docs share number {number}')
     has_roadmap = Path(where['roadmap']).exists()
-    named = {row[3] for row in initiatives(root, where) if row[3]} if has_roadmap else set()
+    named = {row[3] for row in initiatives(root, where) if row[3]} if orphans and has_roadmap else set()
     for doc in wellformed:
         n = doc.name[:4]
         if number and n != number:continue

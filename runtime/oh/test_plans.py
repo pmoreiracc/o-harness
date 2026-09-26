@@ -130,7 +130,7 @@ class PlansTest(unittest.TestCase):
         where['roadmap'].write_text(text)
         plans.add_milestone(self.root,where,'M1','Slice','Done')  # the first milestone goes before later sections
         self.assertLess(where['roadmap'].read_text().index('### M1'),where['roadmap'].read_text().index('## Deliberately'))
-        where['roadmap'].write_text(where['roadmap'].read_text().replace('|---|---|---|---|\n','|---|---|---|---|\n\nExample:\n\n```md\n## Not a section\n```\n',1))
+        where['roadmap'].write_text(where['roadmap'].read_text().replace('|---|---|---|---|\n','|---|---|---|---|\n\nExample:\n\n```md\nsome example\n```\n',1))
         plans.add_milestone(self.root,where,'M2','Next','Done');plans.add_initiative(self.root,where,'M1','a','A',[])
         text=where['roadmap'].read_text()
         self.assertLess(text.index('```\n'),text.index('### M2'));self.assertLess(text.index('| `a` |'),text.index('```md'))
@@ -140,6 +140,29 @@ class PlansTest(unittest.TestCase):
         plans.write_decision(self.root,where,'B','C','A','C','Do B.')
         log=(where['decisions']/'README.md').read_text()
         self.assertGreater(log.index('[0001]'),log.index('## The log'))
+
+    def test_roadmap_code_blocks_that_read_as_structure_are_refused(self):
+        where=self.repo();plans.start_roadmap(where,'Fixture');plans.add_milestone(self.root,where,'M1','One','Done')
+        clean=where['roadmap'].read_text()
+        for example in ('```md\n### M2 — Example\n```\n','```md\n| `search` | Example | — | — |\n```\n','```md\n**Done when:** example\n```\n'):
+            with self.subTest(example):
+                where['roadmap'].write_text(clean.replace('|---|---|---|---|\n','|---|---|---|---|\n\n'+example,1))
+                with self.assertRaisesRegex(Refused,'inside a code block'):plans.add_initiative(self.root,where,'M1','a','A',[])
+                with self.assertRaisesRegex(Refused,'inside a code block'):plans.verify_roadmap(self.root,where)
+        where['roadmap'].write_text(clean.replace('# Fixture — Roadmap\n','# Fixture — Roadmap\n\n```md\nplain example\n```\n'))
+        plans.add_initiative(self.root,where,'M1','a','A',[])
+
+    def test_a_draft_is_written_while_the_roadmap_is_still_empty(self):
+        where=self.repo();plans.start_roadmap(where,'Fixture')
+        (where['designs']).mkdir(parents=True);(where['designs']/'template.md').write_text('x')
+        self.assertEqual(plans.write_design(self.root,where,'idea','Idea','Later.','draft')[0],'0001')
+
+    def test_the_first_milestone_never_enters_the_frontmatter(self):
+        where=self.repo();where['roadmap'].parent.mkdir(parents=True)
+        for front in ('---\ntype: plan\n---\n## Intro\n','---\n---\n\n## Intro\n'):
+            where['roadmap'].write_text(front)
+            plans.add_milestone(self.root,where,'M1','One','Done')
+            self.assertTrue(where['roadmap'].read_text().startswith(front.split('## Intro')[0].rstrip('\n')))
 
     def test_quoted_fences_and_windows_line_endings_are_read_correctly(self):
         where=self.repo()
