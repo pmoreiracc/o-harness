@@ -66,7 +66,7 @@ def install():
             removal=subprocess.run(['launchctl','bootout',target],capture_output=True)
             if removal.returncode or not gone(target):
                 if previous is not None:publish(previous)
-                raise Refused('Dashboard rollback could not remove the current registration ('+said(removal,'exit '+str(removal.returncode) if removal.returncode else 'still listed after bootout')+'). Run launchctl bootout '+target+(', then, once launchctl print '+target+' fails, launchctl bootstrap '+domain+' '+str(path)+' to restart the previous dashboard' if running else ' before reinstalling' if previous is not None else ' and remove '+str(path)+' before reinstalling')+'.') from exc
+                raise Refused('Dashboard rollback could not remove the current registration ('+said(removal,'exit '+str(removal.returncode) if removal.returncode else 'still listed after bootout')+'). Run launchctl bootout '+target+' and, once launchctl print '+target+' fails, '+('run launchctl bootstrap '+domain+' '+str(path)+' to restart the previous dashboard' if running else 'reinstall' if previous is not None else 'remove '+str(path)+' and reinstall')+'.') from exc
         if previous is None:
             path.unlink(missing_ok=True)
             from .backup import sync_parent

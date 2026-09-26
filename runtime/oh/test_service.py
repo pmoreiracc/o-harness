@@ -81,7 +81,7 @@ class ServiceTest(unittest.TestCase):
                 # The old label clears after the first bootout; the failed replacement then stays listed.
                 return subprocess.CompletedProcess(args,1 if args[1]=='print' and calls.count('bootout')==1 and 'bootstrap' not in calls else 0)
             with patch('oh.service.subprocess.run',side_effect=launch),patch('oh.service.time.sleep',side_effect=waited.append):
-                with self.assertRaisesRegex(Refused,'could not remove.*still listed.*once launchctl print .* fails, launchctl bootstrap'):install()
+                with self.assertRaisesRegex(Refused,'could not remove.*still listed.*once launchctl print .* fails, run launchctl bootstrap'):install()
             self.assertEqual(path.read_bytes(),b'prior');self.assertLessEqual(sum(waited),5)
 
     def test_partial_bootstrap_is_removed_before_restoring_prior_state(self):
