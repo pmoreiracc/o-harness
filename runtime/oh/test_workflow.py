@@ -183,6 +183,21 @@ class WorkflowTest(unittest.TestCase):
         restored=[r for r in journal.records() if r['kind']=='settings.restored']
         self.assertEqual(json.loads(Path(restored[0]['data']['copy']).read_text()),{'tasks_per_batch':9})
 
+    def test_a_staged_settings_file_is_unstaged_without_charging_a_task(self):
+        start(self.root,{'tasks':self.tasks},self.event())
+        run(self.root,self.fake)
+        (self.root/'oh.json').write_text('{"tasks_per_batch": 9}');self.git('add','oh.json')
+        choose(self.root,'continue',self.event(turn='2',prompt='continue'))
+        run(self.root,self.fake)
+        _,state=load_run(self.root)
+        self.assertEqual(state['status'],'completed')
+        self.assertFalse([a for a in state['attempts'] if a.get('outcome')=='verification_failed'])
+        self.assertEqual(self.git('status','--porcelain','--','oh.json'),'')
+
+    def test_pathspec_settings_in_the_environment_never_hide_a_settings_change(self):
+        with patch.dict(os.environ,{'GIT_LITERAL_PATHSPECS':'1'}):
+            self.tamper(lambda root:(root/'oh.json').write_text('{"tasks_per_batch": 100}'),committed='{"tasks_per_batch": 5}\n')
+
     def test_a_failed_attempt_never_leaves_a_settings_change_behind(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         calls=[]

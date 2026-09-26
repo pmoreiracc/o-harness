@@ -136,7 +136,8 @@ def git(root, *args):
 def git_bytes(root, *args, quiet=False):
     env = {k: v for k, v in os.environ.items() if k not in {
         'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
-        'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_PREFIX'}}
+        'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_PREFIX',
+        'GIT_LITERAL_PATHSPECS', 'GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS'}}
     return subprocess.check_output(['git', '-C', str(root), *args], env=env,
                                    stderr=subprocess.DEVNULL if quiet else None)
 

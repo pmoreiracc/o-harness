@@ -128,9 +128,9 @@ def committed_settings(root):
 
 
 def settings_edited(root):
-    """Whether committing the checkout now would change the committed oh.json. Asks Git about that
-    one path, so line-ending rules, modes and ignore rules agree exactly with what a commit takes."""
-    return bool(git(root, 'status', '--porcelain', '--untracked-files=all', '--', ':(literal)oh.json'))
+    """Whether oh.json differs from the last commit in the index or the working tree. Asks Git about
+    that one path, so line-ending, mode and ignore rules match what a commit would take."""
+    return bool(git(root, 'status', '--porcelain', '--untracked-files=all', '--', 'oh.json'))
 
 
 def tree_changes_settings(root, tree):
@@ -153,8 +153,11 @@ def restore_settings(root, keep):
     except (OSError, tarfile.TarError):
         if kept:kept.unlink(missing_ok=True)
         kept = None  # the restore matters more than the copy
-    if path.is_dir() and not path.is_symlink():shutil.rmtree(path)
-    elif path.is_symlink() or path.exists():path.unlink()
+    try:
+        if path.is_dir() and not path.is_symlink():shutil.rmtree(path)
+        elif path.is_symlink() or path.exists():path.unlink()
+    except OSError as exc:raise Refused(f'OH could not remove {path} ({exc.strerror}); remove it, then run OH again') from None
+    git(root, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', 'oh.json')  # a staged copy is a change too
     if committed_entry(root):git(root, 'checkout', 'HEAD', '--', 'oh.json')
     return str(kept) if kept else None
 
@@ -237,7 +240,9 @@ def describe(root):
               'effective': effective, 'profile_directory': str(profile_path(root).parent), 'version': version(),
               'precedence': ['packaged defaults', 'global settings', 'project settings (committed oh.json, or private)',
                              'personal project settings']}
-    if problem:result['note'] = problem + '. Runs are unaffected: they use the committed oh.json only.'
+    if problem:
+        used = {'repo': 'the committed oh.json', 'private': 'the private config.json'}.get(settings_location(root)[1], 'the defaults')
+        result['note'] = f'{problem}. Runs are unaffected: they use {used}.'
     elif location == 'repo' and uncommitted(root):
         result['note'] = 'oh.json has uncommitted changes. OH uses the last committed version until you commit it.'
     return result
