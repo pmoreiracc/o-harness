@@ -91,10 +91,13 @@ Workers can't write the settings folder. `oh backup` includes `settings.json`.
 | `context.handoff_chars` | 12000 | Maximum task handoff text sent to a worker |
 | `context.result_chars` | 4000 | Maximum feedback kept in model prompts |
 | `context.compact_at_tokens` | 60000 | Codex worker compaction threshold (Codex only) |
-| `plans.location` | ask | Where roadmaps, design docs and decisions live: `repo` (committed; merging approves them) or `private` (OH's folder) |
+| `plans.location` | ask | Where roadmaps, design docs and decisions live: `repo` (committed in the repository) or `private` (OH's folder) |
 | `plans.roadmap` | docs/roadmap.md | Roadmap file, relative to where plans live |
 | `plans.designs` | docs/design | Design docs folder |
 | `plans.decisions` | docs/decisions | Decision records (ADRs) folder |
+
+`oh plans path` shows where a project's plans live; `oh plans check` checks the roadmap and
+design docs against their rules.
 
 ## Models
 

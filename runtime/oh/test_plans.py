@@ -67,13 +67,13 @@ class PlansTest(unittest.TestCase):
                 self.setUp();where=self.repo(**folders)
                 plans.start_roadmap(where,'Fixture');plans.add_milestone(self.root,where,'M1','Slice','Done')
                 plans.add_initiative(self.root,where,'M1','store','The store',[])
-                number,path=plans.write_design(self.root,where,'store','The store',TASKS)
+                number,path=plans.write_design(self.root,where,'store','The store',TASKS,'approved')
                 self.assertEqual((number,path.name),('0001','0001-store.md'))
                 plans.claim(self.root,where,'store',number)
                 self.assertEqual(roadmap(self.root,'',where).split('\x1f')[-1].strip(),'0001')
                 self.assertEqual(len(plan(self.root,'0001',where).strip('\n').split('\n')),2)
                 self.assertEqual(plans.check(self.root,where),{'location':'repo','initiatives':1,'milestones':1,'designs':1})
-                self.assertEqual(plans.write_design(self.root,where,'other','Other',TASKS)[0],'0002')
+                self.assertEqual(plans.write_design(self.root,where,'other','Other',TASKS,'approved')[0],'0002')
                 with self.assertRaisesRegex(Refused,'0002-other.md is approved but no roadmap row names it'):plans.check(self.root,where)
                 with self.assertRaisesRegex(Refused,'already names design doc 0001'):plans.claim(self.root,where,'store','0002')
 
@@ -83,8 +83,79 @@ class PlansTest(unittest.TestCase):
                            (TASKS.replace('*Blocked on §3.*','Depends on task 1.'),'cycle')):
             with self.subTest(words):
                 for doc in where['designs'].glob('*.md'):doc.unlink()
-                plans.write_design(self.root,where,'store','The store',body)
+                plans.write_design(self.root,where,'store','The store',body,'approved')
                 with self.assertRaisesRegex(Refused,words):plans.verify_design(self.root,where)
+
+    def test_a_failed_edit_leaves_every_file_exactly_as_it_was(self):
+        where=self.repo();plans.start_roadmap(where,'Fixture')
+        plans.add_milestone(self.root,where,'M1','Slice','Done')
+        where['roadmap'].write_bytes(where['roadmap'].read_bytes().replace(b'\n',b'\r\n'))
+        clean=where['roadmap'].read_bytes()
+        # A rule already broken (a row naming a missing design) makes every edit fail after writing.
+        where['roadmap'].write_bytes(clean+b'| `old` | Old | \xe2\x80\x94 | [0009](./design/0009-old.md) |\r\n')
+        before=where['roadmap'].read_bytes()
+        for edit in (lambda:plans.add_initiative(self.root,where,'M1','a','A',[]),lambda:plans.add_milestone(self.root,where,'M2','T','D')):
+            with self.assertRaisesRegex(Refused,'0009, which does not exist'):edit()
+            self.assertEqual(where['roadmap'].read_bytes(),before)
+        where['roadmap'].write_bytes(clean)
+        plans.add_initiative(self.root,where,'M1','a','A',[])
+        self.assertNotIn(b'\n',where['roadmap'].read_bytes().replace(b'\r\n',b''))  # keeps the file's own line endings
+        (where['decisions']).mkdir(parents=True);(where['decisions']/'README.md').write_text('# Decisions\n\nNo table here.\n')
+        with self.assertRaisesRegex(Refused,'no decision log table'):plans.write_decision(self.root,where,'Pick X','C','A','C')
+        self.assertEqual([p.name for p in where['decisions'].iterdir()],['README.md'])
+        for bad in ('A\rB','A\u2028B',''):
+            with self.assertRaisesRegex(Refused,'one non-empty line'):plans.add_initiative(self.root,where,'M1','b',bad,[])
+        with self.assertRaisesRegex(Refused,'four-digit'):plans.claim(self.root,where,'a','00?1')
+
+    def test_new_milestones_join_the_milestones_not_later_sections(self):
+        where=self.repo();plans.start_roadmap(where,'Fixture')
+        plans.add_milestone(self.root,where,'M1','Slice','Done')
+        where['roadmap'].write_text(where['roadmap'].read_text()+'\n## Deliberately deferred\n\n| Idea | Why |\n|---|---|\n| x | later |\n')
+        plans.add_milestone(self.root,where,'M2','Next','Also done')
+        text=where['roadmap'].read_text()
+        self.assertLess(text.index('### M2'),text.index('## Deliberately deferred'))
+        where['decisions'].mkdir(parents=True)
+        (where['decisions']/'README.md').write_text('# D\n\n## The log\n\n| # | Decision | Date | Status |\n|---|---|---|---|\n'
+            '| [0001](./0001-a.md) | A | 2026-01-01 | accepted |\n\n## Superseded\n\n| Old | By |\n|---|---|\n| [0001](./0001-a.md) | x |\n')
+        (where['decisions']/'0001-a.md').write_text('x')
+        plans.write_decision(self.root,where,'B','C','A','C','Do B.')
+        log=(where['decisions']/'README.md').read_text()
+        self.assertLess(log.index('[0002]'),log.index('## Superseded'))
+
+    def test_roadmap_checks_match_geoffreys_on_duplicates_and_milestone_cycles(self):
+        where=self.repo();plans.start_roadmap(where,'Fixture')
+        plans.add_milestone(self.root,where,'M1','One','Done');plans.add_milestone(self.root,where,'M2','Two','Done')
+        plans.add_initiative(self.root,where,'M1','alpha','A',[]);plans.add_initiative(self.root,where,'M2','beta','B',['alpha'])
+        text=where['roadmap'].read_text()
+        where['roadmap'].write_text(text.replace('| `alpha` | A | — |','| `alpha` | A | `M2` |'))
+        with self.assertRaisesRegex(Refused,'cycle'):plans.verify_roadmap(self.root,where)
+        where['roadmap'].write_text(text.replace('| `beta` | B |','| `alpha` | B |'))
+        with self.assertRaisesRegex(Refused,'duplicate slug alpha'):plans.verify_roadmap(self.root,where)
+
+    def test_drafts_and_abandoned_designs_are_allowed_loose_ends(self):
+        where=self.repo()
+        plans.write_design(self.root,where,'idea','An idea','No tasks yet.','draft')
+        path=plans.write_design(self.root,where,'old','Old','No tasks.','draft')[1]
+        path.write_text(path.read_text().replace('status: draft','status: abandoned'))
+        self.assertEqual(plans.verify_design(self.root,where),{'designs':2})
+        fenced=TASKS.replace('## 3. Open — the storage choice','```md\n## 3. Open — example\n```\n\n## 3. Scope')
+        plans.write_design(self.root,where,'store','Store',fenced,'approved')
+        with self.assertRaisesRegex(Refused,'not an open-questions section'):plans.verify_design(self.root,where)
+
+    def test_plans_settings_stay_inside_their_location(self):
+        for key,value in (('designs','../x'),('designs','a/..'),('designs','/abs'),('roadmap','docs/roadmap'),('decisions','x\n')):
+            with self.assertRaises(Refused):change(self.root,'plans.'+key,value,location='private')
+        change(self.root,'plans.location','repo',location='private');change(self.root,'plans.decisions','docs/design/adr')
+        with self.assertRaisesRegex(Refused,'overlap'):plans.layout(self.root)
+
+    def test_geoffreys_document_profile_keeps_plans_in_the_repository(self):
+        from .registry import profile_path
+        from .storage import atomic_json, read_json
+        path=profile_path(self.root);value=read_json(path)|{'design_profile':'consumer-v1'}
+        path.unlink();atomic_json(path,value)
+        self.assertEqual(plans.layout(self.root)['designs'],self.root/'docs/design')
+        change(self.root,'plans.location','private',location='private')
+        with self.assertRaisesRegex(Refused,'document profile'):plans.layout(self.root)
 
     def test_roadmap_checks_find_missing_bars_and_cycles(self):
         where=self.repo();plans.start_roadmap(where,'Fixture')
