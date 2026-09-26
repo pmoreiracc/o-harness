@@ -47,11 +47,14 @@ def install():
         temporary.replace(path)
         from .backup import sync_parent
         sync_parent(path)
-    replacement_attempted=False
+    replacement_attempted=False;stopped=None
     try:
         publish(plistlib.dumps(value))
         if running:
+            # None: old service untouched; False: bootout failed, maybe mid-teardown; True: bootout succeeded.
+            stopped=False
             subprocess.run(['launchctl','bootout',target],check=True,capture_output=True)
+            stopped=True
             if not gone(target):raise OSError('launchd still lists '+target+' after bootout')
         replacement_attempted=True
         subprocess.run(['launchctl','bootstrap',domain,str(path)],check=True,capture_output=True)
@@ -60,19 +63,21 @@ def install():
         # existence cannot tell us whether it is the old or new service.
         present=replacement_attempted and subprocess.run(['launchctl','print',target],capture_output=True).returncode==0
         if present:
-            stopped=subprocess.run(['launchctl','bootout',target],capture_output=True)
-            if stopped.returncode or not gone(target):
+            removal=subprocess.run(['launchctl','bootout',target],capture_output=True)
+            if removal.returncode or not gone(target):
                 if previous is not None:publish(previous)
-                raise Refused('Dashboard rollback could not remove the current registration ('+said(stopped,'exit '+str(stopped.returncode) if stopped.returncode else 'still listed after bootout')+'). Run launchctl bootout '+target+' and restore the saved registration before reinstalling.') from exc
+                raise Refused('Dashboard rollback could not remove the current registration ('+said(removal,'exit '+str(removal.returncode) if removal.returncode else 'still listed after bootout')+'). Run launchctl bootout '+target+' and '+('restore the saved registration' if previous is not None else 'remove '+str(path))+' before reinstalling.') from exc
         if previous is None:
             path.unlink(missing_ok=True)
             from .backup import sync_parent
             sync_parent(path)
         else:
             publish(previous)
-            if running and (replacement_attempted or subprocess.run(['launchctl','print',target],capture_output=True).returncode!=0):
+            # A bootout, even a failed one, may still be tearing the old service down; wait before judging it.
+            if running and (replacement_attempted or (stopped is not None and gone(target))):
                 recovery=subprocess.run(['launchctl','bootstrap',domain,str(path)],capture_output=True)
                 if recovery.returncode:raise Refused('Dashboard install failed; prior registration restored but could not restart. Run launchctl bootstrap '+domain+' '+str(path)+' after repairing launchd: '+said(recovery,'exit '+str(recovery.returncode))) from exc
+            elif stopped:raise Refused('Dashboard install failed ('+said(exc,str(exc))+'); the previous dashboard was stopped but launchd still lists '+target+'. Once launchctl print '+target+' fails, run launchctl bootstrap '+domain+' '+str(path)) from exc
         raise Refused('Dashboard install failed ('+said(exc,str(exc))+'); previous registration and running service were restored when present') from exc
     return {'url':'http://localhost:4318','service':str(path)}
 
