@@ -10,6 +10,7 @@ from .service import install,LABEL
 def launcher(tmp):
     path=Path(tmp)/'state/bin/oh';path.parent.mkdir(parents=True);path.write_text('')
 
+@unittest.skipIf(os.name=='nt','The launchd service is macOS only')
 class ServiceTest(unittest.TestCase):
     def test_failed_upgrade_restores_prior_registration_and_running_service(self):
         with tempfile.TemporaryDirectory() as tmp,patch('oh.service.sys.platform','darwin'),patch('pathlib.Path.home',return_value=Path(tmp)),patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):

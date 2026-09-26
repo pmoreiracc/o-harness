@@ -25,3 +25,22 @@ jobs:
         with:
           node-version: '22.18.0'
       - run: bash integrations/test.sh "${{ matrix.suite }}"
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # OH verifies exact bytes; keep the checkout and test repositories free of CRLF conversion.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - run: bash integrations/test.sh native

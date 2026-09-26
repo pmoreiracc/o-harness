@@ -33,6 +33,8 @@ cat > "$out/.agents/plugins/marketplace.json" <<'JSON'
     "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Productivity"}]
 }
 JSON
+# Keep packaged bytes exact in Windows clones: the installed core checks every file's hash.
+printf '* -text\n' > "$out/.gitattributes"
 cat > "$out/README.md" <<EOF
 # o-harness $version (built packages)
 
