@@ -9,7 +9,7 @@ from datetime import date
 import os
 from pathlib import Path
 import re
-from .design_parse import US, design_file, link_prefix, plan, roadmap
+from .design_parse import US, design_file, lines, link_prefix, plan, roadmap
 from .storage import Refused
 
 SLUG = r'[a-z0-9]+(-[a-z0-9]+)*'
@@ -124,24 +124,26 @@ def all_or_nothing(*paths):
 
 def initiatives(root, where):
     """[(slug, milestone, depends, design)] from the roadmap in document order, refusing one that doesn't parse.
-    The shared parser (Geoffrey's roadmap.sh) reads code blocks too, so a roadmap whose code blocks look like
-    milestones, rows or bars is refused: OH's writers and checks and the parser then always agree."""
+    The shared parser (Geoffrey's roadmap.sh) reads code blocks too, so a fenced milestone heading, or a fenced
+    heading, row or bar inside a milestone, is refused. Structure is read from the parser's own raw lines."""
     if not Path(where['roadmap']).is_file():raise Refused('Start the roadmap first')
-    rows_all, section = rows_of(where['roadmap'])[0], False
+    rows_all, section = lines(where['roadmap']), None
     for (index, line), inside in zip(enumerate(rows_all), fenced(rows_all)):
         # Follow the parser's own section state: inside a milestone it reads headings, rows and bars.
         heading, milestone = re.match(r'#{2,3}' + WS, line), MILESTONE.match(line)
-        if inside and (milestone or section and (heading or line.startswith(('|', '**Done when:**', 'Delivered as ')))):
-            raise Refused(f'{where["roadmap"].name} line {index + 1} is inside a code block within a milestone but reads as '
-                          'roadmap structure; move the example out of the milestone or indent it')
-        section = bool(milestone) or (section and not heading)
+        name = f'{where["roadmap"].name} line {index + 1}'
+        if inside and milestone:raise Refused(f'{name} is in a code block but reads as a milestone heading; indent or reword it')
+        if inside and section and (heading or line.startswith(('|', '**Done when:**', 'Delivered as '))):
+            raise Refused(f'{name} is in a code block inside milestone {section} but reads as roadmap structure; '
+                          'move it out of the milestone, or indent it')
+        section = milestone[1] if milestone else (None if heading else section)
     rows = roadmap(root, '', where).strip('\n')
     return [tuple(row.split(US)) for row in rows.split('\n') if row]
 
 
 def milestones(where):
     """[(id, shipped)] in document order."""
-    return [(match[1], '✅' in line) for _, line in outside(rows_of(where['roadmap'])[0]) if (match := MILESTONE.match(line))]
+    return [(match[1], '✅' in line) for _, line in outside(lines(where['roadmap'])) if (match := MILESTONE.match(line))]
 
 
 def start_roadmap(where, title):
@@ -296,7 +298,7 @@ def verify_roadmap(root, where):
     problems += [f'duplicate slug {s}' for s in sorted({s for s in slugs if slugs.count(s) > 1})]
     problems += [f'duplicate milestone id {m}' for m in sorted({m for m in ids if ids.count(m) > 1})]
     current, bars = None, {}
-    for _, line in outside(rows_of(where['roadmap'])[0]):
+    for _, line in outside(lines(where['roadmap'])):
         match = MILESTONE.match(line)
         if match:current = match[1];bars.setdefault(current, False);continue
         if re.match(r'#{2,3}' + WS, line):current = None;continue
@@ -335,7 +337,7 @@ def status_of(path):
     if not rows or rows[0] != '---':return ''
     for line in rows[1:]:
         if re.match('---' + WS + '*$', line):break
-        if line.startswith('status:'):return line[len('status:'):].strip()
+        if line.startswith('status:'):return re.sub(WS + '*$', '', re.sub('^status:' + WS + '*', '', line, count=1))
     return ''
 
 

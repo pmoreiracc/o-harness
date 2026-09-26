@@ -147,9 +147,9 @@ class PlansTest(unittest.TestCase):
         for example in ('```md\n### M2 — Example\n```\n','```md\n| `search` | Example | — | — |\n```\n','```md\n**Done when:** example\n```\n'):
             with self.subTest(example):
                 where['roadmap'].write_text(clean.replace('|---|---|---|---|\n','|---|---|---|---|\n\n'+example,1))
-                with self.assertRaisesRegex(Refused,'inside a code block'):plans.add_initiative(self.root,where,'M1','a','A',[])
-                with self.assertRaisesRegex(Refused,'inside a code block'):plans.verify_roadmap(self.root,where)
-        # Outside every milestone the parser reads nothing, so examples there are fine, headings and tables included.
+                with self.assertRaisesRegex(Refused,'in a code block'):plans.add_initiative(self.root,where,'M1','a','A',[])
+                with self.assertRaisesRegex(Refused,'in a code block'):plans.verify_roadmap(self.root,where)
+        # Outside milestones the parser reads only milestone headings and slug rows, so other examples are fine there.
         where['roadmap'].write_text(clean.replace('# Fixture — Roadmap\n','# Fixture — Roadmap\n\n```md\n## 1. Problem\n```\n')
             +'\n## Deliberately deferred\n\n```md\n| Thing | Until |\n```\n')
         plans.add_initiative(self.root,where,'M1','a','A',[])
@@ -163,6 +163,15 @@ class PlansTest(unittest.TestCase):
         text=where['roadmap'].read_text().replace('| `a` | A | — |','| `a` | A | `M2` |')
         where['roadmap'].write_text(text+'\n### M2\u00a0— Two\n\n**Done when:** x\n\n| Slug | Initiative | Depends | Design |\n|---|---|---|---|\n')
         with self.assertRaisesRegex(Refused,'neither a slug nor a milestone'):plans.verify_roadmap(self.root,where)
+
+    def test_windows_line_endings_are_read_exactly_as_the_parser_reads_them(self):
+        where=self.repo();plans.start_roadmap(where,'Fixture');plans.add_milestone(self.root,where,'M1','One','Done')
+        text=where['roadmap'].read_text().replace('**Done when:** Done','##\n**Done when:** Done')
+        where['roadmap'].write_bytes(text.replace('\n','\r\n').encode())
+        with self.assertRaisesRegex(Refused,'M1 has no "Done when:"'):plans.verify_roadmap(self.root,where)
+        path=plans.write_design(self.root,where,'x','X',TASKS,'draft')[1]
+        path.write_text(path.read_text().replace('status: draft','status:\u00a0approved'))
+        with self.assertRaisesRegex(Refused,'has status'):plans.verify_design(self.root,where,orphans=False)
 
     def test_design_numbers_stay_four_digits(self):
         where=self.repo();where['designs'].mkdir(parents=True);(where['designs']/'9999-last.md').write_text('x')
