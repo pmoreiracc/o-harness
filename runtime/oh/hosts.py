@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 from .storage import Refused, atomic_json, identifier
+from .system import WINDOWS
 from .telemetry import best_effort
 
 LENSES=('task-and-design','invariants-and-decisions','affected-surfaces-and-negative-space',
@@ -26,21 +27,31 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
 
+def script(stream):
+    """A wrapper that needs an interpreter, not a native binary. Windows binaries start with MZ."""
+    head=stream.read(2)
+    return head!=b'MZ' if WINDOWS else head==b'#!'
+
+
 def binary_identity(path,root=None):
     import hashlib
     import stat
+    import tempfile
     path=Path(path).expanduser().resolve(strict=True)
     if not path.is_file() or not os.access(path,os.X_OK):raise Refused('Host binary is not executable')
     unsafe=[Path('/tmp').resolve(),Path('/private/var/folders'),Path('/var/tmp').resolve()]
+    if WINDOWS:unsafe.append(Path(tempfile.gettempdir()).resolve())
     if root:unsafe.append(Path(root).resolve())
     if any(path.is_relative_to(p) for p in unsafe):raise Refused('Host binary must be installed outside temporary and project directories')
-    for component in [path,*path.parents]:
+    # Windows has no POSIX owner or group/other write bits, so only this check is skipped there;
+    # the location, native-binary, hash and version checks still apply.
+    for component in [] if WINDOWS else [path,*path.parents]:
         info=component.stat()
         if info.st_uid not in (0,os.getuid()) or info.st_mode & (stat.S_IWGRP|stat.S_IWOTH):
             raise Refused('Host executable has an untrusted owner or shared-writable path component: '+str(component))
     # Execute a native binary directly; a PATH-resolved script interpreter is not part of this trust record.
     with path.open('rb') as stream:
-        if stream.read(2)==b'#!':raise Refused('Choose the installed native host binary, not a PATH-resolved wrapper')
+        if script(stream):raise Refused('Choose the installed native host binary, not a PATH-resolved wrapper')
         stream.seek(0);sha=hashlib.file_digest(stream,'sha256').hexdigest()
     return {'path':str(path),'sha256':sha}
 
@@ -53,10 +64,11 @@ def locate(host,root=None):
     if not found:raise Refused(f'{host} was not found on PATH'+(' outside the project' if root else '')+
         f'. Install it, or name its native binary with: oh trust-host {host} <absolute-path>')
     path=Path(found).resolve()
-    with path.open('rb') as stream:script=stream.read(2)==b'#!'
-    if script and host=='codex':
-        # npm installs a Node wrapper; its native binary is vendored beside it.
-        vendored=sorted(path.parent.parent.glob('node_modules/@openai/codex-*/vendor/*/bin/codex'))
+    with path.open('rb') as stream:wrapper=script(stream)
+    if wrapper and host=='codex':
+        # npm installs a Node wrapper (on Windows, a .cmd shim beside node_modules); its native binary is vendored.
+        package=path.parent/'node_modules/@openai/codex' if WINDOWS else path.parent.parent
+        vendored=sorted(package.glob('node_modules/@openai/codex-*/vendor/*/bin/codex'+('.exe' if WINDOWS else '')))
         if len(vendored)==1:path=vendored[0].resolve()
     return path
 
