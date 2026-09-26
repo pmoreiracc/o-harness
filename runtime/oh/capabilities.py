@@ -1,7 +1,8 @@
 from functools import lru_cache
 import json
-import selectors
+import queue
 import subprocess
+import threading
 import time
 from .storage import Refused
 
@@ -13,13 +14,15 @@ def codex_models():
     child=subprocess.Popen([executable('codex',Path.cwd()),'app-server'],env=subscription_env(),stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                            stderr=subprocess.DEVNULL,text=True)
     def send(value):child.stdin.write(json.dumps(value)+'\n');child.stdin.flush()
-    selector=selectors.DefaultSelector();selector.register(child.stdout,selectors.EVENT_READ)
+    # A reader thread instead of select(), which Windows supports only on sockets, not pipes.
+    lines=queue.Queue()
+    threading.Thread(target=lambda:[lines.put(line) for line in iter(child.stdout.readline,'')]+[lines.put('')],daemon=True).start()
     models={};deadline=time.monotonic()+20
     try:
         send({'id':1,'method':'initialize','params':{'clientInfo':{'name':'o-harness','version':'0.1'}}})
         while time.monotonic()<deadline:
-            if not selector.select(.5):continue
-            line=child.stdout.readline()
+            try:line=lines.get(timeout=.5)
+            except queue.Empty:continue
             if not line:break
             message=json.loads(line)
             if message.get('error'):raise Refused('Codex capability discovery failed: '+str(message['error']))
@@ -33,7 +36,7 @@ def codex_models():
                 else:return models
         raise Refused('Timed out discovering Codex model capabilities; no model call was made')
     finally:
-        selector.close();child.terminate()
+        child.terminate()
         try:child.wait(timeout=5)
         except subprocess.TimeoutExpired:child.kill();child.wait()
 

@@ -1,6 +1,7 @@
 """The few operating-system differences in OH. Each has one POSIX and one Windows branch."""
 import errno
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -49,6 +50,9 @@ def unlock_file(fd):
 def spawn(command,**kwargs):
     """Start a command that stop() can end together with every descendant."""
     if not WINDOWS:return subprocess.Popen(command,start_new_session=True,**kwargs)
+    if not os.path.dirname(command[0]):
+        # CreateProcess finds only .exe files; npm and similar tools are .cmd shims found through PATHEXT.
+        command=[shutil.which(command[0],path=(kwargs.get('env') or os.environ).get('PATH')) or command[0],*command[1:]]
     # Start suspended and resume only inside a job object, so no descendant can be born outside it.
     child=subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP|0x4,**kwargs)  # CREATE_SUSPENDED
     job=_kernel32.CreateJobObjectW(None,None)
