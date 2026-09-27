@@ -15,6 +15,7 @@ EFFORTS = {'codex': {'low', 'medium', 'high', 'xhigh', 'max', 'ultra'},
 
 
 MODEL = r'[A-Za-z0-9][A-Za-z0-9._:/-]*'
+FOLDER = r'^(~|/|[A-Za-z]:[\\/]).*'  # absolute, or in your home folder
 PLAN_PATH = r'^(?!.*(^|/)\.\.?(/|$))[A-Za-z0-9_-][A-Za-z0-9._/-]*'  # relative, no . or .. parts
 ROLE_MEANING = {'simple': 'small, bounded tasks', 'standard': 'ordinary tasks',
                 'complex': 'cross-cutting or safety-sensitive tasks, and retries after a failure',
@@ -39,7 +40,9 @@ def rules():
                'Where roadmaps, design docs and decisions live: repo (committed in the repository), private (OH\'s folder), or ask'),
               ('plans.roadmap', {'type': 'string', 'pattern': PLAN_PATH + r'\.md$'}, 'Roadmap file, relative to where plans live'),
               ('plans.designs', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Design docs folder, relative to where plans live'),
-              ('plans.decisions', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Decision records (ADRs) folder, relative to where plans live')]
+              ('plans.decisions', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Decision records (ADRs) folder, relative to where plans live'),
+              ('plans.private_folder', {'type': 'string', 'pattern': FOLDER},
+               'Folder for private plans; each project gets a subfolder named after it')]
     for host in ('claude', 'codex'):
         for role in ROLES:
             result.append((f'models.{host}.{role}.model', {'type': 'string', 'pattern': '^' + MODEL + '$'},
@@ -91,6 +94,7 @@ def allowed(spec):
     if 'enum' in spec:return 'one of: ' + ', '.join(spec['enum'])
     if spec['type'] == 'integer':return f'whole number from {spec["minimum"]} to {spec["maximum"]}'
     if spec['type'] == 'array':return 'a list of checks, each with a name and a command'
+    if spec['pattern'] == FOLDER:return 'an absolute folder, or one starting with ~'
     if spec['pattern'].startswith(PLAN_PATH):return 'a relative path with no . or .. parts' + (', ending in .md' if spec['pattern'].endswith(r'\.md$') else '')
     return 'a model name your subscription offers'
 

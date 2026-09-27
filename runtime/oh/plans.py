@@ -33,7 +33,7 @@ def layout(root, location=None):
     if location == 'ask':
         raise Refused('Choose where plans live first: oh config set plans.location repo (committed in the repository) '
                       'or private (OH\'s folder, nothing in the repository)')
-    base = Path(root) if location == 'repo' else state_home() / 'projects' / project(root)['id'] / 'plans'
+    base = Path(root) if location == 'repo' else private_base(settings['private_folder'], project(root)['name'])
     where = {'location': location, 'base': base, 'roadmap': base / settings['roadmap'],
              'designs': base / settings['designs'], 'decisions': base / settings['decisions']}
     def folded(path):return Path(os.path.realpath(path).casefold())  # case-insensitive file systems share folders
@@ -44,6 +44,11 @@ def layout(root, location=None):
         if folded(where['roadmap'].parent).is_relative_to(folded(where[key])):
             raise Refused(f'plans.roadmap is inside plans.{key}; keep the roadmap outside the numbered folders')
     return where
+
+
+def private_base(folder, name):
+    """<plans.private_folder>/<project name>: private plans where a person can open and edit them."""
+    return Path(os.path.expanduser(folder)).resolve() / name
 
 
 def one_line(text, what):
@@ -250,8 +255,7 @@ def write_design(root, where, slug, title, body, status):
     number = next_number(where['designs'])
     path = Path(where['designs']) / f'{number}-{slug}.md'
     with all_or_nothing(path):
-        write(path, f'---\ntype: design\nstatus: {status}\nlast-verified: {date.today().isoformat()}\n---\n\n'
-              f'# {number} — {title}\n\n{body.strip()}\n')
+        write(path, design_text(number, title, body, status))
         verify_design(root, where, number, orphans=False)  # the roadmap names it only after claim
     return number, path
 
@@ -342,9 +346,9 @@ def status_of(path):
     return ''
 
 
-def verify_design(root, where, number=None, orphans=True):
+def verify_design(root, where, number=None, orphans=True, approving=False):
     """Whether approved and frozen design docs can be delivered (verify-design.sh): structure, not editorial
-    quality. Drafts may have loose ends, and abandoned docs are records."""
+    quality. Drafts may have loose ends, and abandoned docs are records; approving checks a draft as if approved."""
     folder, problems = Path(where['designs']), []
     docs = [d for d in (sorted(folder.glob('*.md')) if folder.exists() else []) if d.name.lower() != 'readme.md']
     wellformed = [d for d in docs if re.fullmatch(r'[0-9]{4}-' + SLUG + r'\.md', d.name)]
@@ -361,6 +365,7 @@ def verify_design(root, where, number=None, orphans=True):
         status = status_of(doc)
         if status not in ('draft', 'approved', 'frozen', 'abandoned'):
             problems.append(f"{doc.name} has status '{status or 'missing'}'");continue
+        if status == 'draft' and approving:status = 'approved'
         if status in ('draft', 'abandoned'):continue
         try:tasks = [row.split(US) for row in plan(root, n, where).strip('\n').split('\n')]
         except Refused as exc:problems.append(f'{doc.name} does not parse: {str(exc).strip()}');continue
@@ -413,8 +418,9 @@ def editing(root):
     return lock(state_home() / 'projects' / project(root)['id'] / 'plans.lock')
 
 
-def initiative(root, where, slug):
-    """The roadmap row a design covers: its milestone, text and dependencies. It must not name a design yet."""
+def initiative(root, where, slug, named=False):
+    """The roadmap row a design covers: its milestone, text, dependencies and design. Unless named, it must not
+    name a design yet."""
     if not isinstance(slug, str) or not re.fullmatch(SLUG, slug):
         raise Refused('Name one roadmap initiative by its slug: /oh-design <slug>. New ideas start with /oh-propose')
     rows = initiatives(root, where)
@@ -424,32 +430,38 @@ def initiative(root, where, slug):
         raise Refused(f"The roadmap has no initiative '{slug}'." + (f' Initiatives without a design: {", ".join(free)}.' if free else '')
                       + ' New work starts with /oh-propose')
     _, milestone, depends, design = found[0]
-    if design:
+    if design and not named:
         raise Refused(f"'{slug}' already has design doc {design} ({design_file(root, design, where)}); edit that doc instead")
     text = next(line.split('|')[2].strip() for _, line in outside(rows_of(where['roadmap'])[0]) if line.startswith(f'| `{slug}` |'))
-    return {'slug': slug, 'milestone': milestone, 'text': text, 'depends': [d for d in depends.split(',') if d]}
+    return {'slug': slug, 'milestone': milestone, 'text': text, 'depends': [d for d in depends.split(',') if d], 'design': design}
 
 
 def design_manifest(root, slug):
     """The run that designs one roadmap initiative, and the plan settings only OH may give it. Code finds the row;
     the worker writes only prose."""
     where = layout(root)
-    if where['location'] != 'repo':
-        raise Refused('/oh-design writes plans in the repository for now; private plans get their approval step in a coming '
-                      'update. Use oh config set plans.location repo, or wait for that update')
-    row = initiative(root, where, slug)
+    private = where['location'] == 'private'
+    row = initiative(root, where, slug, named=private)
+    existing = row['design'] or None
+    if existing:
+        # A private design is approved only while it is what the person approved; an edited one is approved again.
+        status = approval(root, where, existing)
+        if status == 'approved':raise Refused(f"'{slug}' has approved design doc {existing} ({design_file(root, existing, where)}); edit it to change it")
     try:verify_roadmap(root, where)
     except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
-    planned = [Path(where['designs']) / f'{next_number(where["designs"])}-{slug}.md', Path(where['roadmap'])]
-    if (skipped := ignored(root, [Path(p).relative_to(root).as_posix() for p in planned])):
-        raise Refused(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
-    shown = {key: Path(where[key]).relative_to(root).as_posix() for key in ('roadmap', 'designs', 'decisions')}
+    if where['location'] == 'repo':
+        planned = [Path(where['designs']) / f'{next_number(where["designs"])}-{slug}.md', Path(where['roadmap'])]
+        if (skipped := ignored(root, [Path(p).relative_to(root).as_posix() for p in planned])):
+            raise Refused(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+    shown = {key: located(root, where, where[key]) for key in ('roadmap', 'designs', 'decisions')}
     instructions = (f"Design the roadmap initiative `{slug}` in milestone {row['milestone']}: {row['text']}\n"
                     f"It depends on: {', '.join(row['depends']) or 'nothing'}.\n"
-                    f"Roadmap: {shown['roadmap']}. Design docs: {shown['designs']}/. Decision records: {shown['decisions']}/.")
+                    f"Roadmap: {shown['roadmap']}. Design docs: {shown['designs']}/. Decision records: {shown['decisions']}/."
+                    + (f"\nDesign doc {existing} exists ({design_file(root, existing, where)}), {status}. Revise it only as the "
+                       "person asks; keep what they wrote otherwise." if existing else ''))
     return ({'workflow': 'design', 'tasks': [{'id': 'design', 'title': f'Design {slug}', 'instructions': instructions,
-                                              'transition': {'profile': 'plans', 'slug': slug}}]},
-            {'workflow': 'design', 'plans': {'location': 'repo'}, 'slug': slug})
+                                              'transition': {'profile': 'plans', 'slug': slug} | ({'existing': existing} if existing else {})}]},
+            {'workflow': 'design', 'plans': {'location': where['location']}, 'slug': slug})
 
 
 def branch_for(root, slug, run, kind='design'):
@@ -512,20 +524,53 @@ def digest_of(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest() if Path(path).is_file() else None
 
 
+def located(root, where, path):
+    """How a plan path is recorded: relative to the checkout for repo plans, absolute for private ones."""
+    return Path(path).relative_to(root).as_posix() if where['location'] == 'repo' else str(Path(path))
+
+
+def resolved(root, key):
+    return Path(key) if Path(key).is_absolute() else Path(root) / key
+
+
+def snapshot(paths):
+    """Each path's bytes before a private render (base64; None when missing): private plans have no Git to undo with."""
+    import base64
+    return {str(p): (base64.b64encode(Path(p).read_bytes()).decode() if Path(p).is_file() else None) for p in paths}
+
+
 def undo(root, previous, check_only=False):
     """Put back what this run's last render wrote, so a repair starts from the reviewed parent. Safe to repeat.
     It never discards a change it can't prove OH made: a file edited after OH wrote it, or a file OH was writing
-    when it was interrupted, stops the run for a person to look at. check_only only asks whether undo could run."""
+    when it was interrupted, stops the run for a person to look at. check_only only asks whether undo could run.
+    Repository plans are put back from HEAD; private plans from the bytes saved before the render."""
     from .storage import git
-    import hashlib
+    import base64
     if not previous:return
+    written, before = previous.get('files', {}), previous.get('before')
+    if before is not None:
+        import hashlib
+        original = {key: (hashlib.sha256(base64.b64decode(data)).hexdigest() if data is not None else None) for key, data in before.items()}
+        for key in previous.get('intent', []):
+            current = digest_of(resolved(root, key))
+            if current == original.get(key):continue  # already as it was
+            if key not in written:
+                raise Blocked(f'OH was interrupted while writing {key}. Discard that change (put back your own copy, or delete a '
+                              'new file) and run OH again, or stop the run with /oh-stop to keep it')
+            if current != written[key]:
+                raise Blocked(f'{key} changed after OH wrote it. Stop this run (/oh-stop) and keep or discard that edit yourself')
+        if check_only:return
+        for key in previous.get('intent', []):
+            if digest_of(resolved(root, key)) == original.get(key):continue
+            if before.get(key) is None:resolved(root, key).unlink(missing_ok=True)
+            else:write(resolved(root, key), base64.b64decode(before[key]))
+        return
     # An ignored file OH wrote isn't in git status, so a new file counts as changed whenever it exists.
-    written, dirty = previous.get('files', {}), set(changes(root))
+    dirty = set(changes(root))
     dirty |= {r for r in previous.get('intent', []) if (Path(root) / r).exists() and not git(root, 'ls-tree', '--name-only', 'HEAD', '--', r)}
     for relative in previous.get('intent', []):
         if relative not in dirty:continue  # already as HEAD has it
-        path = Path(root) / relative
-        current = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        current = digest_of(Path(root) / relative)
         if relative not in written:
             raise Blocked(f'OH was interrupted while writing {relative}. Discard that change (git checkout -- <file>, or delete '
                           'a new file) and run OH again, or stop the run with /oh-stop to keep it')
@@ -538,45 +583,60 @@ def undo(root, previous, check_only=False):
         else:(Path(root) / relative).unlink(missing_ok=True)
 
 
-def render(root, slug, value, record):
-    """Write the design (or the owed decision record) into a checkout that undo put back to HEAD.
-    `record` saves the paths before anything is written. A Refused is about the worker's prose and goes back to it;
-    a Blocked is about the checkout, settings or roadmap and stops the run. Returns the paths and their hashes."""
-    import hashlib
+def design_text(number, title, body, status):
+    return (f'---\ntype: design\nstatus: {status}\nlast-verified: {date.today().isoformat()}\n---\n\n'
+            f'# {number} — {title}\n\n{body.strip()}\n')
+
+
+def render(root, slug, value, record, existing=None):
+    """Write the design (or the owed decision record) where the plans live, after undo put things back.
+    Repository plans land as approved (the merge approves them); private plans as drafts until the person
+    approves. `existing` rewrites that private design in place, for a person's revision.
+    `record` saves the paths (and, for private plans, their bytes) before anything is written. A Refused is about
+    the worker's prose and goes back to it; a Blocked stops the run. Returns the paths and their hashes."""
     where = blocked(lambda: layout(root))
-    if where['location'] != 'repo':raise Blocked('This design run writes plans in the repository, but plans.location changed')
+    private = where['location'] == 'private'
     with editing(root):
-        changed = changes(root)
-        if changed:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(changed[:5])}); a design commit holds only its plan files")
+        if not private and (changed := changes(root)):
+            raise Blocked(f"The checkout has changes OH didn't write ({', '.join(changed[:5])}); a design commit holds only its plan files")
         value = answer(value)
-        blocked(lambda: initiative(root, where, slug));blocked(lambda: verify_roadmap(root, where))
-        if value['kind'] == 'design':
-            number = blocked(lambda: next_number(where['designs']))
-            paths = [Path(where['designs']) / f'{number}-{slug}.md', Path(where['roadmap'])]
+        if existing:
+            if value['kind'] != 'design':raise Refused('This design exists already: return the revised design, not a decision')
+            found = design_file(root, existing, where)
+            if not found:raise Blocked(f'Design doc {existing} is gone')
+            number, paths = existing, [Path(found)]
         else:
-            number = blocked(lambda: next_number(where['decisions']))
-            paths = [Path(where['decisions']) / f'{number}-{decision_slug(value["title"])}.md', Path(where['decisions']) / 'README.md']
-        intent = [Path(p).relative_to(root).as_posix() for p in paths]
-        skipped = ignored(root, intent)
-        if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
-        record(intent)
+            blocked(lambda: initiative(root, where, slug));blocked(lambda: verify_roadmap(root, where))
+            if value['kind'] == 'design':
+                number = blocked(lambda: next_number(where['designs']))
+                paths = [Path(where['designs']) / f'{number}-{slug}.md', Path(where['roadmap'])]
+            else:
+                number = blocked(lambda: next_number(where['decisions']))
+                paths = [Path(where['decisions']) / f'{number}-{decision_slug(value["title"])}.md', Path(where['decisions']) / 'README.md']
+        intent = [located(root, where, p) for p in paths]
+        if not private and (skipped := ignored(root, intent)):
+            raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+        before = snapshot(paths) if private else None
+        record(intent, before)
+        status = 'draft' if private else 'approved'
         with all_or_nothing(*paths):
             if value['kind'] == 'design':
-                written, path = write_design(root, where, slug, value['title'], value['body'], 'approved')
+                if existing:write(paths[0], design_text(number, value['title'].strip(), value['body'], status));written, path = number, paths[0]
+                else:written, path = write_design(root, where, slug, value['title'], value['body'], status)
                 rows = [row.split(US) for row in plan(root, written, where).split('\n') if row]
                 if any(row[1] != 'pending' for row in rows):
                     raise Refused('A new design has only open tasks: write each as "- [ ] **N.**", never "- [x]"')
-                blocked(lambda: claim(root, where, slug, written))
-                verify_design(root, where, written)
+                if not existing:blocked(lambda: claim(root, where, slug, written))
+                verify_design(root, where, written, approving=True)
                 tasks = len(rows)
             else:
                 written, path = blocked(lambda: write_decision(root, where, value['title'], value['context'], value['alternatives'],
                                                                value['consequences'], recommendation=value['summary']))
                 tasks = 0
             if written != number or Path(path) != paths[0]:raise Blocked('The plan was written under another number')
-        files = {relative: hashlib.sha256((Path(root) / relative).read_bytes()).hexdigest() for relative in intent}
+        files = {key: digest_of(resolved(root, key)) for key in intent}
     return {'kind': value['kind'], 'number': number, 'title': value['title'].strip(), 'path': intent[0], 'tasks': tasks,
-            'summary': value['summary'].strip(), 'intent': intent, 'files': files}
+            'summary': value['summary'].strip(), 'intent': intent, 'files': files} | ({'before': before} if private else {})
 
 
 def decision_slug(title):
@@ -586,12 +646,9 @@ def decision_slug(title):
 def propose_manifest(root, idea):
     """The run that routes one idea: a roadmap row, a task in an approved design, or an improvement."""
     where = layout(root)
-    if where['location'] != 'repo':
-        raise Refused('/oh-propose writes plans in the repository for now; private plans get their approval step in a coming '
-                      'update. Use oh config set plans.location repo, or wait for that update')
     idea = idea.strip()
     if not idea:raise Refused('Say what you want to add: /oh-propose <idea>')
-    shown = {key: Path(where[key]).relative_to(root).as_posix() for key in ('roadmap', 'designs', 'decisions')}
+    shown = {key: located(root, where, where[key]) for key in ('roadmap', 'designs', 'decisions')}
     started = 'exists' if Path(where['roadmap']).is_file() else 'is not started yet; OH starts it if the idea needs a row'
     instructions = (f"The idea, in the person's words:\n{idea}\n\nRoadmap: {shown['roadmap']} ({started}). "
                     f"Design docs: {shown['designs']}/. Decision records: {shown['decisions']}/.")
@@ -600,7 +657,7 @@ def propose_manifest(root, idea):
         except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
     return ({'workflow': 'propose', 'tasks': [{'id': 'propose', 'title': 'Propose: ' + idea.splitlines()[0][:60],
                                                'instructions': instructions, 'transition': {'profile': 'intake'}}]},
-            {'workflow': 'propose', 'plans': {'location': 'repo'}})
+            {'workflow': 'propose', 'plans': {'location': where['location']}})
 
 
 def proposal(value):
@@ -636,7 +693,7 @@ def add_task(root, where, design, track, text, depends):
     """Append one pending task to an approved design's track, numbered after the doc's last task."""
     path = design_file(root, design, where)
     if not path:raise Refused(f'There is no design doc {design}')
-    status = status_of(path)
+    status = approval(root, where, design)
     if status != 'approved':
         raise Refused(f"Design doc {design} is {status or 'missing a status'}: only an approved design takes new tasks"
                       + ('; a frozen design has shipped, so new work is a roadmap row or an improvement' if status == 'frozen' else ''))
@@ -668,15 +725,15 @@ def add_task(root, where, design, track, text, depends):
 
 
 def render_proposal(root, value, record, move):
-    """Write the proposal's route into the checkout: nothing for an improvement or an unclear idea.
-    `move` puts the work on its own branch before anything is written; `record` saves the paths first."""
-    import hashlib
+    """Write the proposal's route where the plans live: nothing for an improvement or an unclear idea.
+    For repository plans `move` puts the work on its own branch before anything is written; `record` saves the
+    paths (and, for private plans, their bytes) first."""
     from .storage import project
     where = blocked(lambda: layout(root))
-    if where['location'] != 'repo':raise Blocked('This proposal writes plans in the repository, but plans.location changed')
+    private = where['location'] == 'private'
     with editing(root):
-        changed = changes(root)
-        if changed:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(changed[:5])}); a proposal commit holds only its plan files")
+        if not private and (changed := changes(root)):
+            raise Blocked(f"The checkout has changes OH didn't write ({', '.join(changed[:5])}); a proposal commit holds only its plan files")
         value = proposal(value)
         if Path(where['roadmap']).is_file():blocked(lambda: verify_roadmap(root, where))
         shown = {k: value[k] for k in ('route', 'understanding', 'reason', 'evidence', 'text', 'summary')}
@@ -690,11 +747,12 @@ def render_proposal(root, value, record, move):
             path = design_file(root, value['design'], where)
             if not path:raise Refused(f"There is no design doc {value['design']}")
             paths, topic = [Path(path)], f"design-{value['design']}"
-        intent = [Path(p).relative_to(root).as_posix() for p in paths]
-        skipped = ignored(root, intent)
-        if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
-        blocked(lambda: move(topic))
-        record(intent)
+        intent = [located(root, where, p) for p in paths]
+        if not private:
+            if (skipped := ignored(root, intent)):raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+            blocked(lambda: move(topic))
+        before = snapshot(paths) if private else None
+        record(intent, before)
         lines = []
         with all_or_nothing(*paths):
             if value['route'] == 'roadmap':
@@ -711,5 +769,61 @@ def render_proposal(root, value, record, move):
             else:
                 _, task = add_task(root, where, value['design'], value['track'], value['text'], value['depends'])
                 lines.append(task)
-        files = {relative: hashlib.sha256((Path(root) / relative).read_bytes()).hexdigest() for relative in intent}
-    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines}
+        files = {key: digest_of(resolved(root, key)) for key in intent}
+    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines} | ({'before': before} if private else {})
+
+
+def approvals_file(root):
+    from .storage import project, state_home
+    return state_home() / 'projects' / project(root)['id'] / 'approvals.json'
+
+
+def approval(root, where, number):
+    """A design's status. A private design counts as approved only while its content is what the person approved."""
+    from .storage import read_json
+    path = design_file(root, number, where)
+    status = status_of(path) if path else ''
+    if where['location'] != 'private' or status != 'approved':return status
+    record = (read_json(approvals_file(root)) if approvals_file(root).is_file() else {}).get(number)
+    return 'approved' if record and record['path'] == str(Path(path)) and record['sha256'] == digest_of(path) else 'edited since approval'
+
+
+def approve(root, where, number, run, flip):
+    """The person approved this private design (flip: a draft that now becomes approved), bound to its content."""
+    from datetime import datetime, timezone
+    from .storage import atomic_json, read_json
+    path = Path(design_file(root, number, where))
+    if flip:
+        rows, ending = rows_of(path)
+        close = next((i for i in range(1, len(rows)) if re.match('---' + WS + '*$', rows[i])), 0)
+        spot = [i for i in range(1, close) if rows[i].startswith('status:')]
+        if rows[:1] != ['---'] or len(spot) != 1:raise Blocked(f'{path.name} has no single status line in its frontmatter')
+        rows[spot[0]] = 'status: approved'
+        write_rows(path, rows, ending)
+        verify_design(root, where, number)
+    records = read_json(approvals_file(root)) if approvals_file(root).is_file() else {}
+    records[number] = {'path': str(path), 'sha256': digest_of(path), 'run': run, 'at': datetime.now(timezone.utc).isoformat()}
+    atomic_json(approvals_file(root), records)
+    return records[number]
+
+
+def existing_plan(root, number):
+    """A private design someone edited, as the subject of a review and an approval, with nothing rewritten."""
+    where = layout(root)
+    path = Path(design_file(root, number, where))
+    rows = [row.split(US) for row in plan(root, number, where).split('\n') if row]
+    title = next((line.split(' — ', 1)[-1] for line in rows_of(path)[0] if line.startswith('# ')), path.stem)
+    return {'kind': 'design', 'number': number, 'title': title, 'path': str(path), 'tasks': len(rows), 'summary': '',
+            'intent': [str(path)], 'files': {str(path): digest_of(path)}, 'before': snapshot([path])}
+
+
+def listing(root):
+    """Every initiative, with its design and whether that design can be delivered."""
+    where = layout(root)
+    rows = initiatives(root, where) if Path(where['roadmap']).is_file() else []
+    result = []
+    for slug, milestone, depends, design in rows:
+        item = {'slug': slug, 'milestone': milestone, 'depends': [d for d in depends.split(',') if d]}
+        if design:item |= {'design': design, 'status': approval(root, where, design), 'path': str(design_file(root, design, where))}
+        result.append(item)
+    return {'location': where['location'], 'roadmap': str(where['roadmap']), 'initiatives': result}
