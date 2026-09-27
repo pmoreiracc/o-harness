@@ -344,6 +344,15 @@ class PrivatePlansTest(unittest.TestCase):
         self.assertEqual(records[canonical(plans.layout(other)['base'])]['project'],owner['id'])
         self.assertEqual(register(other,'RenamedSettings')['id'],owner['id'])
 
+    def test_linked_settings_publish_error_keeps_ownership_and_rename_consistent(self):
+        import os
+        if os.name=='nt':self.skipTest('Creating symlinks needs extra rights on Windows')
+        from .config import settings_file
+        target=Path(self.temp.name)/'dotfiles/settings.json';target.parent.mkdir()
+        settings_file().rename(target);settings_file().symlink_to(target)
+        self.test_settings_publish_error_keeps_folder_ownership_and_rename_consistent()
+        self.assertTrue(settings_file().is_symlink())
+
     def test_private_folder_rejects_cwd_relative_expansion(self):
         import os
         invalid=['~oh_user_that_does_not_exist_927/plans','~relative','relative/plans']

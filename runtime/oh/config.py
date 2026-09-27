@@ -633,7 +633,8 @@ def edit(root, scope, apply, *, creating=False, reserve_plans=False):
                 with guard:
                     try:write_file(data)
                     except OSError as exc:
-                        if not published(settings_file(),data|{'$schema':data.get('$schema','./'+SCHEMA_NAME)}):raise
+                        # Settings support dotfiles symlinks; reconcile the same target write_text uses.
+                        if not published(settings_file().resolve(),data|{'$schema':data.get('$schema','./'+SCHEMA_NAME)}):raise
                         # A committed settings file must retain its reservations (and renamed profile).
                         import sys
                         print(f'OH: Settings were saved, but publication reported an error: {exc}. Run oh config to inspect them.',file=sys.stderr)
