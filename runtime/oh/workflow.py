@@ -241,10 +241,19 @@ def review_limit(state,task):
 
 def checkpoint(root):
     journal,state=load_run(root)
+    left=len([t for t in state['tasks'] if t['id'] not in state['done']])
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
-            'config_hash':state['config_hash'],'version':state['harness_version']}
+            'config_hash':state['config_hash'],'version':state['harness_version']}|(
+            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
+
+
+def continue_limits(left,config):
+    """What typing continue approves, said at every checkpoint."""
+    batch,rounds=min(left,config['tasks_per_batch']),config['review_rounds']
+    return (f'Continue runs {batch} of the {left} remaining task'+('s' if left!=1 else '')+f', up to {rounds} review round'
+            +('s' if rounds!=1 else '')+' each. This run keeps its settings; /oh-config changes them for the next run.')
 
 
 @state_writer

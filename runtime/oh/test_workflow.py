@@ -62,6 +62,7 @@ class WorkflowTest(unittest.TestCase):
         journal,_=start(self.root,{'tasks':self.tasks},self.event())
         result=run(self.root,self.fake)
         self.assertEqual((result['completed'],result['status']),(5,'checkpoint'))
+        self.assertTrue(result['limits'].startswith('Continue runs 1 of the 1 remaining task, up to 3 review rounds each.'))
         self.assertEqual(len(self.calls),10)
         configure(self.root,tasks_per_batch=1,review_rounds=10)
         run(self.root,self.fake);self.assertEqual(len(self.calls),10)

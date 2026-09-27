@@ -8,7 +8,13 @@ setting with its value and meaning. Or say what you want, for example
 
 All your settings live in one file that belongs to you: `~/.config/o-harness/settings.json`
 (or `$XDG_CONFIG_HOME/o-harness/settings.json`). OH creates it when you register a project,
-and never puts anything in your repositories. `oh config open` opens it.
+and never puts anything in your repositories. `oh config open` opens it. If you run OH with
+its own data folder (`OH_DATA_HOME`), that folder keeps its own settings in
+`<OH_DATA_HOME>/config/settings.json`, so it never reads or changes yours.
+
+OH remembers where your settings are. If a process looks elsewhere, for example a host that
+doesn't see the `XDG_CONFIG_HOME` your shell sets, OH stops and says so instead of using its
+defaults.
 
 Top-level values apply to every project. A project's section under `projects`, named as you
 named the project at `oh init`, overrides them for that project and holds its checks:
@@ -48,17 +54,21 @@ Projects registered with the same name share a section.
 - `oh config unset <key>` (optionally `--global`) goes back to the value from the layer before.
 - `oh config open` opens the file, if you prefer to edit it yourself.
 
-OH checks the whole file each time it reads it. An unknown key, a bad value or broken JSON
-stops OH with the file and the exact key named, such as `projects.my-app.review_rounds`.
+OH checks the whole file each time it reads it. An unknown key, a bad value, a key written
+twice or broken JSON stops OH with the file and the exact key named, such as
+`projects.my-app.review_rounds`.
 Settings are captured when a run is prepared, so a change applies to the next run you start;
-**continue** keeps the settings the run was approved with. Every approval repeats the numbers
-it covers, for example "Runs 5 of 12 tasks, then asks you to continue, up to 3 review rounds
-each".
+**continue** keeps the settings the run was approved with. Each prepared approval and each
+**continue** checkpoint repeats the numbers it covers, for example "Runs 5 of 12 tasks, then
+asks you to continue, up to 3 review rounds each".
 
 Updates never rewrite your settings. If a release renames or removes a setting, OH moves it
-for you once and keeps the previous file in `~/.config/o-harness/backups/`. Settings files
-from older versions of OH (`checks.json`, `config.json` and `config.local.json` in a project's
-OH folder, and `settings/defaults.json`) are moved into `settings.json` the same way.
+for you once and keeps the previous file in `backups/` next to `settings.json`. Settings
+files from older versions of OH (`checks.json`, `config.json` and `config.local.json` in a
+project's OH folder, and `settings/defaults.json`) are moved into `settings.json` the same
+way, with the same results as before. A file OH can't move (a value it doesn't accept, or one
+`settings.json` already sets differently) stays where it is and stops only its own project
+(the shared `settings/defaults.json` stops every project), with the reason named.
 
 Workers can't write the settings folder. `oh backup` includes `settings.json`.
 

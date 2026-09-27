@@ -19,6 +19,6 @@ external consumer-v1 profile, `prepare-design <number> [track]` binds its approv
 
 The runner owns automatic models, fresh workers, checks, review, final rendering, commits
 and batch boundaries. Do not reproduce that loop in the parent conversation. At a batch
-checkpoint show continue / PR / stop; at completion show PR / stop. Exact choices from the
+checkpoint show continue / PR / stop with the returned `limits` sentence; at completion show PR / stop. Exact choices from the
 owning human session are verified by `run`; they never silently renew another allowance.
 Keep results concise and link saved evidence. Human merging remains separate.

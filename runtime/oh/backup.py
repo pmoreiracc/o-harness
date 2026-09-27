@@ -74,29 +74,41 @@ def backup(destination):
             for path in home.iterdir():
                 if path.is_dir() and path.name not in ('versions','logs'):shutil.copytree(path,temporary/path.name)
             settings=outside_settings()
-            if settings:(temporary/'config').mkdir();shutil.copyfile(settings,temporary/'config/settings.json')
+            if settings:(temporary/'user-settings').mkdir();shutil.copyfile(settings,temporary/'user-settings/settings.json')
             validate(temporary,manifest=False);atomic_json(temporary/'backup.json',{'schema':2,'inventory':inventory(temporary)})
             validate(temporary)
             durable(temporary);temporary.rename(destination);sync_parent(destination)
         finally:
             if temporary.exists():shutil.rmtree(temporary)
-    return {'backup':str(destination),'authority':'projects/','analytics':'analytics.sqlite3'}|(
-        {'settings':'config/settings.json'} if (destination/'config/settings.json').is_file() else {})
+    settings=[p for p in ('user-settings/settings.json','config/settings.json') if (destination/p).is_file()]
+    return {'backup':str(destination),'authority':'projects/','analytics':'analytics.sqlite3'}|({'settings':settings[0]} if settings else {})
+
+
+def inside():
+    from .config import config_home
+    return config_home().resolve().is_relative_to(state_home())
 
 
 def outside_settings():
     """Your settings.json when it lives outside OH's data folder; inside it, it is copied with the rest."""
-    from .config import config_home,settings_file
-    if config_home().resolve().is_relative_to(state_home()) or not settings_file().is_file():return None
-    return settings_file()
+    from .config import settings_file
+    return None if inside() or not settings_file().is_file() else settings_file()
 
 
 def restore_settings(temporary):
-    """Puts a backup's settings.json back where OH reads it, never over settings you already have."""
-    from .config import backup_folder,config_home,settings_file,write_text
-    copy=temporary/'config/settings.json'
-    if config_home().resolve().is_relative_to(state_home()) or not copy.is_file():return {}
-    text=copy.read_text(encoding='utf-8');shutil.rmtree(temporary/'config')
+    """Puts a backup's settings where OH reads them, never over settings you already have, and keeps its
+    settings history. A backup holds them in user-settings/ (kept outside the data folder) or config/."""
+    from .config import backup_folder,settings_file,write_text
+    outside,folder=temporary/'user-settings/settings.json',temporary/'config'
+    if inside():
+        if outside.is_file() and not (folder/'settings.json').exists():folder.mkdir(exist_ok=True);shutil.move(outside,folder/'settings.json')
+        shutil.rmtree(temporary/'user-settings',ignore_errors=True)
+        return {}
+    source=outside if outside.is_file() else folder/'settings.json'
+    if (folder/'backups').is_dir():shutil.copytree(folder/'backups',backup_folder('restored-history'),dirs_exist_ok=True)
+    text=source.read_text(encoding='utf-8') if source.is_file() else None
+    for name in ('user-settings','config'):shutil.rmtree(temporary/name,ignore_errors=True)
+    if text is None:return {}
     if not settings_file().exists():write_text(settings_file(),text);return {'settings':str(settings_file())}
     if settings_file().read_text(encoding='utf-8')==text:return {'settings':str(settings_file())}
     kept=backup_folder('from-restored-backup')/'settings.json';kept.write_text(text,encoding='utf-8')

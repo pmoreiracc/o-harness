@@ -17,7 +17,6 @@ class ConfigTest(unittest.TestCase):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);self.temp=Path(temp.name)
         self.root=self.temp/'project';self.root.mkdir()
         env=patch.dict(os.environ,{'OH_DATA_HOME':str(self.temp/'state')});env.start();self.addCleanup(env.stop)
-        os.environ.pop('OH_CONFIG_HOME',None)
         subprocess.run(['git','init','-q',str(self.root)],check=True)
         register(self.root,'Fixture')
 
@@ -28,11 +27,11 @@ class ConfigTest(unittest.TestCase):
     def read(self):return json.loads(settings_file().read_text())
 
     def test_settings_live_outside_every_repository_in_one_file_per_user(self):
-        self.assertEqual(config_home(),state_home()/'config')  # a separate data folder keeps its own settings
-        with patch.dict(os.environ,{'OH_CONFIG_HOME':str(self.temp/'mine')}):self.assertEqual(config_home(),self.temp/'mine')
+        self.assertEqual(config_home(),state_home()/'config')  # a separate data folder (a test, say) never touches yours
         home=self.temp/'home'
         with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'OH_DATA_HOME':str(home/'.local/share/o-harness'),'XDG_CONFIG_HOME':''}):
             self.assertEqual(config_home(),home/'.config/o-harness')  # the dashboard service names the default data folder
+            with patch.dict(os.environ,{'XDG_CONFIG_HOME':str(self.temp/'xdg')}):self.assertEqual(config_home(),self.temp/'xdg/o-harness')
         self.assertFalse(any(p.name.startswith(('oh.json','settings')) for p in self.root.iterdir()))
 
     def test_every_project_then_this_project_and_errors_name_the_exact_key(self):
@@ -54,6 +53,8 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaisesRegex(Refused,re.escape(str(settings_file()))+': .*'+words):load(self.root)
         self.write('{"tasks_per_batch": 3,')
         with self.assertRaisesRegex(Refused,'not valid JSON'):load(self.root)
+        self.write('{"review_rounds": 3, "review_rounds": 50}')
+        with self.assertRaisesRegex(Refused,'"review_rounds" appears twice'):load(self.root)
 
     def test_change_is_the_only_writer_and_never_writes_an_invalid_value(self):
         result=change(self.root,'tasks_per_batch','15')
@@ -72,6 +73,12 @@ class ConfigTest(unittest.TestCase):
         self.assertIn('projects.Fixture sets its own value',change(self.root,'tasks_per_batch','8',scope='global')['note'])
         change(self.root,'tasks_per_batch',None)
         self.assertEqual(load(self.root)['tasks_per_batch'],8)
+        for key in ('projects','models.claude','$schema'):
+            with self.assertRaisesRegex(Refused,'not one setting'):change(self.root,key,None,scope='global')
+        self.assertIn('Fixture',self.read()['projects'])
+        other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
+        with self.assertRaisesRegex(Refused,'not an OH project: add --global'):change(other,'review_rounds','4')
+        self.assertEqual(change(other,'review_rounds','4',scope='global')['scope'],'your settings for every project')
         checks='[{"name": "tests", "command": ["npm", "test"], "toolchain": [["node", "--version"]]}]'
         self.assertEqual(change(self.root,'checks',checks)['to'],json.loads(checks))
         self.assertIn('"command": ["npm", "test"]',settings_file().read_text())  # short lists stay on one line
@@ -85,17 +92,22 @@ class ConfigTest(unittest.TestCase):
         change(self.root,'retired',None)
         self.assertEqual(load(self.root)['review_rounds'],4)
 
+    def legacy(self,root=None):
+        home=state_home();return home/'projects'/next(p.name for p in (home/'projects').iterdir()
+                                                       if json.loads((p/'profile.json').read_text())['name']==(root or 'Fixture'))
+
     def test_settings_from_older_versions_move_into_the_file_once_with_backups(self):
-        home=state_home();project=home/'projects'/next(p.name for p in (home/'projects').iterdir())
-        (home/'settings').mkdir();(home/'settings/defaults.json').write_text('{"max_escalations": 2, "review_rounds": 3}')
-        (project/'config.json').write_text(json.dumps(config.defaults()|{'tasks_per_batch':9}))  # an import copied every default
+        home=state_home();project=self.legacy()
+        (home/'settings').mkdir();(home/'settings/defaults.json').write_text('{"max_escalations": 2, "review_rounds": 3, "tasks_per_batch": 15}')
+        # An import copied every default: a project value equal to OH's default still beats the shared value.
+        (project/'config.json').write_text(json.dumps(config.defaults()|{'tasks_per_batch':9}))
         (project/'config.local.json').write_text('{"tasks_per_batch": 11}')
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
         for path in project.glob('c*.json'):path.chmod(0o444)
         value=load(self.root)
-        self.assertEqual((value['max_escalations'],value['tasks_per_batch']),(2,11))
-        self.assertEqual(self.read()['max_escalations'],2);self.assertNotIn('review_rounds',self.read())
-        self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':11,'checks':[{'name':'tests','command':['true']}]})
+        self.assertEqual((value['max_escalations'],value['tasks_per_batch'],value['review_rounds']),(1,11,3))  # as before the move
+        self.assertEqual({k:v for k,v in self.read().items() if k!='projects'},{'$schema':'./settings.schema.json','max_escalations':2,'tasks_per_batch':15})
+        self.assertEqual(self.read()['projects']['Fixture'],{'max_escalations':1,'tasks_per_batch':11,'checks':[{'name':'tests','command':['true']}]})
         self.assertFalse(config.legacy_files())
         moved=list((config_home()/'backups').glob('*-moved-into-settings/projects/*/checks.json'))
         self.assertEqual(len(moved),1)
@@ -103,7 +115,24 @@ class ConfigTest(unittest.TestCase):
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
         load(self.root);self.assertFalse(config.legacy_files())
         (project/'checks.json').write_text('[{"name": "other", "command": ["false"]}]')
-        with self.assertRaisesRegex(Refused,'both set projects.Fixture'):load(self.root)
+        with self.assertRaisesRegex(Refused,'already sets projects.Fixture.checks differently'):load(self.root)
+        self.assertTrue((project/'checks.json').exists())
+
+    def test_an_older_file_that_cannot_move_stops_only_its_own_project(self):
+        other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True);register(other,'Other')
+        for text,words in (('[{"name": "t", "command": ["true"], "description": "kept"}]','Unknown check field'),
+                           ('{"name": "t"}','must contain a JSON list'),('[{"name": "t", "command": ["true"]}',"Cannot move")):
+            (self.legacy()/'checks.json').write_text(text)
+            (self.legacy('Other')/'checks.json').write_text('[{"name": "other", "command": ["true"]}]')
+            with self.assertRaisesRegex(Refused,words):load(self.root)
+            self.assertEqual(project_checks(other),[{'name':'other','command':['true']}])  # moved; Fixture's file stays
+            self.assertTrue((self.legacy()/'checks.json').exists())
+        (self.legacy()/'checks.json').unlink()
+        self.write({'models':{'claude':{'review':{'effort':'max'}}},'projects':{'Other':{'checks':[{'name':'other','command':['true']}]}}})
+        (state_home()/'settings').mkdir();(state_home()/'settings/defaults.json').write_text('{"models": {"codex": {"review": {"effort": "low"}}}}')
+        self.assertEqual(load(self.root)['models']['codex']['review']['effort'],'low')  # different keys under models agree
+        (state_home()/'settings/defaults.json').write_text('[1, 2]')
+        with self.assertRaisesRegex(Refused,'must contain a JSON object'):load(other)
 
     def test_renamed_settings_are_moved_once_with_a_backup(self):
         self.write({'review_rounds':4,'projects':{'Fixture':{'review_rounds':6}}})
@@ -140,6 +169,23 @@ class ConfigTest(unittest.TestCase):
         self.assertIn(str(config_home()),sandbox['sandbox']['filesystem']['denyWrite'])
         self.assertIn(f'Edit(/{config_home()}/**)',sandbox['permissions']['deny'])
 
+    def test_a_process_that_looks_elsewhere_is_refused_instead_of_using_defaults(self):
+        change(self.root,'review_rounds','4')
+        elsewhere=self.temp/'elsewhere'
+        with patch('oh.config.config_home',return_value=elsewhere):
+            with self.assertRaisesRegex(Refused,'Your settings are in .*settings.json, but OH now reads'):load(self.root)
+        moved=self.temp/'moved';moved.mkdir();settings_file().rename(moved/'settings.json')
+        with patch('oh.config.config_home',return_value=moved):
+            self.assertEqual(load(self.root)['review_rounds'],4)  # a moved file is followed
+            with patch('oh.config.config_home',return_value=elsewhere):
+                with self.assertRaisesRegex(Refused,'but this OH process reads'):load(self.root)
+
+    @unittest.skipIf(os.name=='nt','Read-only folders work differently on Windows')
+    def test_a_read_only_settings_folder_never_stops_oh(self):
+        change(self.root,'review_rounds','4');(config_home()/'settings.schema.json').write_text('{}')
+        config_home().chmod(0o555);self.addCleanup(config_home().chmod,0o755)
+        self.assertEqual(load(self.root)['review_rounds'],4)
+
     def test_open_creates_the_file_and_asks_the_system_to_open_it(self):
         with patch('oh.config.launch') as opener:result=config.open_settings(self.root)
         opener.assert_called_once_with(str(settings_file()))
@@ -151,26 +197,41 @@ class ConfigTest(unittest.TestCase):
     def test_backups_carry_your_settings_and_restore_never_overwrites_them(self):
         from .backup import backup,restore
         mine=self.temp/'mine'
-        with patch.dict(os.environ,{'OH_CONFIG_HOME':str(mine)}):
+        with patch('oh.config.config_home',return_value=mine):
             change(self.root,'review_rounds','4')
-            self.assertIn('settings',backup(self.temp/'backup'))
+            (state_home()/'config').mkdir()  # a stray folder never breaks a backup
+            self.assertEqual(backup(self.temp/'backup')['settings'],'user-settings/settings.json')
             settings_file().unlink()
             with patch.dict(os.environ,{'OH_DATA_HOME':str(self.temp/'fresh')}):
                 restore(self.temp/'backup')
                 self.assertEqual(self.read()['projects']['Fixture'],{'review_rounds':4})
-                self.assertFalse((self.temp/'fresh/config').exists())
+                self.assertFalse((self.temp/'fresh/user-settings').exists())
             change(self.root,'review_rounds','5')
             with patch.dict(os.environ,{'OH_DATA_HOME':str(self.temp/'again')}):
                 self.assertIn('Kept your current settings.json',restore(self.temp/'backup')['note'])
             self.assertEqual(load(self.root)['review_rounds'],5)
+        # A backup of a separate data folder carries its settings and their history to where you keep yours.
+        (state_home()/'config').rmdir();(mine/'settings.json').unlink();change(self.root,'review_rounds','6');change(self.root,'review_rounds','7')
+        keep=config_home()/'backups/20000101-000000-settings';keep.mkdir(parents=True);(keep/'settings.json').write_text('{}')
+        backup(self.temp/'inside')
+        home=self.temp/'home'
+        with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'OH_DATA_HOME':str(home/'.local/share/o-harness'),'XDG_CONFIG_HOME':''}):
+            restore(self.temp/'inside')
+            self.assertEqual(self.read()['projects']['Fixture'],{'review_rounds':7})
+            self.assertTrue(list((config_home()/'backups').glob('*-restored-history/20000101-000000-settings/settings.json')))
+            self.assertFalse((state_home()/'config').exists())
 
     def test_an_imported_profile_keeps_only_what_differs_from_your_settings(self):
         from .profiles import export_profile,import_profile
         change(self.root,'review_rounds','4',scope='global');change(self.root,'tasks_per_batch','9')
         exported=self.temp/'profile.json';export_profile(self.root,exported)
         clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
-        import_profile(clone,exported)  # same name on this machine: the section is shared
+        self.assertIn('shared with the project already named Fixture',import_profile(clone,exported)['settings'])
         self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':9})
+        change(self.root,'tasks_per_batch',None)  # an empty section of a registered project is still that project's
+        second=self.temp/'second';subprocess.run(['git','init','-q',str(second)],check=True)
+        with self.assertRaisesRegex(Refused,'already has different settings for Fixture'):import_profile(second,exported)
+        self.assertEqual(self.read()['projects']['Fixture'],{})
         value=json.loads(exported.read_text());value['profile']['name']='Moved'
         (self.temp/'moved.json').write_text(json.dumps(value))
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
@@ -179,7 +240,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(self.read()['projects']['Moved'],{'tasks_per_batch':9,'review_rounds':4})
         value['config']['tasks_per_batch']=3;(self.temp/'clash.json').write_text(json.dumps(value))
         third=self.temp/'third';subprocess.run(['git','init','-q',str(third)],check=True)
-        with self.assertRaisesRegex(Refused,'already has other settings for Moved'):import_profile(third,self.temp/'clash.json')
+        with self.assertRaisesRegex(Refused,'already has different settings for Moved'):import_profile(third,self.temp/'clash.json')
 
     def test_every_approval_names_its_limits(self):
         from .prepared import limits
