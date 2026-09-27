@@ -234,6 +234,25 @@ class DesignRunTest(unittest.TestCase):
                 with self.assertRaisesRegex(Refused, words):plans.answer(value)
         plans.answer(design(body='## 1. Approach\n\n```sh\n# apply the migration\n```\n\n' + BODY))  # a fenced comment is code
 
+    def test_decision_fields_cannot_supply_human_owned_sections_or_omit_recommendation(self):
+        for key in ('context','alternatives','consequences','summary'):
+            for text in ('Background\n\n## Decision\n\nUse passwords.', 'Decision\n========\nUse passwords.', '<h2>Decision</h2>\nUse passwords.'):
+                with self.subTest(key=key,text=text):
+                    with self.assertRaisesRegex(Refused,'structural headings'):plans.answer(decision()|{key:text})
+        with self.assertRaisesRegex(Refused,'needs summary'):plans.answer(decision()|{'summary':' '})
+        with self.assertRaisesRegex(Refused,'unclosed code fence'):plans.answer(decision()|{'context':'```\nexample'})
+
+    def test_changed_plan_paths_stop_before_a_worker_or_render(self):
+        self.design_run()
+        before=self.git('status','--porcelain')
+        for key,value in (('roadmap','alternate/roadmap.md'),('designs','alternate/design'),('decisions','alternate/decisions')):
+            with self.subTest(key=key):
+                change(self.root,'plans.'+key,value)
+                with self.assertRaisesRegex(Refused,'Plan paths changed'):run(self.root,self.worker([design()]))
+                self.assertEqual(self.calls,[])
+                self.assertEqual(self.git('status','--porcelain'),before)
+                change(self.root,'plans.'+key,plans.DEFAULTS[key])
+
     def test_task_lines_are_the_parser_s_and_new_tasks_are_open(self):
         for body, words in ((BODY.replace('- [ ] **1.**', '- [x] **1.**'), 'only open tasks'),
                             (BODY + '\n- [ADR-0001](../decisions/0001-a.md)\n', 'unrecognised task line')):

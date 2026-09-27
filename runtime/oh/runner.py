@@ -300,10 +300,11 @@ def write_plan(root,journal,state,task,work):
 
 def blocked_layout(root,state):
     """Why the plans can't be written where this run started writing them, or None."""
-    from .plans import layout
+    from .plans import layout,layout_snapshot
     try:where=layout(root)
     except Refused as exc:return str(exc)
     if where['location']!=state['plans']['location']:return f"plans.location changed to {where['location']} during this run; set it back or stop the run"
+    if layout_snapshot(where)!=state['plans']:return 'Plan paths changed during this run; restore the original plans settings and paths or stop the run'
     return None
 
 
