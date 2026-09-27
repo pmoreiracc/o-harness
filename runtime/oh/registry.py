@@ -31,6 +31,17 @@ def verified(recorded):
     except (OSError, KeyError, TypeError, ValueError):return False
 
 
+def repository_projects(current):
+    """Registered projects of the Git repository `current` belongs to: those with a registration whose
+    Git common folder is this checkout's, still in place (so no reused folder id can match)."""
+    from .config import registrations
+    def same(recorded):
+        try:return (recorded.get('common_identity') == current['common_identity'] == stamp(recorded['common'])
+                    and recorded['common'] == current['common'])
+        except (OSError, KeyError, TypeError, ValueError):return False
+    return {p for p, found in registrations().items() if any(same(e) for e in found)}
+
+
 def index_path(root):
     return state_home() / 'registry' / 'checkouts' / (digest(str(Path(root).resolve())) + '.json')
 
@@ -41,7 +52,9 @@ def lookup(root):
         raise Refused('Project is not registered. Run oh init once for this checkout.')
     value = read_json(path)
     if value.get('schema_version') != 1 or value.get('identity') != identity(root):
-        raise Refused('Checkout identity changed. For a new checkout at this path, run oh init --name <name> --replace; '
+        from .config import name_of
+        name = name_of(value.get('project', '')) if isinstance(value.get('project'), str) else None
+        raise Refused(f'Checkout identity changed. For a new checkout at this path, run oh init --name "{name or "<name>"}" --replace; '
                       'for a moved one, reattach it. Old grants were not reused.')
     validate_id(value['checkout']); validate_id(value['project'])
     return value
@@ -82,16 +95,18 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
         if not (attach or reattach) and (replace or not path.exists()):
             # A new project needs a free name, checked before anything changes so a refusal changes nothing.
             # A checkout of the Git repository of the project that has the name (a worktree, or one recreated
-            # at an old path) joins that project, as --attach would, with a fresh checkout id and no grants.
-            # Without birth times (Linux), a folder id can be reused, so only a registration still in place counts.
-            from .config import name_of, projects_named, registrations
+            # at an old path, whose replaced registration counts too) joins that project, as --attach would,
+            # with a fresh checkout id and no grants.
+            from .config import name_of, projects_named
             here = str(Path(root).resolve())
             holders = projects_named(name, excluding_root=here)
-            same = {p for p, found in registrations().items() if name_of(p) == name and any(
-                    e.get('common_identity') == current['common_identity'] and e['root'] != here
-                    and (verified(e) or 'birth' in current['common_identity']) for e in found)}
-            if len(same) == 1 and holders <= same and not imported:
-                attach, joined = next(iter(same)), True
+            same = {p for p in repository_projects(current) if name_of(p) == name}
+            match = holders & same if holders else same
+            if len(match) > 1 and not holders:
+                raise Refused(f'Several earlier OH projects of this repository are named {name}; join one with '
+                              f'oh init --name "{name}" --attach <id> (ids: {", ".join(sorted(match))})')
+            if len(match) == 1 and len(holders) <= 1 and not imported:
+                attach, joined = next(iter(match)), True
                 note = f'This checkout belongs to the Git repository of {name}, so it joined that project: its settings and checks apply here.'
             else:free(name, excluding_root=here)
         if replace:
@@ -135,7 +150,7 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
         if attach:
             value = read_json(destination)
             known = [read_json(p) for p in (home / 'registry/checkouts').glob('*.json')]
-            if not any(v.get('project') == attach and v['identity']['common_identity'] == current['common_identity'] for v in known):
+            if not joined and not any(v.get('project') == attach and v['identity']['common_identity'] == current['common_identity'] for v in known):
                 raise Refused('Automatic project attachment is limited to sibling worktrees; clones need separate registration')
         else:
             value = (dict(imported) if imported else {}) | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}

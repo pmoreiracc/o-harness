@@ -109,6 +109,41 @@ class RegistryTests(unittest.TestCase):
         self.assertNotEqual((restored['id'],lookup(self.root)['checkout']),(project,old))
         self.assertEqual(register(sibling,'Fixture',replace=True)['id'],restored['id'])
 
+    def test_a_project_known_only_through_a_worktree_keeps_its_identity(self):
+        from . import registry
+        real=registry.stamp
+        for birth in (True,False):  # the rule never depends on birth times, which Linux lacks
+            with self.subTest(birth=birth),patch('oh.registry.stamp',side_effect=lambda path:real(path) if birth else
+                                                {k:v for k,v in real(path).items() if k!='birth'}):
+                self.known_only_through_a_worktree(f'Geoffrey {birth}')
+
+    def known_only_through_a_worktree(self,name):
+        from .config import describe
+        from .storage import identifier
+        sibling=self.base/name.replace(' ','-');self.git('worktree','add','-qb',sibling.name,str(sibling))
+        project=register(sibling,name,imported={'id':identifier(),'design_profile':'consumer-v1'})['id']
+        self.git('worktree','remove',str(sibling));self.git('worktree','add','-q',str(sibling),sibling.name)
+        again=register(sibling,name,replace=True)  # its own replaced registration shows the repository
+        self.assertEqual((again['id'],again['design_profile']),(project,'consumer-v1'))
+        self.git('worktree','remove',str(sibling))
+        self.assertEqual(describe(self.root)['join'],name)  # the main checkout learns which project it belongs to
+        self.assertEqual(register(self.root,name)['id'],project)
+        clone=self.base/('clone-'+sibling.name);self.git('clone','-q',str(self.root),str(clone),root=self.base)
+        with self.assertRaisesRegex(Refused,'already named'):register(clone,name)  # another repository never joins
+        from .registry import index_path
+        index_path(self.root).unlink()  # the next round starts with an unregistered main checkout
+
+    def test_older_same_name_projects_of_the_repository_never_block_a_worktree(self):
+        from .storage import identifier
+        main=register(self.root,'Fixture')['id']
+        for number in range(2):
+            old=self.base/f'old{number}';self.git('worktree','add','-qb',f'old{number}',str(old))
+            with patch('oh.registry.free'),patch('oh.registry.repository_projects',return_value=set()):
+                register(old,'Fixture',imported={'id':identifier()})  # separate projects, from before names were unique
+            self.git('worktree','remove',str(old))
+        fresh=self.base/'fresh';self.git('worktree','add','-qb','fresh',str(fresh))
+        self.assertEqual(register(fresh,'Fixture')['id'],main)
+
     def test_a_moved_checkout_cannot_come_back_to_a_name_taken_meanwhile(self):
         register(self.root,'Fixture');old=lookup(self.root)
         moved=self.base/'moved';self.root.rename(moved)

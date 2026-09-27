@@ -728,6 +728,14 @@ def launch(path):
     else:subprocess.Popen(['xdg-open', path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def repository_names(root):
+    """Names of the OH projects of an unregistered checkout's Git repository, which oh init can join."""
+    import subprocess
+    from .registry import identity, repository_projects
+    try:return sorted(n for n in map(name_of, repository_projects(identity(root))) if n)
+    except (Refused, OSError, ValueError, subprocess.CalledProcessError):return []
+
+
 def describe(root):
     base, origin = defaults(), {}
     name = project_name(root, required=False)
@@ -740,7 +748,13 @@ def describe(root):
               'effective': effective, 'version': version(),
               'precedence': ['OH defaults', 'settings.json: your settings for every project'] + (
                   [f'settings.json: projects.{name}'] if name else [])}
-    notes = [] if name else ['This checkout is not an OH project yet: register it with oh init --name <name>.']
+    known = [] if name else repository_names(root)
+    notes = [] if name else [
+        f'This checkout is not registered yet. It belongs to the Git repository of the OH project {known[0]}: '
+        f'oh init --name "{known[0]}" joins it.' if len(known) == 1 else
+        f'This checkout is not registered yet. OH projects of its Git repository: {", ".join(known)}; oh init with one of '
+        'those names joins it.' if known else 'This checkout is not an OH project yet: register it with oh init --name <name>.']
+    if len(known) == 1:result['join'] = known[0]
     if name:
         result['checks'] = project_checks(root, data)
         if not result['checks']:notes.append(f'{name} has no checks yet: add them with oh config set checks \'<JSON list>\'')

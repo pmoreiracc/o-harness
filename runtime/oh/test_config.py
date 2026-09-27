@@ -173,7 +173,9 @@ class ConfigTest(unittest.TestCase):
         change(self.root,'review_rounds','4',scope='global');settings_file().rename(self.temp/'moved.json')
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
         from .cli import main
+        from .registry import index_path
         with self.assertRaises(SystemExit):main(['--root',str(other),'init','--name','Other'])
+        self.assertFalse(index_path(other).exists())  # refused before registering anything
         with self.assertRaisesRegex(Refused,'is missing'):change(self.root,'review_rounds',None,scope='global')
         self.assertFalse(settings_file().exists())
         with patch('oh.config.launch'):config.open_settings(self.root)

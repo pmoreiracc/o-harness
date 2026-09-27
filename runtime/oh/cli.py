@@ -114,7 +114,8 @@ def main(argv=None):
             result=rename(root,args.name)
         elif args.command=='init':
             from .registry import register
-            from .config import ensure_project
+            from .config import ensure_project,read_file
+            read_file()  # a settings problem stops init before anything is registered
             registered=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace);settings=ensure_project(root)
             notes=[n for n in (registered.get('note'),settings.get('note')) if n]
             result=registered|settings|({'note':' '.join(notes)} if notes else {})
