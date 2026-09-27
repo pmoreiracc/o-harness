@@ -179,7 +179,7 @@ class DesignRunTest(unittest.TestCase):
         self.design_run();run(self.root, self.worker([design()]))
         with self.assertRaisesRegex(Refused, "'auth' already has design doc 0001"):plans.design_manifest(self.root, 'auth')
         change(self.root, 'plans.location', 'private')
-        with self.assertRaisesRegex(Refused, 'private plans'):plans.design_manifest(self.root, 'ledger')
+        with self.assertRaisesRegex(Refused, 'Start the roadmap first'):plans.design_manifest(self.root, 'ledger')
         change(self.root, 'plans.location', 'ask')
         with self.assertRaisesRegex(Refused, 'Choose where plans live'):plans.design_manifest(self.root, 'ledger')
 

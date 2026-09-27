@@ -16,19 +16,29 @@ starts with `/oh-propose`; never pick one yourself.
 Run `--root <checkout> plans path`. If it says to choose where plans live, ask the user once:
 in the repository (recommended: the design is reviewed and approved through a pull request)
 or private (OH's folder, nothing in the repository). Save the answer with
-`config set plans.location repo` or `private`. `/oh-design` needs `repo` for now.
+`config set plans.location repo` or `private`. Private plans default to `~/oh-plans/<project name>/`.
+Show the exact folder from `plans path`; `plans.private_folder` changes its parent.
 
 Run `--root <checkout> run`. It verifies the native human invocation and starts the design
-(on a new `design/<slug>` branch; the checkout must start on `main` or `master`). OH reads the roadmap row, a fresh worker writes the prose, and
+(repository plans use a new `design/<slug>` branch from `main` or `master`; private plans need no branch). OH reads the roadmap row, a fresh worker writes the prose, and
 OH numbers the doc, links it from the row, checks its task list, has it reviewed
-independently and commits the reviewed files. Never write or edit plan files yourself, and
+independently. Repository plans are committed; private plans wait for your approval. Never write or edit plan files yourself, and
 never run your own worker or review loop. If `run` refuses, relay its reason; it names the fix.
 
-At the end, present the returned `plan`:
+If the status is `approval_checkpoint`, show the private plan path, task count and summary,
+then **approve** / **refine: <what to change>** / **reconsider**. Approval binds the reviewed
+file contents; editing an approved design invalidates that approval. Run `run` after the
+human choice. An edited existing private design goes directly to review, preserving the
+person's text. A proposed decision remains undecided after approval of the document.
+For recovery checkpoints, show the returned reason and choices: **retry** / **stop** for
+`needs_attention`, **grant review** / **stop** for `review_checkpoint`, and the exact retained
+finding dispositions or fixes for `findings_checkpoint`. Never publish incomplete work.
+
+At completion, present the returned `plan`:
 - a design: its path, task count and `summary`. Say that approving the design means merging
-  its pull request.
+  its pull request for repository plans; private approval is bound to the file contents.
 - a decision record: the question, the recommendation in `summary`, and that the design
   waits for a human decision in that record.
 
-Show **pr** / **stop**. After the user types **pr**, push the branch and open one pull
+Show **pr** / **stop** only when repository files were committed. Private plans offer **stop**, without a PR. After the user types **pr**, push the branch and open one pull
 request whose body ends with the output of `pr-summary`. Never merge it.

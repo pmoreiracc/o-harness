@@ -59,6 +59,41 @@ class PrivatePlansTest(unittest.TestCase):
         self.assertFalse((self.where['designs']/'0001-auth.md').exists())
         self.assertEqual(self.git('branch','--show-current'),'main')
 
+    def test_private_paths_refuse_escaping_names_and_checkout_storage(self):
+        for name in ('../escape','a/b','a\\b','..','CON','name.'):
+            with self.assertRaisesRegex(Refused,'portable folder name'):plans.private_base(self.temp.name,name)
+        change(self.root,'plans.private_folder',str(self.root/'private'))
+        with self.assertRaisesRegex(Refused,'outside the project'):plans.layout(self.root)
+
+    def test_rename_retains_private_documents_even_if_new_folder_exists(self):
+        from .registry import rename
+        before=self.where['roadmap'].read_bytes()
+        (self.where['base'].parent/'Renamed').mkdir()
+        rename(self.root,'Renamed')
+        self.assertEqual(plans.layout(self.root)['roadmap'],self.where['roadmap'])
+        self.assertEqual(self.where['roadmap'].read_bytes(),before)
+
+    def test_replacement_keeps_private_documents_without_old_approval_authority(self):
+        from .registry import register,lookup
+        old=lookup(self.root);before=self.where['roadmap'].read_bytes()
+        (self.root/'.git').rename(Path(self.temp.name)/'old-git')
+        self.git('init','-q')
+        new=register(self.root,'Replacement',replace=True)
+        change(self.root,'plans.location','private')
+        self.assertNotEqual(lookup(self.root)['checkout'],old['checkout'])
+        self.assertNotEqual(new['id'],old['project'])
+        self.assertEqual(plans.layout(self.root)['roadmap'],self.where['roadmap'])
+        self.assertEqual(self.where['roadmap'].read_bytes(),before)
+        self.assertFalse(plans.approvals_file(self.root).exists())
+
+    def test_profile_export_explicitly_excludes_private_documents(self):
+        from .profiles import export_profile
+        change(self.root,'checks','[]')
+        target=Path(self.temp.name)/'portable.json'
+        result=export_profile(self.root,target)
+        self.assertIn('private plan documents and their approvals are excluded',result['contents'])
+        self.assertNotIn('Sign-in',target.read_text())
+
     def test_approval_refuses_a_file_changed_after_review(self):
         self.design_run();run(self.root,self.worker([design()]))
         path=self.where['designs']/'0001-auth.md';path.write_text(path.read_text()+'\nHuman edit\n')
@@ -66,6 +101,44 @@ class PrivatePlansTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'changed after'):run(self.root,self.worker([]))
         self.assertIn('Human edit',path.read_text())
         self.assertNotEqual(plans.approval(self.root,self.where,'0001'),'approved')
+
+    def test_private_scope_edit_stops_before_the_worker(self):
+        self.design_run()
+        self.where['roadmap'].write_text(self.where['roadmap'].read_text().replace('Sign-in','Different scope'))
+        with self.assertRaisesRegex(Refused,'Private plan files changed'):run(self.root,self.worker([design()]))
+        self.assertEqual(self.calls,[])
+
+    def test_private_scope_deletion_stops_before_the_worker(self):
+        self.design_run();self.where['roadmap'].unlink()
+        with self.assertRaisesRegex(Refused,'Private plan files changed'):run(self.root,self.worker([design()]))
+        self.assertEqual(self.calls,[])
+
+    def test_edited_design_retries_failed_review_without_rewriting_human_prose(self):
+        self.design_run();run(self.root,self.worker([design()]));self.say('approve');run(self.root,self.worker([]))
+        path=self.where['designs']/'0001-auth.md';path.write_text(path.read_text()+'\nA human rationale.\n')
+        before=path.read_bytes();self.calls=[]
+        self.design_run(turn='2')
+        normal=self.worker([]);failed=[False]
+        def retry(*args,**kwargs):
+            if not failed[0]:
+                failed[0]=True
+                self.assertEqual(args[4],'review')
+                return {'failed':True,'returncode':1,'text':'unavailable','structured':None,'duration_ms':1,'usage_observed':False}
+            return normal(*args,**kwargs)
+        self.assertEqual(run(self.root,retry)['status'],'approval_checkpoint')
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual([c[0] for c in self.calls],['review'])
+        self.say('approve');self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
+        self.assertEqual(plans.approval(self.root,self.where,'0001'),'approved')
+
+    def test_private_analysis_cannot_mutate_other_planning_context(self):
+        self.design_run();normal=self.worker([design()])
+        def mutate(*args,**kwargs):
+            result=normal(*args,**kwargs)
+            self.where['roadmap'].write_text(self.where['roadmap'].read_text()+'\nMutated context\n')
+            return result
+        self.assertEqual(run(self.root,mutate)['status'],'needs_attention')
+        self.assertEqual(load_run(self.root)[1]['attempts'][-1]['outcome'],'analysis_mutated_tree')
 
     def test_private_reviewer_cannot_mutate_the_plan_and_approve_it(self):
         self.design_run();normal=self.worker([design()])

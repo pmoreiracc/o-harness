@@ -8,6 +8,7 @@ from datetime import date
 import os
 from pathlib import Path
 import re
+import threading
 from .design_parse import US, design_file, lines, link_prefix, plan, roadmap
 from .storage import Refused
 
@@ -33,15 +34,23 @@ def layout(root, location=None):
     if location == 'ask':
         raise Refused('Choose where plans live first: oh config set plans.location repo (committed in the repository) '
                       'or private (OH\'s folder, nothing in the repository)')
-    base = Path(root) if location == 'repo' else private_base(settings['private_folder'], project(root)['name'])
+    owner = project(root)
+    base = Path(root) if location == 'repo' else private_base(settings['private_folder'], owner.get('private_plans_name', owner['name']))
+    if location == 'private':
+        if owner.get('private_plans_path'):base = Path(owner['private_plans_path'])
+        legacy = state_home() / 'projects' / owner.get('private_plans_legacy', owner['id']) / 'plans'
+        if legacy.is_dir() and base != legacy:
+            if base.exists():raise Refused(f'Private plans exist at both {legacy} and {base}; reconcile them before planning')
+            base = legacy
+        if base.resolve().is_relative_to(Path(root).resolve()):raise Refused('Private plans must live outside the project checkout')
     where = {'location': location, 'base': base, 'roadmap': base / settings['roadmap'],
              'designs': base / settings['designs'], 'decisions': base / settings['decisions']}
-    if location == 'repo':
+    if location in ('repo', 'private'):
         for key in ('roadmap', 'designs', 'decisions'):
             path = where[key]
             for part in (path, *path.parents):
+                if part.is_symlink():raise Refused(f'Plan paths cannot use symlinks: {part}')
                 if part == base:break
-                if part.is_symlink():raise Refused(f'Repository plan paths cannot use symlinks: {part}')
             if not path.resolve().is_relative_to(base.resolve()):
                 raise Refused(f'Repository plan paths must stay inside the checkout: {path}')
     def folded(path):return Path(os.path.realpath(path).casefold())  # case-insensitive file systems share folders
@@ -56,6 +65,9 @@ def layout(root, location=None):
 
 def private_base(folder, name):
     """<plans.private_folder>/<project name>: private plans where a person can open and edit them."""
+    if (not name or name in ('.','..') or name.rstrip(' .') != name or re.search(r'[\\/:*?"<>|\x00-\x1f]', name)
+            or re.fullmatch(r'(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?',name)):
+        raise Refused('Private plans need a project name that is a portable folder name; rename the project first')
     return Path(os.path.expanduser(folder)).resolve() / name
 
 
@@ -435,10 +447,43 @@ def blocked(action):
     except Refused as exc:raise Blocked(str(exc)) from None
 
 
+_editing = threading.local()
+
+
+@contextlib.contextmanager
 def editing(root):
     """One plan edit at a time per project, whichever checkout it runs in."""
     from .storage import lock, project, state_home
-    return lock(state_home() / 'projects' / project(root)['id'] / 'plans.lock')
+    path = state_home() / 'projects' / project(root)['id'] / 'plans.lock'
+    held = getattr(_editing, 'held', set())
+    if path in held:
+        yield
+        return
+    with lock(path):
+        _editing.held = held
+        held.add(path)
+        try:yield
+        finally:held.remove(path)
+
+
+def private_inputs(where):
+    """Content that defines private planning scope; Git cannot bind these files."""
+    if where['location'] != 'private':return {}
+    paths = [Path(where['roadmap'])]
+    for key in ('designs','decisions'):
+        paths.extend(Path(where[key]).rglob('*.md'))
+    if any(p.is_symlink() for p in paths):raise Refused('Private plan documents cannot use symlinks')
+    return {str(p): digest_of(p) for p in paths if p.is_file()}
+
+
+def private_drift(root,state):
+    if state['plans']['location'] != 'private':return False
+    original=state.get('private_inputs',{})
+    rendered=(state.get('rendered') or {}).get('files',{})
+    approved=(state.get('private_approval') or {}).get('after',{})
+    actual=private_inputs(layout(root))
+    keys=set(original)|set(rendered)|set(approved)|set(actual)
+    return any(actual.get(k) not in [original.get(k)]+[d[k] for d in (rendered,approved) if k in d] for k in keys)
 
 
 def initiative(root, where, slug, named=False):
@@ -485,7 +530,7 @@ def design_manifest(root, slug):
                        "person asks; keep what they wrote otherwise." if existing else ''))
     return ({'workflow': 'design', 'tasks': [{'id': 'design', 'title': f'Design {slug}', 'instructions': instructions,
                                               'transition': {'profile': 'plans', 'slug': slug} | ({'existing': existing} if existing else {})}]},
-            {'workflow': 'design', 'plans': layout_snapshot(where), 'slug': slug})
+            {'workflow': 'design', 'plans': layout_snapshot(where), 'slug': slug, 'private_inputs': private_inputs(where)})
 
 
 def branch_for(root, slug, run, kind='design'):
@@ -569,6 +614,10 @@ def snapshot(paths):
 
 
 def undo(root, previous, check_only=False):
+    with editing(root):return _undo(root,previous,check_only)
+
+
+def _undo(root, previous, check_only=False):
     """Put back what this run's last render wrote, so a repair starts from the reviewed parent. Safe to repeat.
     It never discards a change it can't prove OH made: a file edited after OH wrote it, or a file OH was writing
     when it was interrupted, stops the run for a person to look at. check_only only asks whether undo could run.
@@ -646,7 +695,8 @@ def render(root, slug, value, record, existing=None):
         if not private and (skipped := ignored(root, intent)):
             raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
         before = snapshot(paths) if private else None
-        record(intent, before)
+        if private:record(intent, before)
+        else:record(intent)
         status = 'draft' if private else 'approved'
         with all_or_nothing(*paths):
             if value['kind'] == 'design':
@@ -686,7 +736,7 @@ def propose_manifest(root, idea):
         except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
     return ({'workflow': 'propose', 'tasks': [{'id': 'propose', 'title': 'Propose: ' + idea.splitlines()[0][:60],
                                                'instructions': instructions, 'transition': {'profile': 'intake'}}]},
-            {'workflow': 'propose', 'plans': layout_snapshot(where)})
+            {'workflow': 'propose', 'plans': layout_snapshot(where), 'private_inputs': private_inputs(where)})
 
 
 def proposal(value):
@@ -786,7 +836,8 @@ def render_proposal(root, value, record, move):
             if (skipped := ignored(root, intent)):raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
             blocked(lambda: move(topic))
         before = snapshot(paths) if private else None
-        record(intent, before)
+        if private:record(intent, before)
+        else:record(intent)
         lines = []
         with all_or_nothing(*paths):
             if value['route'] == 'roadmap':
@@ -888,6 +939,7 @@ def finish_private(root, state, profile, journal, files):
     task added to an approved design keeps that design approved with the task in it."""
     import base64,hashlib
     where=layout(root);rendered=state['rendered'];intent=state.get('private_approval')
+    if private_drift(root,state):raise Refused('Private plan context changed after review; preserve the edits and stop this run')
     if not intent:
         if current_files(root,files)!=files:raise Refused('The plan files changed after their review; stop this run, then plan again')
         number=rendered['number'] if profile=='plans' and rendered.get('kind')=='design' else rendered.get('design') if profile=='intake' and rendered.get('route')=='task' else None

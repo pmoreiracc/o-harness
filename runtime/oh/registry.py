@@ -127,7 +127,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             admin=Path(current['admin'])
             if any((admin/name).exists() for name in ('oh-active-run.json','oh-design-run.json')):
                 raise Refused('An old run binding exists. Finish or stop it with its retained runtime and archive its binding before importing this checkout.')
-        note, joined = None, False
+        note, joined, preserved_plans = None, False, {}
         if not (attach or reattach) and (replace or not path.exists()):
             # A new project needs a free name, checked before anything changes so a refusal changes nothing.
             # A checkout of the Git repository of the project that has the name (a worktree, or one recreated
@@ -147,6 +147,15 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             if not path.exists():raise Refused('No prior checkout registration exists to replace')
             previous=read_json(path)
             if previous.get('identity')==current:raise Refused('This checkout has not been replaced; its existing registration remains authoritative')
+            old_profile=read_json(home/'projects'/previous['project']/'profile.json')
+            preserved_plans={'private_plans_name':old_profile.get('private_plans_name',old_profile['name']),
+                             'private_plans_legacy':old_profile.get('private_plans_legacy',previous['project'])}
+            from .config import load_global,layers,read_file,merge
+            from .plans import private_base
+            old_settings=merge(load_global(),{k:v for k,v in layers(read_file())[1].get(old_profile['name'],{}).items() if k!='checks'})
+            legacy=home/'projects'/preserved_plans['private_plans_legacy']/'plans'
+            old_folder=Path(old_profile['private_plans_path']) if old_profile.get('private_plans_path') else legacy if legacy.is_dir() else private_base(old_settings['plans']['private_folder'],preserved_plans['private_plans_name'])
+            if old_folder.is_dir():preserved_plans['private_plans_path']=str(old_folder)
             archive=home/'registry/retired'/(digest(previous)+'.json')
             if not archive.exists():atomic_json(archive,previous,immutable=True)
             path.unlink()
@@ -186,7 +195,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             if not joined and not any(v.get('project') == attach and v['identity']['common_identity'] == current['common_identity'] for v in known):
                 raise Refused('Automatic project attachment is limited to sibling worktrees; clones need separate registration')
         else:
-            value = (dict(imported) if imported else {}) | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
+            value = (dict(imported) if imported else {}) | preserved_plans | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
             if destination.exists() and read_json(destination) != value:
                 raise Refused('Existing external profile differs; preserve it and resolve the import explicitly')
             if not destination.exists():
@@ -230,21 +239,15 @@ def rename(root, name):
             projects[name] = theirs or mine
             outcome['section'] = (f'projects.{old} stays with the other project named {old}; projects.{name} starts empty'
                                   if shared else f'projects.{old} is now projects.{name}')
-            atomic_json(path, value | {'name': name})  # under the settings lock, so no change lands in between
+            from .plans import private_base
+            folder_name=value.get('private_plans_name',old)
+            from .config import load
+            try:
+                if not private_base(load(root)['plans']['private_folder'],folder_name).is_dir():folder_name=name
+            except Refused:folder_name=name  # renaming can repair a nonportable old name
+            atomic_json(path, value | {'name': name, 'private_plans_name': folder_name})
         try:edit(root, 'global', move)
         except BaseException:
             if read_json(path).get('name') == name:atomic_json(path, value)  # the settings weren't written
             raise
-    return profile(root) | outcome | move_private_plans(root, old, name)
-
-
-def move_private_plans(root, old, name):
-    """Private plans live in a folder named after the project, so they follow a rename."""
-    from .config import load
-    from .plans import private_base
-    folder = load(root)['plans']['private_folder']
-    source, target = private_base(folder, old), private_base(folder, name)
-    if not source.is_dir():return {}
-    if target.exists():return {'plans': f'Your private plans stay in {source}: {target} already exists. Merge them yourself.'}
-    source.rename(target)
-    return {'plans': f'Your private plans moved to {target}'}
+    return profile(root) | outcome | {'plans': 'Private documents keep their existing folder; oh plans path shows it.'}
