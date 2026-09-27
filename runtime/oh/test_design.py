@@ -1,5 +1,6 @@
 import json
 import unittest
+import unittest.mock
 from pathlib import Path
 from . import plans
 from . import test_workflow as fixtures
@@ -114,6 +115,7 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(result['plan']['kind'], 'decision')
         record = self.root / 'docs/decisions/0001-passkeys-or-passwords.md'
         self.assertIn('status: proposed', record.read_text());self.assertIn('_Not decided yet.', record.read_text())
+        self.assertIn('## Recommendation\n\nRecommend passkeys.', record.read_text())
         self.assertIn('[0001](./0001-passkeys-or-passwords.md)', (self.root / 'docs/decisions/README.md').read_text())
         self.assertFalse((self.root / 'docs/design').exists())
         self.assertIn('| `auth` | Sign-in with passkeys | — | — |', self.where['roadmap'].read_text())
@@ -147,10 +149,13 @@ class DesignRunTest(unittest.TestCase):
         doc.write_text(doc.read_text().replace('A human note.\n', ''))
         for _ in range(2):plans.undo(self.root, written)  # safe to repeat
         self.assertFalse(doc.exists());self.assertEqual(self.git('status', '--porcelain'), '')
-        # A crash between recording the intent and saving the hashes still undoes the write.
+        # A crash between recording the intent and saving the hashes leaves files OH can't prove it wrote: a person decides.
         plans.render(self.root, 'auth', design(), lambda intent: None)
-        plans.undo(self.root, {'intent': intents[0]})
-        self.assertEqual(self.git('status', '--porcelain'), '')
+        with self.assertRaisesRegex(plans.Blocked, 'OH was interrupted while writing docs/design/0001-auth.md'):
+            plans.undo(self.root, {'intent': intents[0]})
+        self.assertTrue(doc.exists())
+        self.git('checkout', '--', 'docs/roadmap.md');doc.unlink()
+        plans.undo(self.root, {'intent': intents[0]})  # nothing left to undo
 
     def test_a_design_commit_holds_only_its_plan_files(self):
         (self.root / 'notes.txt').write_text('unrelated')
@@ -173,9 +178,95 @@ class DesignRunTest(unittest.TestCase):
     def test_answers_carry_prose_only(self):
         for value, words in ((design() | {'extra': ''}, 'JSON object'), (design(title='Two\nlines'), 'one non-empty line'),
                              (design(body='# 0009 — Mine\n\n' + BODY), 'use ## sections'), (decision() | {'context': ' '}, 'needs context'),
-                             (design() | {'kind': 'essay'}, "kind must be")):
+                             (design() | {'kind': 'essay'}, "kind must be"), (design(title='T' * 151), 'longer than 150'),
+                             (design(summary='S' * 1001), 'longer than 1000'), (decision() | {'title': 'A | B'}, 'cannot contain')):
             with self.subTest(words):
                 with self.assertRaisesRegex(Refused, words):plans.answer(value)
+        plans.answer(design(body='## 1. Approach\n\n```sh\n# apply the migration\n```\n\n' + BODY))  # a fenced comment is code
+
+    def test_task_lines_are_the_parser_s_and_new_tasks_are_open(self):
+        for body, words in ((BODY.replace('- [ ] **1.**', '- [x] **1.**'), 'only open tasks'),
+                            (BODY + '\n- [ADR-0001](../decisions/0001-a.md)\n', 'unrecognised task line')):
+            with self.subTest(words):
+                with self.assertRaisesRegex(Refused, words):plans.render(self.root, 'auth', design(body=body), lambda intent: None)
+                self.assertEqual(self.git('status', '--porcelain'), '')
+
+    def test_a_manifest_file_never_starts_a_plan_run(self):
+        from .prepared import directory
+        from .storage import atomic_json, checkout_id, digest, project
+        from datetime import datetime, timedelta, timezone
+        manifest = {'workflow': 'design', 'plans': {'location': 'repo'}, 'slug': 'auth',
+                    'tasks': [{'id': 'd', 'title': 'D', 'instructions': 'x', 'transition': {'profile': 'plans', 'slug': 'auth'}}]}
+        value = {'created': (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(), 'project': project(self.root)['id'],
+                 'checkout': checkout_id(self.root), 'base': self.git('rev-parse', 'HEAD'), 'kind': 'tasks', 'manifest': manifest}
+        key = digest(value);atomic_json(directory(self.root) / (key + '.json'), value)
+        event = self.event('9', f'$o-harness:oh-deliver request:{key}') | {'at': datetime.now(timezone.utc).isoformat()}
+        with self.assertRaisesRegex(Refused, 'only tasks and checks'):host_hook(self.root, 'codex', {'prompt': event['prompt']}, verified=event)
+        from .workflow import start
+        for bad in (manifest, {'tasks': manifest['tasks']}):
+            with self.assertRaisesRegex(Refused, 'cannot choose plan settings'):start(self.root, bad, self.event('8'))
+        from .workflow import active_file
+        self.assertFalse(active_file(self.root).exists())
+
+    def test_a_refused_command_never_blocks_the_next_one(self):
+        from .authority import materialize, pending_file, stage
+        payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
+        with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
+                unittest.mock.patch('oh.transcripts.register'):
+            stage(self.root, 'codex', payload('1', '/oh-design login'))
+            with self.assertRaisesRegex(Refused, "no initiative 'login'"):materialize(self.root)
+            self.assertFalse(pending_file(self.root).exists())
+            stage(self.root, 'codex', payload('1', '/oh-design login'))  # the same turn again gives the same answer
+            with self.assertRaisesRegex(Refused, "no initiative 'login'"):materialize(self.root)
+            stage(self.root, 'codex', payload('2', '/oh-design auth'))
+            self.assertEqual(materialize(self.root)['status'], 'running')
+
+    def interrupt_review(self):
+        """Run until the first review starts, then stop OH the way a crash would."""
+        self.design_run()
+        def invoke(host, root, profile, prompt, role, directory, context, **kwargs):
+            if role == 'review':raise KeyboardInterrupt
+            return self.worker([design()])(host, root, profile, prompt, role, directory, context, **kwargs)
+        with self.assertRaises(KeyboardInterrupt):run(self.root, invoke)
+        return len(self.calls)
+
+    def test_problems_the_worker_cannot_fix_stop_the_run_before_a_worker_is_paid(self):
+        calls = self.interrupt_review()
+        (self.root / 'notes.txt').write_text('a note')
+        with self.assertRaisesRegex(plans.Blocked, r"changes OH didn't write \(notes.txt\)"):run(self.root, self.worker([design()]))
+        self.assertEqual(len(self.calls), calls)
+        (self.root / 'notes.txt').unlink()
+        self.assertEqual(run(self.root, self.worker([design()]))['status'], 'completed')
+
+    def test_a_human_edit_stops_the_run_before_a_worker_is_paid(self):
+        calls = self.interrupt_review()
+        doc = self.root / 'docs/design/0001-auth.md';doc.write_text(doc.read_text() + 'A human note.\n')
+        with self.assertRaisesRegex(plans.Blocked, 'changed after OH wrote it'):run(self.root, self.worker([design()]))
+        self.assertEqual(len(self.calls), calls);self.assertIn('A human note.', doc.read_text())
+
+    def test_checks_that_leave_files_stop_the_run(self):
+        import sys
+        fixtures.configure(self.root, checks=[{'name': 'coverage', 'command': [sys.executable, '-c', 'open("coverage.xml", "w").write("x")']}])
+        self.design_run()
+        with self.assertRaisesRegex(plans.Blocked, r"checks left files OH didn't write \(coverage.xml\)"):run(self.root, self.worker([design()]))
+
+    def test_a_broken_roadmap_is_refused_before_the_design_starts(self):
+        text = self.where['roadmap'].read_text().replace('| `auth` | Sign-in with passkeys | — |', '| `auth` | Sign-in with passkeys | `ledger` |')
+        self.where['roadmap'].write_text(text)
+        with self.assertRaisesRegex(Refused, '(?s)Fix the roadmap first.*cycle'):plans.design_manifest(self.root, 'auth')
+
+    def test_retry_gives_a_design_worker_a_fresh_attempt(self):
+        self.design_run()
+        self.assertEqual(run(self.root, self.worker([None, None]))['status'], 'needs_attention')
+        choose(self.root, 'retry', self.event('2', 'retry'))
+        calls = len(self.calls)
+        self.assertEqual(run(self.root, self.worker([design()]))['status'], 'completed')
+        self.assertEqual([c[0] for c in self.calls[calls:]], ['analysis', 'review'])
+
+    def test_a_branch_named_design_does_not_stop_a_design(self):
+        self.git('branch', 'design')
+        self.design_run()
+        self.assertEqual(self.git('branch', '--show-current'), 'design-auth')
 
 
 if __name__ == '__main__':

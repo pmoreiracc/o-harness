@@ -85,10 +85,19 @@ def materialize(root):
         source=digest({k:event[k] for k in ('host','session','turn','prompt')})
         from .storage import project
         used=state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')
-        if used.exists():path.unlink();return read_json(used)['result']
+        if used.exists():
+            path.unlink();record=read_json(used)
+            if 'refused' in record:raise Refused(record['refused'])
+            return record['result']
         from .cli import host_hook
-        result=host_hook(root,locator['host'],locator['payload'],verified=event)
-        if result is None:raise Refused('This input is not a supported native OH transition')
+        try:
+            result=host_hook(root,locator['host'],locator['payload'],verified=event)
+            if result is None:raise Refused('This input is not a supported native OH transition')
+        except Refused as exc:
+            # The human's turn was verified and answered with this refusal: it is spent, so the next typed command
+            # isn't blocked behind it. Replaying the same turn gives the same refusal.
+            atomic_json(used,{'source':event,'refused':str(exc)},immutable=True);path.unlink()
+            raise
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
         from .workflow import active_file,load_run

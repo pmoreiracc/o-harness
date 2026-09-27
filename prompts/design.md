@@ -13,7 +13,7 @@ will change.
 ## First: is a decision owed?
 
 Ask one question: would an unanswered question change the approach? If it would, don't
-write the design. Return `kind` "decision": `title` is the question in one line, then
+write the design. Return `kind` "decision": `title` is the question in one line (no `|`), then
 `context`, `alternatives` (each with its effects) and `consequences`. Put your
 recommendation and why in `summary`. The record's Decision stays empty for a human.
 
@@ -49,11 +49,17 @@ the title, in numbered `## N. <Section>` headings, no `#` heading:
 
   - Tasks sit under `### <Name> track` headings; the name is one word.
   - Each task starts a line with exactly `- [ ] **N.** `; numbers are unique in the doc.
+    Every task is open (`- [ ]`); OH ticks tasks as they are delivered.
   - Dependencies are written as `Depends on task N.` or `Depends on tasks N, M.`
   - A task waiting on an Open question says `*Blocked on §N.*`, N being that section.
   - Indent a task's extra lines; a blank line followed by unindented text ends the task.
   - One task is one reviewed commit and says what to read to build it. Aim for six to
     twelve tasks; thirty means the roadmap row is really two initiatives.
 
-`summary` tells the person approving what the design decides, in two or three sentences.
-Fields your kind doesn't use are empty strings.
+OH's parser reads every line, code blocks included. So only task lines may start with
+`- [` (put links inside sentences, not at the start of a list item), and code blocks must not
+contain lines starting with `##` or `- [`. Other code, `#` comments included, is fine.
+
+`summary` tells the person approving what the design decides, in two or three sentences
+(at most 1000 characters); for a decision it is your recommendation, which OH writes into the
+record. A `title` has at most 150 characters. Fields your kind doesn't use are empty strings.

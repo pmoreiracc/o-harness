@@ -212,6 +212,14 @@ def _run(root,invoke):
             if not reusable:
                 parent=state['summaries'][-1].get('commit',state['base']) if state['summaries'] else state['base']
                 if git(root,'rev-parse','HEAD')!=parent:raise Refused('HEAD changed outside the runner; restore the recorded task parent')
+                if designing(task):
+                    # Refuse before paying for a worker whose plan OH could not write: a human edit to the last render,
+                    # or changes in the checkout that OH didn't make.
+                    from .plans import Blocked,changes,undo
+                    rendered=reduce(journal.records()).get('rendered') or {}
+                    undo(root,rendered,check_only=True)
+                    extra=[p for p in changes(root) if p not in rendered.get('intent',[])]
+                    if extra:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(extra[:5])}); a design commit holds only its plan files")
                 work=attempt(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
                 if work['outcome']!='implemented':continue
             apply_pending(root)
@@ -236,6 +244,11 @@ def _run(root,invoke):
             best_effort('phase.finished',state['project'],state['id'],task_id,phase='verification',
                         duration_ms=sum(r['duration_ms'] for r in check_results if not r['reused']),
                         reused=sum(r['reused'] for r in check_results),checks=len(check_results))
+            if designing(task):
+                from .plans import Blocked,changes
+                extra=[p for p in changes(root) if p not in reduce(journal.records())['rendered']['intent']]
+                if extra:raise Blocked(f"The checks left files OH didn't write ({', '.join(extra[:5])}); a design commit holds only "
+                                       'its plan files. Make the checks clean up or have Git ignore those files, then run OH again')
             if any(r['returncode'] for r in check_results):
                 journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
                     'summary':json.dumps(check_results)[-state['config']['context']['result_chars']:]})
@@ -256,13 +269,14 @@ def _run(root,invoke):
 def write_plan(root,journal,state,task,work):
     """OH writes the worker's prose into the plans. A problem with the prose goes back to the worker as feedback;
     a changed checkout or setting stops the run with its reason."""
-    from .plans import render,undo
+    from .plans import Blocked,render,undo
     from .storage import read_json
     value=read_json(Path(work['evidence'])/'result.json').get('structured')
     previous=reduce(journal.records()).get('rendered')
     undo(root,previous)  # refuses to discard a human edit: that stops the run, it isn't the worker's to fix
     try:
         plan=render(root,state['slug'],value,lambda intent:journal.append('subject.preparing',{'attempt':work['id'],'intent':intent}))
+    except Blocked:raise
     except Refused as exc:
         journal.append('verification.failed',{'attempt':work['id'],'task':task['id'],
             'summary':f'OH could not write the plan from this answer: {exc}'[-state['config']['context']['result_chars']:]})
