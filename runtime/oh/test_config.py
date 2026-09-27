@@ -298,7 +298,7 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(load(self.root)['review_rounds'],5)
         # A backup of a separate data folder carries its settings and their history to where you keep yours.
         (state_home()/'config').rmdir();(mine/'settings.json').unlink()
-        with self.assertRaisesRegex(Refused,'mine/settings.json is missing'):load(self.root)
+        with self.assertRaisesRegex(Refused,'settings.json is missing'):load(self.root)
         change(self.root,'review_rounds','6');change(self.root,'review_rounds','7')
         keep=config_home()/'backups/20000101-000000-settings';keep.mkdir(parents=True);(keep/'settings.json').write_text('{}')
         backup(self.temp/'inside')

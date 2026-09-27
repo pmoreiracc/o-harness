@@ -102,8 +102,10 @@ class RegistryTests(unittest.TestCase):
         old=lookup(self.root)['checkout']
         self.assertEqual(register(sibling,'Fixture',replace=True)['id'],project)  # same project, fresh checkout, no grants
         # A repository restored from a copy: every registration is stale, so the name is free again.
-        import shutil
-        copy=self.base/'copy';shutil.copytree(self.root,copy,symlinks=True);shutil.rmtree(self.root);copy.rename(self.root)
+        import shutil,stat
+        copy=self.base/'copy';shutil.copytree(self.root,copy,symlinks=True)
+        shutil.rmtree(self.root,onexc=lambda remove,path,_:(os.chmod(path,stat.S_IWRITE),remove(path)))  # Git's read-only files, on Windows
+        copy.rename(self.root)
         self.git('worktree','repair',str(sibling))
         restored=register(self.root,'Fixture',replace=True)
         self.assertNotEqual((restored['id'],lookup(self.root)['checkout']),(project,old))
@@ -120,18 +122,19 @@ class RegistryTests(unittest.TestCase):
     def known_only_through_a_worktree(self,name):
         from .config import describe
         from .storage import identifier
-        sibling=self.base/name.replace(' ','-');self.git('worktree','add','-qb',sibling.name,str(sibling))
+        main=self.base/('repo-'+name.replace(' ','-'))  # a repository of its own, so rounds never see each other
+        self.git('init','-q',str(main),root=self.base)
+        self.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-q','--allow-empty','-m','initial',root=main)
+        sibling=self.base/name.replace(' ','-');self.git('worktree','add','-qb',sibling.name,str(sibling),root=main)
         project=register(sibling,name,imported={'id':identifier(),'design_profile':'consumer-v1'})['id']
-        self.git('worktree','remove',str(sibling));self.git('worktree','add','-q',str(sibling),sibling.name)
+        self.git('worktree','remove',str(sibling),root=main);self.git('worktree','add','-q',str(sibling),sibling.name,root=main)
         again=register(sibling,name,replace=True)  # its own replaced registration shows the repository
         self.assertEqual((again['id'],again['design_profile']),(project,'consumer-v1'))
-        self.git('worktree','remove',str(sibling))
-        self.assertEqual(describe(self.root)['join'],name)  # the main checkout learns which project it belongs to
-        self.assertEqual(register(self.root,name)['id'],project)
-        clone=self.base/('clone-'+sibling.name);self.git('clone','-q',str(self.root),str(clone),root=self.base)
+        self.git('worktree','remove',str(sibling),root=main)
+        self.assertEqual(describe(main)['join'],name)  # the main checkout learns which project it belongs to
+        self.assertEqual(register(main,name)['id'],project)
+        clone=self.base/('clone-'+sibling.name);self.git('clone','-q',str(main),str(clone),root=self.base)
         with self.assertRaisesRegex(Refused,'already named'):register(clone,name)  # another repository never joins
-        from .registry import index_path
-        index_path(self.root).unlink()  # the next round starts with an unregistered main checkout
 
     def test_older_same_name_projects_of_the_repository_never_block_a_worktree(self):
         from .storage import identifier
