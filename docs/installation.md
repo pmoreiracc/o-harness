@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- macOS, Linux or Windows 10/11 ([Windows notes](#windows)). The dashboard auto-start
+- macOS, Linux, or Windows 10 or 11 as a preview ([Windows notes](#windows)). The dashboard auto-start
   service covers macOS and Windows; on Linux run `oh serve` yourself.
 - Python 3.11+ (on Windows, OH can fetch it for you) and Git.
 - Claude Code signed in with a Claude subscription, or Codex signed in with ChatGPT.
@@ -49,8 +49,8 @@ Registering a project changes nothing in its repository.
 
 ## Windows
 
-CI runs every test on Windows, but no real Claude Code or Codex run on Windows has been
-recorded yet, so treat Windows support as a preview.
+CI runs the tests on a Windows Server runner, but no real Claude Code or Codex run on
+Windows has been recorded yet, so treat Windows support as a preview.
 
 - **Git for Windows**, which includes Git Bash: Claude Code runs OH's prompt hook through it.
 - **Python:** OH uses Python 3.11 or newer if it finds one (`python3`, `python` or `py -3`).
@@ -59,15 +59,20 @@ recorded yet, so treat Windows support as a preview.
   against its published SHA-256, with no admin rights and no `PATH` change. It says so before
   it downloads. Set `OH_PYTHON_DOWNLOAD=0` to stop it and install Python yourself.
 - From PowerShell or cmd, run OH through `scripts\oh.cmd` (the plugin's, or
-  `%USERPROFILE%\.local\share\o-harness\bin\oh.cmd` after setup).
+  `%USERPROFILE%\.local\share\o-harness\bin\oh.cmd` after setup). cmd re-reads `& | < > ^`
+  in arguments, so pass JSON from a file: `oh.cmd config set checks @checks.json`.
+- Git for Windows converts line endings by default (`core.autocrlf`); OH accepts files whose
+  only difference from what Git stores is their line endings.
 - **Claude workers have no shell on Windows.** Claude Code's sandbox doesn't run on native
   Windows, so OH's Claude workers only read and edit files; OH runs your project's checks
   after each task and sends failures back. Reviewers read the exact change from a file.
   Codex workers keep Codex's own Windows sandbox. For full Claude workers, run OH inside WSL 2,
   where it behaves as on Linux.
-- OH never runs a program from your project folder by mistake: Windows' search of the
-  current folder is turned off, and it starts `claude` or `codex` only when no one but you,
-  the system or administrators can change the program or the folders above it.
+- Windows' search of the current folder is off for the commands OH starts (your checks keep
+  it, since they run your project's own scripts), and OH starts `claude` or `codex` only when
+  no one but you, the system or administrators can change the program, add files next to it,
+  or replace a folder above it. Folders on your `PATH` are still searched, including a
+  project's activated virtual environment.
 - `oh service-install` adds a Task Scheduler task that starts the dashboard at logon,
   without admin rights or a window; `oh service-uninstall` removes it.
 
@@ -91,6 +96,9 @@ Merged changes reach you only when a new version is released.
   ```
 
 Start a new session afterwards. The first OH command you run switches to the new version.
+Updates only go forward: versions with Windows support install an `oh` command that older
+versions' `setup` refuses to replace, so go back to an older version only with a fresh OH
+data folder.
 Batches already in progress finish on the version they started with. The dashboard service
 restarts itself on the new version; if you installed it before version 0.3.0, run
 `oh service-install` once more.

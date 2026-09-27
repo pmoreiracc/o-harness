@@ -71,7 +71,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
     if role=='review' and git_tree:
         # The exact change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
-        diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','HEAD',git_tree],capture_output=True,check=True,
+        diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','--text','--no-textconv','HEAD',git_tree],capture_output=True,check=True,
                             env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout
         (directory/'subject.diff').write_bytes(diff)
         data['diff']={'path':str(directory/'subject.diff'),'sha256':hashlib.sha256(diff).hexdigest()}

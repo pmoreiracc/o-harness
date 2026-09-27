@@ -66,6 +66,9 @@ def spawn(command,**kwargs):
     if not os.path.dirname(command[0]):
         # CreateProcess finds only .exe files; npm and similar tools are .cmd shims found through PATHEXT.
         command=[shutil.which(command[0],path=(kwargs.get('env') or os.environ).get('PATH')) or command[0],*command[1:]]
+    elif not os.path.isabs(command[0]) and kwargs.get('cwd'):
+        # CreateProcess reads a relative program against OH's own folder, not cwd; a check's .\\gradlew.bat is the project's.
+        command=[os.path.join(kwargs['cwd'],command[0]),*command[1:]]
     # Start suspended and resume only inside a job object, so no descendant can be born outside it.
     child=subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP|0x4,**kwargs)  # CREATE_SUSPENDED
     job=_kernel32.CreateJobObjectW(None,None)

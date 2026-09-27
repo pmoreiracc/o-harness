@@ -5,17 +5,21 @@
 # prompts never fail) or python.sh --launcher <script> <args> (OH's launcher).
 mode=${1:-}
 shift
-data="${OH_DATA_HOME:-$HOME/.local/share/o-harness}"
 here=$(dirname "$0")
 windows=
 [ "${OS:-}" = Windows_NT ] && windows=1
+home=$HOME
+# On Windows OH's folder is under USERPROFILE, whatever HOME a Git Bash user set.
+[ -n "$windows" ] && [ -n "${USERPROFILE:-}" ] && home=$(cygpath -u "$USERPROFILE" 2>/dev/null || printf '%s' "$USERPROFILE")
+data="${OH_DATA_HOME:-$home/.local/share/o-harness}"
 check='import sys; sys.exit(sys.version_info < (3, 11))'
 pick() {
   for name in python3 python; do
     if command -v "$name" >/dev/null 2>&1 && "$name" -c "$check" >/dev/null 2>&1; then interpreter=$name; return 0; fi
   done
   if command -v py >/dev/null 2>&1 && py -3 -c "$check" >/dev/null 2>&1; then interpreter=py; flag=-3; return 0; fi
-  if [ -n "$windows" ] && "$data/python/python.exe" -c "$check" >/dev/null 2>&1; then interpreter="$data/python/python.exe"; return 0; fi
+  own="$data/python/$(cat "$data/python/current" 2>/dev/null)/python.exe"
+  if [ -n "$windows" ] && "$own" -c "$check" >/dev/null 2>&1; then interpreter=$own; return 0; fi
   return 1
 }
 interpreter= flag=
@@ -31,7 +35,7 @@ if ! pick; then
   done
   if [ -n "$windows" ] && [ "$command" = setup ]; then
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$here/get-python.ps1" || exit 2
-    pick || exit 2
+    pick || { echo "OH downloaded Python but can't find it in $data/python. Run setup again." >&2; exit 2; }
   else
     if [ -n "$windows" ]; then
       echo 'OH needs Python 3.11 or newer. Run this plugin'"'"'s scripts/oh setup: it downloads the official Python from python.org into OH'"'"'s folder, without admin rights or PATH changes.' >&2

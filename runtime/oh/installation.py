@@ -11,8 +11,8 @@ from .system import replace
 
 # The launcher finds Python through these: python.sh from sh and Git Bash, oh.cmd from PowerShell and cmd,
 # and get-python.ps1 fetches the official Python on Windows during setup when none is installed.
-HELPERS=('python.sh','oh.cmd','get-python.ps1')
-LAUNCHERS=(b'#!/usr/bin/env -S python3 -I\n"""Resolve bundled setup',b'#!/bin/sh\n""":"\nexec sh "$(dirname "$0")/python.sh" --launcher')
+HELPERS=('python.sh','python.cmd','oh.cmd','hook.cmd','get-python.ps1')
+LAUNCHERS=(b'#!/usr/bin/env -S python3 -I\n"""Resolve bundled setup',b'#!/bin/sh\n""":"\nself=$0\n')
 
 
 def inventory(root):
@@ -45,11 +45,24 @@ def build(destination, host):
     for group in hooks['hooks']['UserPromptSubmit']:
         for hook in group['hooks']:
             hook['command']=hook['command'].rsplit(' ',1)[0]+' '+host
+            # Codex runs Windows hooks without sh; cmd /c works whether it uses cmd or PowerShell.
+            if host=='codex':hook['commandWindows']='cmd /c "%PLUGIN_ROOT%\\scripts\\hook.cmd" codex'
     atomic_json(destination/'hooks/hooks.json',hooks)
     if host=='codex':
         for path in (destination/'skills').glob('*/SKILL.md'):
             path.write_text(path.read_text().replace('disable-model-invocation: true\n',''))
     return {'plugin':str(destination),'host':host,'revision':revision}
+
+
+def refresh_python(core):
+    """On Windows, move a Python that OH fetched earlier to the version this release pins (best effort)."""
+    from .system import WINDOWS
+    if not WINDOWS or not (state_home()/'python'/'current').is_file():return {}
+    import os,subprocess
+    powershell=Path(os.environ.get('SystemRoot',r'C:\Windows'))/'System32/WindowsPowerShell/v1.0/powershell.exe'
+    done=subprocess.run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(core/'get-python.ps1'),'-Refresh'],
+                        capture_output=True,text=True,env=os.environ|{'OH_DATA_HOME':str(state_home())})
+    return {} if done.returncode==0 else {'python':'Could not update the Python OH fetched: '+done.stderr.strip()[-500:]}
 
 
 def verify_package(root):
@@ -99,4 +112,5 @@ def setup(*, development=False, if_newer=False):
             target=launcher.parent/name;temporary=target.with_name(name+'.pending')
             temporary.write_bytes(data);temporary.chmod(0o755);replace(temporary,target)
         atomic_json(active,{'revision':revision,'version':version,'schema_version':1})
-    return {'core':str(destination),'revision':revision,'cli':str(home/'bin/oh'),'next':'Register the project with oh init, then configure its external checks. Existing runs keep their recorded runtime.'}
+    refreshed=refresh_python(destination)
+    return refreshed|{'core':str(destination),'revision':revision,'cli':str(home/'bin/oh'),'next':'Register the project with oh init, then configure its external checks. Existing runs keep their recorded runtime.'}

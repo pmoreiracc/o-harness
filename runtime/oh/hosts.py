@@ -48,7 +48,9 @@ def binary_identity(path,root=None):
         # program, add files next to it (a planted DLL), or replace a folder above it.
         from .system import untrusted
         for component,kind in [(path,'file'),(path.parent,'folder'),*((p,'above') for p in path.parent.parents)]:
-            if (reason:=untrusted(component,kind)):raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
+            try:reason=untrusted(component,kind)
+            except OSError as exc:raise Refused(f'OH cannot read who may change {component} ({exc}); install the host where you can read its permissions') from None
+            if reason:raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
     for component in [] if WINDOWS else [path,*path.parents]:
         info=component.stat()
         if info.st_uid not in (0,os.getuid()) or info.st_mode & (stat.S_IWGRP|stat.S_IWOTH):
@@ -214,7 +216,7 @@ def parse_usage(host,event,attempt):
 def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=1800):
     authentication(host,root)
     from .capabilities import validate_profile
-    validate_profile(host,profile)
+    validate_profile(host,profile,root)
     attempt_dir=Path(attempt_dir);attempt_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     schema_path=None
     if schema:

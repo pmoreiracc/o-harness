@@ -51,10 +51,62 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(found.returncode, 1);self.assertIn('OH is not set up', found.stderr)
 
     def test_the_launcher_is_valid_sh_and_python(self):
-        source = (SCRIPTS / 'oh').read_text()
-        compile(source, 'oh', 'exec')
-        self.assertTrue(source.startswith('#!/bin/sh\n""":"\nexec sh "$(dirname "$0")/python.sh" --launcher "$0" "$@"\n'))
-        self.assertTrue((SCRIPTS / 'oh.cmd').read_bytes().count(b'\r\n') > 10, 'cmd files need CRLF line endings')
+        from .installation import LAUNCHERS
+        source = (SCRIPTS / 'oh').read_bytes()
+        compile(source, 'oh', 'exec');self.assertTrue(source.startswith(LAUNCHERS))
+        for name in ('oh.cmd', 'python.cmd', 'hook.cmd'):
+            data = (SCRIPTS / name).read_bytes()
+            self.assertEqual(data.count(b'\n'), data.count(b'\r\n'), f'{name} needs CRLF line endings')
+        # Stored as they are checked out, so a review of this repository compares equal bytes.
+        stored = subprocess.run(['git', '-C', str(HOME), 'ls-files', '--eol', '--', 'plugins/o-harness/scripts/oh.cmd'], capture_output=True, text=True).stdout
+        self.assertIn('i/crlf', stored)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX symlinks')
+    def test_a_symlinked_launcher_still_finds_its_helpers(self):
+        links = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, links)
+        (links / 'oh').symlink_to(SCRIPTS / 'oh')
+        result = subprocess.run([str(links / 'oh'), 'status'], env=os.environ | {'OH_DATA_HOME': str(links / 'data')}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stderr);self.assertIn('OH is not set up', result.stderr)
+
+    def test_codex_gets_a_windows_hook_that_needs_no_sh(self):
+        from .installation import build
+        with tempfile.TemporaryDirectory() as tmp:
+            build(Path(tmp) / 'codex/o-harness', 'codex');build(Path(tmp) / 'claude/o-harness', 'claude')
+            codex = json.loads((Path(tmp) / 'codex/o-harness/hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]
+            claude = json.loads((Path(tmp) / 'claude/o-harness/hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]
+            self.assertEqual(codex['commandWindows'], 'cmd /c "%PLUGIN_ROOT%\\scripts\\hook.cmd" codex')
+            self.assertNotIn('commandWindows', claude)
+            for name in ('python.cmd', 'hook.cmd', 'oh.cmd', 'python.sh', 'get-python.ps1'):self.assertTrue((Path(tmp) / 'codex/o-harness/core' / name).is_file())
+
+    def test_json_values_can_come_from_a_file(self):
+        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+        test.setUp();self.addCleanup(test.doCleanups)
+        from .cli import main
+        from .config import project_checks
+        value = Path(test.temp.name) / 'checks.json'
+        value.write_text('\ufeff[{"name": "t", "command": ["git", "diff", "--check"]}]')  # PowerShell 5 writes a BOM
+        with patch('sys.stdout'):main(['--root', str(test.root), 'config', 'set', 'checks', '@' + str(value)])
+        self.assertEqual(project_checks(test.root), [{'name': 't', 'command': ['git', 'diff', '--check']}])
+
+    def test_codex_is_never_trusted_from_inside_the_project(self):
+        from .capabilities import validate_profile
+        with patch('oh.hosts.executable', side_effect=RuntimeError('stop')) as executable:
+            with self.assertRaises(RuntimeError):validate_profile('codex', {'model': 'm', 'effort': 'high'}, Path('/the/project'))
+        self.assertEqual(executable.call_args.args, ('codex', Path('/the/project')))
+
+    def test_line_ending_conversion_alone_is_accepted_for_review(self):
+        from .verification import candidate_tree
+        origin = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
+        subprocess.run(['git', 'init', '-q', str(origin)], check=True)
+        (origin / 'a.txt').write_text('one\ntwo\n')
+        subprocess.run(['git', '-C', str(origin), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(origin), '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'a'], check=True)
+        clone = origin.parent / (origin.name + '-clone');self.addCleanup(shutil.rmtree, clone, ignore_errors=True)
+        subprocess.run(['git', 'clone', '-q', '-c', 'core.autocrlf=true', str(origin), str(clone)], check=True)
+        self.assertEqual((clone / 'a.txt').read_bytes(), b'one\r\ntwo\r\n')
+        candidate_tree(clone)
+        (clone / 'a.txt').write_bytes(b'one\r\ntwo\r\nthree\r\n')
+        self.assertTrue(candidate_tree(clone))
 
     def test_the_dashboard_starts_at_logon_through_task_scheduler(self):
         from . import service
@@ -67,7 +119,8 @@ class WindowsTest(unittest.TestCase):
             self.assertIn('<RunLevel>LeastPrivilege</RunLevel>', task);self.assertIn('dashboard.pyw', task)
             starter = (Path(tmp) / 'bin/dashboard.pyw').read_text()
             compile(starter, 'dashboard.pyw', 'exec');self.assertIn(json.dumps(tmp)[1:-1], starter)
-            self.assertEqual([c.args[0] for c in schtasks.call_args_list], ['/Create', '/End', '/Run'])
+            self.assertEqual([c.args[0] for c in schtasks.call_args_list], ['/Create', '/Run'])
+            self.assertIn('<MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>', task)
             service.uninstall()
             self.assertFalse((Path(tmp) / 'bin/dashboard.pyw').exists())
             self.assertEqual(schtasks.call_args_list[-1].args[:2], ('/Delete', '/F'))
@@ -84,9 +137,13 @@ class WindowsTest(unittest.TestCase):
                 seen.append((Path(admission['diff']['path']).read_text(), prompt))
             return test.fake(host, root, profile, prompt, role, directory, context, **kw)
         start(test.root, {'tasks': test.tasks[:1]}, test.event())
-        run(test.root, fake)
+        def hiding(host, root, profile, prompt, role, directory, context, **kw):
+            if role != 'review':(Path(root) / '.gitattributes').write_text('* -diff\n')  # a worker hiding its change
+            return fake(host, root, profile, prompt, role, directory, context, **kw)
+        run(test.root, hiding)
         diff, prompt = seen[0]
-        self.assertIn('+++ b/output.txt', diff);self.assertIn('subject.diff', prompt)
+        self.assertIn('+++ b/output.txt', diff);self.assertIn('+1', diff);self.assertNotIn('Binary files', diff)
+        self.assertIn('subject.diff', prompt)
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows only')
@@ -103,13 +160,31 @@ class NativeWindowsTest(unittest.TestCase):
 
     def test_oh_never_runs_a_command_planted_in_the_checkout(self):
         checkout = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, checkout, ignore_errors=True)
-        shutil.copy(sys.executable, checkout / 'git.exe')  # a "git" that is really Python
+        # A self-contained program as "git": whoami answers "git -C ..." with "Invalid argument/option".
+        shutil.copy(Path(os.environ['SystemRoot']) / 'System32/whoami.exe', checkout / 'git.exe')
         env = os.environ | {'OH_DATA_HOME': str(checkout / 'state')}
         result = subprocess.run([sys.executable, '-I', '-X', 'utf8', str(HOME / 'oh'), '--root', str(checkout), 'config'],
                                 cwd=checkout, env=env, capture_output=True, text=True)
-        # Python run as "git -C ..." would say "Unknown option: -C"; the real Git answers instead.
-        self.assertNotIn('Unknown option', result.stderr + result.stdout)
+        self.assertNotIn('Invalid argument', result.stderr + result.stdout)
         self.assertIn(result.returncode, (0, 2), result.stderr)
+
+    def test_oh_cmd_never_runs_a_python_planted_in_the_current_folder(self):
+        folder = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        marker = folder / 'ran'
+        for name in ('python3.cmd', 'python.cmd', 'py.cmd', 'powershell.cmd'):(folder / name).write_text(f'@echo x> "{marker}"\r\n')
+        subprocess.run(['cmd', '/c', str(SCRIPTS / 'oh.cmd'), 'status'], cwd=folder, env=os.environ | {'OH_DATA_HOME': str(folder / 'state')},
+                       capture_output=True, text=True)
+        self.assertFalse(marker.exists())
+
+    def test_a_check_may_run_a_script_in_the_project(self):
+        from .verification import verify
+        root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / 'ok.cmd').write_text('@exit /b 0\r\n')
+        os.chdir(HOME);self.addCleanup(os.chdir, os.getcwd())
+        subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        with patch.dict(os.environ, {'OH_DATA_HOME': str(root / 'state')}):
+            results = verify(root, [{'name': 'ok', 'command': ['.\\ok.cmd']}, {'name': 'cmd', 'command': ['cmd', '/c', 'ok.cmd']}], 'p')
+        self.assertEqual([r['returncode'] for r in results], [0, 0], results)
 
     def test_oh_cmd_starts_oh_from_cmd_and_powershell(self):
         env = os.environ | {'OH_DATA_HOME': tempfile.mkdtemp()}

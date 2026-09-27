@@ -72,8 +72,9 @@ New-Item -ItemType Directory -Path $project | Out-Null
 git -C $project init -q -b main; Set-Content (Join-Path $project 'README.md') "# Sample`n"
 git -C $project add .; git -C $project -c user.name=OH -c user.email=oh@example.invalid commit -qm start
 Run 'register the project' { & $oh --root $project init; if ($LASTEXITCODE) { throw "exit $LASTEXITCODE" } }
-$checks = '[{"name":"whitespace","command":["git","diff","--check","HEAD"]}]'
-Run 'save checks (JSON through PowerShell)' { & $oh --root $project config set checks $checks; if ($LASTEXITCODE) { throw "exit $LASTEXITCODE" } }
+$checks = Join-Path $work 'checks.json'
+Set-Content -Encoding utf8 -Path $checks -Value '[{"name":"whitespace","command":["git","diff","--check","HEAD"]}]'
+Run 'save checks from a file' { & $oh --root $project config set checks "@$checks"; if ($LASTEXITCODE) { throw "exit $LASTEXITCODE" } }
 Run 'read settings back' { & $oh --root $project config | Select-String 'whitespace' | Out-Host }
 Run 'plans in the repository' { & $oh --root $project config set plans.location repo }
 Run 'dashboard at logon (Task Scheduler)' { & $oh service-install; Start-Sleep 5; (Invoke-WebRequest -UseBasicParsing http://localhost:4318).StatusCode }

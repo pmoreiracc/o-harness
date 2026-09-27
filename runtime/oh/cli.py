@@ -138,7 +138,11 @@ def main(argv=None):
             if not args.action:result=describe(root)
             elif args.action=='open':result=open_settings(root)
             elif not args.key or (args.action=='set')!=(args.value is not None):raise Refused('Use: oh config set <key> <value>, or oh config unset <key>')
-            else:result=change(root,args.key,args.value if args.action=='set' else None,scope='global' if args.everywhere else None)
+            else:
+                value=args.value
+                # @file reads the value from a file: JSON passes through PowerShell and cmd without losing its quotes.
+                if value and value.startswith('@') and len(value)>1:value=Path(value[1:]).expanduser().read_text(encoding='utf-8-sig')
+                result=change(root,args.key,value if args.action=='set' else None,scope='global' if args.everywhere else None)
         elif args.command=='plans':
             from .plans import check,layout
             where=layout(root)

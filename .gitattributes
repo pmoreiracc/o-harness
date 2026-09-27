@@ -1,3 +1,4 @@
 # Scripts must keep LF line endings on Windows checkouts too.
 * text=auto eol=lf
-*.cmd text eol=crlf
+# Batch files keep CRLF bytes in Git too, so what is reviewed is exactly what is stored.
+*.cmd -text

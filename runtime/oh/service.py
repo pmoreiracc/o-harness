@@ -28,8 +28,11 @@ class Basic(ctypes.Structure):
 class Extended(ctypes.Structure):
     _fields_=[('basic',Basic),('io',ctypes.c_uint64*6),('memory',ctypes.c_size_t*4)]
 job=kernel32.CreateJobObjectW(None,None);limits=Extended();limits.basic.flags=0x2000  # kill on job close
-kernel32.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits))
-kernel32.AssignProcessToJobObject(job,kernel32.GetCurrentProcess())
+if not (job and kernel32.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits))
+        and kernel32.AssignProcessToJobObject(job,kernel32.GetCurrentProcess())):
+    # Without the job an ended task would leave its server holding the port: refuse to start instead.
+    open(CONFIG['errors'],'a').write('OH dashboard: could not set up its job object (error %%d)\\n'%%ctypes.get_last_error())
+    raise SystemExit(1)
 data=CONFIG['env']['OH_DATA_HOME']
 while True:
     revision=json.loads(open(os.path.join(data,'runtime','active.json'),'rb').read())['revision']
@@ -76,7 +79,7 @@ def install_windows():
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{escape(user)}</UserId></LogonTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>{escape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
@@ -90,8 +93,7 @@ def install_windows():
     definition.write_text(task,encoding='utf-16')
     try:
         schtasks('/Create','/F','/TN',TASK,'/XML',str(definition))
-        schtasks('/End','/TN',TASK,check=False)  # a running dashboard ends with its job; the new one starts below
-        schtasks('/Run','/TN',TASK)
+        schtasks('/Run','/TN',TASK)  # StopExisting ends a running dashboard (and, through its job, its server) first
     except subprocess.CalledProcessError as exc:
         raise Refused('Task Scheduler refused the dashboard task: '+said(exc,str(exc))) from exc
     return {'url':'http://localhost:4318','service':TASK}

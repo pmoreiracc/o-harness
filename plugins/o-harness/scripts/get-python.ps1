@@ -1,5 +1,8 @@
-# Fetches the official Python for OH on Windows, only when no Python 3.11+ is installed.
-# The version and each file's SHA-256 are pinned here; nothing is installed system-wide.
+# Fetches the official Python for OH on Windows, when no Python 3.11+ is installed. The version and each
+# file's SHA-256 are pinned here; nothing is installed system-wide. Each version gets its own folder under
+# <OH data>\python and the file "current" names the one to use, so a newer pin replaces it on the next setup.
+# -Refresh (used by setup) updates only a Python OH fetched before.
+param([switch]$Refresh)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $version = '3.14.7'
@@ -8,26 +11,40 @@ $hashes = @{
     'arm64' = 'f6773983c8959d4281e48c4540cb0bdd23e42391e4e951ce17e7ceb52658f21c'
 }
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'amd64' }
+$data = if ($env:OH_DATA_HOME) { $env:OH_DATA_HOME } else { Join-Path $env:USERPROFILE '.local\share\o-harness' }
+$root = Join-Path $data 'python'
+$current = Join-Path $root 'current'
+$target = Join-Path $root $version
+$named = if (Test-Path $current) { (Get-Content -Raw $current).Trim() } else { '' }
+if ($named -eq $version -and (Test-Path (Join-Path $target 'python.exe'))) { return }
+if ($Refresh -and -not $named) { return }
 # The download happens at the first setup, before OH has any settings, so an environment variable turns it off.
 if ($env:OH_PYTHON_DOWNLOAD -eq '0') {
     throw 'OH_PYTHON_DOWNLOAD is 0, so OH does not download Python. Install Python 3.11 or newer yourself (python.org, or: winget install Python.Python.3.14), then run setup again.'
 }
-$data = if ($env:OH_DATA_HOME) { $env:OH_DATA_HOME } else { Join-Path $env:USERPROFILE '.local\share\o-harness' }
-$target = Join-Path $data 'python'
-if (Test-Path (Join-Path $target 'python.exe')) { return }
 $url = "https://www.python.org/ftp/python/$version/python-$version-embed-$arch.zip"
-[Console]::Error.WriteLine("OH is downloading Python $version from python.org (the official Windows embeddable package, about 12 MB, SHA-256 checked) into $target. No admin rights or PATH changes; delete that folder to remove it.")
-New-Item -ItemType Directory -Force -Path $data | Out-Null
-$zip = Join-Path $data ".python-$version-$arch.zip"
-$staging = Join-Path $data (".python-" + [guid]::NewGuid())
+[Console]::Error.WriteLine("OH is downloading Python $version from python.org (the official Windows embeddable package, about 12 MB, SHA-256 checked) into $target. No admin rights or PATH changes; delete $root to remove it.")
+New-Item -ItemType Directory -Force -Path $root | Out-Null
+$unique = [guid]::NewGuid()
+$zip = Join-Path $root ".download-$unique.zip"
+$staging = Join-Path $root ".stage-$unique"
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
     $actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
     if ($actual -ne $hashes[$arch]) { throw "The download from $url doesn't match its pinned SHA-256 (got $actual); nothing was installed." }
     Expand-Archive -Path $zip -DestinationPath $staging
-    try { Move-Item -Path $staging -Destination $target } catch { if (-not (Test-Path (Join-Path $target 'python.exe'))) { throw } }
+    # A folder left by an interrupted setup is replaced; another setup finishing first is fine.
+    if (Test-Path $target) { Remove-Item -Recurse -Force -Path $target -ErrorAction SilentlyContinue }
+    if (-not (Test-Path $target)) { Move-Item -Path $staging -Destination $target }
+    if (-not (Test-Path (Join-Path $target 'python.exe'))) { throw "Python $version is not complete in $target; run setup again." }
+    $next = Join-Path $root ".current-$unique"
+    Set-Content -NoNewline -Encoding ascii -Path $next -Value $version
+    Move-Item -Force -Path $next -Destination $current
+    # Older versions go when nothing uses them; one still running stays until the next setup.
+    Get-ChildItem -Directory -Path $root | Where-Object { $_.Name -ne $version -and $_.Name -match '^[0-9]+\.[0-9]+\.[0-9]+$' } |
+        ForEach-Object { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction SilentlyContinue }
 } finally {
     Remove-Item -Force -ErrorAction SilentlyContinue -Path $zip
-    if (Test-Path $staging) { Remove-Item -Recurse -Force -Path $staging }
+    if (Test-Path $staging) { Remove-Item -Recurse -Force -Path $staging -ErrorAction SilentlyContinue }
 }
