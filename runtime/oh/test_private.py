@@ -138,10 +138,10 @@ class PrivatePlansTest(unittest.TestCase):
 
     def test_rename_rejects_collision_before_moving_profile_or_settings(self):
         from .registry import register,rename,profile
-        from .config import read_file
+        from .config import read_file,write_file
         other=self.other_repository('other');register(other,'Other')
-        change(other,'plans.location','private')
-        change(other,'plans.private_folder',str(self.where['base'].parent))
+        data=read_file();data.setdefault('projects',{})['Other']={'plans':{'location':'private','private_folder':str(self.where['base'].parent)}}
+        write_file(data)  # also support settings edited directly, before any private command
         before_profile=profile(other);before_settings=read_file()
         with self.assertRaisesRegex(Refused,'belongs to another project'):rename(other,'fixture')
         self.assertEqual(profile(other),before_profile)
@@ -184,6 +184,78 @@ class PrivatePlansTest(unittest.TestCase):
         self.assertEqual(read_json(path),before)
         self.assertEqual(profile(other)['name'],'Other')
 
+    def test_enabling_private_reserves_existing_projects_before_new_registration(self):
+        from .registry import register,index_path
+        first=self.other_repository('first');second=self.other_repository('second')
+        register(first,'Alpha')
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        change(self.root,'plans.location','private',scope='global')
+        with self.assertRaisesRegex(Refused,'belongs to another project'):register(second,'ALPHA')
+        self.assertFalse(index_path(second).exists())
+        self.assertEqual(plans.layout(first)['base'].name,'Alpha')
+
+    def test_settings_collision_and_failed_write_preserve_all_reservations(self):
+        from .registry import register
+        from .config import read_file
+        from .storage import read_json,state_home
+        first=self.other_repository('first');second=self.other_repository('second')
+        register(first,'Alpha');register(second,'ALPHA')
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        path=state_home()/'registry/private-plans.json';before=read_json(path);settings=read_file()
+        with self.assertRaisesRegex(Refused,'belongs to another project'):change(self.root,'plans.location','private',scope='global')
+        self.assertEqual(read_json(path),before);self.assertEqual(read_file(),settings)
+        with patch('oh.config.write_file',side_effect=PermissionError(13,'Permission denied')):
+            with self.assertRaisesRegex(Refused,'Cannot write'):change(first,'plans.location','private')
+        self.assertEqual(read_json(path),before);self.assertEqual(read_file(),settings)
+        change(first,'plans.location','private')
+        with self.assertRaisesRegex(Refused,'belongs to another project'):change(second,'plans.location','private')
+
+    def test_changing_or_unsetting_private_folder_cannot_take_another_projects_folder(self):
+        from .registry import register
+        from .config import read_file
+        other=self.other_repository('other');register(other,'fixture')
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        change(other,'plans.private_folder',str(Path(self.temp.name)/'separate'))
+        change(other,'plans.location','private');before=read_file()
+        with self.assertRaisesRegex(Refused,'belongs to another project'):
+            change(other,'plans.private_folder',str(self.where['base'].parent))
+        with self.assertRaisesRegex(Refused,'belongs to another project'):change(other,'plans.private_folder')
+        self.assertEqual(read_file(),before)
+        self.assertEqual(plans.layout(other)['base'].parent,(Path(self.temp.name)/'separate').resolve())
+
+    def test_registration_checks_private_locations_from_manually_edited_settings(self):
+        from .registry import register,index_path
+        from .config import read_file,write_file
+        first=self.other_repository('first');second=self.other_repository('second')
+        register(first,'Alpha')
+        data=read_file();data['plans']={'location':'private','private_folder':str(self.where['base'].parent)};write_file(data)
+        with self.assertRaisesRegex(Refused,'belongs to another project'):register(second,'ALPHA')
+        self.assertFalse(index_path(second).exists())
+        self.assertEqual(plans.layout(first)['base'].name,'Alpha')
+
+    def test_empty_reserved_replacement_and_failed_publication_are_recoverable(self):
+        from .registry import register,lookup,index_path
+        from .storage import atomic_json,read_json,state_home
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        change(self.root,'plans.location','private',scope='global')
+        other=self.other_repository('other');old=register(other,'Unused');index=read_json(index_path(other))
+        self.assertFalse((self.where['base'].parent/'Unused').exists())
+        (other/'.git').rename(Path(self.temp.name)/'unused-old-git')
+        import subprocess
+        subprocess.run(['git','init','-q',str(other)],check=True)
+        path=state_home()/'registry/private-plans.json';before=read_json(path)
+        def fail_index(target,*args,**kwargs):
+            if target==index_path(other):raise OSError('replacement publication failed')
+            return atomic_json(target,*args,**kwargs)
+        with patch('oh.registry.atomic_json',side_effect=fail_index):
+            with self.assertRaisesRegex(OSError,'replacement publication failed'):register(other,replace=True)
+        self.assertEqual(read_json(path),before);self.assertEqual(read_json(index_path(other)),index)
+        fresh=register(other,replace=True)
+        self.assertNotEqual(fresh['id'],old['id'])
+        self.assertEqual(plans.layout(other)['base'],self.where['base'].parent/'Unused')
+        self.assertFalse(plans.approvals_file(other).exists())
+        self.assertNotEqual(lookup(other)['checkout'],index['checkout'])
+
     def test_private_folder_rejects_cwd_relative_expansion(self):
         import os
         invalid=['~oh_user_that_does_not_exist_927/plans','~relative','relative/plans']
@@ -198,11 +270,10 @@ class PrivatePlansTest(unittest.TestCase):
         from .registry import register
         other=self.other_repository('other');register(other,'fixture')
         change(other,'plans.private_folder',str(self.where['base'].parent))
-        change(other,'plans.location','private')
-        with self.assertRaisesRegex(Refused,'belongs to another project'):plans.layout(other)
+        with self.assertRaisesRegex(Refused,'belongs to another project'):change(other,'plans.location','private')
         folder=Path(self.temp.name)/'existing';(folder/'fixture').mkdir(parents=True)
         change(other,'plans.private_folder',str(folder))
-        with self.assertRaisesRegex(Refused,'without ownership'):plans.layout(other)
+        with self.assertRaisesRegex(Refused,'without ownership'):change(other,'plans.location','private')
 
     def test_import_does_not_adopt_deleted_projects_private_documents(self):
         from .registry import index_path

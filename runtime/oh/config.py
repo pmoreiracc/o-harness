@@ -606,7 +606,7 @@ def remove(data, parts):
         if not parent[part]:parent.pop(part)
 
 
-def edit(root, scope, apply, *, creating=False):
+def edit(root, scope, apply, *, creating=False, reserve_plans=False):
     """Read, change and check settings.json as one step; nothing invalid is ever written. Only a
     change you ask for (`creating`) may start a new file where a recorded one went missing."""
     from .storage import lock
@@ -626,7 +626,11 @@ def edit(root, scope, apply, *, creating=False):
         result = apply(layer)
         if valid:layers(data)  # a valid file stays valid
         if data != before or not settings_file().exists():
-            try:write_file(data)
+            from contextlib import nullcontext
+            from .private_storage import reservations,configured_folders
+            guard=reservations(configured_folders(data)) if reserve_plans else nullcontext()
+            try:
+                with guard:write_file(data)
             except OSError as exc:raise Refused(f'Cannot write {settings_file()}: {exc.strerror or exc}') from None
     return result
 
@@ -689,7 +693,12 @@ def change(root, key, raw=None, *, scope=None):
             remove(layer, parts);return True
         if present(layer, parts) and type(get(layer, parts)) is type(value) and get(layer, parts) == value:return False
         put(layer, parts, value);return True
-    changed = edit(root, scope, apply, creating=creating)
+    from contextlib import nullcontext
+    from .storage import lock,state_home,snapshot_guard
+    plan_change=key in ('plans.location','plans.private_folder')
+    # Match registry -> settings -> ownership lock order used by registration and rename.
+    with snapshot_guard(), (lock(state_home()/'registry/.lock') if plan_change else nullcontext()):
+        changed = edit(root, scope, apply, creating=creating,reserve_plans=plan_change)
     result = {'setting': key, 'scope': where, 'file': str(settings_file())}
     if changed is False:
         return result | {'unchanged': True, 'note': f'Not set in {where}' if raw is None else 'Already set to this value'}

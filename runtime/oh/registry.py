@@ -163,15 +163,15 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             old_settings=planning_settings(old_profile['name'])
             legacy=home/'projects'/preserved_plans['private_plans_legacy']/'plans'
             old_folder=Path(old_profile['private_plans_path']) if old_profile.get('private_plans_path') else legacy if legacy.is_dir() else private_base(old_settings['plans']['private_folder'],preserved_plans['private_plans_name'])
-            if old_folder.is_dir():preserved_plans['private_plans_path']=str(old_folder)
+            from .private_storage import owned
+            if old_folder.is_dir() or owned(old_folder,old_profile):preserved_plans['private_plans_path']=str(old_folder)
             preserved_plans['private_plans_previous_owner']=previous['project']
             if old_folder.is_dir() and not attach:
                 from .private_storage import reserve
                 reserve(old_folder,preserved_plans|{'id':identifier()},claim=False)
             archive=home/'registry/retired'/(digest(previous)+'.json')
             if not archive.exists():atomic_json(archive,previous,immutable=True)
-            path.unlink()
-        if path.exists():
+        if path.exists() and not replace:
             existing = lookup(root)
             if attach and existing['project'] != attach:
                 raise Refused('Checkout is already registered to another project')
@@ -209,17 +209,18 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
         else:
             value = (dict(imported) if imported else {}) | preserved_plans | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
             from .plans import private_base
-            from .private_storage import reservation
+            from .private_storage import reservations,configured_folders
+            from .config import read_file
             settings=planning_settings(name)
-            if settings['plans']['location']=='private':
+            if settings['plans']['location']=='private' or value.get('private_plans_path'):
                 base=Path(value['private_plans_path']) if value.get('private_plans_path') else private_base(settings['plans']['private_folder'],value.get('private_plans_name',name))
-                transaction.enter_context(reservation(base,value))
+                transaction.enter_context(reservations(configured_folders(read_file(upgrade_first=False))+[(base,value)]))
             if destination.exists() and read_json(destination) != value:
                 raise Refused('Existing external profile differs; preserve it and resolve the import explicitly')
             if not destination.exists():
                 atomic_json(destination, value, immutable=True)
         entry = {'schema_version': 1, 'checkout': identifier(), 'project': project_id, 'identity': current}
-        atomic_json(path, entry, immutable=True)
+        atomic_json(path, entry, immutable=not replace)
         return value | ({'note': note, 'joined': name} if joined else {})
 
 
