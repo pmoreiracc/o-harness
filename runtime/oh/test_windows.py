@@ -112,7 +112,7 @@ class WindowsTest(unittest.TestCase):
     def test_the_dashboard_starts_at_logon_through_task_scheduler(self):
         from . import service
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OH_DATA_HOME': tmp, 'USERDOMAIN': 'PC', 'USERNAME': 'me'}), \
-                patch('oh.system.WINDOWS', True), patch('oh.service.schtasks') as schtasks:
+                patch('oh.system.WINDOWS', True), patch('oh.service.schtasks', side_effect=TaskScheduler()) as schtasks:
             (Path(tmp) / 'bin').mkdir();(Path(tmp) / 'bin/oh').write_text('launcher')
             self.assertEqual(service.install()['service'], 'OH dashboard')
             task = (Path(tmp) / 'service/dashboard-task.xml').read_text(encoding='utf-16')
@@ -124,11 +124,47 @@ class WindowsTest(unittest.TestCase):
                               and any(isinstance(target, ast.Name) and target.id == 'CONFIG' for target in node.targets))
             config = json.loads(ast.literal_eval(assignment.value.args[0]))
             self.assertEqual(Path(config['env']['OH_DATA_HOME']), Path(tmp).resolve())
-            self.assertEqual([c.args[0] for c in schtasks.call_args_list], ['/Create', '/Run'])
+            self.assertEqual([c.args[0] for c in schtasks.call_args_list], ['/Query', '/Create', '/Run'])
             self.assertIn('<MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>', task)
             service.uninstall()
             self.assertFalse((Path(tmp) / 'bin/dashboard.pyw').exists())
             self.assertEqual(schtasks.call_args_list[-1].args[:2], ('/Delete', '/F'))
+
+    def test_failed_service_start_restores_the_prior_task_and_starter(self):
+        from . import service
+        from .storage import Refused
+        for previous in (None, b'<previous-task/>'):
+            with self.subTest(previous=previous), tempfile.TemporaryDirectory() as tmp, \
+                    patch.dict(os.environ, {'OH_DATA_HOME': tmp}), patch('oh.service.schtasks', side_effect=TaskScheduler(previous, ['/Run'])) as calls:
+                starter=Path(tmp)/'bin/dashboard.pyw';starter.parent.mkdir();(starter.parent/'oh').write_text('launcher')
+                if previous:starter.write_bytes(b'old starter')
+                with self.assertRaisesRegex(Refused, 'previous task and starter were restored'):service.install_windows()
+                scheduler=calls.side_effect
+                self.assertEqual(scheduler.definition, previous)
+                self.assertEqual(starter.read_bytes() if starter.exists() else None, b'old starter' if previous else None)
+                self.assertEqual(scheduler.running, bool(previous))
+
+    def test_failed_service_removal_keeps_the_starter_and_reports_recovery(self):
+        from . import service
+        from .storage import Refused
+        for failure in ('/End', '/Delete'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp, \
+                    patch.dict(os.environ, {'OH_DATA_HOME': tmp}), patch('oh.system.WINDOWS', True), \
+                    patch('oh.service.schtasks', side_effect=TaskScheduler(b'<task/>', [failure])) as calls:
+                starter=Path(tmp)/'bin/dashboard.pyw';starter.parent.mkdir();starter.write_bytes(b'old starter')
+                with self.assertRaisesRegex(Refused, 'starter was retained'):service.uninstall()
+                self.assertTrue(starter.exists());self.assertIsNotNone(calls.side_effect.definition)
+
+    def test_failed_service_rollback_keeps_recovery_files(self):
+        from . import service
+        from .storage import Refused
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OH_DATA_HOME': tmp}), \
+                patch('oh.service.schtasks', side_effect=TaskScheduler(b'<old/>', ['/Run', '/Delete'])):
+            starter=Path(tmp)/'bin/dashboard.pyw';starter.parent.mkdir();starter.write_bytes(b'old starter');(starter.parent/'oh').write_text('launcher')
+            with self.assertRaisesRegex(Refused, 'rollback is incomplete'):service.install_windows()
+            self.assertEqual((Path(tmp)/'service/dashboard-previous.xml').read_bytes(), b'<old/>')
+            self.assertEqual((Path(tmp)/'service/dashboard-previous.pyw').read_bytes(), b'old starter')
+            self.assertTrue(starter.exists())
 
     def test_reviewers_get_the_exact_change_as_a_file(self):
         test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
@@ -151,8 +187,57 @@ class WindowsTest(unittest.TestCase):
         self.assertIn('subject.diff', prompt)
 
 
+class TaskScheduler:
+    """Simulates registration and execution separately, including partial failures."""
+    def __init__(self, definition=None, failures=()):
+        self.definition=definition;self.running=bool(definition);self.failures=list(failures)
+
+    def __call__(self, *args, check=True):
+        command=args[0]
+        if self.failures and command==self.failures[0]:
+            self.failures.pop(0)
+            raise subprocess.CalledProcessError(1, args, stderr=b'simulated failure')
+        output=b''
+        if command=='/Query':
+            output=(b'"\\OH dashboard","next","state"\n' if self.definition is not None else b'') if '/CSV' in args or 'CSV' in args else self.definition
+        elif command=='/Create':self.definition=Path(args[args.index('/XML')+1]).read_bytes()
+        elif command=='/Run':self.running=True
+        elif command=='/End':self.running=False
+        elif command=='/Delete':self.definition=None
+        return subprocess.CompletedProcess(args, 0, stdout=output, stderr=b'')
+
+
 @unittest.skipUnless(os.name == 'nt', 'Windows only')
 class NativeWindowsTest(unittest.TestCase):
+    def test_acceptance_check_selects_installed_and_private_python(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp);data=folder/'custom data';private=data/'python/3.14.7/python.exe'
+            private.parent.mkdir(parents=True);private.write_bytes(b'fixture')
+            (data/'python/current').write_text('3.14.7')
+            downloader=folder/'download.ps1';downloader.write_text('$global:downloadCalled = $true')
+            quote=lambda value: "'"+str(value).replace("'", "''")+"'"
+            script=folder/'check.ps1'
+            script.write_text("\n".join([
+                "$ErrorActionPreference = 'Stop'",
+                '. '+quote(HOME/'integrations/windows-python.ps1'),
+                '$expected = '+quote(sys.executable),
+                # Test each candidate in isolation, including py's -3 argument.
+                "foreach ($name in @('python3', 'python', 'py')) {",
+                '  function Get-Command { param($Name, $CommandType, $ErrorAction) if ($Name -eq $script:selected) { [pscustomobject]@{Source=$script:program} } }',
+                '  $script:selected = $name',
+                '  $script:program = '+quote(folder/'python.cmd'),
+                '''  $lines = @('@echo off'); if ($name -eq 'py') { $lines += @('@if not "%1"=="-3" exit /b 7', '@echo '+$expected); } else { $lines += '@echo '+$expected }; $lines += '@exit /b 0' ''',
+                '  Set-Content -Encoding ascii $script:program $lines',
+                '  $actual = Resolve-CheckPython '+quote(data)+' '+quote(downloader),
+                '  if ($actual -ne $expected -or $global:downloadCalled) { throw "Installed Python not selected: $name / $actual" }',
+                '}',
+                "function Get-Command { param($Name, $CommandType, $ErrorAction) return $null }",
+                '$actual = Resolve-CheckPython '+quote(data)+' '+quote(downloader),
+                'if ($actual -ne '+quote(private)+' -or -not $global:downloadCalled) { throw "Private Python not selected: $actual" }',
+            ]))
+            result=subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
     def test_only_you_or_administrators_may_change_a_host_program(self):
         from .system import untrusted
         folder = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, folder, ignore_errors=True)

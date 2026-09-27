@@ -6,6 +6,7 @@
 param([switch]$After)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+$data = if ($env:OH_DATA_HOME) { $env:OH_DATA_HOME } else { Join-Path $env:USERPROFILE '.local\share\o-harness' }
 $work = Join-Path $env:USERPROFILE 'oh-windows-check'
 $log = Join-Path $work 'oh-windows-check.log'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -22,7 +23,7 @@ if ($After) {
     git -C $project log --format='%h %s%n%b' -6
     & $oh --root $project status
     Get-ScheduledTask -TaskName 'OH dashboard' -ErrorAction SilentlyContinue | Format-List TaskName, State
-    Get-ChildItem (Join-Path $env:USERPROFILE '.local\share\o-harness\logs') -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "-- $($_.Name)"; Get-Content $_.FullName -Tail 20 }
+    Get-ChildItem (Join-Path $data 'logs') -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "-- $($_.Name)"; Get-Content $_.FullName -Tail 20 }
     Stop-Transcript | Out-Null
     return
 }
@@ -37,20 +38,10 @@ foreach ($tool in 'git', 'claude', 'codex', 'python3', 'python', 'py', 'bash') {
 git --version; claude --version; codex --version
 
 Step 'Python for OH'
-$py = $null
-foreach ($candidate in @(@('python3'), @('python'), @('py', '-3'))) {
-    if (Get-Command $candidate[0] -ErrorAction SilentlyContinue) {
-        & $candidate[0] @($candidate[1..9] | Where-Object { $_ }) -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>$null
-        if ($LASTEXITCODE -eq 0) { $py = $candidate; break }
-    }
-}
-if (-not $py) {
-    Write-Host 'No Python 3.11+: testing the download OH does during setup.'
-    & (Join-Path $repo 'plugins\o-harness\scripts\get-python.ps1')
-    $py = @(Join-Path $env:USERPROFILE '.local\share\o-harness\python\python.exe')
-}
-Write-Host "Using: $($py -join ' ')"
-$python = $py[0]; $pyArgs = @($py[1..9] | Where-Object { $_ }) + @('-I', '-X', 'utf8')
+. (Join-Path $PSScriptRoot 'windows-python.ps1')
+$python = Resolve-CheckPython $data (Join-Path $repo 'plugins\o-harness\scripts\get-python.ps1')
+Write-Host "Using: $python"
+$pyArgs = @('-I', '-X', 'utf8')
 
 Step 'Build and install OH from this clone'
 $dist = Join-Path $work 'dist'
@@ -84,11 +75,18 @@ Write-Host @"
 1. In a new terminal: cd $project ; claude
    a. /oh-propose Add a one-line greeting to README.md
    b. /oh-deliver   -> agree to one task: add the greeting line. Type the trigger it shows.
-   c. Wait for the checkpoint, then type: stop
+   c. While a task is running, type /oh-pause. Check status, then type /oh-resume.
+   d. At the checkpoint, type stop. Start another one-task run and let it finish.
 2. Same folder in Codex: codex
    a. `$oh-deliver  -> one task: add a second greeting line. Type the trigger it shows.
-3. Open http://localhost:4318 and check both runs are listed.
-4. Run: powershell -NoProfile -ExecutionPolicy Bypass -File "$PSCommandPath" -After
+   b. Repeat pause, resume, stop, and a fresh one-task run in Codex.
+3. Open http://localhost:4318 and check both hosts' runs and delivered commits are listed.
+4. Test an update: run "$oh" setup --development and "$oh" service-install again.
+   Restart both hosts; confirm OH still works and the dashboard opens.
+5. Test uninstall: run "$oh" service-uninstall. Confirm the scheduled task is absent
+   and the dashboard port is closed. Remove the plugin from each host; confirm it no longer loads.
+   Preserve OH data and report any failure, including the command and error.
+6. Run: powershell -NoProfile -ExecutionPolicy Bypass -File "$PSCommandPath" -After
    and paste $log back into the chat.
 "@
 Stop-Transcript | Out-Null

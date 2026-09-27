@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -61,6 +63,21 @@ def schtasks(*args,check=True):
     return subprocess.run([str(program),*args],capture_output=True,check=check)
 
 
+
+def windows_registration():
+    # Listing first distinguishes an absent task from a failed query (including access denied).
+    listing=schtasks('/Query','/FO','CSV','/NH')
+    names=[row[0].lstrip('\\').casefold() for row in csv.reader(io.StringIO(listing.stdout.decode(errors='replace'))) if row]
+    if TASK.casefold() not in names:return None
+    return schtasks('/Query','/TN',TASK,'/XML').stdout
+
+
+def remove_windows_task():
+    # Keep the executable until BOTH operations succeed. A failure can leave a live process or registration.
+    schtasks('/End','/TN',TASK)
+    schtasks('/Delete','/F','/TN',TASK)
+
+
 def install_windows():
     """A Task Scheduler task that starts the dashboard at your logon, without admin rights or a window."""
     from xml.sax.saxutils import escape
@@ -71,7 +88,13 @@ def install_windows():
             'env':{'OH_DATA_HOME':str(state_home()),'OH_SERVICE_FOLLOWS_ACTIVE':'1','PATH':os.environ.get('PATH','')}|(
                 {'XDG_CONFIG_HOME':os.environ['XDG_CONFIG_HOME']} if os.environ.get('XDG_CONFIG_HOME') else {})}
     from .config import write_text
-    starter=state_home()/'bin/dashboard.pyw';write_text(starter,STARTER%json.dumps(config))
+    starter=state_home()/'bin/dashboard.pyw'
+    try:previous=windows_registration()
+    except (OSError,subprocess.CalledProcessError) as exc:
+        raise Refused('Cannot inspect the existing dashboard task; repair Task Scheduler and retry: '+said(exc,str(exc))) from exc
+    old_starter=starter.read_bytes() if starter.exists() else None
+    if previous is not None and old_starter is None:
+        raise Refused('The dashboard task has no starter. Restore '+str(starter)+' or remove the task in Task Scheduler before reinstalling.')
     user=os.environ.get('USERDOMAIN','')+'\\'+os.environ.get('USERNAME','')
     task=f'''<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -90,12 +113,32 @@ def install_windows():
 </Task>
 '''
     definition=state_home()/'service/dashboard-task.xml';definition.parent.mkdir(parents=True,exist_ok=True)
-    definition.write_text(task,encoding='utf-16')
+    backup=definition.with_name('dashboard-previous.xml')
+    starter_backup=definition.with_name('dashboard-previous.pyw')
+    if previous is not None:backup.write_bytes(previous)
+    if old_starter is not None:starter_backup.write_bytes(old_starter)
+    attempted=False
     try:
+        definition.write_text(task,encoding='utf-16')
+        write_text(starter,STARTER%json.dumps(config))
+        attempted=True
         schtasks('/Create','/F','/TN',TASK,'/XML',str(definition))
-        schtasks('/Run','/TN',TASK)  # StopExisting ends a running dashboard (and, through its job, its server) first
-    except subprocess.CalledProcessError as exc:
-        raise Refused('Task Scheduler refused the dashboard task: '+said(exc,str(exc))) from exc
+        schtasks('/Run','/TN',TASK)  # StopExisting ends the previous dashboard and its job's server
+    except (OSError,subprocess.CalledProcessError) as exc:
+        try:
+            if attempted and windows_registration() is not None:remove_windows_task()
+            if old_starter is None:starter.unlink(missing_ok=True)
+            else:starter.write_bytes(old_starter)
+            if attempted and previous is not None:
+                schtasks('/Create','/F','/TN',TASK,'/XML',str(backup))
+                schtasks('/Run','/TN',TASK)
+        except (OSError,subprocess.CalledProcessError) as recovery:
+            raise Refused('Dashboard install failed and rollback is incomplete: '+said(recovery,str(recovery))+
+                          '. End and remove "'+TASK+'" in Task Scheduler, then '+
+                          ('restore '+str(starter_backup)+' to '+str(starter)+', import '+str(backup)+' and run the task.'
+                           if previous is not None else 'run oh service-install again.')) from exc
+        raise Refused('Task Scheduler refused the dashboard task: '+said(exc,str(exc))+
+                      '; the previous task and starter were restored when present. Repair Task Scheduler and retry.') from exc
     return {'url':'http://localhost:4318','service':TASK}
 
 
@@ -164,7 +207,11 @@ def install():
 def uninstall():
     from .system import WINDOWS
     if WINDOWS:
-        schtasks('/End','/TN',TASK,check=False);schtasks('/Delete','/F','/TN',TASK,check=False)
+        try:
+            if windows_registration() is not None:remove_windows_task()
+        except (OSError,subprocess.CalledProcessError) as exc:
+            raise Refused('Dashboard uninstall could not finish: '+said(exc,str(exc))+
+                          '. Its starter was retained. End and delete "'+TASK+'" in Task Scheduler, then retry oh service-uninstall.') from exc
         (state_home()/'bin/dashboard.pyw').unlink(missing_ok=True)
         return {'status':'stopped','data':'preserved'}
     if sys.platform!='darwin':raise Refused('macOS and Windows services only')
