@@ -176,6 +176,15 @@ def _run(root,invoke):
     journal,state=load_run(root)
     lockpath=checkout_file(root, 'oh-runner.lock')
     with lock(lockpath,wait=False):
+        with lock(checkout_file(root, 'oh-control.lock')):
+            state=reduce(journal.records())
+            if state.get('discard'):
+                from .workflow import discard_proposal
+                discard_proposal(root,journal,state)
+                return
+            if state.get('branch_move'):
+                finish_move(root,journal,state)
+                state=reduce(journal.records())
         # A proposal cuts its branch when it first writes; nothing runs on main before that.
         if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in ('main','master',''):
             raise Refused('Execute tasks on a short-lived branch, not main or detached HEAD')
@@ -341,14 +350,38 @@ def blocked_layout(root,state):
 
 
 def move(root,journal,topic):
-    """A proposal started on main gets its own branch, propose/<topic>, right before OH first writes."""
+    """Record an exact branch transition before switching or writing any plan files."""
     state=reduce(journal.records());current=git(root,'branch','--show-current')
+    if state.get('branch_move'):
+        finish_move(root,journal,state)
+        return
     if current not in ('main','master'):return
     from .branches import incarnation
-    from .plans import branch_for
+    from .plans import branch_for,Blocked
     name=branch_for(root,topic,state['id'],'propose')
-    git(root,'switch','-c',name)
-    journal.append('branch.moved',{'from':current,'branch':name,'incarnation':incarnation(root,name,create=True)})
+    git(root,'branch',name)
+    try:
+        journal.append('branch.moving',{'from':current,'from_incarnation':state['incarnation'],
+            'branch':name,'incarnation':incarnation(root,name,create=True),'base':state['base']})
+    except Exception:
+        if not reduce(journal.records()).get('branch_move'):
+            git(root,'branch','-D',name)
+        raise
+    try:finish_move(root,journal,reduce(journal.records()))
+    except Refused as exc:raise Blocked(f'Proposal branch transition is pending; run OH again after fixing: {exc}') from None
+
+
+def finish_move(root,journal,state):
+    from .branches import incarnation
+    pending=state['branch_move'];current=git(root,'branch','--show-current')
+    if (current not in (pending['from'],pending['branch']) or git(root,'status','--porcelain')
+            or git(root,'rev-parse','HEAD')!=pending['base']
+            or git(root,'rev-parse',pending['branch'])!=pending['base']
+            or incarnation(root,pending['branch'])!=pending['incarnation']
+            or incarnation(root,pending['from'])!=pending['from_incarnation']):
+        raise Refused('Restore the unchanged proposal branches and recorded base before retrying the pending transition')
+    if current!=pending['branch']:git(root,'switch',pending['branch'])
+    journal.append('branch.moved',pending)
 
 
 def apply_pending(root):

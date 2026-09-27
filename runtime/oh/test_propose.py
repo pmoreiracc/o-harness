@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from . import plans
 from . import test_workflow as fixtures
 from .cli import host_hook
@@ -150,6 +151,87 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['status'], 'stopped')
         self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
         self.assertNotIn('propose/search', self.git('branch', '--list'))
+
+    def test_proposals_refuse_feature_and_detached_starts_before_recording_a_run(self):
+        for branch in ('feature/work',None):
+            with self.subTest(branch=branch):
+                if branch:self.git('switch','-qc',branch)
+                else:self.git('switch','--detach','-q','main')
+                with self.assertRaisesRegex(Refused,'Committed proposals must start from main'):
+                    self.propose()
+                self.assertEqual(self.calls,[])
+                self.assertEqual(self.git('status','--porcelain'),'')
+                from .workflow import active_file
+                self.assertFalse(active_file(self.root).exists())
+
+    def test_branch_transition_recovers_after_switch_without_another_worker(self):
+        from .storage import Journal
+        original=Journal.append
+        def fail(journal,kind,data):
+            if kind=='branch.moved':raise OSError('publication interrupted')
+            return original(journal,kind,data)
+        self.propose()
+        with patch.object(Journal,'append',fail):
+            with self.assertRaisesRegex(OSError,'publication interrupted'):run(self.root,self.worker([idea()]))
+        self.assertEqual(self.git('branch','--show-current'),'propose/search')
+        self.assertIn('branch_move',load_run(self.root)[1])
+        result=run(self.root,self.worker([]))
+        self.assertEqual(result['status'],'approval_checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
+        self.assertNotIn('branch_move',load_run(self.root)[1])
+        self.assertEqual(self.where['roadmap'].read_text().count('`search`'),1)
+
+    def test_branch_identity_failure_removes_only_the_unpublished_branch(self):
+        from .branches import incarnation
+        self.propose()
+        def fail(root,branch,**kwargs):
+            if branch.startswith('propose/'):raise OSError('identity unavailable')
+            return incarnation(root,branch,**kwargs)
+        with patch('oh.branches.incarnation',fail):
+            with self.assertRaisesRegex(OSError,'identity unavailable'):run(self.root,self.worker([idea()]))
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertNotIn('propose/search',self.git('branch','--list'))
+        self.assertEqual(run(self.root,self.worker([]))['status'],'approval_checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
+
+    def test_pending_branch_transition_preserves_new_human_edits(self):
+        from .storage import Journal
+        original=Journal.append
+        def fail(journal,kind,data):
+            if kind=='branch.moved':raise OSError('publication interrupted')
+            return original(journal,kind,data)
+        self.propose()
+        with patch.object(Journal,'append',fail):
+            with self.assertRaises(OSError):run(self.root,self.worker([idea()]))
+        path=self.root/'human.txt';path.write_text('keep this')
+        with self.assertRaisesRegex(Refused,'Restore the unchanged proposal branches'):
+            run(self.root,self.worker([]))
+        self.assertEqual(path.read_text(),'keep this')
+        self.assertEqual([c[0] for c in self.calls],['analysis'])
+
+    def test_reconsider_recovers_after_switch_before_branch_deletion(self):
+        from .storage import git
+        self.propose();run(self.root,self.worker([idea()]))
+        def fail(root,*args,**kwargs):
+            if args[:2]==('branch','-D'):raise OSError('delete interrupted')
+            return git(root,*args,**kwargs)
+        with patch('oh.workflow.git',fail):
+            with self.assertRaisesRegex(OSError,'delete interrupted'):self.say('reconsider')
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        state=load_run(self.root)[1]
+        self.assertEqual(state['status'],'stopped');self.assertIn('discard',state)
+        self.assertEqual(run(self.root,self.worker([]))['status'],'stopped')
+        self.assertNotIn('discard',load_run(self.root)[1])
+        self.assertNotIn('propose/search',self.git('branch','--list'))
+        self.assertEqual(self.git('status','--porcelain'),'')
+        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
+
+    def test_reconsider_never_discards_a_human_edit(self):
+        self.propose();run(self.root,self.worker([idea()]))
+        path=self.where['roadmap'];path.write_text(path.read_text()+'\nHuman note\n')
+        with self.assertRaises(Refused):self.say('reconsider')
+        self.assertIn('Human note',path.read_text())
+        self.assertEqual(load_run(self.root)[1]['status'],'approval_checkpoint')
 
     def test_the_gate_words_reach_oh_only_while_a_proposal_waits(self):
         from .entry import command

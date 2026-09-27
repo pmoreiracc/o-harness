@@ -16,7 +16,7 @@ and code and picks one route:
 - or **unclear**, with the two readings and the question to answer.
 
 OH writes the row, milestone, decision record or task itself (on a new `propose/<topic>`
-branch when you start from `main`), runs your checks and has it reviewed independently. Then
+branch; start from `main` or `master`), runs your checks and has it reviewed independently. Then
 it shows what it understood, the route and why, and exactly what it wrote, and waits for you
 to type **approve** (commit it), **refine: <what to change>** (ask again with your words), or
 **reconsider** (undo it and write nothing). After approve, **pr** opens the pull request;
