@@ -581,3 +581,135 @@ def render(root, slug, value, record):
 
 def decision_slug(title):
     return re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:60].strip('-') or 'decision'
+
+
+def propose_manifest(root, idea):
+    """The run that routes one idea: a roadmap row, a task in an approved design, or an improvement."""
+    where = layout(root)
+    if where['location'] != 'repo':
+        raise Refused('/oh-propose writes plans in the repository for now; private plans get their approval step in a coming '
+                      'update. Use oh config set plans.location repo, or wait for that update')
+    idea = idea.strip()
+    if not idea:raise Refused('Say what you want to add: /oh-propose <idea>')
+    shown = {key: Path(where[key]).relative_to(root).as_posix() for key in ('roadmap', 'designs', 'decisions')}
+    started = 'exists' if Path(where['roadmap']).is_file() else 'is not started yet; OH starts it if the idea needs a row'
+    instructions = (f"The idea, in the person's words:\n{idea}\n\nRoadmap: {shown['roadmap']} ({started}). "
+                    f"Design docs: {shown['designs']}/. Decision records: {shown['decisions']}/.")
+    if Path(where['roadmap']).is_file():
+        try:verify_roadmap(root, where)
+        except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
+    return ({'workflow': 'propose', 'tasks': [{'id': 'propose', 'title': 'Propose: ' + idea.splitlines()[0][:60],
+                                               'instructions': instructions, 'transition': {'profile': 'intake'}}]},
+            {'workflow': 'propose', 'plans': {'location': 'repo'}})
+
+
+def proposal(value):
+    """The intake worker's answer, checked: its route and prose. OH decides every number and link."""
+    from .hosts import PROPOSAL_SCHEMA
+    fields = PROPOSAL_SCHEMA['required']
+    if not isinstance(value, dict) or set(value) != set(fields):
+        raise Refused('The answer must be the JSON object the output schema describes')
+    if any(not isinstance(value[k], str) for k in fields if k != 'depends') or not isinstance(value['depends'], list) \
+            or any(not isinstance(d, str) for d in value['depends']):
+        raise Refused('Every field is a string, and depends a list of strings')
+    if value['route'] not in ('roadmap', 'task', 'improvement', 'unclear'):
+        raise Refused("route must be 'roadmap', 'task', 'improvement' or 'unclear'")
+    for key in ('understanding', 'reason', 'text'):
+        if not value[key].strip():raise Refused(f'{key} is empty')
+    for key, limit in (('understanding', SUMMARY_CHARS), ('reason', SUMMARY_CHARS), ('summary', SUMMARY_CHARS), ('evidence', 2 * SUMMARY_CHARS),
+                       ('text', 2 * SUMMARY_CHARS), ('milestone_title', TITLE_CHARS), ('decision_title', TITLE_CHARS)):
+        if len(value[key].strip()) > limit:raise Refused(f'{key} is longer than {limit} characters')
+    if '|' in value['decision_title']:raise Refused('A decision title cannot contain |')
+    if value['route'] == 'roadmap':
+        if not re.fullmatch(SLUG, value['slug']):raise Refused(f"'{value['slug']}' is not a kebab-case slug")
+        if not re.fullmatch(r'M[0-9]+', value['milestone']):raise Refused(f"'{value['milestone']}' is not a milestone id like M3")
+        decision = [value[k].strip() for k in ('decision_title', 'decision_context', 'decision_alternatives', 'decision_consequences')]
+        if any(decision) and not all(decision):raise Refused('A contested choice needs its decision title, context, alternatives and consequences')
+    if value['route'] == 'task':
+        if not re.fullmatch(r'[0-9]{4}', value['design']):raise Refused(f"'{value['design']}' is not a four-digit design number")
+        if not value['track'].strip():raise Refused('A task names the track it joins')
+        if any(not re.fullmatch(r'[0-9]+', d) for d in value['depends']):raise Refused('A task depends on task numbers')
+    return value
+
+
+def add_task(root, where, design, track, text, depends):
+    """Append one pending task to an approved design's track, numbered after the doc's last task."""
+    path = design_file(root, design, where)
+    if not path:raise Refused(f'There is no design doc {design}')
+    status = status_of(path)
+    if status != 'approved':
+        raise Refused(f"Design doc {design} is {status or 'missing a status'}: only an approved design takes new tasks"
+                      + ('; a frozen design has shipped, so new work is a roadmap row or an improvement' if status == 'frozen' else ''))
+    text = one_line(text, 'The task text')
+    rows = [row.split(US) for row in plan(root, design, where).strip('\n').split('\n')]
+    owner = track.strip().split()[0].lower()
+    if owner not in {row[2] for row in rows}:
+        raise Refused(f"Design doc {design} has no {track} track; its tracks are {', '.join(sorted({row[2] for row in rows}))}")
+    for need in depends:
+        if need not in {row[0] for row in rows}:raise Refused(f'Design doc {design} has no task {need}')
+    number = str(max(int(row[0]) for row in rows) + 1)
+    lines, ending = rows_of(path)
+    section, end = None, None
+    for index, line in outside(lines):
+        heading = re.match(r'###' + WS + r'+(\S+).*[Tt]rack' + WS + '*$', line)
+        if heading:section = heading[1].lower();continue
+        if re.match(r'#{1,3}' + WS, line):
+            if section == owner:break
+            section = None;continue
+        if section == owner and line.strip():end = index
+    if end is None:raise Refused(f'Cannot find the end of the {track} track in design doc {design}')
+    needs = f" Depends on task{'s' if len(depends) > 1 else ''} {', '.join(depends)}." if depends else ''
+    task = f'- [ ] **{number}.** {text.rstrip()}{needs}'
+    lines.insert(end + 1, task)
+    with all_or_nothing(path):
+        write_rows(path, lines, ending)
+        verify_design(root, where, design)
+    return number, task
+
+
+def render_proposal(root, value, record, move):
+    """Write the proposal's route into the checkout: nothing for an improvement or an unclear idea.
+    `move` puts the work on its own branch before anything is written; `record` saves the paths first."""
+    import hashlib
+    from .storage import project
+    where = blocked(lambda: layout(root))
+    if where['location'] != 'repo':raise Blocked('This proposal writes plans in the repository, but plans.location changed')
+    with editing(root):
+        changed = changes(root)
+        if changed:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(changed[:5])}); a proposal commit holds only its plan files")
+        value = proposal(value)
+        if Path(where['roadmap']).is_file():blocked(lambda: verify_roadmap(root, where))
+        shown = {k: value[k] for k in ('route', 'understanding', 'reason', 'evidence', 'text', 'summary')}
+        if value['route'] in ('improvement', 'unclear'):return shown | {'intent': [], 'files': {}, 'lines': []}
+        if value['route'] == 'roadmap':
+            paths, topic = [Path(where['roadmap'])], value['slug']
+            if value['decision_title'].strip():
+                number = blocked(lambda: next_number(where['decisions']))
+                paths += [Path(where['decisions']) / f'{number}-{decision_slug(value["decision_title"])}.md', Path(where['decisions']) / 'README.md']
+        else:
+            path = design_file(root, value['design'], where)
+            if not path:raise Refused(f"There is no design doc {value['design']}")
+            paths, topic = [Path(path)], f"design-{value['design']}"
+        intent = [Path(p).relative_to(root).as_posix() for p in paths]
+        skipped = ignored(root, intent)
+        if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+        blocked(lambda: move(topic))
+        record(intent)
+        lines = []
+        with all_or_nothing(*paths):
+            if value['route'] == 'roadmap':
+                if not Path(where['roadmap']).exists():blocked(lambda: start_roadmap(where, project(root)['name']))
+                if value['milestone'] not in dict(milestones(where)):
+                    add_milestone(root, where, value['milestone'], value['milestone_title'], value['milestone_done_when'])
+                    lines.append(f"### {value['milestone']} — {value['milestone_title'].strip()}")
+                add_initiative(root, where, value['milestone'], value['slug'], value['text'], value['depends'])
+                lines.append(next(line for _, line in outside(rows_of(where['roadmap'])[0]) if line.startswith(f"| `{value['slug']}` |")))
+                if value['decision_title'].strip():
+                    number, _ = blocked(lambda: write_decision(root, where, value['decision_title'], value['decision_context'],
+                                               value['decision_alternatives'], value['decision_consequences'], recommendation=value['summary']))
+                    lines.append(f"Decision record {number} (proposed): {value['decision_title'].strip()}")
+            else:
+                _, task = add_task(root, where, value['design'], value['track'], value['text'], value['depends'])
+                lines.append(task)
+        files = {relative: hashlib.sha256((Path(root) / relative).read_bytes()).hexdigest() for relative in intent}
+    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines}

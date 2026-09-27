@@ -97,6 +97,8 @@ def reduce(records):
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}
+        elif kind=='branch.moved':state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
+        elif kind=='proposal':state.setdefault('proposals',{})[d['attempt']]=d
         elif kind=='subject.prepared':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Rendered subject without one implementation attempt')
@@ -196,6 +198,25 @@ def _choose(root, choice, event):
         append('run.status',{'status':state.get('pause_return_status','running') if choice=='resume' else 'running'})
         append('task.intervention',{'task':task})
         best_effort('task.intervention',state['project'],state['id'],task,reason=choice)
+    elif choice in ('approve','reconsider') or choice.startswith('refine:'):
+        if state['status']!='approval_checkpoint':raise Refused('No proposal is waiting for approve, refine or reconsider')
+        task=state['tasks'][0]['id'];last=[a for a in state['attempts'] if a['task']==task][-1]
+        if choice=='reconsider':
+            # Write nothing: undo what OH wrote and leave the branch it cut, when that branch holds no commit.
+            from .plans import undo
+            undo(root,state.get('rendered'))
+            if state.get('moved_from') and git(root,'rev-parse','HEAD')==state['base'] and not git(root,'status','--porcelain'):
+                git(root,'switch',state['moved_from']);git(root,'branch','-D',state['branch'])
+            append('decision',{'source':source,'choice':choice})
+            append('run.status',{'status':'stopped'})
+        else:
+            words=choice[len('refine:'):].strip() if choice.startswith('refine:') else ''
+            if choice.startswith('refine:') and not words:raise Refused('Say what to change: refine: <what to change>')
+            decided='refine' if words else 'approve'
+            append('proposal',{'attempt':last['id'],'choice':decided,'feedback':words,'source':source})
+            append('decision',{'source':source,'choice':decided})
+            append('run.status',{'status':'running'})
+            if words:append('task.intervention',{'task':task})
     elif choice in ('pr','stop'):
         if choice=='pr' and not committed(state):raise Refused('Planning does not authorize product publication')
         if choice=='pr' and state['status'] not in ('checkpoint','completed'):
@@ -203,8 +224,9 @@ def _choose(root, choice, event):
         decision={'source':source,'choice':choice}
         if choice=='pr':
             head=git(root,'rev-parse','HEAD');branch=git(root,'branch','--show-current')
-            commits=[item['commit'] for item in state['summaries']]
-            if not commits or head!=commits[-1] or branch!=state['branch']:
+            commits=[item['commit'] for item in state['summaries'] if 'commit' in item]
+            if not commits:raise Refused('Nothing was committed, so there is nothing to publish')
+            if head!=commits[-1] or branch!=state['branch']:
                 raise Refused('PR choice must cover the exact completed branch head')
             decision.update(head=head,branch=branch,commits=commits)
         append('decision',decision)
@@ -242,10 +264,10 @@ def _choose(root, choice, event):
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':'running'})
     else:raise Refused('Unknown human choice')
-    if state['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','needs_attention') and any(item['kind']=='run.status' and item['data']['status']=='running' for item in events):
+    if state['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','approval_checkpoint','needs_attention') and any(item['kind']=='run.status' and item['data']['status']=='running' for item in events):
         pending=next((t['id'] for t in state['tasks'] if t['id'] not in state['done']),None)
         from datetime import datetime,timezone
-        waits=[entry for entry in journal.records() if entry['kind']=='run.status' and entry['data']['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','needs_attention')]
+        waits=[entry for entry in journal.records() if entry['kind']=='run.status' and entry['data']['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','approval_checkpoint','needs_attention')]
         if pending and waits:
             best_effort('phase.finished',state['project'],state['id'],pending,phase='waiting',duration_ms=(datetime.now(timezone.utc)-datetime.fromisoformat(waits[-1]['at'])).total_seconds()*1000)
     journal.append('transition',{'source':event,'events':events})
@@ -275,7 +297,10 @@ def checkpoint(root):
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
             'config_hash':state['config_hash'],'version':state['harness_version']}|(
-            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') else {})|(
+            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
+            {'proposal':{k:v for k,v in state['rendered'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent')}
+                        |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
+             if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
 
 

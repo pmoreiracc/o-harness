@@ -27,7 +27,10 @@ def host_hook(root,host,payload,*,verified):
             from .plans import design_manifest
             manifest,plan=design_manifest(root,intent.strip())
             start(root,manifest,verified,plan=plan)
-        else:start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
+        else:
+            from .plans import propose_manifest
+            manifest,plan=propose_manifest(root,intent)
+            start(root,manifest,verified,plan=plan)
         return checkpoint(root)
     delivery=re.fullmatch(r'[$/](?:o-harness:)?oh-deliver\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
     if delivery:
@@ -45,7 +48,9 @@ def host_hook(root,host,payload,*,verified):
         prepared=resolve(root,parsed[1],verified,'tasks')
         start(root,prepared['manifest'],verified,prepared=prepared)
         return checkpoint(root)
-    if prompt in ('pause','continue','resume','retry','pr','stop','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope') and active_file(root).exists():
+    from .entry import REFINE
+    if (prompt in ('pause','continue','resume','retry','pr','stop','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope','approve','reconsider')
+            or re.fullmatch(REFINE,prompt,re.S)) and active_file(root).exists():
         choose(root,prompt,verified)
         return checkpoint(root)
     return None
