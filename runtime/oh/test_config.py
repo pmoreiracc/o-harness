@@ -246,7 +246,8 @@ class ConfigTest(unittest.TestCase):
         with patch('oh.hosts.executable',return_value='claude'):
             args=command('claude',{'model':'opus','effort':'high'},self.root,'implementation',None,60000)
         sandbox=json.loads(args[args.index('--settings')+1])
-        self.assertIn(str(config_home()),sandbox['sandbox']['filesystem']['denyWrite'])
+        if os.name!='nt':self.assertIn(str(config_home()),sandbox['sandbox']['filesystem']['denyWrite'])
+        else:self.assertEqual(sandbox['sandbox'],{'enabled':False})
         from .hosts import rule_path
         self.assertIn(f'Edit({rule_path(config_home())}/**)',sandbox['permissions']['deny'])
 

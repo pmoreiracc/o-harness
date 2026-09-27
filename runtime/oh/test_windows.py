@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 from pathlib import Path
@@ -118,7 +119,11 @@ class WindowsTest(unittest.TestCase):
             self.assertIn('<LogonTrigger><Enabled>true</Enabled><UserId>PC\\me</UserId>', task)
             self.assertIn('<RunLevel>LeastPrivilege</RunLevel>', task);self.assertIn('dashboard.pyw', task)
             starter = (Path(tmp) / 'bin/dashboard.pyw').read_text()
-            compile(starter, 'dashboard.pyw', 'exec');self.assertIn(json.dumps(tmp)[1:-1], starter)
+            syntax = ast.parse(starter, 'dashboard.pyw')
+            assignment = next(node for node in syntax.body if isinstance(node, ast.Assign)
+                              and any(isinstance(target, ast.Name) and target.id == 'CONFIG' for target in node.targets))
+            config = json.loads(ast.literal_eval(assignment.value.args[0]))
+            self.assertEqual(Path(config['env']['OH_DATA_HOME']), Path(tmp).resolve())
             self.assertEqual([c.args[0] for c in schtasks.call_args_list], ['/Create', '/Run'])
             self.assertIn('<MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>', task)
             service.uninstall()
@@ -153,6 +158,8 @@ class NativeWindowsTest(unittest.TestCase):
         folder = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         program = folder / 'host.exe';program.write_bytes(b'MZ')
         self.assertIsNone(untrusted(program, 'file'))
+        subprocess.run(['icacls', str(program), '/grant', '*S-1-3-4:(M)'], check=True, capture_output=True)
+        self.assertIsNone(untrusted(program, 'file'))
         subprocess.run(['icacls', str(program), '/grant', '*S-1-1-0:(M)'], check=True, capture_output=True)
         self.assertIn('S-1-1-0', untrusted(program, 'file'))
         subprocess.run(['icacls', str(folder), '/grant', '*S-1-5-32-545:(OI)(CI)(W)'], check=True, capture_output=True)
@@ -180,8 +187,10 @@ class NativeWindowsTest(unittest.TestCase):
         from .verification import verify
         root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         (root / 'ok.cmd').write_text('@exit /b 0\r\n')
-        os.chdir(HOME);self.addCleanup(os.chdir, os.getcwd())
+        self.addCleanup(os.chdir, os.getcwd());os.chdir(HOME)
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        subprocess.run(['git', '-C', str(root), 'add', 'ok.cmd'], check=True)
+        subprocess.run(['git', '-C', str(root), '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'check script'], check=True)
         with patch.dict(os.environ, {'OH_DATA_HOME': str(root / 'state')}):
             results = verify(root, [{'name': 'ok', 'command': ['.\\ok.cmd']}, {'name': 'cmd', 'command': ['cmd', '/c', 'ok.cmd']}], 'p')
         self.assertEqual([r['returncode'] for r in results], [0, 0], results)

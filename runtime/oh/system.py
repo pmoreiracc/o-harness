@@ -189,6 +189,8 @@ def untrusted(path,kind):
     try:
         trusted=TRUSTED_SIDS|{_current_user()}
         if _sid_text(owner) not in trusted:return 'is owned by '+_sid_text(owner)
+        # OWNER RIGHTS denotes this object's owner, which has just passed the trust check.
+        trusted=trusted|{'S-1-3-4'}
         if not dacl.value:return 'has no access list, so everyone can change it'
         count=ctypes.cast(dacl.value+4,ctypes.POINTER(ctypes.c_ushort))[0]  # ACL: revision, padding, size, AceCount
         for index in range(count):
