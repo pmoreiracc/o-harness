@@ -55,7 +55,7 @@ try {
     if (-not (Test-Path (Join-Path $target 'python.exe'))) { throw "Python $version is not complete in $target; run setup again." }
     $next = Join-Path $root ".current-$unique"
     Set-Content -NoNewline -Encoding ascii -Path $next -Value $version
-    if (Test-Path $current) { [IO.File]::Replace($next, $current, $null) }
+    if (Test-Path $current) { [IO.File]::Replace($next, $current, [NullString]::Value) }
     else { [IO.File]::Move($next, $current) }
     # Keep older complete versions: an installed dashboard task or an in-flight batch
     # may still name that interpreter even when no process currently has it open.
