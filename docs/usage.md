@@ -11,7 +11,7 @@ it; it is saved outside your repository and nothing is implemented.
 `/oh-design <slug>` writes the design doc for one row of your roadmap, such as
 `/oh-design auth`. A fresh worker writes the design; OH numbers the doc, links it from the
 row and checks its task list. An independent reviewer checks the design, and OH commits it
-(on a new `design/<slug>` branch when you start from `main`). Type **pr** to open the pull request; merging it approves the
+(on a new `design/<slug>` branch; start from `main` or `master`). Type **pr** to open the pull request; merging it approves the
 design. When a question has to be answered before the design can be written, OH writes a
 proposed decision record instead, with the question, the options and a recommendation, and
 leaves the decision to you.

@@ -20,7 +20,7 @@ or private (OH's folder, nothing in the repository). Save the answer with
 `config set plans.location repo` or `private`. `/oh-design` needs `repo` for now.
 
 Run `--root <checkout> run`. It verifies the native human invocation and starts the design
-(on a new `design/<slug>` branch when the checkout is on `main`). OH reads the roadmap row, a fresh worker writes the prose, and
+(on a new `design/<slug>` branch; the checkout must start on `main` or `master`). OH reads the roadmap row, a fresh worker writes the prose, and
 OH numbers the doc, links it from the row, checks its task list, has it reviewed
 independently and commits the reviewed files. Never write or edit plan files yourself, and
 never run your own worker or review loop. If `run` refuses, relay its reason; it names the fix.

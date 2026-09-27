@@ -96,8 +96,11 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
 
     def test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed(self):
+        main = self.git('rev-parse', 'main')
         self.design_run()
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+        self.assertEqual(self.git('rev-parse', 'HEAD'), main)
+        self.assertEqual(load_run(self.root)[1]['base'], main)
         result = run(self.root, self.worker([design()]))
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['plan'], {'kind': 'design', 'number': '0001', 'title': 'Sign-in', 'path': 'docs/design/0001-auth.md', 'tasks': 2,
@@ -114,6 +117,26 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(self.git('diff', '--name-only', 'main', 'HEAD').split(), ['docs/design/0001-auth.md', 'docs/roadmap.md'])
         choose(self.root, 'pr', self.event('2', 'pr'))
         self.assertEqual(load_run(self.root)[1]['status'], 'pr')
+
+    def test_feature_and_detached_starts_leave_no_run_or_branch(self):
+        from .storage import state_home
+        from .workflow import active_file
+        for detached in (False, True):
+            with self.subTest(detached=detached):
+                if detached:self.git('switch', '--detach', 'main')
+                else:self.git('switch', '-c', 'feature/payments')
+                before = sorted(str(p) for p in state_home().rglob('*') if p.is_file() and p.suffix != '.lock')
+                with unittest.mock.patch('oh.workflow.Journal') as journal:
+                    with self.assertRaisesRegex(Refused, 'must start from main or master'):
+                        self.design_run(turn=str(detached))
+                    journal.assert_not_called()
+                self.assertFalse(active_file(self.root).exists())
+                self.assertEqual(self.git('branch', '--list', 'design/*'), '')
+                self.assertEqual(sorted(str(p) for p in state_home().rglob('*') if p.is_file() and p.suffix != '.lock'), before)
+                self.assertEqual(self.calls, [])
+        self.git('switch', 'main')
+        self.design_run(turn='fresh')
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
 
     def test_an_answer_oh_cannot_use_goes_back_to_the_worker(self):
         broken = design(body=BODY.replace('- [ ] **2.**', '- [ ] 2.'))
@@ -372,7 +395,7 @@ class DesignRunTest(unittest.TestCase):
     def test_a_new_design_never_lands_on_another_plan_s_branch(self):
         self.design_run();run(self.root, self.worker([design()]))
         choose(self.root, 'pr', self.event('2', 'pr'))
-        with self.assertRaisesRegex(Refused, 'on design/auth, the branch of another plan'):self.design_run('ledger', turn='3')
+        with self.assertRaisesRegex(Refused, 'must start from main or master'):self.design_run('ledger', turn='3')
 
 
 if __name__ == '__main__':

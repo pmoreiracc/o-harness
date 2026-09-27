@@ -136,6 +136,8 @@ def _start(root, manifest, event, prepared=None, plan=None):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
     original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
+    if plan and workflow=='design' and committed(plan) and original not in ('main','master'):
+        raise Refused('Committed designs must start from main or master; switch to that branch before typing /oh-design again')
     try:
         if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
             created='codex/oh-'+run[:8]
@@ -143,7 +145,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
         import re
         current=git(root,'branch','--show-current')
         if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
-            raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main (or your working branch) first')
+            raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main first')
         if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
             from .plans import branch_for
             created=branch_for(root,plan['slug'],run)
