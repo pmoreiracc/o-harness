@@ -107,11 +107,15 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         (directory/'subject.diff').write_text(changed_text(root,rendered))
         prompt+=('\nThe subject is the plan files OH wrote: '+', '.join(rendered['files'])+'. Their exact change is in '
                  +str(directory/'subject.diff')+'. The unchanged code tree is not the review subject by itself.')
-    elif role=='review' and not committed(state):
+    if role=='review' and (intake(task) or not committed(state) and not data.get('artifact')):
         workers=[a for a in reduce(journal.records())['attempts'] if a['role']=='analysis' and a.get('outcome')=='implemented']
         artifact=Path(workers[-1]['evidence'])/'result.json'
         from .storage import read_json
-        data['artifact']={'path':str(artifact),'hash':digest(read_json(artifact))}
+        if intake(task):
+            proposal={'answer':read_json(artifact)['structured'],'rendered':state['rendered']}
+            artifact=directory/'proposal.json'
+            atomic_json(artifact,proposal,immutable=True)
+        data['artifact']=data.get('artifact',{})|{'path':str(artifact),'hash':digest(read_json(artifact))}
         prompt+='\nReview the actual planning artifact at '+str(artifact)+'. The unchanged code tree is not the review subject by itself.'
     if role=='review':
         prior=[{'id':a['id'],'outcome':a.get('outcome'),'tree':a['tree'],'git_tree':a.get('git_tree'),
@@ -198,7 +202,8 @@ def _run(root,invoke):
             if state.get('discard'):
                 from .workflow import discard_proposal
                 discard_proposal(root,journal,state)
-                return
+                if not state['discard'].get('resume'):return
+                state=reduce(journal.records())
             if state.get('branch_move'):
                 finish_move(root,journal,state)
                 state=reduce(journal.records())
@@ -236,10 +241,8 @@ def _run(root,invoke):
             worker_attempts=[a for a in previous if a['role'] in ('implementation','analysis')]
             reviews=[a for a in previous if a['role']=='review']
             decided=state.get('proposals',{}).get(previous[-1]['id']) if gated(state,task) and previous else None
-            if gated(state,task) and previous and not decided and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']
-                    or (previous[-1]['role']=='analysis' and (state.get('rendered') or {}).get('attempt')==previous[-1]['id']
-                        and not state['rendered'].get('files'))):
-                # A reviewed proposal, or an improvement with nothing to write, waits for approve, refine or reconsider.
+            if gated(state,task) and previous and not decided and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']):
+                # Every route waits for independent review before human approval.
                 status(journal,state,'approval_checkpoint');return checkpoint(root)
             if decided and decided['choice']=='approve':
                 complete_reviewed(root,journal,state,task,previous[-1]);continue
@@ -292,7 +295,6 @@ def _run(root,invoke):
                     check(root)
                     rendered=write_plan(root,journal,state,task,work)
                 if rendered is None:continue
-                if intake(task) and not rendered['files']:continue  # nothing to check or review: the gate is next
             elif task.get('transition'):
                 with lock(checkout_file(root,'oh-control.lock')):
                     from .controls import check
@@ -361,6 +363,14 @@ def write_plan(root,journal,state,task,work):
         return None
     plan['attempt']=work['id']
     journal.append('subject.prepared',{'attempt':work['id'],'tree':tree(root),'plan':plan})
+    current=reduce(journal.records())
+    if intake(task) and not plan['files'] and current.get('moved_from'):
+        from .workflow import discard_proposal
+        from .branches import incarnation
+        target=current['moved_from']
+        journal.append('proposal.discard',{'branch':current['branch'],'incarnation':current['incarnation'],
+            'base':current['base'],'return_to':target,'return_incarnation':incarnation(root,target),'resume':True})
+        discard_proposal(root,journal,reduce(journal.records()))
     return plan
 
 
@@ -421,7 +431,16 @@ def complete_reviewed(root,journal,state,task,review):
         state=reduce(journal.records())
         if state['status']!='running':return
         task_id=task['id'];expected=review.get('git_tree')
+        if intake(task):
+            from .storage import read_json
+            artifact=review.get('artifact')
+            if not artifact or digest(read_json(artifact['path']))!=artifact['hash']:
+                raise Refused('The proposal artifact differs from its independent review')
+            if read_json(artifact['path'])['rendered']!=state['rendered']:
+                raise Refused('The proposal changed after independent review')
         if intake(task) and not (state.get('rendered') or {}).get('files'):
+            if git(root,'rev-parse','HEAD')!=review['head'] or tree(root)!=review['tree']:
+                raise Refused('The project changed while the proposal was reviewed')
             # An approved improvement or unclear idea: nothing was written, so nothing is committed.
             journal.append('task.completed',{'task':task_id,'route':state['rendered']['route'],'summary':state['rendered']['summary'],
                 'evidence':review['evidence']})

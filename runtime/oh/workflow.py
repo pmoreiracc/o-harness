@@ -104,7 +104,11 @@ def reduce(records):
             state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
             state.pop('branch_move',None)
         elif kind=='proposal.discard':state['discard']=d
-        elif kind=='proposal.discarded':state.pop('discard',None)
+        elif kind=='proposal.discarded':
+            pending=state.pop('discard',{})
+            if pending.get('resume'):
+                state.update(branch=pending['return_to'],incarnation=pending['return_incarnation'])
+                state.pop('moved_from',None)
         elif kind=='proposal':state.setdefault('proposals',{})[d['attempt']]=d
         elif kind=='subject.prepared':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
@@ -315,6 +319,8 @@ def discard_proposal(root,journal,state):
     from .plans import undo
     from .branches import incarnation
     pending=state['discard'];branch=pending['branch'];target=pending['return_to']
+    if target and pending.get('return_incarnation') and incarnation(root,target)!=pending['return_incarnation']:
+        raise Refused('The original branch was recreated; restore its recorded identity before cleanup')
     current=git(root,'branch','--show-current')
     exists=bool(git(root,'branch','--list',branch))
     if current not in (branch,target) or git(root,'rev-parse','HEAD')!=pending['base']:

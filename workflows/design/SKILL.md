@@ -6,9 +6,8 @@ Use the absolute `<plugin>/scripts/oh` entry supplied by the invoking skill. Res
 selected Git checkout. Run `--root <checkout> config`; if unregistered, run `init` once: it
 joins the project of the same repository, or names a new one after the repository (pass
 `--name` only when the user asks for another name, or when `config` or `init` says the name is
-taken or ambiguous; then ask the user which name to use). If `config` then lists no checks, save appropriate ordinary
-project checks with `config set checks '<JSON list>'` and tell the user which; never replace
-existing checks here. No OH files, hooks or settings belong in the product.
+taken or ambiguous; then ask the user which name to use). Existing project checks run when
+configured; design can proceed without checks. No OH files, hooks or settings belong in the product.
 
 The argument is one roadmap slug, such as `/oh-design auth`. Without one, read the roadmap
 that `plans path` names and list the initiatives that have no design yet, or say new work

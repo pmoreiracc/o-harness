@@ -15,8 +15,8 @@ wrong, and the cheapest to catch. Then pick one `route` and give the one-line `r
   approach, or adds a new area of the product (new tables, a new bounded context). Give
   `slug` (kebab-case, new), `text` (the initiative in one line, no `|`), `milestone` and
   `depends`. Choose the milestone by what the work unblocks, not by when it is wanted; a
-  shipped milestone (✅) takes no new rows. For a new milestone give its id (the next `M`
-  number), `milestone_title` and `milestone_done_when` (one line each). `depends` lists only
+  shipped milestone (✅) takes no new rows. For a new milestone give an unused `M` id,
+  `milestone_title` and `milestone_done_when` (one line each); OH assigns the next number. `depends` lists only
   hard edges: slugs or milestone ids that genuinely have to come first.
   If where it belongs is genuinely contested (where it sits, what owns it, one area or two),
   also fill `decision_title` (the question, one line, no `|`), `decision_context`,
@@ -25,7 +25,8 @@ wrong, and the cheapest to catch. Then pick one `route` and give the one-line `r
 - **task**: new behaviour inside an initiative whose design doc is `approved`. Give `design`
   (its four-digit number), `track` (the track's name as in its `### <Name> track` heading),
   `text` (the task in one line, saying what to read to build it) and `depends` (task numbers
-  in that doc). A `frozen` design has shipped: new work there is a roadmap row when it needs
+  in that doc). Never put `Depends on` or `Blocked on` clauses in task prose; OH renders dependency structure.
+  A `frozen` design has shipped: new work there is a roadmap row when it needs
   several pull requests or has more than one approach, otherwise an improvement. A `draft`
   design isn't approved: say so in `reason` and route it as `unclear`.
 - **improvement**: a change to behaviour that already exists, or obvious work that owes no
