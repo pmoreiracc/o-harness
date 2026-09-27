@@ -46,11 +46,12 @@ stop the batch. It never discards your edits.
 
 ## Projects
 
-- `oh init --name <name>` registers a checkout. It grants no work.
-- Another worktree of the same project: `oh init --name <its name>` joins that project (or
+- `oh init` registers a checkout, named after its repository (`--name` picks another name).
+  It grants no work.
+- Another worktree of the same project: `oh init` joins that project (or
   `--attach <project-id>`).
-- A checkout you moved: `oh init --name <name> --reattach <checkout-id>`.
-- A new checkout at an old path: `oh init --name <name> --replace`.
+- A checkout you moved: `oh init --reattach <checkout-id>`.
+- A new checkout at an old path: `oh init --replace`.
 
 To reuse a project's settings and checks elsewhere, run `oh profile-export <file>` and
 `oh --root <other-checkout> profile-import <file>` (add `--name <name>` when a project on

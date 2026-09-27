@@ -52,6 +52,12 @@ def join_candidates(current, name, here):
     return holders, (holders & same if holders else same)
 
 
+def repository_name(current):
+    """The repository's folder name: the main checkout's, also for a worktree (my-app for my-app/.git)."""
+    common = Path(current['common'])
+    return common.parent.name if common.name == '.git' else Path(current['root']).name
+
+
 def joinable(root):
     """Names oh init would join for an unregistered checkout: exactly the ones register accepts."""
     from .config import name_of
@@ -97,11 +103,15 @@ def checkout_state(root):
 
 
 @state_writer
-def register(root, name, kind='product', *, attach=None, reattach=None, imported=None, replace=False):
-    """Onboarding grants no work. Reattachment is explicit and identity-checked."""
-    if kind not in ('product', 'harness') or not isinstance(name, str) or not name.strip():
-        raise Refused('A project needs a name and product/harness kind')
+def register(root, name=None, kind='product', *, attach=None, reattach=None, imported=None, replace=False):
+    """Onboarding grants no work. Reattachment is explicit and identity-checked. Without a name, a
+    checkout joins the project of its Git repository, or starts one named after the repository."""
     current = identity(root)
+    if name is None and not (attach or reattach or imported):
+        known = joinable(root)
+        name = known[0] if len(known) == 1 else repository_name(current)
+    if kind not in ('product', 'harness') or not (attach or reattach or isinstance(name, str) and name.strip()):
+        raise Refused('A project needs a name and product/harness kind')
     home = state_home()
     with lock(home / 'registry' / '.lock'):
         path = index_path(root)

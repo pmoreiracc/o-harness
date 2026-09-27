@@ -641,7 +641,7 @@ def change(root, key, raw=None, *, scope=None):
     else:name = project_name(root, required=False)
     if scope == 'project' and not name:
         raise Refused('This checkout is not an OH project: add --global to change your settings for every project, '
-                      'or register it with oh init --name <name>')
+                      'or register it with oh init')
     keys, parts, creating = {k for k, _, _ in rules()}, key.split('.'), raw is not None  # only a set may start a new file
     known = key in keys or (key == 'checks' and scope == 'project')
     if raw is not None and key == 'checks' and scope == 'global':raise Refused('checks belong to one project; run this in the project, without --global')
@@ -751,9 +751,9 @@ def describe(root):
     known = [] if name else repository_names(root)
     notes = [] if name else [
         f'This checkout is not registered yet. It belongs to the Git repository of the OH project {known[0]}: '
-        f'oh init --name "{known[0]}" joins it.' if len(known) == 1 else
+        f'oh init joins it.' if len(known) == 1 else
         f'This checkout is not registered yet. OH projects of its Git repository: {", ".join(known)}; oh init with one of '
-        'those names joins it.' if known else 'This checkout is not an OH project yet: register it with oh init --name <name>.']
+        'those names joins it.' if known else 'This checkout is not an OH project yet: oh init registers it, named after its repository.']
     if len(known) == 1:result['join'] = known[0]
     if name:
         result['checks'] = project_checks(root, data)

@@ -117,7 +117,7 @@ class RegistryTests(unittest.TestCase):
         for birth in (True,False):  # the rule never depends on birth times, which Linux lacks
             with self.subTest(birth=birth),patch('oh.registry.stamp',side_effect=lambda path:real(path) if birth else
                                                 {k:v for k,v in real(path).items() if k!='birth'}):
-                self.known_only_through_a_worktree(f'Geoffrey {birth}')
+                self.known_only_through_a_worktree(f'Planner {birth}')
 
     def known_only_through_a_worktree(self,name):
         from .config import describe
@@ -148,6 +148,16 @@ class RegistryTests(unittest.TestCase):
         from .config import describe
         self.assertEqual(describe(fresh)['join'],'Fixture')  # the name register accepts, once
         self.assertEqual(register(fresh,'Fixture')['id'],main)
+
+    def test_a_project_is_named_after_its_repository_unless_you_choose(self):
+        first=register(self.root)
+        self.assertEqual(first['name'],self.root.name)
+        sibling=self.base/'sibling';self.git('worktree','add','-qb','sibling',str(sibling))
+        self.assertEqual(register(sibling)['id'],first['id'])  # a worktree joins, whatever its folder is called
+        other=self.base/'other';self.git('init','-q',str(other),root=self.base)
+        self.assertEqual(register(other,'Chosen')['name'],'Chosen')
+        old=lookup(other)['checkout'];moved=self.base/'moved';other.rename(moved)
+        self.assertEqual(register(moved,reattach=old)['name'],'Chosen')  # a moved checkout needs no name
 
     def test_a_moved_checkout_cannot_come_back_to_a_name_taken_meanwhile(self):
         register(self.root,'Fixture');old=lookup(self.root)

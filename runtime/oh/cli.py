@@ -66,7 +66,7 @@ def main(argv=None):
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?',default='origin/main');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
     publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?',default='origin/main');publication.add_argument('--validate-event',type=Path)
     trusted=sub.add_parser('trust-host');trusted.add_argument('host',choices=['codex','claude']);trusted.add_argument('path',type=Path,nargs='?')
-    init=sub.add_parser('init');init.add_argument('--name',required=True);init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
+    init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
     sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
