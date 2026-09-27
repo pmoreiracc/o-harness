@@ -82,6 +82,23 @@ class DesignRunTest(unittest.TestCase):
         self.design_run(turn='fresh')
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
 
+    def test_failed_start_cleanup_preserves_a_concurrently_updated_branch(self):
+        from . import workflow
+        original_git=workflow.git
+        base=self.git('rev-parse','HEAD').strip()
+        human=self.git('commit-tree',base+'^{tree}','-p',base,'-m','Human work').strip()
+        def concurrent(root,*args,**kwargs):
+            result=original_git(root,*args,**kwargs)
+            if args==('switch','main'):
+                original_git(root,'update-ref','refs/heads/design/auth',human)
+            return result
+        with unittest.mock.patch('oh.branches.incarnation',side_effect=RuntimeError('start failed')):
+            with unittest.mock.patch('oh.workflow.git',side_effect=concurrent):
+                with self.assertRaises(Refused):self.design_run()
+        self.assertEqual(self.git('rev-parse','design/auth').strip(),human)
+        self.assertEqual(self.git('branch','--show-current').strip(),'main')
+        self.assertEqual(self.calls,[])
+
     def test_a_start_error_after_publishing_the_pointer_keeps_the_run_branch(self):
         from .storage import atomic_json
         def publish_then_fail(*args, **kwargs):
@@ -193,10 +210,11 @@ class DesignRunTest(unittest.TestCase):
         written = plans.render(self.root, 'auth', design(), intents.append)
         self.assertEqual(intents, [['docs/design/0001-auth.md', 'docs/roadmap.md']])
         doc = self.root / 'docs/design/0001-auth.md'
-        doc.write_text(doc.read_text() + 'A human note.\n')
+        original = doc.read_bytes()
+        doc.write_bytes(original + b'A human note.\n')
         with self.assertRaisesRegex(Refused, 'changed after OH wrote it'):plans.undo(self.root, written)
         self.assertTrue(doc.exists())
-        doc.write_text(doc.read_text().replace('A human note.\n', ''))
+        doc.write_bytes(original)  # Undo needs the exact original bytes, including LF on Windows.
         for _ in range(2):plans.undo(self.root, written)  # safe to repeat
         self.assertFalse(doc.exists());self.assertEqual(self.git('status', '--porcelain'), '')
         # A crash between recording the intent and saving the hashes leaves files OH can't prove it wrote: a person decides.
@@ -470,15 +488,71 @@ class DesignRunTest(unittest.TestCase):
                     with self.assertRaisesRegex(Refused,'Raw HTML'):plans.section_prose('Background\n'+opener)
         plans.section_prose('Example:\n```html\n<!--\n<pre>\n```')
 
+    def test_reference_definitions_cannot_hide_tasks_or_tracks(self):
+        hidden='### Hidden track\n- [ ] **99.** Hidden task.'
+        definitions=[f'[hidden]: /url {opening}\n{hidden}\n{closing}'
+                     for opening,closing in [('"','"'),("'","'"),('(',')')]]
+        definitions += ['[hidden\n### Hidden track\n]: /url',
+                        '[hidden\\]\n### Hidden track\n]: /url',
+                        '[hidden\n```\n### Hidden track\n```\n]: /url',
+                        '[hidden\\\n### Hidden track\n]: /url',
+                        '[hidden]: /url "', '[^footnote]: hidden']
+        for definition in definitions:
+            for indent in ('','   '):
+                with self.subTest(definition=definition,indent=indent):
+                    with self.assertRaisesRegex(Refused,'reference definitions'):
+                        plans.answer(design(body='## 1. Approach\n\n'+indent+definition+'\n\n'+BODY))
+                    for field in ('context','alternatives','consequences','summary'):
+                        with self.assertRaisesRegex(Refused,'reference definitions'):
+                            plans.answer(decision()|{field:indent+definition})
+                    with self.assertRaisesRegex(Refused,'reference definitions'):
+                        plans.section_prose(indent+definition)
+        safe='[Inline link](https://example.com).\n\n```md\n[example]: /url "title"\n```\n\n'
+        plans.section_prose(safe)
+        result=plans.render(self.root,'auth',plans.answer(design(body=safe+BODY)),lambda intent:None)
+        rows=plans.plan(self.root,result['number']).splitlines()
+        self.assertEqual([(row.split(plans.US)[0],row.split(plans.US)[2]) for row in rows],[('1','core'),('2','core')])
+
+    def test_symlinked_decision_log_is_refused_before_start_or_write(self):
+        target=Path(self.temp.name)/'external-log.md'
+        target.write_text('# Decisions\n\n## The log\n\n| # | Decision | Date | Status |\n|---|---|---|---|\n')
+        target.chmod(0o600);before=target.read_bytes();mode=target.stat().st_mode & 0o777
+        log=self.where['decisions']/'README.md';log.parent.mkdir(parents=True);log.symlink_to(target)
+        self.git('add','.');self.git('commit','-qm','linked decision log')
+        with self.assertRaisesRegex(Refused,'ordinary file'):self.design_run()
+        self.assertEqual(self.calls,[])
+        with self.assertRaisesRegex(Refused,'ordinary file'):
+            plans.render(self.root,'auth',decision(),lambda intent:self.fail('must refuse before recording intent'))
+        with self.assertRaisesRegex(Refused,'ordinary file'):
+            plans.write_decision(self.root,self.where,'Choice','Context','Alternatives','Consequences')
+        self.assertTrue(log.is_symlink());self.assertEqual(target.read_bytes(),before)
+        self.assertEqual(target.stat().st_mode & 0o777,mode)
+        self.assertEqual(list(log.parent.glob('[0-9]*.md')),[])
+
+    def test_undo_of_older_symlink_output_never_chmods_its_target(self):
+        import hashlib
+        target=Path(self.temp.name)/'external-log.md';target.write_text('Human file');target.chmod(0o600)
+        mode=target.stat().st_mode & 0o777
+        log=self.where['decisions']/'README.md';log.parent.mkdir(parents=True);log.symlink_to(target)
+        self.git('add','.');self.git('commit','-qm','linked decision log')
+        prior=plans.file_identity(log);name=log.relative_to(self.root).as_posix()
+        log.unlink();log.write_text('Old OH output')
+        previous={'intent':[name],'files':{name:hashlib.sha256(log.read_bytes()).hexdigest()},
+                  'identities':{name:plans.file_identity(log)},'before_identities':{name:prior}}
+        plans.undo(self.root,previous)
+        self.assertTrue(log.is_symlink());self.assertEqual(target.read_text(),'Human file')
+        self.assertEqual(target.stat().st_mode & 0o777,mode)
+
     def test_plan_writes_and_rollback_preserve_existing_permissions(self):
         path=self.where['roadmap'];before=path.read_bytes();path.chmod(0o600)
+        mode=path.stat().st_mode & 0o777  # Windows preserves only the writable bit, not POSIX owner/group bits.
         plans.write(path,before+b'\n')
-        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.assertEqual(path.stat().st_mode & 0o777,mode)
         with self.assertRaisesRegex(RuntimeError,'failed'):
             with plans.all_or_nothing(path):
                 path.unlink();plans.write(path,'temporary');raise RuntimeError('failed')
         self.assertEqual(path.read_bytes(),before+b'\n')
-        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.assertEqual(path.stat().st_mode & 0o777,mode)
 
     def test_fenced_structure_and_alternate_headings_cannot_change_visible_tasks(self):
         for marker in ('### API track','## 3. Other','- [ ] **99.** Example only.','-[ ] **99.** Example only.'):
@@ -507,9 +581,11 @@ class DesignRunTest(unittest.TestCase):
 
     def test_human_mode_only_edit_is_preserved_before_repair(self):
         self.interrupt_review()
-        path=self.where['designs']/'0001-auth.md';path.chmod(0o600)
-        with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([design()]))
-        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        path=self.where['designs']/'0001-auth.md';path.chmod(0o444)
+        try:
+            with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([design()]))
+            self.assertEqual(path.stat().st_mode & 0o777,0o444)
+        finally:path.chmod(0o600)  # Let Windows remove the temporary fixture.
 
     def test_a_changed_plans_location_stops_a_repair_before_a_worker_is_paid(self):
         calls = self.interrupt_review()
