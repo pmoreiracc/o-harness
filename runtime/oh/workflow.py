@@ -188,7 +188,10 @@ def _start(root, manifest, event, prepared=None, plan=None):
                     or git(root,'status','--porcelain')):
                 raise Refused('Run start failed and the checkout changed; inspect it, then switch back to '+original+' before typing the command again')
             git(root,'switch',original)
-            git(root,'branch','-D',created)
+            from subprocess import CalledProcessError
+            try:git(root,'update-ref','-d','refs/heads/'+created,base)
+            except CalledProcessError as exc:
+                raise Refused('Run start failed and branch cleanup was refused; inspect '+created+' before starting again') from exc
         raise
     best_effort('run.started',p['id'],run,name=p['name'],work_kind=p['kind'],host=event['host'],
                 version=data['harness_version'],config_hash=data['config_hash'])

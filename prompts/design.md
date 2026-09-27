@@ -65,3 +65,5 @@ contain lines starting with `##` or `- [`. Other code, `#` comments included, is
 record. A `title` has at most 150 characters. Fields your kind doesn't use are empty strings.
 Use LF line endings in every field; carriage returns (including CRLF) are refused.
 Raw HTML and HTML comments are allowed only inside fenced code examples.
+Link reference definitions (`[label]: destination`, including multiline labels or titles) are
+also allowed only inside fenced examples. Use inline links in prose.
