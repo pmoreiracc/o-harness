@@ -450,6 +450,15 @@ class DesignRunTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'Git ignores docs/decisions/0001-decision.md'):self.design_run()
         self.assertEqual(self.calls,[])
 
+    def test_carriage_returns_cannot_hide_tasks_or_decision_structure(self):
+        for ending in ('\r','\r\n','\n\r'):
+            with self.subTest(ending=repr(ending)):
+                with self.assertRaises(Refused):plans.answer(design(body=BODY+ending+'- [ ] **3.** Visible task.\n'))
+                for field in ('context','alternatives','consequences','summary'):
+                    text='Prose'+ending+'## Decision'+ending+'Worker choice.'
+                    with self.assertRaises(Refused):plans.answer(decision()|{field:text})
+                    with self.assertRaises(Refused):plans.section_prose(text)
+
     def test_fenced_structure_and_alternate_headings_cannot_change_visible_tasks(self):
         for marker in ('### API track','## 3. Other','- [ ] **99.** Example only.','-[ ] **99.** Example only.'):
             for fence in ('```md','~~~'):
