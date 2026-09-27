@@ -249,6 +249,8 @@ def _run(root,invoke):
             if designing(task):
                 from .plans import Blocked,changes,digest_of
                 rendered=reduce(journal.records())['rendered']
+                from .plans import validate_outputs
+                validate_outputs(root,rendered)
                 extra=[p for p in changes(root) if p not in rendered['intent']]
                 if extra:raise Blocked(f"The checks left files OH didn't write ({', '.join(extra[:5])}); a design commit holds only "
                                        'its plan files. Make the checks clean up, or list those files in .git/info/exclude, then run OH again')
@@ -319,6 +321,9 @@ def complete_reviewed(root,journal,state,task,review):
     with lock(checkout_file(root, 'oh-control.lock')):
         state=reduce(journal.records())
         if state['status']!='running':return
+        if designing(task):
+            from .plans import validate_outputs
+            validate_outputs(root,state['rendered'])
         task_id=task['id'];expected=review.get('git_tree')
         if not committed(state):
             from .storage import read_json
