@@ -142,6 +142,9 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     if role=='review':
         outcome,findings=hosts.review_result(result)
         if after!=before:outcome='review_mutated_tree'
+        if 'files' in (data.get('artifact') or {}):
+            from .plans import current_files
+            if current_files(root,data['artifact']['files'])!=data['artifact']['files']:outcome='review_mutated_tree'
     else:
         outcome='failed' if result['failed'] else 'implemented';findings=[]
         if outcome=='implemented' and (designing(task) or intake(task)):
@@ -426,14 +429,14 @@ def complete_reviewed(root,journal,state,task,review):
         artifact=review.get('artifact') or {}
         if not committed(state) and 'files' in artifact:
             # Private plans, approved by the person just now: bound to exactly the reviewed files.
-            from .plans import current_files,finish_private
-            if current_files(root,artifact['files'])!=artifact['files']:
-                raise Refused('The plan files changed after their review; stop this run, then plan again')
+            from .plans import finish_private,editing
+            if blocked_layout(root,state):raise Refused(blocked_layout(root,state))
             if git(root,'rev-parse','HEAD')!=review['head'] or tree(root)!=review['tree']:
                 raise Refused('The project changed while the plan was reviewed')
-            approved=finish_private(root,state,task['transition']['profile'])
-            journal.append('task.completed',{'task':task_id,'artifact':artifact,'review':review['id'],'approved':approved,
-                'summary':review['summary'],'evidence':review['evidence']})
+            with editing(root):
+                approved=finish_private(root,state,task['transition']['profile'],journal,artifact['files'])
+                journal.append('task.completed',{'task':task_id,'artifact':artifact,'review':review['id'],'approved':approved,
+                    'summary':review['summary'],'evidence':review['evidence']})
             return
         if not committed(state):
             from .storage import read_json

@@ -867,11 +867,30 @@ def changed_text(root, rendered):
     return ''.join(parts)
 
 
-def finish_private(root, state, profile):
+def finish_private(root, state, profile, journal, files):
     """After the person approved a reviewed private plan: a design becomes approved, bound to its content; a
     task added to an approved design keeps that design approved with the task in it."""
-    where = layout(root)
-    rendered = state['rendered']
-    if profile == 'plans' and rendered.get('kind') == 'design':return approve(root, where, rendered['number'], state['id'], flip=True)
-    if profile == 'intake' and rendered.get('route') == 'task':return approve(root, where, rendered['design'], state['id'], flip=False)
+    import base64,hashlib
+    where=layout(root);rendered=state['rendered'];intent=state.get('private_approval')
+    if not intent:
+        if current_files(root,files)!=files:raise Refused('The plan files changed after their review; stop this run, then plan again')
+        number=rendered['number'] if profile=='plans' and rendered.get('kind')=='design' else rendered.get('design') if profile=='intake' and rendered.get('route')=='task' else None
+        intent={'before':files,'after':dict(files),'number':number,'write':None}
+        if number and profile=='plans':
+            path=Path(design_file(root,number,where));rows,ending=rows_of(path)
+            close=next((i for i in range(1,len(rows)) if re.match('---'+WS+'*$',rows[i])),0)
+            spots=[i for i in range(1,close) if rows[i].startswith('status:')]
+            if rows[:1]!=['---'] or len(spots)!=1:raise Blocked('The private design needs one frontmatter status line')
+            verify_design(root,where,number,approving=True)
+            rows[spots[0]]='status: approved';body=(ending.join(rows)+ending).encode()
+            intent['write']={'path':str(path),'bytes':base64.b64encode(body).decode()}
+            intent['after'][str(path)]=hashlib.sha256(body).hexdigest()
+        journal.append('private.approval.intent',intent)
+    current=current_files(root,files)
+    if intent['before']!=files or any(current[k] not in (intent['before'][k],intent['after'][k]) for k in files):
+        raise Refused('The plan files changed after their review; preserve the edit and stop this run')
+    if intent['write']:
+        item=intent['write']
+        if current[item['path']]!=intent['after'][item['path']]:write(item['path'],base64.b64decode(item['bytes']))
+    if intent['number']:return approve(root,where,intent['number'],state['id'],flip=False)
     return None
