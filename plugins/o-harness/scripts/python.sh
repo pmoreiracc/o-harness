@@ -15,11 +15,11 @@ data="${OH_DATA_HOME:-$home/.local/share/o-harness}"
 check='import sys; sys.exit(sys.version_info < (3, 11))'
 pick() {
   for name in python3 python; do
-    if command -v "$name" >/dev/null 2>&1 && "$name" -c "$check" >/dev/null 2>&1; then interpreter=$name; return 0; fi
+    if command -v "$name" >/dev/null 2>&1 && "$name" -I -c "$check" >/dev/null 2>&1; then interpreter=$name; return 0; fi
   done
-  if command -v py >/dev/null 2>&1 && py -3 -c "$check" >/dev/null 2>&1; then interpreter=py; flag=-3; return 0; fi
+  if command -v py >/dev/null 2>&1 && py -3 -I -c "$check" >/dev/null 2>&1; then interpreter=py; flag=-3; return 0; fi
   own="$data/python/$(cat "$data/python/current" 2>/dev/null)/python.exe"
-  if [ -n "$windows" ] && "$own" -c "$check" >/dev/null 2>&1; then interpreter=$own; return 0; fi
+  if [ -n "$windows" ] && "$own" -I -c "$check" >/dev/null 2>&1; then interpreter=$own; return 0; fi
   return 1
 }
 interpreter= flag=

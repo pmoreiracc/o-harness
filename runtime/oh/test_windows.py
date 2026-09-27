@@ -15,6 +15,32 @@ SCRIPTS = HOME / 'plugins/o-harness/scripts'
 
 
 class WindowsTest(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'Uses POSIX sh and symlinks')
+    def test_launcher_and_hook_probes_never_import_project_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp);bin=folder/'bin';bin.mkdir();project=folder/'project';project.mkdir()
+            (bin/'dirname').symlink_to(shutil.which('dirname'))
+            (project/'sitecustomize.py').write_text('from pathlib import Path\nPath("planted").touch()\n')
+            script=folder/'safe.py';script.write_text('print("isolated")\n')
+            env=dict(os.environ,PATH=str(bin),HOME=tmp,PYTHONPATH=str(project),OH_DATA_HOME=str(folder/'data'))
+            for name in ('python3','python','py','private'):
+                if name=='private':
+                    own=folder/'data/python/test';own.mkdir(parents=True)
+                    (own/'python.exe').symlink_to(sys.executable)
+                    (own.parent/'current').write_text('test');(bin/'cat').symlink_to(shutil.which('cat'))
+                    env['OS']='Windows_NT';env.pop('USERPROFILE',None)
+                elif name=='py':
+                    import shlex
+                    (bin/name).write_text('#!/bin/sh\nshift\nexec '+shlex.quote(sys.executable)+' "$@"\n');(bin/name).chmod(0o755)
+                else:(bin/name).symlink_to(sys.executable)
+                for mode in ('--launcher','--hook'):
+                    with self.subTest(name=name,mode=mode):
+                        result=subprocess.run(['/bin/sh',str(SCRIPTS/'python.sh'),mode,str(script)],cwd=project,env=env,capture_output=True,text=True)
+                        self.assertEqual(result.returncode,0,result.stderr)
+                        self.assertEqual(result.stdout.strip(),'isolated')
+                        self.assertFalse((project/'planted').exists())
+                if name!='private':(bin/name).unlink()
+
     def test_claude_rules_name_windows_paths_the_way_claude_reads_them(self):
         from .hosts import rule_path
         self.assertEqual(rule_path(r'C:\Users\me\.config\o-harness'), '//c/Users/me/.config/o-harness')
