@@ -53,6 +53,8 @@ CI runs the tests on a Windows Server runner, but no real Claude Code or Codex r
 Windows has been recorded yet, so treat Windows support as a preview.
 
 - **Git for Windows**, which includes Git Bash: Claude Code runs OH's prompt hook through it.
+- Codex uses its default Windows `cmd` hook runner. A custom PowerShell hook shell is not
+  covered by this preview; keep the default for OH's packaged Windows hook.
 - **Python:** OH uses Python 3.11 or newer if it finds one (`python3`, `python` or `py -3`).
   If there is none, `setup` downloads the official Python 3.14.7 Windows package from
   python.org into `%USERPROFILE%\.local\share\o-harness\python`: about 12 MB, checked

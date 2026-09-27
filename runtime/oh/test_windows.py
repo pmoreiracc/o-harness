@@ -116,9 +116,30 @@ class WindowsTest(unittest.TestCase):
             build(Path(tmp) / 'codex/o-harness', 'codex');build(Path(tmp) / 'claude/o-harness', 'claude')
             codex = json.loads((Path(tmp) / 'codex/o-harness/hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]
             claude = json.loads((Path(tmp) / 'claude/o-harness/hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]
-            self.assertEqual(codex['commandWindows'], 'cmd /c "%PLUGIN_ROOT%\\scripts\\hook.cmd" codex')
+            self.assertEqual(codex['commandWindows'], '"%PLUGIN_ROOT%\\scripts\\hook.cmd" codex')
             self.assertNotIn('commandWindows', claude)
             for name in ('python.cmd', 'hook.cmd', 'oh.cmd', 'python.sh', 'get-python.ps1'):self.assertTrue((Path(tmp) / 'codex/o-harness/core' / name).is_file())
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires the actual Windows cmd hook runner')
+    def test_packaged_codex_hook_runs_through_outer_cmd_quotes(self):
+        from .installation import build
+        with tempfile.TemporaryDirectory(prefix='OH hook spaces ') as tmp:
+            package=Path(tmp)/'Codex Plugin';build(package,'codex')
+            # Keep the packaged hook.cmd, python.cmd and human-event.py. Replace only the
+            # OH subprocess boundary: host attestation is tested separately, never forged here.
+            (package/'scripts/oh').write_text('import json,sys\nassert sys.argv[-2:]==["--host","codex"]\nprint(json.dumps({"received":json.load(sys.stdin),"authorized":False}))\n')
+            hook=json.loads((package/'hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]['commandWindows']
+            shell=os.environ['ComSpec']
+            # Mirrors command_runner.rs: cmd.exe /C plus raw_arg("\"{command_line}\"").
+            command=f'"{shell}" /C "{hook}"'
+            payload={'hook_event_name':'UserPromptSubmit','session_id':'fixture','prompt':'/oh-design auth','cwd':tmp}
+            env=dict(os.environ,PLUGIN_ROOT=str(package));env.pop('OH_CHILD_ATTEMPT',None)
+            result=subprocess.run(command,executable=shell,env=env,cwd=tmp,input=json.dumps(payload),capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            output=json.loads(result.stdout)['hookSpecificOutput']
+            self.assertEqual(output['hookEventName'],'UserPromptSubmit')
+            forwarded=json.loads(output['additionalContext'].removeprefix('OH: '))
+            self.assertEqual(forwarded,{'received':payload,'authorized':False})
 
     def test_json_values_can_come_from_a_file(self):
         test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')

@@ -45,8 +45,9 @@ def build(destination, host):
     for group in hooks['hooks']['UserPromptSubmit']:
         for hook in group['hooks']:
             hook['command']=hook['command'].rsplit(' ',1)[0]+' '+host
-            # Codex runs Windows hooks without sh; cmd /c works whether it uses cmd or PowerShell.
-            if host=='codex':hook['commandWindows']='cmd /c "%PLUGIN_ROOT%\\scripts\\hook.cmd" codex'
+            # Codex's default Windows runner supplies cmd /C and its outer quote pair.
+            # Keep the quoted executable first, avoiding a redundant nested shell.
+            if host=='codex':hook['commandWindows']='"%PLUGIN_ROOT%\\scripts\\hook.cmd" codex'
     atomic_json(destination/'hooks/hooks.json',hooks)
     if host=='codex':
         for path in (destination/'skills').glob('*/SKILL.md'):
