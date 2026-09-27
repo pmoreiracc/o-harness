@@ -21,6 +21,8 @@ def host_hook(root,host,payload,*,verified):
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
     if planning:
         kind,intent=planning.groups()
+        from .workflow import unfinished
+        if unfinished(root,verified):raise Refused('An unfinished run exists in this checkout; resume it, or stop it with /oh-stop, first')
         if kind=='design':
             from .plans import design_manifest
             manifest,plan=design_manifest(root,intent.strip())
@@ -156,7 +158,8 @@ def main(argv=None):
             from .authority import stage
             result=stage(root,args.host,json.load(sys.stdin))
         elif args.command in ('run','start'):
-            from .authority import materialize
+            from .authority import materialize,refused_last
+            refused_last(root)
             materialize(root)
             if args.command=='start' and args.request:
                 from .workflow import load_run

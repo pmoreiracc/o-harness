@@ -49,6 +49,14 @@ def human_event(payload, host):
     return {'host':host,'session':session,'turn':turn,'prompt':prompt.strip()}
 
 
+def unfinished(root,event):
+    """Whether this checkout has a run, other than the one this very event started, that isn't stopped, published
+    or completed. (A replay of the event after a crash finds its own run.)"""
+    if not active_file(root).exists():return False
+    _,state=load_run(root)
+    return state['source']!=digest({k:event[k] for k in ('host','session','turn','prompt')}) and state['status'] not in ('stopped','pr','completed')
+
+
 def active_file(root):
     return checkout_file(root, 'oh-active-run.json')
 
@@ -129,6 +137,10 @@ def _start(root, manifest, event, prepared=None, plan=None):
     run=identifier();checkout=checkout_id(root)
     if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
         git(root,'switch','-c','codex/oh-'+run[:8])
+    import re
+    current=git(root,'branch','--show-current')
+    if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
+        raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main (or your working branch) first')
     if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
         from .plans import branch_for
         git(root,'switch','-c',branch_for(root,plan['slug'],run))

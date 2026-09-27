@@ -440,6 +440,9 @@ def design_manifest(root, slug):
     row = initiative(root, where, slug)
     try:verify_roadmap(root, where)
     except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
+    planned = [Path(where['designs']) / f'{next_number(where["designs"])}-{slug}.md', Path(where['roadmap'])]
+    if (skipped := ignored(root, [Path(p).relative_to(root).as_posix() for p in planned])):
+        raise Refused(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
     shown = {key: Path(where[key]).relative_to(root).as_posix() for key in ('roadmap', 'designs', 'decisions')}
     instructions = (f"Design the roadmap initiative `{slug}` in milestone {row['milestone']}: {row['text']}\n"
                     f"It depends on: {', '.join(row['depends']) or 'nothing'}.\n"
@@ -455,8 +458,10 @@ def branch_for(root, slug, run, kind='design'):
     import subprocess
     def exists(name):
         return subprocess.run(['git', '-C', str(root), 'rev-parse', '--verify', '--quiet', 'refs/heads/' + name], capture_output=True).returncode == 0
+    def nested(name):  # design/auth can't exist beside design/auth/v2
+        return bool(subprocess.run(['git', '-C', str(root), 'for-each-ref', '--format=%(refname)', f'refs/heads/{name}/'], capture_output=True, text=True).stdout.strip())
     name = f'{kind}-{slug}' if exists(kind) else f'{kind}/{slug}'
-    return f'{name}-{run[:8]}' if exists(name) else name
+    return f'{name}-{run[:8]}' if exists(name) or nested(name) else name
 
 
 TITLE_CHARS, SUMMARY_CHARS = 150, 1000
@@ -502,6 +507,11 @@ def ignored(root, relative):
     return found.stdout.decode().split()
 
 
+def digest_of(path):
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest() if Path(path).is_file() else None
+
+
 def undo(root, previous, check_only=False):
     """Put back what this run's last render wrote, so a repair starts from the reviewed parent. Safe to repeat.
     It never discards a change it can't prove OH made: a file edited after OH wrote it, or a file OH was writing
@@ -509,14 +519,16 @@ def undo(root, previous, check_only=False):
     from .storage import git
     import hashlib
     if not previous:return
+    # An ignored file OH wrote isn't in git status, so a new file counts as changed whenever it exists.
     written, dirty = previous.get('files', {}), set(changes(root))
+    dirty |= {r for r in previous.get('intent', []) if (Path(root) / r).exists() and not git(root, 'ls-tree', '--name-only', 'HEAD', '--', r)}
     for relative in previous.get('intent', []):
         if relative not in dirty:continue  # already as HEAD has it
         path = Path(root) / relative
         current = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
         if relative not in written:
-            raise Blocked(f'OH was interrupted while writing {relative}. Keep or discard that change yourself '
-                          '(git checkout -- <file>, or delete a new file), then run OH again')
+            raise Blocked(f'OH was interrupted while writing {relative}. Discard that change (git checkout -- <file>, or delete '
+                          'a new file) and run OH again, or stop the run with /oh-stop to keep it')
         if current != written[relative]:
             raise Blocked(f'{relative} changed after OH wrote it. Stop this run (/oh-stop) and keep or discard that edit yourself')
     if check_only:return

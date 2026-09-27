@@ -269,5 +269,84 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(self.git('branch', '--show-current'), 'design-auth')
 
 
+    def test_a_project_without_checks_can_still_design(self):
+        fixtures.configure(self.root, checks=[])
+        self.design_run()
+        self.assertEqual(run(self.root, self.worker([design()]))['status'], 'completed')
+
+    def test_a_refused_start_says_to_type_the_command_again(self):
+        from .authority import materialize, stage
+        from .cli import main
+        payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
+        with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
+                unittest.mock.patch('oh.transcripts.register'):
+            (self.root / 'notes.txt').write_text('dirty')
+            stage(self.root, 'codex', payload('1', '/oh-design auth'))
+            with self.assertRaisesRegex(Refused, 'clean execution checkout.*type it again'):materialize(self.root)
+            (self.root / 'notes.txt').unlink()
+            with self.assertRaisesRegex(Refused, 'Your last OH command was refused'), unittest.mock.patch('sys.stderr'):
+                try:main(['--root', str(self.root), 'run'])
+                except SystemExit:raise Refused('Your last OH command was refused')
+            self.assertFalse(self.root.joinpath('docs/design').exists())
+
+    def test_an_unexpected_failure_never_blocks_the_next_command(self):
+        from .authority import materialize, pending_file, stage
+        self.git('branch', 'design/auth/v2')  # Git can't add design/auth beside it
+        payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
+        with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
+                unittest.mock.patch('oh.transcripts.register'):
+            stage(self.root, 'codex', payload('1', '/oh-design auth'))
+            self.assertEqual(materialize(self.root)['status'], 'running')
+        self.assertRegex(self.git('branch', '--show-current'), r'^design/auth-[0-9a-f]{8}$')
+        with unittest.mock.patch('oh.cli.host_hook', side_effect=RuntimeError('boom')), \
+                unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}):
+            stage(self.root, 'codex', payload('2', 'stop'))
+            with self.assertRaisesRegex(Refused, 'RuntimeError: boom'):materialize(self.root)
+        self.assertFalse(pending_file(self.root).exists())
+
+    def test_a_check_that_rewrites_a_plan_file_stops_the_run(self):
+        import sys
+        script = 'open("docs/roadmap.md", "a").write("formatted\\n")'
+        fixtures.configure(self.root, checks=[{'name': 'format', 'command': [sys.executable, '-c', script], 'when': ['docs/**']}])
+        self.design_run()
+        with self.assertRaisesRegex(plans.Blocked, 'A check changed docs/roadmap.md after OH wrote it'):run(self.root, self.worker([design()]))
+
+    def test_a_failing_check_that_runs_on_everything_stops_the_run_after_one_worker(self):
+        import sys
+        fixtures.configure(self.root, checks=[{'name': 'tests', 'command': [sys.executable, '-c', 'raise SystemExit(1)']}])
+        self.design_run()
+        with self.assertRaisesRegex(plans.Blocked, r"checks fail with the design in place \(tests\)"):run(self.root, self.worker([design(), design()]))
+        self.assertEqual([c[0] for c in self.calls], ['analysis'])
+
+    def test_a_scoped_failing_check_goes_back_to_the_worker(self):
+        import sys
+        lint = 'import sys,glob; sys.exit(any("TODO" in open(p).read() for p in glob.glob("docs/design/*.md")))'
+        fixtures.configure(self.root, checks=[{'name': 'lint', 'command': [sys.executable, '-c', lint], 'when': ['docs/**']}])
+        self.design_run()
+        result = run(self.root, self.worker([design(body=BODY + '\nTODO\n'), design()]))
+        self.assertEqual(result['status'], 'completed')
+        feedback = json.loads(json.loads([c[1] for c in self.calls if c[0] == 'analysis'][1].rsplit('\n', 1)[-1])['feedback'])
+        self.assertEqual([(r['name'], r['returncode']) for r in feedback], [('lint', 1)])
+
+    def test_ignored_plan_paths_are_refused_before_a_worker_is_paid(self):
+        (self.root / '.gitignore').write_text('docs/design/\n');self.git('add', '.gitignore');self.git('commit', '-qm', 'ignore')
+        with self.assertRaisesRegex(Refused, 'Git ignores docs/design/0001-auth.md'):plans.design_manifest(self.root, 'auth')
+
+    def test_a_changed_plans_location_stops_a_repair_before_a_worker_is_paid(self):
+        calls = self.interrupt_review()
+        change(self.root, 'plans.location', 'private')
+        with self.assertRaisesRegex(plans.Blocked, 'plans.location changed to private'):run(self.root, self.worker([design()]))
+        self.assertEqual(len(self.calls), calls)
+
+    def test_typing_the_design_again_during_its_run_points_to_the_run(self):
+        self.interrupt_review()
+        with self.assertRaisesRegex(Refused, 'An unfinished run exists'):self.design_run(turn='5')
+
+    def test_a_new_design_never_lands_on_another_plan_s_branch(self):
+        self.design_run();run(self.root, self.worker([design()]))
+        choose(self.root, 'pr', self.event('2', 'pr'))
+        with self.assertRaisesRegex(Refused, 'on design/auth, the branch of another plan'):self.design_run('ledger', turn='3')
+
+
 if __name__ == '__main__':
     unittest.main()

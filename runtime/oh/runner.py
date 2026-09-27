@@ -215,8 +215,9 @@ def _run(root,invoke):
                 if designing(task):
                     # Refuse before paying for a worker whose plan OH could not write: a human edit to the last render,
                     # or changes in the checkout that OH didn't make.
-                    from .plans import Blocked,changes,undo
+                    from .plans import Blocked,changes,layout,undo
                     rendered=reduce(journal.records()).get('rendered') or {}
+                    if blocked_layout(root,state):raise Blocked(blocked_layout(root,state))
                     undo(root,rendered,check_only=True)
                     extra=[p for p in changes(root) if p not in rendered.get('intent',[])]
                     if extra:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(extra[:5])}); a design commit holds only its plan files")
@@ -238,17 +239,28 @@ def _run(root,invoke):
                     render(root,task)
                     journal.append('subject.prepared',{'attempt':work['id'],'tree':tree(root)})
             from .checks import resolve
-            checks=resolve(root,state['project_checks']+state['checks'],state['base']) if committed(state) else []
+            # A design in a project without checks has nothing to run: delivery alone requires checks.
+            checks=resolve(root,state['project_checks']+state['checks'],state['base']) if committed(state) and state['project_checks']+state['checks'] else []
             check_results=verify(root,checks,state['project'],controlled=True)
             journal.append('verification',{'task':task_id,'tree':tree(root),'checks':check_results})
             best_effort('phase.finished',state['project'],state['id'],task_id,phase='verification',
                         duration_ms=sum(r['duration_ms'] for r in check_results if not r['reused']),
                         reused=sum(r['reused'] for r in check_results),checks=len(check_results))
             if designing(task):
-                from .plans import Blocked,changes
-                extra=[p for p in changes(root) if p not in reduce(journal.records())['rendered']['intent']]
+                from .plans import Blocked,changes,digest_of
+                rendered=reduce(journal.records())['rendered']
+                extra=[p for p in changes(root) if p not in rendered['intent']]
                 if extra:raise Blocked(f"The checks left files OH didn't write ({', '.join(extra[:5])}); a design commit holds only "
-                                       'its plan files. Make the checks clean up or have Git ignore those files, then run OH again')
+                                       'its plan files. Make the checks clean up, or list those files in .git/info/exclude, then run OH again')
+                touched=[p for p in rendered['intent'] if digest_of(Path(root)/p)!=rendered['files'].get(p)]
+                if touched:raise Blocked(f"A check changed {', '.join(touched)} after OH wrote it; plan files stay as OH wrote them. "
+                                         'Stop the check from rewriting them, then run OH again')
+                # A check that runs on every change fails for reasons a design can't fix; one scoped with `when` ran
+                # because of the plan files, so its failure goes back to the worker.
+                named={c['name']:c for c in checks}
+                unscoped=[r['name'] for r in check_results if r['returncode'] and not named.get(r['name'],{}).get('when')]
+                if unscoped:raise Blocked(f"The project's checks fail with the design in place ({', '.join(unscoped)}). A design only adds plan "
+                                          'files, so fix those checks (or scope them to paths with when) and run OH again')
             if any(r['returncode'] for r in check_results):
                 journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
                     'summary':json.dumps(check_results)[-state['config']['context']['result_chars']:]})
@@ -273,6 +285,7 @@ def write_plan(root,journal,state,task,work):
     from .storage import read_json
     value=read_json(Path(work['evidence'])/'result.json').get('structured')
     previous=reduce(journal.records()).get('rendered')
+    if blocked_layout(root,state):raise Blocked(blocked_layout(root,state))  # before undo throws the paid answer's render away
     undo(root,previous)  # refuses to discard a human edit: that stops the run, it isn't the worker's to fix
     try:
         plan=render(root,state['slug'],value,lambda intent:journal.append('subject.preparing',{'attempt':work['id'],'intent':intent}))
@@ -283,6 +296,15 @@ def write_plan(root,journal,state,task,work):
         return None
     journal.append('subject.prepared',{'attempt':work['id'],'tree':tree(root),'plan':plan})
     return plan
+
+
+def blocked_layout(root,state):
+    """Why the plans can't be written where this run started writing them, or None."""
+    from .plans import layout
+    try:where=layout(root)
+    except Refused as exc:return str(exc)
+    if where['location']!=state['plans']['location']:return f"plans.location changed to {where['location']} during this run; set it back or stop the run"
+    return None
 
 
 def apply_pending(root):
