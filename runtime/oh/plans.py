@@ -85,6 +85,7 @@ def layout_snapshot(where):
 
 def section_prose(text):
     """The renderer owns decision headings; fields may contain prose and fenced examples only."""
+    if '\r' in text:raise Refused('Plan prose must use LF line endings, without carriage returns')
     if fenced(text.split('\n')+['## OH section boundary'])[-1]:
         raise Refused('Decision prose has an unclosed code fence that would hide OH sections')
     for _, line in outside(text.split('\n')):
@@ -569,7 +570,7 @@ def answer(value):
     if value['kind'] == 'decision' and '|' in value['title']:raise Refused('A decision title cannot contain |')
     if value['kind'] == 'decision':
         for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
-    if any(re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', text) for text in value.values()):
+    if any(re.search(r'[\x00-\x08\x0b-\x1f\x7f]', text) for text in value.values()):
         raise Refused('Plan prose cannot contain control characters')
     if value['kind'] == 'design':
         rows=value['body'].split('\n')
