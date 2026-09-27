@@ -30,6 +30,7 @@ then **approve** / **refine: <what to change>** / **reconsider**. Approval binds
 file contents; editing an approved design invalidates that approval. Run `run` after the
 human choice. An edited existing private design goes directly to review, preserving the
 person's text. A proposed decision remains undecided after approval of the document.
+Only drafts and designs edited since approval can be reapproved; frozen and abandoned designs stay closed.
 Handle the returned status before offering publication:
 - `review_checkpoint`: explain the retained findings and offer **grant review** / **stop**.
 - `needs_attention`: show the failure and its concrete recovery step, then **retry** / **stop**.

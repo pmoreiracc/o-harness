@@ -365,6 +365,11 @@ def review_limit(state,task):
 def checkpoint(root):
     journal,state=load_run(root)
     left=len([t for t in state['tasks'] if t['id'] not in state['done']])
+    private_diff={}
+    if state['status']=='approval_checkpoint' and state.get('plans',{}).get('location')=='private' and state.get('rendered',{}).get('files'):
+        from .plans import changed_text,validate_outputs
+        validate_outputs(root,state['rendered'],state['plans']['base'])
+        private_diff={'private_diff':changed_text(root,state['rendered'])}
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
@@ -375,7 +380,7 @@ def checkpoint(root):
             {'proposal':{k:v for k,v in state['rendered'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent')}
                         |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
              if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(
-            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
+            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {}) | private_diff
 
 
 def continue_limits(left,config):

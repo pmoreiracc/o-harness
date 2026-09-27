@@ -101,6 +101,10 @@ Workers can't write the settings folder. `oh backup` includes `settings.json`.
 design docs against their rules. `oh plans list` shows each initiative's design and approval
 status. New private plans live at `~/oh-plans/<project name>/`; the relative document paths
 above apply inside that folder. Renaming a project preserves its existing document folder.
+Folders remain reserved to their project after rename or checkout deletion, including case-only
+aliases. OH refuses an existing unowned folder; preserve its contents and choose another project
+name or `plans.private_folder`. Only explicit checkout replacement can transfer ownership, without
+transferring approvals. Private edits hold both the project lock and the canonical folder lock.
 Private plans from older installations remain at their existing OH state path; `plans path`
 is authoritative. `init --replace` preserves that document location but creates fresh checkout
 authority. Profile export excludes private documents and approvals explicitly; copy those

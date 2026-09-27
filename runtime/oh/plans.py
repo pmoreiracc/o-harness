@@ -60,6 +60,9 @@ def layout(root, location=None):
     for key in ('designs', 'decisions'):
         if folded(where['roadmap'].parent).is_relative_to(folded(where[key])):
             raise Refused(f'plans.roadmap is inside plans.{key}; keep the roadmap outside the numbered folders')
+    if location == 'private':
+        from .private_storage import reserve
+        reserve(base, owner)
     return where
 
 
@@ -479,15 +482,20 @@ def editing(root):
     """One plan edit at a time per project, whichever checkout it runs in."""
     from .storage import lock, project, state_home
     path = state_home() / 'projects' / project(root)['id'] / 'plans.lock'
+    paths=[path]
+    where=layout(root)
+    if where['location']=='private':
+        from .private_storage import folder_lock
+        paths.append(folder_lock(where['base']))
     held = getattr(_editing, 'held', set())
-    if path in held:
-        yield
-        return
-    with lock(path):
+    with contextlib.ExitStack() as stack:
+        acquired=[]
+        for path in paths:
+            if path not in held:
+                stack.enter_context(lock(path));held.add(path);acquired.append(path)
         _editing.held = held
-        held.add(path)
         try:yield
-        finally:held.remove(path)
+        finally:held.difference_update(acquired)
 
 
 def private_inputs(where):
@@ -539,6 +547,8 @@ def design_manifest(root, slug):
         # A private design is approved only while it is what the person approved; an edited one is approved again.
         status = approval(root, where, existing)
         if status == 'approved':raise Refused(f"'{slug}' has approved design doc {existing} ({design_file(root, existing, where)}); edit it to change it")
+        if status not in ('draft','edited since approval'):
+            raise Refused(f'Design doc {existing} is {status or "missing a status"}; only draft or edited since approval designs can be approved again')
     try:verify_roadmap(root, where)
     except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
     if where['location'] == 'repo':
@@ -1051,11 +1061,18 @@ def finish_private(root, state, profile, journal, files):
         intent={'before':files,'after':dict(files),'number':number,'write':None}
         if number and profile=='plans':
             path=Path(design_file(root,number,where));rows,ending=rows_of(path)
+            if approval(root,where,number) not in ('draft','edited since approval'):
+                raise Refused('Only draft or edited since approval designs can be approved again')
             close=next((i for i in range(1,len(rows)) if re.match('---'+WS+'*$',rows[i])),0)
             spots=[i for i in range(1,close) if rows[i].startswith('status:')]
             if rows[:1]!=['---'] or len(spots)!=1:raise Blocked('The private design needs one frontmatter status line')
             verify_design(root,where,number,approving=True)
             rows[spots[0]]='status: approved';body=(ending.join(rows)+ending).encode()
+            # Validate the exact approved bytes before changing the document or recording authority.
+            import tempfile
+            with tempfile.TemporaryDirectory() as temporary:
+                (Path(temporary)/path.name).write_bytes(body)
+                verify_design(root,where|{'designs':Path(temporary)},number,orphans=False)
             intent['write']={'path':str(path),'bytes':base64.b64encode(body).decode()}
             intent['after'][str(path)]=hashlib.sha256(body).hexdigest()
         journal.append('private.approval.intent',intent)
@@ -1070,5 +1087,7 @@ def finish_private(root, state, profile, journal, files):
     if intent['write']:
         item=intent['write']
         if current[item['path']]!=intent['after'][item['path']]:write(item['path'],base64.b64decode(item['bytes']))
-    if intent['number']:return approve(root,where,intent['number'],state['id'],flip=False)
+    if intent['number']:
+        verify_design(root,where,intent['number'])
+        return approve(root,where,intent['number'],state['id'],flip=False)
     return None

@@ -26,8 +26,9 @@ review loop. If `run` refuses, relay its reason; it names the fix.
 When the returned status is `approval_checkpoint`, present `proposal` in this order:
 1. what OH understood the idea to be (`understanding`);
 2. the route and its one-line `reason`, with the `evidence`;
-3. exactly what was written (`lines`, and `git diff` of the files in `intent` if the user
-   wants the full change); for an improvement or an unclear idea, the `text` instead;
+3. exactly what was written (`lines`, and the returned `private_diff` for private plans or
+   `git diff` of the files in `intent` for repository plans if the user wants the full change);
+   for an improvement or an unclear idea, the `text` instead;
 4. the choices, for the user to type: **approve** (commit repository plans or approve the exact private files), **refine: <what to
    change>** (in their own words; OH asks the worker again), or **reconsider** (undo it and
    write nothing). Never choose for them, and never treat silence as approval.
