@@ -107,14 +107,17 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
     """Onboarding grants no work. Reattachment is explicit and identity-checked. Without a name, a
     checkout joins the project of its Git repository, or starts one named after the repository."""
     current = identity(root)
-    if name is None and not (attach or reattach or imported):
-        # A replaced checkout keeps its project's name, so its settings and checks still apply.
+    if name is None and not (attach or reattach or imported) and (replace or not index_path(root).is_file()):
+        # A replaced checkout keeps its project's name, so its settings and checks still apply, unless
+        # the checkout now belongs to a repository with other OH projects.
         from .config import name_of
-        previous = name_of(read_json(index_path(root)).get('project', '')) if replace and index_path(root).is_file() else None
+        entry = read_json(index_path(root)) if replace and index_path(root).is_file() else {}
+        previous = name_of(entry['project']) if entry.get('checkout') and isinstance(entry.get('project'), str) else None
         known = joinable(root)
-        if not previous and len(known) > 1:
+        if previous and (previous in known or not known):name = previous
+        elif len(known) > 1:
             raise Refused(f'OH projects of this repository: {", ".join(known)}; pass --name with the one this checkout belongs to')
-        name = previous or (known[0] if known else repository_name(current))
+        else:name = known[0] if known else repository_name(current)
     if kind not in ('product', 'harness') or not (attach or reattach or isinstance(name, str) and name.strip()):
         raise Refused('A project needs a name and product/harness kind')
     home = state_home()

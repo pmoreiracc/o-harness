@@ -728,6 +728,18 @@ def launch(path):
     else:subprocess.Popen(['xdg-open', path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def new_project_note(root):
+    """What oh init would name an unregistered checkout with no OH project in its repository."""
+    import subprocess
+    from .registry import identity, repository_name
+    try:name = repository_name(identity(root))
+    except (Refused, OSError, ValueError, subprocess.CalledProcessError):name = None
+    taken = sorted(e['root'] for p in projects_named(name) for e in registrations()[p]) if name else []
+    if taken:return (f'This checkout is not an OH project yet. Its repository\'s name, {name}, is used by another project '
+                     f'({", ".join(taken)}): oh init --name <another name> registers it.')
+    return 'This checkout is not an OH project yet: oh init registers it' + (f' as {name}.' if name else '.')
+
+
 def repository_names(root):
     """Names of the OH projects of an unregistered checkout's Git repository, which oh init can join."""
     import subprocess
@@ -753,7 +765,7 @@ def describe(root):
         f'This checkout is not registered yet. It belongs to the Git repository of the OH project {known[0]}: '
         f'oh init joins it.' if len(known) == 1 else
         f'This checkout is not registered yet. OH projects of its Git repository: {", ".join(known)}; '
-        'oh init --name <one of them> joins it.' if known else 'This checkout is not an OH project yet: oh init registers it, named after its repository.']
+        'oh init --name <one of them> joins it.' if known else new_project_note(root)]
     if len(known) == 1:result['join'] = known[0]
     if name:
         result['checks'] = project_checks(root, data)

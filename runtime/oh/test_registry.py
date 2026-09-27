@@ -167,6 +167,17 @@ class RegistryTests(unittest.TestCase):
             fresh=self.base/'fresh';self.git('worktree','add','-qb','fresh',str(fresh))
             with self.assertRaisesRegex(Refused,'pass --name'):register(fresh)  # never a silent third project
 
+    def test_a_path_reused_by_another_repository_joins_that_repository(self):
+        from .config import describe
+        register(self.root,'Alpha');slot=self.base/'slot';self.git('worktree','add','-qb','slot',str(slot));register(slot)
+        self.git('worktree','remove',str(slot))
+        bravo=self.base/'bravo';self.git('init','-q',str(bravo),root=self.base)
+        self.git('-c','user.name=F','-c','user.email=f@example.invalid','commit','-q','--allow-empty','-m','initial',root=bravo)
+        register(bravo,'Bravo');self.git('worktree','add','-qb','slot',str(slot),root=bravo)
+        self.assertEqual(register(slot,replace=True)['name'],'Bravo')  # not the old registration's Alpha
+        taken=self.base/'elsewhere'/'Alpha';taken.parent.mkdir();self.git('init','-q',str(taken),root=self.base)
+        self.assertIn('is used by another project',describe(taken)['note'])  # a taken folder name is said up front
+
     def test_a_moved_checkout_cannot_come_back_to_a_name_taken_meanwhile(self):
         register(self.root,'Fixture');old=lookup(self.root)
         moved=self.base/'moved';self.root.rename(moved)
