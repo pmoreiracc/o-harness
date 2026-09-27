@@ -155,7 +155,8 @@ def command(host,profile,root,role,schema_path,compact_tokens):
     from .storage import state_home
     from .storage import git
     git_paths=[git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
-    protected=git_paths+[str(state_home()),str(Path.home()/'.codex'),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
+    from .config import protected_paths
+    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
     if role in ('review','analysis'):protected.append(str(root))
     settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
       'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':['Agent','Task']+[f'Edit(/{p}/**)' for p in protected]}}

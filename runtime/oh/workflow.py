@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .registry import profile_path
 
 
 from .storage import checkout_file
@@ -109,8 +108,9 @@ def _start(root, manifest, event, prepared=None):
         if state['status'] not in ('stopped','pr','completed'):
             raise Refused('An unfinished run exists; resume it or explicitly stop first')
     config=prepared['snapshot'] if prepared else snapshot(root)
-    required=prepared['project_checks'] if prepared else (read_json(profile_path(root, 'checks.json')) if profile_path(root, 'checks.json').exists() else [])
-    if workflow=='deliver' and not required and not manifest.get('checks'):raise Refused('Configure required verification in the external OH project profile before starting paid work')
+    from .config import project_checks
+    required=prepared['project_checks'] if prepared else project_checks(root)
+    if workflow=='deliver' and not required and not manifest.get('checks'):raise Refused("Add this project's checks before starting paid work: oh config set checks '<JSON list>'")
     if git(root,'status','--porcelain'):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
@@ -241,10 +241,19 @@ def review_limit(state,task):
 
 def checkpoint(root):
     journal,state=load_run(root)
+    left=len([t for t in state['tasks'] if t['id'] not in state['done']])
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
-            'config_hash':state['config_hash'],'version':state['harness_version']}
+            'config_hash':state['config_hash'],'version':state['harness_version']}|(
+            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
+
+
+def continue_limits(left,config):
+    """What typing continue approves, said at every checkpoint."""
+    batch,rounds=min(left,config['tasks_per_batch']),config['review_rounds']
+    return (f'Continue runs {batch} of the {left} remaining task'+('s' if left!=1 else '')+f', up to {rounds} review round'
+            +('s' if rounds!=1 else '')+' each. This run keeps its settings; /oh-config changes them for the next run.')
 
 
 @state_writer

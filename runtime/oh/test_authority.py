@@ -67,14 +67,15 @@ class AuthorityTest(unittest.TestCase):
             for args in [('init','-qb','main'),('config','user.name','Fixture'),('config','user.email','fixture@example.invalid')]:subprocess.run(['git','-C',str(root),*args],check=True)
             register(root,'Fixture')
             (root/'product.txt').write_text('fixture')
-            atomic_json(profile_path(root,'checks.json'),[{'name':'check','command':['true']}])
+            from .test_workflow import configure
+            configure(root,checks=[{'name':'check','command':['true']}])
             subprocess.run(['git','-C',str(root),'add','.'],check=True);subprocess.run(['git','-C',str(root),'commit','-qm','base'],check=True)
             tasks={'tasks':[{'id':'1','title':'Fix','instructions':'Fix agreed behavior'}],'checks':[]}
             atomic_json(profile_path(root).parent/'tasks.json',tasks)
             request=prepare(root,str(profile_path(root).parent/'tasks.json'))
             event={'host':'codex','session':'s','turn':'t','prompt':request['trigger'],'at':(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()}
             atomic_json(profile_path(root).parent/'tasks.json',{'tasks':tasks['tasks']+[{'id':'2','title':'Extra','instructions':'Unapproved'}]})
-            atomic_json(profile_path(root,'config.local.json'),{'tasks_per_batch':99,'review_rounds':99})
+            configure(root,tasks_per_batch=99,review_rounds=99)
             with self.assertRaises(Refused):resolve(root,'request:'+request['request'],event|{'at':'2000-01-01T00:00:00+00:00'},'tasks')
             host_hook(root,'codex',{'prompt':request['trigger']},verified=event)
             _,run=load_run(root);self.assertEqual(len(run['tasks']),1);self.assertEqual(run['config']['tasks_per_batch'],5);self.assertEqual(run['config']['review_rounds'],3)

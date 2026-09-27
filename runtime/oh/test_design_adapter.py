@@ -16,7 +16,7 @@ class DesignAdapterTest(unittest.TestCase):
         fixtures.WorkflowTest.setUp(self)
         path=profile_path(self.root)
         atomic_json(path,read_json(path)|{'design_profile':'consumer-v1'})
-        atomic_json(profile_path(self.root,'config.json'),{'tasks_per_batch':1})
+        fixtures.configure(self.root,tasks_per_batch=1)
         directory=self.root/'docs/design';directory.mkdir(parents=True)
         self.design=directory/'0900-fixture.md'
         self.design.write_text('---\ntype: design\nstatus: approved\nlast-verified: 2026-09-25\n---\n# Fixture\n## Tasks\n### Code track\n- [ ] **1.** Implement first behavior.\n- [ ] **2.** Implement second behavior. *Depends on task 1.*\n',newline='\n')

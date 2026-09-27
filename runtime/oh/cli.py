@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import shlex
 import sys
-from .config import HOME, load
+from .config import HOME
 from .storage import Refused, atomic_json, checkout_id, digest, identifier, project, read_json, state_home
 from .workflow import active_file, checkpoint, choose, human_event, start
 
@@ -59,16 +59,19 @@ def main(argv=None):
     plugin_hook=sub.add_parser('plugin-hook');plugin_hook.add_argument('--host',choices=['codex','claude'],required=True)
     launch=sub.add_parser('start');launch.add_argument('request',nargs='?')
     export=sub.add_parser('profile-export');export.add_argument('destination',type=Path)
-    imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path)
+    imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
+    renamed=sub.add_parser('rename');renamed.add_argument('name')
     prep=sub.add_parser('prepare');prep.add_argument('manifest')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?',default='origin/main');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
     publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?',default='origin/main');publication.add_argument('--validate-event',type=Path)
     trusted=sub.add_parser('trust-host');trusted.add_argument('host',choices=['codex','claude']);trusted.add_argument('path',type=Path,nargs='?')
-    init=sub.add_parser('init');init.add_argument('--name',required=True);init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
+    init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
-    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('config');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
+    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
+    settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
+    settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
     hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
     serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4318)
     sub.add_parser('service-install');sub.add_parser('service-uninstall')
@@ -85,7 +88,7 @@ def main(argv=None):
             result=setup(development=args.development,if_newer=args.if_newer)
         elif args.command in ('profile-export','profile-import'):
             from .profiles import export_profile,import_profile
-            result=export_profile(root,args.destination) if args.command=='profile-export' else import_profile(root,args.source)
+            result=export_profile(root,args.destination) if args.command=='profile-export' else import_profile(root,args.source,args.name)
         elif args.command=='plugin-hook':
             from .entry import receive
             result=receive(root,args.host,json.load(sys.stdin))
@@ -106,9 +109,16 @@ def main(argv=None):
             from .hosts import trust
             # Host trust is machine-wide: the current folder is a project only when --root names it.
             result=trust(args.host,args.path,args.root.resolve() if args.root else None)
+        elif args.command=='rename':
+            from .registry import rename
+            result=rename(root,args.name)
         elif args.command=='init':
-            from .registry import register, profile_path
-            result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace)
+            from .registry import register
+            from .config import ensure_project,layers,read_file
+            layers(read_file())  # a settings problem stops init before anything is registered
+            registered=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace);settings=ensure_project(root)
+            notes=[n for n in (registered.get('note'),settings.get('note')) if n]
+            result=registered|settings|({'note':' '.join(notes)} if notes else {})
         elif args.command=='backup':
             from .backup import backup
             result=backup(args.destination)
@@ -116,8 +126,11 @@ def main(argv=None):
             from .backup import restore
             result=restore(args.source)
         elif args.command=='config':
-            from .registry import profile_path
-            result={'effective':load(root),'profile_directory':str(profile_path(root).parent),'precedence':['packaged defaults','external global defaults','project config','personal project config'],'version':__import__('oh.config',fromlist=['version']).version()}
+            from .config import change,describe,open_settings
+            if not args.action:result=describe(root)
+            elif args.action=='open':result=open_settings(root)
+            elif not args.key or (args.action=='set')!=(args.value is not None):raise Refused('Use: oh config set <key> <value>, or oh config unset <key>')
+            else:result=change(root,args.key,args.value if args.action=='set' else None,scope='global' if args.everywhere else None)
         elif args.command=='status':result=checkpoint(root)
         elif args.command in ('pause','stop'):
             from .controls import request
@@ -171,5 +184,5 @@ def main(argv=None):
             if not path.is_relative_to(HOME):raise Refused('Resource outside OH')
             print(path.read_text());return
         if result is not None:print(json.dumps(result,indent=2))
-    except (Refused,FileNotFoundError,ValueError,KeyError) as exc:
+    except (Refused,OSError,ValueError,KeyError) as exc:
         print(f'OH: {exc}',file=sys.stderr);raise SystemExit(2)

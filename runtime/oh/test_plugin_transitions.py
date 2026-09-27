@@ -9,7 +9,8 @@ from unittest.mock import patch
 from . import test_workflow as fixtures
 from .entry import receive
 from .authority import pending_file
-from .config import HOME
+from .config import HOME, project_checks
+from .test_workflow import configure, write_settings
 from .storage import atomic_json,digest,read_json,Refused
 from .workflow import start
 from .runner import run
@@ -93,29 +94,29 @@ class PluginTransitions(unittest.TestCase):
         from .profiles import export_profile,import_profile
         from .registry import lookup,profile_path
         self.tracked_script()
-        atomic_json(profile_path(self.root,'checks.json'),[{'name':'review-only','command':['bash','checks.sh','{base}'],'modes':['review'],'inputs':['.'],'when':['*.py'],'toolchain':[['python3','--version']],'timeout_seconds':30}])
+        configure(self.root,checks=[{'name':'review-only','command':['bash','checks.sh','{base}'],'modes':['review'],'inputs':['.'],'when':['*.py'],'toolchain':[['python3','--version']],'timeout_seconds':30}])
         destination=Path(self.temp.name)/'portable.json'
         export_profile(self.root,destination);value=read_json(destination)
         self.assertEqual(set(value),{'schema_version','profile','config','checks'})
         self.assertNotIn('id',value['profile'])
         clone=Path(self.temp.name)/'clone'
         subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True)
-        imported=import_profile(clone,destination)
+        imported=import_profile(clone,destination,'Fixture clone')
         self.assertFalse(imported['authorized'])
         self.assertNotEqual(lookup(clone)['checkout'],lookup(self.root)['checkout'])
         self.assertNotEqual(imported['profile']['id'],self.project_id)
-        self.assertEqual(read_json(profile_path(clone,'checks.json')),value['checks'])
+        self.assertEqual(project_checks(clone),value['checks'])
         self.assertFalse(pending_file(clone).exists())
         self.assertFalse((clone/'.oh').exists())
         subprocess.run([shutil.which('bash'),'checks.sh','main'],cwd=clone,check=True)
-        with self.assertRaises(Refused):import_profile(clone,destination)
+        with self.assertRaises(Refused):import_profile(clone,destination,'Fixture clone')
 
     def test_portable_checks_refuse_secret_arguments_and_invalid_supported_fields(self):
         from .profiles import export_profile,import_profile,validate_document
         from .registry import profile_path
         destination=Path(self.temp.name)/'portable.json'
         self.tracked_script()
-        atomic_json(profile_path(self.root,'checks.json'),[{'name':'check','command':['bash','checks.sh']}])
+        configure(self.root,checks=[{'name':'check','command':['bash','checks.sh']}])
         export_profile(self.root,destination);value=read_json(destination)
         bad_checks=[
             {'command':['tool','--token','secret-value']},
@@ -131,7 +132,7 @@ class PluginTransitions(unittest.TestCase):
             with self.subTest(change=change):
                 candidate=value|{'checks':[value['checks'][0]|change]}
                 with self.assertRaises(Refused):validate_document(candidate,self.root)
-                atomic_json(profile_path(self.root,'checks.json'),candidate['checks'])
+                write_settings(self.root,{'checks':candidate['checks']})  # some are only refused on export, others on every read
                 target=Path(self.temp.name)/'refused.json'
                 with self.assertRaises(Refused):export_profile(self.root,target)
                 self.assertFalse(target.exists())
@@ -171,14 +172,14 @@ class PluginTransitions(unittest.TestCase):
         script=self.tracked_script();script.chmod(0o755)
         self.git('add','checks.sh');self.git('commit','-qm','Make verification executable')
         checks=[{'name':'direct','command':['./checks.sh']}]
-        atomic_json(profile_path(self.root,'checks.json'),checks)
+        configure(self.root,checks=checks)
         destination=Path(self.temp.name)/'direct.json';export_profile(self.root,destination)
         clone=Path(self.temp.name)/'direct-clone'
         subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True)
-        imported=import_profile(clone,destination)
+        imported=import_profile(clone,destination,'Fixture clone')
         shadow=Path(self.temp.name)/'shadow';shadow.mkdir()
         wrong=shadow/'checks.sh';wrong.write_text('#!/bin/sh\nexit 97\n');wrong.chmod(0o755)
         search=[str(shadow)]+[p for p in os.environ['PATH'].split(os.pathsep) if p and p!='.' and Path(p).resolve() not in (clone.resolve(),self.root.resolve())]
         with patch.dict(os.environ,{'PATH':os.pathsep.join(search)}):
-            results=verify(clone,read_json(profile_path(clone,'checks.json')),imported['profile']['id'])
+            results=verify(clone,project_checks(clone),imported['profile']['id'])
         self.assertEqual(results[0]['returncode'],0)

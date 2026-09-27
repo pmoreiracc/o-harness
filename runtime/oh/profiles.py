@@ -5,8 +5,8 @@ import math
 import re
 import stat
 from .config import HOME, merge, validate
-from .registry import lookup, profile, profile_path, register
-from .storage import Refused, git, atomic_json, identifier, read_json, state_home, state_writer
+from .registry import lookup, profile, register
+from .storage import Refused, git, atomic_json, identifier, read_json, state_writer
 
 FIELDS={'schema_version','profile','config','checks'}
 
@@ -88,26 +88,37 @@ def portable_command(command,root,probe=False):
 
 @state_writer
 def export_profile(root,destination):
-    from .config import load
+    from .config import load,project_checks
     destination=Path(destination).expanduser().resolve()
     if destination.exists() or destination.is_relative_to(Path(root).resolve()):
         raise Refused('Export to a new file outside the product checkout')
     source=profile(root)
     value={'schema_version':1,'profile':{k:source[k] for k in ('name','kind','design_profile') if k in source},
-           'config':load(root),'checks':read_json(profile_path(root,'checks.json')) if profile_path(root,'checks.json').exists() else []}
+           'config':load(root),'checks':project_checks(root)}
     validate_document(value,root);atomic_json(destination,value,immutable=True)
     return {'exported':str(destination),'contents':'profile, effective non-secret settings and check definitions only; no identities, authority, host trust or transcripts'}
 
 
 @state_writer
-def import_profile(root,source):
+def import_profile(root,source,name=None):
     from .registry import index_path
     value=validate_document(read_json(Path(source).expanduser().resolve()),root)
     if index_path(root).exists():raise Refused('Import requires an unregistered checkout; it never replaces an existing profile or its grants')
-    project_id=identifier();target=state_home()/'projects'/project_id
-    # Publish profile resources before registering the checkout. Failure leaves inert data,
-    # never an active binding with missing checks or old authority.
-    atomic_json(target/'config.json',value['config'],immutable=True)
-    atomic_json(target/'checks.json',value['checks'],immutable=True)
-    result=register(root,value['profile']['name'],value['profile']['kind'],imported=value['profile']|{'id':project_id})
-    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False}
+    from .config import edit,load_global,prune,section_differences,settings_file
+    from .registry import free
+    name=name or value['profile']['name'];mine=load_global();free(name)
+    # Settings are saved before the checkout is registered: a failure leaves an unused section, never a
+    # registered project without its checks. Only what differs from your own settings is kept, so later
+    # OH defaults and your changes still apply. A section left by an earlier project of this name is
+    # reused only when it already holds the same settings.
+    def apply(data):
+        projects=data.setdefault('projects',{})
+        section=prune(value['config'],mine)|({'checks':value['checks']} if value['checks'] else {})
+        existing=projects.get(name) or {}
+        if existing and section_differences(existing,section,mine):
+            raise Refused(f'{settings_file()} already has different settings under projects.{name}; remove them, '
+                          f'or import with --name <another name>')
+        if not existing:projects[name]=section
+    edit(root,'global',apply)
+    result=register(root,name,value['profile']['kind'],imported=value['profile']|{'id':identifier(),'name':name})
+    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False,'settings':f'{settings_file()} (projects.{name})'}

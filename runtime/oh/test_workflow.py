@@ -20,6 +20,19 @@ from .verification import tree, verify
 RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
+def configure(root,**values):
+    """Saves this project's settings the way oh config does, checked."""
+    from .config import edit
+    edit(root,'project',lambda layer:layer.update(values))
+
+
+def write_settings(root,section):
+    """Writes this project's section as a hand edit would, unchecked."""
+    from .config import project_name,settings_file
+    settings_file().parent.mkdir(parents=True,exist_ok=True)
+    settings_file().write_text(json.dumps({'projects':{project_name(root):section}}))
+
+
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -28,7 +41,7 @@ class WorkflowTest(unittest.TestCase):
         self.git('init','-q','-b','main');self.git('config','user.name','OH Test');self.git('config','user.email','test@example.invalid')
         self.project_id=identifier()
         register(self.root,'Fixture',imported={'id':self.project_id})
-        atomic_json(profile_path(self.root,'checks.json'),[{'name':'fixture','command':['python3','-c','pass']}])
+        configure(self.root,checks=[{'name':'fixture','command':['python3','-c','pass']}])
         (self.root/'product.txt').write_text('fixture')
         self.git('add','.');self.git('commit','-qm','init');self.git('switch','-qc','work')
         self.tasks=[{'id':str(i),'title':f'Task {i}','instructions':'Implement behavior','needs':[] if i==1 else [str(i-1)]} for i in range(1,7)]
@@ -49,8 +62,9 @@ class WorkflowTest(unittest.TestCase):
         journal,_=start(self.root,{'tasks':self.tasks},self.event())
         result=run(self.root,self.fake)
         self.assertEqual((result['completed'],result['status']),(5,'checkpoint'))
+        self.assertTrue(result['limits'].startswith('Continue runs 1 of the 1 remaining task, up to 3 review rounds each.'))
         self.assertEqual(len(self.calls),10)
-        atomic_json(profile_path(self.root,'config.local.json'),{'tasks_per_batch':1,'review_rounds':10})
+        configure(self.root,tasks_per_batch=1,review_rounds=10)
         run(self.root,self.fake);self.assertEqual(len(self.calls),10)
         choose(self.root,'continue',self.event('2','continue'))
         waiting=[json.loads(p.read_text()) for p in (Path(self.temp.name)/'state/spool').glob('*.json') if json.loads(p.read_text())['kind']=='phase.finished' and json.loads(p.read_text())['payload'].get('phase')=='waiting']
@@ -104,7 +118,7 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(Refused):journal.records()
 
     def test_config_unknown_fields_fail_closed_and_no_false_zero(self):
-        atomic_json(profile_path(self.root,'config.local.json'),{'taskz':10})
+        write_settings(self.root,{'taskz':10})
         with self.assertRaises(Refused):load(self.root)
         self.assertEqual(usage_values({}),{'input':None,'cached':None,'output':None,'reasoning':None})
         with self.assertRaises(Refused):usage_values({'input':10,'cached':11})
@@ -197,7 +211,7 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(Refused):run(self.root,self.fake)
 
     def test_failed_review_then_verification_failure_consumes_worker_allowance(self):
-        atomic_json(profile_path(self.root,'config.local.json'),{'max_escalations':0})
+        configure(self.root,max_escalations=0)
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         def failed_review(*args,**kwargs):
             value=self.fake(*args,**kwargs)
