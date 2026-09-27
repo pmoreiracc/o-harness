@@ -97,7 +97,9 @@ def reduce(records):
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}
-        elif kind=='branch.moving':state['branch_move']=d
+        elif kind=='branch.creating':state['branch_creation']=d
+        elif kind=='branch.moving':
+            state['branch_move']=d;state.pop('branch_creation',None)
         elif kind=='branch.moved':
             state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
             state.pop('branch_move',None)

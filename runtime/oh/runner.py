@@ -187,6 +187,10 @@ def _run(root,invoke):
                 discard_proposal(root,journal,state)
                 if not state['discard'].get('resume'):return
                 state=reduce(journal.records())
+            if state['status'] in ('paused','pausing','stopped','stopping','completed','pr'):return
+            if state.get('branch_creation'):
+                create_proposal_branch(root,journal,state)
+                state=reduce(journal.records())
             if state.get('branch_move'):
                 finish_move(root,journal,state)
                 state=reduce(journal.records())
@@ -368,19 +372,34 @@ def move(root,journal,topic):
         finish_move(root,journal,state)
         return
     if current not in ('main','master'):return
-    from .branches import incarnation
     from .plans import branch_for,Blocked
     name=branch_for(root,topic,state['id'],'propose')
-    git(root,'branch',name)
+    journal.append('branch.creating',{'from':current,'from_incarnation':state['incarnation'],
+        'branch':name,'base':state['base'],'reflog':'branch: Created for proposal '+state['id']})
+    create_proposal_branch(root,journal,reduce(journal.records()))
+    try:finish_move(root,journal,reduce(journal.records()))
+    except Refused as exc:raise Blocked(f'Proposal branch transition is pending; run OH again after fixing: {exc}') from None
+
+
+def create_proposal_branch(root,journal,state):
+    """Recover ref creation from durable intent before binding its incarnation and switching."""
+    from .branches import incarnation
+    pending=state['branch_creation'];name=pending['branch'];ref='refs/heads/'+name
+    if (git(root,'branch','--show-current')!=pending['from'] or git(root,'status','--porcelain')
+            or git(root,'rev-parse','HEAD')!=pending['base'] or incarnation(root,pending['from'])!=pending['from_incarnation']):
+        raise Refused('Restore the unchanged original proposal branch before retrying its creation')
+    if not git(root,'branch','--list',name):
+        # Compare-and-create also refuses a concurrently created ref. The ordinary Git reflog
+        # reason identifies this creation if the process dies before its incarnation is saved.
+        git(root,'update-ref','--create-reflog','-m',pending['reflog'],ref,pending['base'],'0'*len(pending['base']))
+    if (git(root,'rev-parse',ref)!=pending['base'] or git(root,'reflog','show','-1','--format=%gs',ref)!=pending['reflog']):
+        raise Refused('The pending proposal branch was changed or created elsewhere; preserve it and resolve the branch name before retrying')
     try:
-        journal.append('branch.moving',{'from':current,'from_incarnation':state['incarnation'],
-            'branch':name,'incarnation':incarnation(root,name,create=True),'base':state['base']})
+        journal.append('branch.moving',pending|{'incarnation':incarnation(root,name,create=True)})
     except Exception:
         if not reduce(journal.records()).get('branch_move'):
             git(root,'branch','-D',name)
         raise
-    try:finish_move(root,journal,reduce(journal.records()))
-    except Refused as exc:raise Blocked(f'Proposal branch transition is pending; run OH again after fixing: {exc}') from None
 
 
 def finish_move(root,journal,state):

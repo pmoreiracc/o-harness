@@ -708,6 +708,8 @@ def proposal(value):
         raise Refused('Every field is a string, and depends a list of strings')
     if value['route'] not in ('roadmap', 'task', 'improvement', 'unclear'):
         raise Refused("route must be 'roadmap', 'task', 'improvement' or 'unclear'")
+    for key in fields:
+        for text in value[key] if key=='depends' else [value[key]]:prose_controls(text)
     for key in ('understanding', 'reason', 'text'):
         if not value[key].strip():raise Refused(f'{key} is empty')
     for key, limit in (('understanding', SUMMARY_CHARS), ('reason', SUMMARY_CHARS), ('summary', SUMMARY_CHARS), ('evidence', 2 * SUMMARY_CHARS),
