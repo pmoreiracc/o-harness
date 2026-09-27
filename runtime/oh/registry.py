@@ -1,5 +1,6 @@
 """External project profiles and checkout identities; consumers remain untouched."""
 from pathlib import Path
+from contextlib import ExitStack
 from .storage import (Refused, atomic_json, digest, git, identifier, lock, read_json,
                       state_home, state_writer, validate_id)
 
@@ -129,7 +130,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
     if kind not in ('product', 'harness') or not (attach or reattach or isinstance(name, str) and name.strip()):
         raise Refused('A project needs a name and product/harness kind')
     home = state_home()
-    with lock(home / 'registry' / '.lock'):
+    with lock(home / 'registry' / '.lock'), ExitStack() as transaction:
         path = index_path(root)
         if imported:
             admin=Path(current['admin'])
@@ -208,11 +209,11 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
         else:
             value = (dict(imported) if imported else {}) | preserved_plans | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
             from .plans import private_base
-            from .private_storage import reserve
+            from .private_storage import reservation
             settings=planning_settings(name)
             if settings['plans']['location']=='private':
                 base=Path(value['private_plans_path']) if value.get('private_plans_path') else private_base(settings['plans']['private_folder'],value.get('private_plans_name',name))
-                reserve(base,value,claim=False)
+                transaction.enter_context(reservation(base,value))
             if destination.exists() and read_json(destination) != value:
                 raise Refused('Existing external profile differs; preserve it and resolve the import explicitly')
             if not destination.exists():
@@ -238,7 +239,7 @@ def rename(root, name):
     names were unique), the section stays theirs and this project starts from an empty one."""
     from .config import edit, load_global, projects_named, section_differences
     if not isinstance(name, str) or not name.strip() or name != name.strip():raise Refused('A project name needs text without surrounding spaces')
-    with lock(state_home() / 'registry' / '.lock'):
+    with lock(state_home() / 'registry' / '.lock'), ExitStack() as transaction:
         value = profile(root)
         if value['name'] == name:return value
         free(name, value['id'])
@@ -257,12 +258,18 @@ def rename(root, name):
             outcome['section'] = (f'projects.{old} stays with the other project named {old}; projects.{name} starts empty'
                                   if shared else f'projects.{old} is now projects.{name}')
             from .plans import private_base
+            from .private_storage import owned, reservation
             folder_name=value.get('private_plans_name',old)
             try:
                 folder=mine.get('plans',{}).get('private_folder',base['plans']['private_folder'])
-                if not private_base(folder,folder_name).is_dir():folder_name=name
+                previous_folder=private_base(folder,folder_name)
+                if not previous_folder.is_dir() and not owned(previous_folder,value):folder_name=name
             except Refused:folder_name=name  # renaming can repair a nonportable old name
-            atomic_json(path, value | {'name': name, 'private_plans_name': folder_name})
+            updated=value | {'name': name, 'private_plans_name': folder_name}
+            if mine.get('plans',{}).get('location',base['plans']['location'])=='private':
+                candidate=Path(value['private_plans_path']) if value.get('private_plans_path') else private_base(folder,folder_name)
+                transaction.enter_context(reservation(candidate,updated))
+            atomic_json(path, updated)
         try:edit(root, 'global', move)
         except BaseException:
             if read_json(path).get('name') == name:atomic_json(path, value)  # the settings weren't written

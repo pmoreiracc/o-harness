@@ -15,7 +15,7 @@ EFFORTS = {'codex': {'low', 'medium', 'high', 'xhigh', 'max', 'ultra'},
 
 
 MODEL = r'[A-Za-z0-9][A-Za-z0-9._:/-]*'
-FOLDER = r'^(~|/|[A-Za-z]:[\\/]).*'  # absolute, or in your home folder
+FOLDER = r'^(~(?:[/\\].*)?|/.*|[A-Za-z]:[\\/].*)'  # absolute, or in your home folder
 PLAN_PATH = r'^(?!.*(^|/)\.\.?(/|$))[A-Za-z0-9_-][A-Za-z0-9._/-]*'  # relative, no . or .. parts
 ROLE_MEANING = {'simple': 'small, bounded tasks', 'standard': 'ordinary tasks',
                 'complex': 'cross-cutting or safety-sensitive tasks, and retries after a failure',
@@ -110,6 +110,8 @@ def check(key, spec, item):
     if spec['type'] == 'integer':valid = type(item) is int and spec['minimum'] <= item <= spec['maximum']
     elif 'enum' in spec:valid = item in spec['enum']
     else:valid = isinstance(item, str) and bool(re.fullmatch(spec['pattern'], item))
+    if valid and spec.get('pattern') == FOLDER:
+        valid = Path(os.path.expanduser(item)).is_absolute()
     if not valid:raise Refused(f'{key} must be {allowed(spec)}; got {json.dumps(item)}')
 
 

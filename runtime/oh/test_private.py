@@ -125,6 +125,75 @@ class PrivatePlansTest(unittest.TestCase):
         self.assertFalse(index_path(other).exists())
         self.assertEqual(plans.layout(self.root)['base'],self.where['base'])
 
+    def test_registration_reserves_unused_folder_before_an_alias_can_register(self):
+        from .registry import register,index_path
+        change(self.root,'plans.location','private',scope='global')
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        first=self.other_repository('first');second=self.other_repository('second')
+        register(first,'Unused')
+        self.assertFalse((self.where['base'].parent/'Unused').exists())
+        with self.assertRaisesRegex(Refused,'belongs to another project'):register(second,'UNUSED')
+        self.assertFalse(index_path(second).exists())
+        self.assertEqual(plans.layout(first)['base'],self.where['base'].parent/'Unused')
+
+    def test_rename_rejects_collision_before_moving_profile_or_settings(self):
+        from .registry import register,rename,profile
+        from .config import read_file
+        other=self.other_repository('other');register(other,'Other')
+        change(other,'plans.location','private')
+        change(other,'plans.private_folder',str(self.where['base'].parent))
+        before_profile=profile(other);before_settings=read_file()
+        with self.assertRaisesRegex(Refused,'belongs to another project'):rename(other,'fixture')
+        self.assertEqual(profile(other),before_profile)
+        self.assertEqual(read_file(),before_settings)
+
+    def test_rename_retains_reserved_folder_even_before_first_document(self):
+        from .registry import register,rename
+        change(self.root,'plans.location','private',scope='global')
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        other=self.other_repository('other');register(other,'Unused')
+        rename(other,'fixture')
+        self.assertEqual(plans.layout(other)['base'],self.where['base'].parent/'Unused')
+
+    def test_failed_registration_rolls_back_folder_reservation(self):
+        from .registry import register,index_path
+        from .storage import atomic_json,read_json,state_home
+        change(self.root,'plans.location','private',scope='global')
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        other=self.other_repository('other');path=state_home()/'registry/private-plans.json'
+        before=read_json(path)
+        def fail_index(target,*args,**kwargs):
+            if target==index_path(other):raise OSError('index publication failed')
+            return atomic_json(target,*args,**kwargs)
+        with patch('oh.registry.atomic_json',side_effect=fail_index):
+            with self.assertRaisesRegex(OSError,'index publication failed'):register(other,'Unused')
+        self.assertEqual(read_json(path),before)
+        self.assertFalse(index_path(other).exists())
+        register(other,'UNUSED')
+        self.assertEqual(plans.layout(other)['base'].name,'UNUSED')
+
+    def test_failed_rename_rolls_back_new_reservation(self):
+        from .registry import register,rename,profile
+        from .storage import read_json,state_home
+        other=self.other_repository('other');register(other,'Other')
+        change(other,'plans.location','private')
+        change(other,'plans.private_folder',str(self.where['base'].parent))
+        path=state_home()/'registry/private-plans.json';before=read_json(path)
+        with patch('oh.config.write_file',side_effect=PermissionError(13,'Permission denied')):
+            with self.assertRaisesRegex(Refused,'Cannot write'):rename(other,'Unused')
+        self.assertEqual(read_json(path),before)
+        self.assertEqual(profile(other)['name'],'Other')
+
+    def test_private_folder_rejects_cwd_relative_expansion(self):
+        import os
+        invalid=['~oh_user_that_does_not_exist_927/plans','~relative','relative/plans']
+        if os.name!='nt':invalid+=['C:\\plans','C:/plans','~\\plans']
+        for folder in invalid:
+            with self.subTest(folder=folder):
+                with self.assertRaisesRegex(Refused,'absolute folder'):change(self.root,'plans.private_folder',folder)
+                with self.assertRaisesRegex(Refused,'absolute folder'):plans.private_base(folder,'Fixture')
+        self.assertEqual(plans.private_base('~/oh-plans','Fixture'),Path.home()/'oh-plans/Fixture')
+
     def test_case_aliases_and_unowned_folders_are_refused(self):
         from .registry import register
         other=self.other_repository('other');register(other,'fixture')

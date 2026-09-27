@@ -71,7 +71,11 @@ def private_base(folder, name):
     if (not name or name in ('.','..') or name.rstrip(' .') != name or re.search(r'[\\/:*?"<>|\x00-\x1f]', name)
             or re.fullmatch(r'(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?',name)):
         raise Refused('Private plans need a project name that is a portable folder name; rename the project first')
-    return Path(os.path.expanduser(folder)).resolve() / name
+    expanded=Path(os.path.expanduser(folder))
+    if folder.startswith('~') and folder != '~' and not folder.startswith('~/') and not (os.name=='nt' and folder.startswith('~\\')):
+        raise Refused('plans.private_folder must be an absolute folder or ~/... on this platform')
+    if not expanded.is_absolute():raise Refused('plans.private_folder must be an absolute folder or ~/... on this platform')
+    return expanded.resolve() / name
 
 
 def one_line(text, what):
