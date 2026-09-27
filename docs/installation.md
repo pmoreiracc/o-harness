@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- macOS, Linux, or Windows 10 or 11 as a preview ([Windows notes](#windows)). The dashboard auto-start
+- macOS, Linux, or 64-bit Windows 11 (x64 or ARM64) as a preview ([Windows notes](#windows)). The dashboard auto-start
   service covers macOS and Windows; on Linux run `oh serve` yourself.
 - Python 3.11+ (on Windows, OH can fetch it for you) and Git.
 - Claude Code signed in with a Claude subscription, or Codex signed in with ChatGPT.

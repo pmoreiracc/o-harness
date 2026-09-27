@@ -15,6 +15,21 @@ SCRIPTS = HOME / 'plugins/o-harness/scripts'
 
 
 class WindowsTest(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Requires Windows PowerShell')
+    def test_acceptance_steps_retain_native_command_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad=Path(tmp)/'fail.cmd';bad.write_bytes(b'@exit /b 23\r\n')
+            helper=str(HOME/'integrations/windows-status.ps1').replace("'","''")
+            fixture=str(bad).replace("'","''")
+            command=f". '{helper}'; Run 'fixture' {{ Native '{fixture}'; Write-Host 'UNREACHABLE' }}; Run 'later evidence' {{ Write-Host 'collected' }}; if ($script:Failures.Count -eq 1) {{ exit 7 }} else {{ exit 2 }}"
+            result=subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',command],capture_output=True,text=True)
+            self.assertEqual(result.returncode,7,result.stdout+result.stderr)
+            self.assertIn('FAIL fixture',result.stdout)
+            self.assertIn('status 23',result.stdout)
+            self.assertIn('OK   later evidence',result.stdout)
+            self.assertNotIn('OK   fixture',result.stdout)
+            self.assertNotIn('UNREACHABLE',result.stdout)
+
     @unittest.skipIf(os.name == 'nt', 'Uses POSIX sh and symlinks')
     def test_launcher_and_hook_probes_never_import_project_code(self):
         with tempfile.TemporaryDirectory() as tmp:
