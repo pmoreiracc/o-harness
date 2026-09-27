@@ -32,7 +32,7 @@ class PlansTest(unittest.TestCase):
     def approve(self,path):path.write_text(path.read_text().replace('status: draft','status: approved'))
 
     def repo(self,**folders):
-        change(self.root,'plans.location','repo',location='private')
+        change(self.root,'plans.location','repo')
         for key,value in folders.items():change(self.root,'plans.'+key,value)
         return plans.layout(self.root)
 
@@ -226,8 +226,8 @@ class PlansTest(unittest.TestCase):
 
     def test_plans_settings_stay_inside_their_location(self):
         for key,value in (('designs','../x'),('designs','a/..'),('designs','/abs'),('roadmap','docs/roadmap'),('decisions','x\n')):
-            with self.assertRaises(Refused):change(self.root,'plans.'+key,value,location='private')
-        change(self.root,'plans.location','repo',location='private');change(self.root,'plans.decisions','docs/design/adr')
+            with self.assertRaises(Refused):change(self.root,'plans.'+key,value)
+        change(self.root,'plans.location','repo');change(self.root,'plans.decisions','docs/design/adr')
         with self.assertRaisesRegex(Refused,'overlap'):plans.layout(self.root)
 
     def test_geoffreys_document_profile_keeps_plans_in_the_repository(self):
@@ -236,7 +236,7 @@ class PlansTest(unittest.TestCase):
         path=profile_path(self.root);value=read_json(path)|{'design_profile':'consumer-v1'}
         path.unlink();atomic_json(path,value)
         self.assertEqual(plans.layout(self.root)['designs'],self.root/'docs/design')
-        change(self.root,'plans.location','private',location='private')
+        change(self.root,'plans.location','private')
         with self.assertRaisesRegex(Refused,'document profile'):plans.layout(self.root)
 
     def test_roadmap_checks_find_missing_bars_and_cycles(self):
