@@ -17,7 +17,9 @@ def prepare(root,manifest=None,doc=None,track=''):
         from .workflow import validate_tasks
         path=(Path(root)/manifest).resolve()
         if not path.is_relative_to(directory(root).parent):raise Refused('Save task manifests in this project’s external OH storage')
-        data=read_json(path);validate_tasks(data['tasks'])
+        data=read_json(path)
+        if not isinstance(data,dict) or 'tasks' not in data:raise Refused('A prepared task list is a JSON object with tasks')
+        validate_tasks(data['tasks']);delivery_only(data)
         value.update(kind='tasks',manifest=data)
     else:
         if project(root).get('design_profile')!='consumer-v1':raise Refused('Design preparation requires a consumer-owned profile')
@@ -38,6 +40,12 @@ def limits(count,config):
     return f'{tasks}, up to {rounds} review round'+('s' if rounds!=1 else '')+' each. Change this with /oh-config.'
 
 
+def delivery_only(data):
+    """A prepared list is delivery work: the workflow, plan settings and document transitions come only from OH."""
+    if set(data)-{'tasks','checks'} or any('transition' in task for task in data['tasks']):
+        raise Refused('A prepared task list holds only tasks and checks')
+
+
 def resolve(root,name,event,kind):
     import re
     if not re.fullmatch(r'request:[0-9a-f]{64}',name or ''):raise Refused('Prepare the agreed scope first, then use the exact request trigger returned by OH')
@@ -48,4 +56,5 @@ def resolve(root,name,event,kind):
     except (KeyError,ValueError,TypeError):raise Refused('A timestamped native human event is required for prepared scope')
     if before.tzinfo is None or human.tzinfo is None or before>=human:raise Refused('Scope must be prepared before the human trigger; use the new request in a new human turn')
     if value['base']!=git(root,'rev-parse','HEAD'):raise Refused('Prepared scope is stale: prepare against the current committed base')
+    if kind=='tasks':delivery_only(value['manifest'])  # also for a file written without prepare
     return value

@@ -1,6 +1,7 @@
 ---
 name: oh-design
-description: Prepare an independently reviewed OH task plan only when explicitly invoked.
+description: Write the reviewed design doc for one roadmap initiative, only when explicitly invoked as /oh-design <slug>.
+argument-hint: "<roadmap-slug>"
 disable-model-invocation: true
 ---
 Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory. Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly. Never install or start anything merely because this skill was discovered.

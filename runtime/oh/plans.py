@@ -36,6 +36,14 @@ def layout(root, location=None):
     base = Path(root) if location == 'repo' else state_home() / 'projects' / project(root)['id'] / 'plans'
     where = {'location': location, 'base': base, 'roadmap': base / settings['roadmap'],
              'designs': base / settings['designs'], 'decisions': base / settings['decisions']}
+    if location == 'repo':
+        for key in ('roadmap', 'designs', 'decisions'):
+            path = where[key]
+            for part in (path, *path.parents):
+                if part == base:break
+                if part.is_symlink():raise Refused(f'Repository plan paths cannot use symlinks: {part}')
+            if not path.resolve().is_relative_to(base.resolve()):
+                raise Refused(f'Repository plan paths must stay inside the checkout: {path}')
     def folded(path):return Path(os.path.realpath(path).casefold())  # case-insensitive file systems share folders
     designs, decisions = folded(where['designs']), folded(where['decisions'])
     if designs.is_relative_to(decisions) or decisions.is_relative_to(designs):
@@ -48,9 +56,41 @@ def layout(root, location=None):
 
 def one_line(text, what):
     """A single line of text: no line break of any kind, which Markdown or the parser would split on."""
-    if not isinstance(text, str) or not text.strip() or len(text.splitlines()) != 1 or '\x1f' in text:
+    if not isinstance(text, str) or not text.strip() or len(text.splitlines()) != 1 or any(ord(c)<32 or ord(c)==127 for c in text):
         raise Refused(f'{what} must be one non-empty line')
     return text.strip()
+
+
+def layout_snapshot(where):
+    """Bind both the location and resolved document paths, including symlink destinations."""
+    return {key: str(value.resolve()) if isinstance(value, Path) else value for key, value in where.items()}
+
+
+def section_prose(text):
+    """The renderer owns decision headings; fields may contain prose and fenced examples only."""
+    prose_controls(text)
+    no_reference_definitions(text)
+    if fenced(text.split('\n')+['## OH section boundary'])[-1]:
+        raise Refused('Decision prose has an unclosed code fence that would hide OH sections')
+    for _, line in outside(text.split('\n')):
+        if re.match(r' {0,3}(#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)', line) or re.search(r'<h[1-6](?:\s|/?>|$)', line, re.I):
+            raise Refused('Decision prose cannot contain structural headings; OH owns the decision sections')
+        if re.search(r'<(?:/?[A-Za-z]|[!?])',line):raise Refused('Raw HTML is not allowed in plan prose; put examples in fenced code')
+
+
+def prose_controls(text):
+    if re.search(r'[\x00-\x08\x0b-\x1f\x7f]',text):
+        raise Refused('Plan prose cannot contain control characters; use LF line endings')
+
+
+def no_reference_definitions(text):
+    """Reference definitions render no text and can swallow task/track lines in multiline labels or titles.
+    Inspect the whole label before consulting fences: a fence-looking line can itself be part of a label.
+    Inline links and definitions inside actual fenced examples remain available."""
+    inside = fenced(text.split('\n'))
+    for match in re.finditer(r'(?m)^ {0,3}\[(?:\\[\s\S]|[^\[\]\\])*\]:', text):
+        if not inside[text.count('\n', 0, match.start())]:
+            raise Refused('Link reference definitions are not allowed in plan prose; use inline links or fenced examples')
 
 
 def raw(path):
@@ -90,12 +130,14 @@ def outside(rows):
 
 def write(path, text):
     import tempfile
+    import stat
     from .system import replace
-    path = Path(path);path.parent.mkdir(parents=True, exist_ok=True)
+    path = Path(path);ordinary_outputs(path);path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.oh-plan-', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:stream.write(text.encode() if isinstance(text, str) else text)
-        mask = os.umask(0);os.umask(mask);os.chmod(temporary, 0o666 & ~mask)
+        mask = os.umask(0);os.umask(mask)
+        os.chmod(temporary, stat.S_IMODE(path.stat().st_mode) if path.is_file() else 0o666 & ~mask)
         replace(temporary, path)
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
@@ -112,12 +154,16 @@ def all_or_nothing(*paths):
     # Plans in OH's folder are OH state: hold the state guard so a backup never sees half an edit.
     guard = snapshot_guard() if any(Path(p).resolve().is_relative_to(state_home().resolve()) for p in paths) else contextlib.nullcontext()
     with guard:
+        ordinary_outputs(*paths)
         before = {Path(p): raw(p) for p in paths}
+        modes = {Path(p): file_identity(p)['mode'] for p in paths if Path(p).is_file()}
         try:yield
         except BaseException:
             for path, data in before.items():
                 if data is None:path.unlink(missing_ok=True)
-                else:write(path, data)
+                else:
+                    write(path, data)
+                    os.chmod(path,modes[path])
             raise
 
 
@@ -256,12 +302,14 @@ def write_design(root, where, slug, title, body, status):
     return number, path
 
 
-def write_decision(root, where, title, context, alternatives, consequences, decision=''):
-    """A decision record plus its log row. Without a decision it is proposed, its Decision left to a human."""
+def write_decision(root, where, title, context, alternatives, consequences, decision='', recommendation='', filename_slug=None):
+    """A decision record plus its log row. Without a decision it is proposed, its Decision left to a human, with the
+    proposer's recommendation when there is one."""
     title = one_line(title, 'The decision title')
+    for text in (title,context,alternatives,consequences,decision,recommendation):section_prose(text)
     if '|' in title:raise Refused('The decision title can\'t contain a pipe')
     folder = Path(where['decisions']);number = next_number(folder)
-    slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:60].strip('-') or 'decision'
+    slug = filename_slug or decision_slug(title)
     status = 'accepted' if decision.strip() else 'proposed'
     today = date.today().isoformat()
     path, log = folder / f'{number}-{slug}.md', folder / 'README.md'
@@ -283,6 +331,7 @@ def write_decision(root, where, title, context, alternatives, consequences, deci
         write(path, f'---\ntype: decision\nstatus: {status}\ndate: {today}\n---\n\n'
               f'# ADR-{number} — {title}\n\n## Context\n\n{context.strip()}\n\n## Decision\n\n'
               f'{decision.strip() or "_Not decided yet. This record states the question and its alternatives for a human decision._"}\n\n'
+              + (f'## Recommendation\n\n{recommendation.strip()}\n\n' if recommendation.strip() and not decision.strip() else '') +
               f'## Alternatives considered\n\n{alternatives.strip()}\n\n## Consequences\n\n{consequences.strip()}\n')
         write_rows(log, rows, ending)
     return number, path
@@ -392,3 +441,262 @@ def check(root, where=None):
     if Path(where['roadmap']).exists():result.update(verify_roadmap(root, where))
     if Path(where['designs']).exists():result.update(verify_design(root, where))
     return result
+
+
+class Blocked(Refused):
+    """A problem the worker can't fix (the checkout, the settings or the roadmap itself): it stops the run with its
+    reason instead of going back to the worker as feedback."""
+
+
+def blocked(action):
+    try:return action()
+    except Blocked:raise
+    except Refused as exc:raise Blocked(str(exc)) from None
+
+
+def editing(root):
+    """One plan edit at a time per project, whichever checkout it runs in."""
+    from .storage import lock, project, state_home
+    return lock(state_home() / 'projects' / project(root)['id'] / 'plans.lock')
+
+
+def initiative(root, where, slug):
+    """The roadmap row a design covers: its milestone, text and dependencies. It must not name a design yet."""
+    if not isinstance(slug, str) or not re.fullmatch(SLUG, slug):
+        raise Refused('Name one roadmap initiative by its slug: /oh-design <slug>. New ideas start with /oh-propose')
+    rows = initiatives(root, where)
+    found = [row for row in rows if row[0] == slug]
+    if not found:
+        free = [row[0] for row in rows if not row[3]]
+        raise Refused(f"The roadmap has no initiative '{slug}'." + (f' Initiatives without a design: {", ".join(free)}.' if free else '')
+                      + ' New work starts with /oh-propose')
+    _, milestone, depends, design = found[0]
+    if design:
+        raise Refused(f"'{slug}' already has design doc {design} ({design_file(root, design, where)}); edit that doc instead")
+    text = next(line.split('|')[2].strip() for _, line in outside(rows_of(where['roadmap'])[0]) if line.startswith(f'| `{slug}` |'))
+    return {'slug': slug, 'milestone': milestone, 'text': text, 'depends': [d for d in depends.split(',') if d]}
+
+
+def design_manifest(root, slug):
+    """The run that designs one roadmap initiative, and the plan settings only OH may give it. Code finds the row;
+    the worker writes only prose."""
+    where = layout(root)
+    if where['location'] != 'repo':
+        raise Refused('/oh-design writes plans in the repository for now; private plans get their approval step in a coming '
+                      'update. Use oh config set plans.location repo, or wait for that update')
+    row = initiative(root, where, slug)
+    try:verify_roadmap(root, where)
+    except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
+    planned = [Path(where['designs']) / f'{next_number(where["designs"])}-{slug}.md', Path(where['roadmap']),
+               Path(where['decisions']) / f'{next_number(where["decisions"])}-decision.md', Path(where['decisions']) / 'README.md']
+    ordinary_outputs(*planned)
+    if (skipped := ignored(root, [Path(p).relative_to(root).as_posix() for p in planned])):
+        raise Refused(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+    shown = {key: Path(where[key]).relative_to(root).as_posix() for key in ('roadmap', 'designs', 'decisions')}
+    instructions = (f"Design the roadmap initiative `{slug}` in milestone {row['milestone']}: {row['text']}\n"
+                    f"It depends on: {', '.join(row['depends']) or 'nothing'}.\n"
+                    f"Roadmap: {shown['roadmap']}. Design docs: {shown['designs']}/. Decision records: {shown['decisions']}/.")
+    return ({'workflow': 'design', 'tasks': [{'id': 'design', 'title': f'Design {slug}', 'instructions': instructions,
+                                              'transition': {'profile': 'plans', 'slug': slug}}]},
+            {'workflow': 'design', 'plans': layout_snapshot(where), 'slug': slug})
+
+
+def branch_for(root, slug, run, kind='design'):
+    """<kind>/<slug>; <kind>-<slug> when a branch named <kind> exists (Git can't have both); a run-specific
+    name when that is taken too."""
+    import subprocess
+    def exists(name):
+        return subprocess.run(['git', '-C', str(root), 'rev-parse', '--verify', '--quiet', 'refs/heads/' + name], capture_output=True).returncode == 0
+    def nested(name):  # design/auth can't exist beside design/auth/v2
+        return bool(subprocess.run(['git', '-C', str(root), 'for-each-ref', '--format=%(refname)', f'refs/heads/{name}/'], capture_output=True, text=True).stdout.strip())
+    name = f'{kind}-{slug}' if exists(kind) else f'{kind}/{slug}'
+    return f'{name}-{run[:8]}' if exists(name) or nested(name) else name
+
+
+TITLE_CHARS, SUMMARY_CHARS = 150, 1000
+
+
+def answer(value):
+    """The design worker's answer, checked. It carries prose only: OH adds numbers, frontmatter and links."""
+    from .hosts import DESIGN_SCHEMA
+    fields = DESIGN_SCHEMA['required']
+    if not isinstance(value, dict) or set(value) != set(fields) or any(not isinstance(value[k], str) for k in fields):
+        raise Refused('The answer must be the JSON object the output schema describes, with every field a string')
+    if value['kind'] not in ('design', 'decision'):raise Refused("kind must be 'design' or 'decision'")
+    one_line(value['title'], 'The title')
+    section_prose(value['title'])
+    if len(value['title'].strip()) > TITLE_CHARS:raise Refused(f'The title is longer than {TITLE_CHARS} characters')
+    if len(value['summary'].strip()) > SUMMARY_CHARS:raise Refused(f'The summary is longer than {SUMMARY_CHARS} characters')
+    needed = ('body', 'summary') if value['kind'] == 'design' else ('context', 'alternatives', 'consequences', 'summary')
+    missing = [k for k in needed if not value[k].strip()]
+    if missing:raise Refused(f"A {value['kind']} needs {', '.join(missing)}")
+    unused = ('context', 'alternatives', 'consequences') if value['kind'] == 'design' else ('body',)
+    if any(value[k].strip() for k in unused):raise Refused(f"A {value['kind']} requires empty unused fields: {', '.join(unused)}")
+    if value['kind'] == 'decision' and '|' in value['title']:raise Refused('A decision title cannot contain |')
+    if value['kind'] == 'decision':
+        for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
+    for text in value.values():prose_controls(text)
+    if value['kind'] == 'design':
+        no_reference_definitions(value['body'])
+        rows=value['body'].split('\n')
+        if fenced(rows+['## OH boundary'])[-1]:
+            raise Refused('Design prose has an unclosed code fence')
+        for line, inside in zip(rows,fenced(rows)):
+            if inside and re.match(r'##|-'+WS+r'*\[',line):
+                raise Refused('Code blocks cannot contain parser-significant heading or task lines')
+        tracks=set()
+        for _, line in outside(rows):
+            if re.search(r'<(?:/?[A-Za-z]|[!?])',line):raise Refused('Raw HTML is not allowed in plan prose; put examples in fenced code')
+            if re.match(r' {0,3}#(?:[ \t]|$)',line):
+                raise Refused('The body starts below the title: use ## sections, not a # heading')
+            if re.match(r' {0,3}(?:=+|-+)[ \t]*$',line) or re.search(r'<h[1-6](?:\s|/?>|$)',line,re.I):
+                raise Refused('Design sections use numbered ## headings, not Setext or HTML headings')
+            if re.match(r' {0,3}##[ \t]',line) and not re.match(r'##[ \t]+[0-9]+\.[ \t]+\S',line):
+                raise Refused('Design sections use numbered ## headings')
+            if re.match(r' {0,3}###[ \t]',line):
+                match=re.fullmatch(r'###[ \t]+(\S+)[ \t]+[Tt]rack[ \t]*',line)
+                if not match:raise Refused('Track headings use ### <one-word name> track')
+                owner=match[1].lower()
+                if owner in tracks:raise Refused('Each track name must be unique')
+                tracks.add(owner)
+    return value
+
+
+def changes(root):
+    """Paths Git sees as changed or untracked in the checkout."""
+    import subprocess
+    output = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+                            capture_output=True, check=True).stdout.decode().split('\0')
+    paths, skip = [], False
+    for entry in output:
+        if skip or not entry:skip = False;continue
+        paths.append(entry[3:]);skip = entry[0] in 'RC'  # a rename or copy is followed by its old path
+    return paths
+
+
+def ignored(root, relative):
+    """Which new paths Git ignores, so a commit would miss them. Tracked files are committed even when a pattern
+    matches them; exit status 1 means none is ignored."""
+    import subprocess
+    found = subprocess.run(['git', '-C', str(root), 'check-ignore', '--', *relative], capture_output=True)
+    if found.returncode not in (0, 1):raise Blocked(f'git check-ignore failed: {found.stderr.decode().strip()}')
+    return found.stdout.decode().split()
+
+
+def digest_of(path):
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest() if Path(path).is_file() else None
+
+
+def file_identity(path):
+    """File type, mode and content; never follow a link when binding a rendered document."""
+    import hashlib,stat
+    path=Path(path)
+    if not path.exists() and not path.is_symlink():return None
+    info=path.lstat()
+    kind='file' if stat.S_ISREG(info.st_mode) else 'symlink' if stat.S_ISLNK(info.st_mode) else 'other'
+    body=path.read_bytes() if kind=='file' else os.readlink(path).encode() if kind=='symlink' else b''
+    return {'kind':kind,'mode':stat.S_IMODE(info.st_mode),'hash':hashlib.sha256(body).hexdigest()}
+
+
+def ordinary_outputs(*paths):
+    """Never replace a link/special file or snapshot its followed bytes as a regular file."""
+    for path in paths:
+        identity=file_identity(path)
+        if identity and identity['kind']!='file':
+            raise Blocked(f'Plan output must be an ordinary file, not a symlink or special file: {path}')
+
+
+def validate_outputs(root, rendered):
+    """All committed planning outputs remain ordinary files inside the repository."""
+    base=Path(root).resolve()
+    for name in rendered['intent']:
+        path=Path(root)/name;identity=file_identity(path)
+        if (not identity or identity['kind']!='file' or not path.resolve().is_relative_to(base)
+                or any(p.is_symlink() for p in (path,*path.parents) if p!=base and base in p.parents)
+                or identity!=rendered.get('identities',{}).get(name)):
+            raise Blocked(f'A check changed {name} after OH wrote it (file type, mode or content); preserve the change and stop this run')
+
+
+def undo(root, previous, check_only=False):
+    """Put back what this run's last render wrote, so a repair starts from the reviewed parent. Safe to repeat.
+    It never discards a change it can't prove OH made: a file edited after OH wrote it, or a file OH was writing
+    when it was interrupted, stops the run for a person to look at. check_only only asks whether undo could run."""
+    from .storage import git
+    import hashlib
+    if not previous:return
+    # An ignored file OH wrote isn't in git status, so a new file counts as changed whenever it exists.
+    written, dirty = previous.get('files', {}), set(changes(root))
+    for name, expected in previous.get('identities',{}).items():
+        current=file_identity(Path(root)/name)
+        if current==previous.get('before_identities',{}).get(name):continue
+        if current!=expected:raise Blocked(f'{name} changed after OH wrote it (file type, mode or content); stop this run and preserve the edit')
+        dirty.add(name)
+    dirty |= {r for r in previous.get('intent', []) if (Path(root) / r).exists() and not git(root, 'ls-tree', '--name-only', 'HEAD', '--', r)}
+    for relative in previous.get('intent', []):
+        if relative not in dirty:continue  # already as HEAD has it
+        path = Path(root) / relative
+        current = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        if relative not in written:
+            raise Blocked(f'OH was interrupted while writing {relative}. Discard that change (git checkout -- <file>, or delete '
+                          'a new file) and run OH again, or stop the run with /oh-stop to keep it')
+        if current != written[relative]:
+            raise Blocked(f'{relative} changed after OH wrote it. Stop this run (/oh-stop) and keep or discard that edit yourself')
+    if check_only:return
+    for relative in previous.get('intent', []):
+        if relative not in dirty:continue
+        if git(root, 'ls-tree', '--name-only', 'HEAD', '--', relative):
+            git(root, 'checkout', 'HEAD', '--', relative)
+            prior=previous.get('before_identities',{}).get(relative)
+            restored=file_identity(Path(root)/relative)
+            if prior and prior['kind']=='file' and restored and restored['kind']=='file':
+                os.chmod(Path(root)/relative,prior['mode'])
+        else:(Path(root) / relative).unlink(missing_ok=True)
+
+
+def render(root, slug, value, record):
+    """Write the design (or the owed decision record) into a checkout that undo put back to HEAD.
+    `record` saves the paths before anything is written. A Refused is about the worker's prose and goes back to it;
+    a Blocked is about the checkout, settings or roadmap and stops the run. Returns the paths and their hashes."""
+    import hashlib
+    where = blocked(lambda: layout(root))
+    if where['location'] != 'repo':raise Blocked('This design run writes plans in the repository, but plans.location changed')
+    with editing(root):
+        changed = changes(root)
+        if changed:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(changed[:5])}); a design commit holds only its plan files")
+        value = answer(value)
+        blocked(lambda: initiative(root, where, slug));blocked(lambda: verify_roadmap(root, where))
+        if value['kind'] == 'design':
+            number = blocked(lambda: next_number(where['designs']))
+            paths = [Path(where['designs']) / f'{number}-{slug}.md', Path(where['roadmap'])]
+        else:
+            number = blocked(lambda: next_number(where['decisions']))
+            paths = [Path(where['decisions']) / f'{number}-decision.md', Path(where['decisions']) / 'README.md']
+        intent = [Path(p).relative_to(root).as_posix() for p in paths]
+        skipped = ignored(root, intent)
+        if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+        ordinary_outputs(*paths)
+        record(intent)
+        before_identities={p:file_identity(Path(root)/p) for p in intent}
+        with all_or_nothing(*paths):
+            if value['kind'] == 'design':
+                written, path = write_design(root, where, slug, value['title'], value['body'], 'approved')
+                rows = [row.split(US) for row in plan(root, written, where).split('\n') if row]
+                if any(row[1] != 'pending' for row in rows):
+                    raise Refused('A new design has only open tasks: write each as "- [ ] **N.**", never "- [x]"')
+                blocked(lambda: claim(root, where, slug, written))
+                verify_design(root, where, written)
+                tasks = len(rows)
+            else:
+                written, path = blocked(lambda: write_decision(root, where, value['title'], value['context'], value['alternatives'],
+                                                      value['consequences'], recommendation=value['summary'], filename_slug='decision'))
+                tasks = 0
+            if written != number or Path(path) != paths[0]:raise Blocked('The plan was written under another number')
+        files = {relative: hashlib.sha256((Path(root) / relative).read_bytes()).hexdigest() for relative in intent}
+    return {'kind': value['kind'], 'number': number, 'title': value['title'].strip(), 'path': intent[0], 'tasks': tasks,
+            'summary': value['summary'].strip(), 'intent': intent, 'files': files,
+            'before_identities':before_identities,'identities':{p:file_identity(Path(root)/p) for p in intent}}
+
+
+def decision_slug(title):
+    return re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:60].strip('-') or 'decision'

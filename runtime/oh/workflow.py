@@ -29,6 +29,12 @@ def validate_tasks(tasks):
     return tasks
 
 
+def committed(state):
+    """Whether this run commits its reviewed tree: delivery, and designs whose plans live in the repository.
+    Other planning runs review a saved artifact and leave the product untouched."""
+    return state.get('workflow','deliver')=='deliver' or (state.get('plans') or {}).get('location')=='repo'
+
+
 def human_event(payload, host):
     if host not in ('codex','claude') or payload.get('hook_event_name') != 'UserPromptSubmit':
         raise Refused('Only a host UserPromptSubmit event can grant work')
@@ -41,6 +47,14 @@ def human_event(payload, host):
     if not isinstance(prompt,str):
         raise Refused('Missing human prompt')
     return {'host':host,'session':session,'turn':turn,'prompt':prompt.strip()}
+
+
+def unfinished(root,event):
+    """Whether this checkout has a run, other than the one this very event started, that isn't stopped, published
+    or completed. (A replay of the event after a crash finds its own run.)"""
+    if not active_file(root).exists():return False
+    _,state=load_run(root)
+    return state['source']!=digest({k:event[k] for k in ('host','session','turn','prompt')}) and state['status'] not in ('stopped','pr','completed')
 
 
 def active_file(root):
@@ -82,10 +96,12 @@ def reduce(records):
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
+        elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}
         elif kind=='subject.prepared':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Rendered subject without one implementation attempt')
             matches[0]['tree']=d['tree']
+            if d.get('plan'):state['rendered']=d['plan']
         elif kind=='verification.failed':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Verification failure without an admitted implementation')
@@ -96,10 +112,15 @@ def reduce(records):
     return state
 
 
-def _start(root, manifest, event, prepared=None):
+def _start(root, manifest, event, prepared=None, plan=None):
     tasks=validate_tasks(manifest['tasks']);p=project(root)
     workflow=manifest.get('workflow','deliver')
     if workflow not in ('propose','design','deliver'):raise Refused('Unknown workflow')
+    # Plan settings and plan transitions come only from OH's own parsing of a typed /oh-design, never from a
+    # manifest file: a prepared file is delivery work, whoever wrote it.
+    if {'plans','slug'}&set(manifest) or (plan is None and any((t.get('transition') or {}).get('profile') in ('plans','intake') for t in tasks)):
+        raise Refused('A manifest cannot choose plan settings or plan transitions')
+    if prepared is not None and (workflow!='deliver' or plan is not None):raise Refused('Prepared scope is delivery work only')
     if workflow!='deliver' and len(tasks)!=1:raise Refused('Planning workflows have one bounded artifact task')
     source=digest({k:event[k] for k in ('host','session','turn','prompt')})
     if active_file(root).exists():
@@ -114,22 +135,50 @@ def _start(root, manifest, event, prepared=None):
     if git(root,'status','--porcelain'):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
-    if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
-        git(root,'switch','-c','codex/oh-'+run[:8])
-    from .branches import incarnation
-    branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
-    for task in tasks:
-        task['difficulty'],task['difficulty_reason']=classify(task)
-    data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
-          'host':event['host'],'checkout':checkout,'source':source,'human':event,
-          'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
-          'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
-          'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
-    journal=Journal(p['id'],run)
-    journal.append('run.started',data)
-    ids=[t['id'] for t in tasks[:data['config']['tasks_per_batch']]]
-    journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
-    atomic_json(active_file(root),{'project':p['id'],'run':run,'checkout':checkout})
+    original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
+    if plan and workflow=='design' and committed(plan) and original not in ('main','master'):
+        raise Refused('Committed designs must start from main or master; switch to that branch before typing /oh-design again')
+    try:
+        if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
+            created='codex/oh-'+run[:8]
+            git(root,'switch','-c',created)
+        import re
+        current=git(root,'branch','--show-current')
+        if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
+            raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main first')
+        if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
+            from .plans import branch_for
+            created=branch_for(root,plan['slug'],run)
+            git(root,'switch','-c',created)
+        from .branches import incarnation
+        branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
+        for task in tasks:
+            task['difficulty'],task['difficulty_reason']=classify(task)
+        data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
+              'host':event['host'],'checkout':checkout,'source':source,'human':event,
+              'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
+              'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
+              **(plan or {}),
+              'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
+        journal=Journal(p['id'],run)
+        journal.append('run.started',data)
+        ids=[t['id'] for t in tasks[:data['config']['tasks_per_batch']]]
+        journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
+        atomic_json(active_file(root),{'project':p['id'],'run':run,'checkout':checkout})
+    except Exception:
+        # A start that never published its active pointer must not strand the checkout
+        # on a plan branch which the next typed command will refuse. Retain its journal.
+        active=read_json(active_file(root)) if active_file(root).exists() else {}
+        if created and active.get('run')!=run:
+            if (git(root,'branch','--show-current')!=created or git(root,'rev-parse','HEAD')!=base
+                    or git(root,'status','--porcelain')):
+                raise Refused('Run start failed and the checkout changed; inspect it, then switch back to '+original+' before typing the command again')
+            git(root,'switch',original)
+            from subprocess import CalledProcessError
+            try:git(root,'update-ref','-d','refs/heads/'+created,base)
+            except CalledProcessError as exc:
+                raise Refused('Run start failed and branch cleanup was refused; inspect '+created+' before starting again') from exc
+        raise
     best_effort('run.started',p['id'],run,name=p['name'],work_kind=p['kind'],host=event['host'],
                 version=data['harness_version'],config_hash=data['config_hash'])
     return journal,reduce(journal.records())
@@ -161,14 +210,14 @@ def _choose(root, choice, event):
                 raise Refused('Files changed while paused; preserve them and reconcile the run before resuming')
         if choice=='retry':
             # A new, explicit human retry grants one bounded recovery window. Restart alone does not.
-            spent=sum(a.get('outcome') in ('failed','interrupted','verification_failed') for a in state['attempts'] if a['task']==task and a['role']=='implementation')
+            spent=sum(a.get('outcome') in ('failed','interrupted','verification_failed') for a in state['attempts'] if a['task']==task and a['role'] in ('implementation','analysis'))
             append('recovery.grant',{'task':task,'source':source,'spent_before':spent})
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':state.get('pause_return_status','running') if choice=='resume' else 'running'})
         append('task.intervention',{'task':task})
         best_effort('task.intervention',state['project'],state['id'],task,reason=choice)
     elif choice in ('pr','stop'):
-        if choice=='pr' and state.get('workflow','deliver')!='deliver':raise Refused('Planning does not authorize product publication')
+        if choice=='pr' and not committed(state):raise Refused('Planning does not authorize product publication')
         if choice=='pr' and state['status'] not in ('checkpoint','completed'):
             raise Refused('PR choice requires completed work at a checkpoint')
         decision={'source':source,'choice':choice}
@@ -246,6 +295,7 @@ def checkpoint(root):
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
             'config_hash':state['config_hash'],'version':state['harness_version']}|(
+            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
 
 
@@ -257,9 +307,9 @@ def continue_limits(left,config):
 
 
 @state_writer
-def start(root,manifest,event,prepared=None):
+def start(root,manifest,event,prepared=None,plan=None):
     with lock(checkout_file(root, 'oh-control.lock')):
-        return _start(root,manifest,event,prepared)
+        return _start(root,manifest,event,prepared,plan)
 
 
 @state_writer

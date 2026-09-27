@@ -12,6 +12,17 @@ from .storage import Refused,atomic_json,digest,git,lock,read_json,state_home
 def pending_file(root):return checkout_file(root, 'oh-pending-human.json')
 
 
+def refusal_file(root):return checkout_file(root, 'oh-last-refusal.json')
+
+
+def refused_last(root):
+    """After a typed command was refused, the next plain run says so once instead of acting on an older run."""
+    path=refusal_file(root)
+    if pending_file(root).exists() or not path.exists():return
+    message=read_json(path)['refused'];path.unlink()
+    raise Refused('Your last OH command was refused: '+message)
+
+
 def stage(root,host,payload):
     if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Delegated agent prompts cannot grant authority')
     from .workflow import human_event
@@ -85,10 +96,24 @@ def materialize(root):
         source=digest({k:event[k] for k in ('host','session','turn','prompt')})
         from .storage import project
         used=state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')
-        if used.exists():path.unlink();return read_json(used)['result']
+        if used.exists():
+            path.unlink();record=read_json(used)
+            if 'refused' in record:raise Refused(record['refused'])
+            return record['result']
         from .cli import host_hook
-        result=host_hook(root,locator['host'],locator['payload'],verified=event)
-        if result is None:raise Refused('This input is not a supported native OH transition')
+        try:
+            result=host_hook(root,locator['host'],locator['payload'],verified=event)
+            if result is None:raise Refused('This input is not a supported native OH transition')
+        except Exception as exc:
+            # The human's turn was verified and answered with this refusal: it is spent, so the next typed command
+            # isn't blocked behind it. Replaying the same turn gives the same refusal, and the next plain `oh run`
+            # says the command has to be typed again instead of showing an older run.
+            message=(str(exc) if isinstance(exc,Refused) else f'OH could not carry out this command ({type(exc).__name__}: {exc})').strip()
+            message+=' OH answered this command; type it again once this is fixed.'
+            atomic_json(used,{'source':event,'refused':message},immutable=True)
+            atomic_json(refusal_file(root),{'refused':message});path.unlink()
+            raise Refused(message) from exc
+        refusal_file(root).unlink(missing_ok=True)
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
         from .workflow import active_file,load_run

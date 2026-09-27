@@ -21,7 +21,13 @@ def host_hook(root,host,payload,*,verified):
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
     if planning:
         kind,intent=planning.groups()
-        start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
+        from .workflow import unfinished
+        if unfinished(root,verified):raise Refused('An unfinished run exists in this checkout; resume it, or stop it with /oh-stop, first')
+        if kind=='design':
+            from .plans import design_manifest
+            manifest,plan=design_manifest(root,intent.strip())
+            start(root,manifest,verified,plan=plan)
+        else:start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
         return checkpoint(root)
     delivery=re.fullmatch(r'[$/](?:o-harness:)?oh-deliver\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
     if delivery:
@@ -152,7 +158,8 @@ def main(argv=None):
             from .authority import stage
             result=stage(root,args.host,json.load(sys.stdin))
         elif args.command in ('run','start'):
-            from .authority import materialize
+            from .authority import materialize,refused_last
+            refused_last(root)
             materialize(root)
             if args.command=='start' and args.request:
                 from .workflow import load_run

@@ -98,7 +98,7 @@ class ControlsTest(unittest.TestCase):
         def concern(*args,**kwargs):
             result=self.fake(*args,**kwargs)
             if args[4]=='review':
-                result['structured'].update(verdict='concern',findings=[{'severity':'concern','description':'Accepted tradeoff','path':'output.txt'}])
+                result['structured'].update(verdict='concern',findings=[{'severity':'concern','description':'Accepted tradeoff','path':'output.txt','family':'accepted-tradeoff','relation':'original'}])
             return result
         self.assertEqual(run(self.root,concern)['status'],'findings_checkpoint')
         choose(self.root,'accept concerns',self.event('2','accept concerns'))
