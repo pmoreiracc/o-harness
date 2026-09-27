@@ -187,6 +187,11 @@ class ConfigTest(unittest.TestCase):
             with patch('oh.config.launch') as opener:config.open_settings(self.root)
             opener.assert_called_once();self.assertEqual(settings_file().read_text(),broken)  # opened as it is
         self.write({'projects':[]})
+        other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
+        from .cli import main
+        from .registry import index_path
+        with self.assertRaises(SystemExit):main(['--root',str(other),'init','--name','Other'])
+        self.assertFalse(index_path(other).exists())  # init refuses before registering
         self.assertEqual(change(self.root,'review_rounds','4',scope='global')['to'],4)
         with self.assertRaisesRegex(Refused,'projects must be an object'):change(self.root,'review_rounds','4')
         self.write({'checks':[],'context':5,'projects':{'Fixture':{'$schema':'x','checks':[{'name':'unit','command':['true']}]}}})

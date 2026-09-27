@@ -142,6 +142,8 @@ class RegistryTests(unittest.TestCase):
                 register(old,'Fixture',imported={'id':identifier()})  # separate projects, from before names were unique
             self.git('worktree','remove',str(old))
         fresh=self.base/'fresh';self.git('worktree','add','-qb','fresh',str(fresh))
+        from .config import describe
+        self.assertEqual(describe(fresh)['join'],'Fixture')  # the name register accepts, once
         self.assertEqual(register(fresh,'Fixture')['id'],main)
 
     def test_a_moved_checkout_cannot_come_back_to_a_name_taken_meanwhile(self):

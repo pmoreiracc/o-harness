@@ -33,13 +33,31 @@ def verified(recorded):
 
 def repository_projects(current):
     """Registered projects of the Git repository `current` belongs to: those with a registration whose
-    Git common folder is this checkout's, still in place (so no reused folder id can match)."""
+    Git common folder is this checkout's (same path and folder id). Without birth times (Linux), a
+    folder deleted and re-created at the same path may get the same id back; see issue #20."""
     from .config import registrations
     def same(recorded):
         try:return (recorded.get('common_identity') == current['common_identity'] == stamp(recorded['common'])
                     and recorded['common'] == current['common'])
         except (OSError, KeyError, TypeError, ValueError):return False
     return {p for p, found in registrations().items() if any(same(e) for e in found)}
+
+
+def join_candidates(current, name, here):
+    """(present projects holding `name`, projects of this repository named `name` that a checkout could
+    join). When a present project holds the name, only it can be joined."""
+    from .config import name_of, projects_named
+    holders = projects_named(name, excluding_root=here)
+    same = {p for p in repository_projects(current) if name_of(p) == name}
+    return holders, (holders & same if holders else same)
+
+
+def joinable(root):
+    """Names oh init would join for an unregistered checkout: exactly the ones register accepts."""
+    from .config import name_of
+    current, here = identity(root), str(Path(root).resolve())
+    names = {n for n in map(name_of, repository_projects(current)) if n}
+    return sorted(n for n in names if (lambda h, m: len(m) == 1 and len(h) <= 1)(*join_candidates(current, n, here)))
 
 
 def index_path(root):
@@ -97,11 +115,8 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
             # A checkout of the Git repository of the project that has the name (a worktree, or one recreated
             # at an old path, whose replaced registration counts too) joins that project, as --attach would,
             # with a fresh checkout id and no grants.
-            from .config import name_of, projects_named
             here = str(Path(root).resolve())
-            holders = projects_named(name, excluding_root=here)
-            same = {p for p in repository_projects(current) if name_of(p) == name}
-            match = holders & same if holders else same
+            holders, match = join_candidates(current, name, here)
             if len(match) > 1 and not holders:
                 raise Refused(f'Several earlier OH projects of this repository are named {name}; join one with '
                               f'oh init --name "{name}" --attach <id> (ids: {", ".join(sorted(match))})')

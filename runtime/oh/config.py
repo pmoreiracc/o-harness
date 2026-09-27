@@ -731,8 +731,8 @@ def launch(path):
 def repository_names(root):
     """Names of the OH projects of an unregistered checkout's Git repository, which oh init can join."""
     import subprocess
-    from .registry import identity, repository_projects
-    try:return sorted(n for n in map(name_of, repository_projects(identity(root))) if n)
+    from .registry import joinable
+    try:return joinable(root)
     except (Refused, OSError, ValueError, subprocess.CalledProcessError):return []
 
 
