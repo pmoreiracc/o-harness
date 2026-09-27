@@ -35,7 +35,8 @@ def install():
     value={'Label':LABEL,'ProgramArguments':[sys.executable,'-I',str(launcher),'serve'],
       'WorkingDirectory':str(state_home()),'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':10,
       'StandardOutPath':str(logs/'dashboard.log'),'StandardErrorPath':str(logs/'dashboard-error.log'),
-      'EnvironmentVariables':{'PATH':os.environ.get('PATH','/usr/bin:/bin'),'OH_DATA_HOME':str(state_home()),'OH_SERVICE_FOLLOWS_ACTIVE':'1'}}
+      'EnvironmentVariables':{'PATH':os.environ.get('PATH','/usr/bin:/bin'),'OH_DATA_HOME':str(state_home()),'OH_SERVICE_FOLLOWS_ACTIVE':'1'}|(
+        {'XDG_CONFIG_HOME':os.environ['XDG_CONFIG_HOME']} if os.environ.get('XDG_CONFIG_HOME') else {})}  # the dashboard reads your settings too
     previous=path.read_bytes() if path.exists() else None
     domain=f'gui/{os.getuid()}';target=domain+'/'+LABEL
     running=subprocess.run(['launchctl','print',target],capture_output=True).returncode==0

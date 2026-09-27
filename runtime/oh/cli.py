@@ -59,7 +59,8 @@ def main(argv=None):
     plugin_hook=sub.add_parser('plugin-hook');plugin_hook.add_argument('--host',choices=['codex','claude'],required=True)
     launch=sub.add_parser('start');launch.add_argument('request',nargs='?')
     export=sub.add_parser('profile-export');export.add_argument('destination',type=Path)
-    imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path)
+    imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
+    renamed=sub.add_parser('rename');renamed.add_argument('name')
     prep=sub.add_parser('prepare');prep.add_argument('manifest')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?',default='origin/main');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
@@ -87,7 +88,7 @@ def main(argv=None):
             result=setup(development=args.development,if_newer=args.if_newer)
         elif args.command in ('profile-export','profile-import'):
             from .profiles import export_profile,import_profile
-            result=export_profile(root,args.destination) if args.command=='profile-export' else import_profile(root,args.source)
+            result=export_profile(root,args.destination) if args.command=='profile-export' else import_profile(root,args.source,args.name)
         elif args.command=='plugin-hook':
             from .entry import receive
             result=receive(root,args.host,json.load(sys.stdin))
@@ -108,6 +109,9 @@ def main(argv=None):
             from .hosts import trust
             # Host trust is machine-wide: the current folder is a project only when --root names it.
             result=trust(args.host,args.path,args.root.resolve() if args.root else None)
+        elif args.command=='rename':
+            from .registry import rename
+            result=rename(root,args.name)
         elif args.command=='init':
             from .registry import register
             from .config import ensure_project

@@ -8,7 +8,8 @@ import unittest
 from unittest.mock import patch
 from . import config
 from .config import change, config_home, describe, load, project_checks, schema, settings_file
-from .registry import register
+from .registry import register, rename
+import shutil
 from .storage import Refused, state_home
 
 
@@ -73,8 +74,10 @@ class ConfigTest(unittest.TestCase):
         self.assertIn('projects.Fixture sets its own value',change(self.root,'tasks_per_batch','8',scope='global')['note'])
         change(self.root,'tasks_per_batch',None)
         self.assertEqual(load(self.root)['tasks_per_batch'],8)
-        for key in ('projects','projects.Fixture','models.claude','$schema'):
-            with self.assertRaisesRegex(Refused,'not one setting'):change(self.root,key,None,scope='global')
+        for key in ('projects','projects.Fixture','$schema'):
+            with self.assertRaisesRegex(Refused,'not a setting'):change(self.root,key,None,scope='global')
+        change(self.root,'models.claude.review.model','opus',scope='global')
+        with self.assertRaisesRegex(Refused,'groups several settings'):change(self.root,'models.claude',None,scope='global')
         self.assertIn('Fixture',self.read()['projects'])
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
         with self.assertRaisesRegex(Refused,'not an OH project: add --global'):change(other,'review_rounds','4')
@@ -123,21 +126,56 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.max_escalations, projects.Fixture.tasks_per_batch'):load(self.root)
         self.assertTrue((project/'checks.json').exists())
 
-    def test_same_name_and_replaced_registrations_never_change_a_project(self):
+    def test_one_project_per_name_so_a_section_is_never_shared(self):
         home=state_home();clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
-        register(clone,'Fixture')  # a second registration with the same name
-        first,second=sorted((p for p in (home/'projects').iterdir()),key=lambda p:p.name)
-        (first/'config.local.json').write_text('{"tasks_per_batch": 2}');(first/'checks.json').write_text('[{"name": "unit", "command": ["true"]}]')
-        (second/'config.json').write_text('{"review_rounds": 9}')
-        roots={json.loads(p.read_text())['project']:Path(json.loads(p.read_text())['identity']['root']) for p in (home/'registry/checkouts').glob('*.json')}
-        with self.assertRaisesRegex(Refused,'Projects named Fixture share projects.Fixture'):load(roots[second.name])
-        self.assertEqual((load(roots[first.name])['tasks_per_batch'],load(roots[first.name])['review_rounds']),(2,3))
-        # A registration replaced by oh init --replace no longer counts: its files are kept aside, never merged.
-        (second/'config.json').unlink();retired=home/'projects/retired-project';retired.mkdir()
+        with self.assertRaisesRegex(Refused,'already named Fixture'):register(clone,'Fixture')
+        with patch('oh.registry.free'):register(clone,'Fixture')  # two registrations named alike, from before this rule
+        first,second=(self.legacy_by(self.root),self.legacy_by(clone))
+        (first/'config.local.json').write_text('{"tasks_per_batch": 5}');(second/'config.json').write_text('{"review_rounds": 9}')
+        for root in (self.root,clone):
+            with self.assertRaisesRegex(Refused,'More than one OH project is named Fixture.*rename'):load(root)
+        rename(clone,'Fixture clone')
+        with self.assertRaisesRegex(Refused,'already named Fixture'):rename(clone,'Fixture')
+        self.assertEqual((load(self.root)['review_rounds'],load(clone)['review_rounds']),(3,9))  # each keeps what it had
+        self.assertEqual(sorted(self.read()['projects']),['Fixture','Fixture clone'])
+        rename(clone,'Second');self.assertEqual(self.read()['projects']['Second'],{'review_rounds':9})  # the section follows
+        # A replaced registration no longer counts; nor does a deleted checkout whose name a present project uses.
+        retired=home/'projects/retired-project';retired.mkdir()
         (retired/'profile.json').write_text(json.dumps({'id':'retired-project','name':'Fixture','kind':'product','schema_version':1}))
-        (retired/'config.json').write_text('{"tasks_per_batch": 20, "max_escalations": 2}')
-        self.assertEqual((load(self.root)['tasks_per_batch'],load(self.root)['max_escalations']),(2,1))
-        self.assertTrue(list((config_home()/'backups').glob('*-unused-project-settings/projects/retired-project/config.json')))
+        (retired/'config.json').write_text('{"tasks_per_batch": 20}')
+        gone=self.temp/'gone';subprocess.run(['git','init','-q',str(gone)],check=True)
+        with patch('oh.registry.free'):register(gone,'Fixture')
+        (self.legacy_by(gone)/'checks.json').write_text('[{"name": "old", "command": ["true"]}]');shutil.rmtree(gone)
+        self.assertEqual((load(self.root)['tasks_per_batch'],project_checks(self.root)),(5,[]))
+        kept=config_home()/'backups'
+        self.assertTrue(list(kept.glob('*-unused-project-settings/projects/retired-project/config.json')))
+        self.assertEqual(len(list(kept.glob('*-unused-project-settings/projects/*/checks.json'))),1)
+
+    def legacy_by(self,root):
+        from .registry import lookup
+        return state_home()/'projects'/lookup(root)['project']
+
+    def test_a_missing_settings_file_is_only_recreated_when_you_ask(self):
+        change(self.root,'review_rounds','4',scope='global');settings_file().rename(self.temp/'moved.json')
+        other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
+        from .cli import main
+        with self.assertRaises(SystemExit):main(['--root',str(other),'init','--name','Other'])
+        with self.assertRaisesRegex(Refused,'is missing'):change(self.root,'review_rounds',None,scope='global')
+        self.assertFalse(settings_file().exists())
+        with patch('oh.config.launch'):config.open_settings(self.root)
+        self.assertEqual(load(self.root)['review_rounds'],3)
+
+    def test_the_repair_tools_work_on_broken_files(self):
+        for broken in ('{"review_rounds": 3,','{"a": 1, "a": 2}','{"projects": []}','{"projects": {"Fixture": 5}}'):
+            self.write(broken)
+            with patch('oh.config.launch') as opener:config.open_settings(self.root)
+            opener.assert_called_once();self.assertEqual(settings_file().read_text(),broken)  # opened as it is
+        self.write({'projects':[]})
+        self.assertEqual(change(self.root,'review_rounds','4',scope='global')['to'],4)
+        with self.assertRaisesRegex(Refused,'projects must be an object'):change(self.root,'review_rounds','4')
+        self.write({'checks':[],'context':5,'projects':{'Fixture':{'$schema':'x','checks':[{'name':'unit','command':['true']}]}}})
+        change(self.root,'checks',None,scope='global');change(self.root,'context',None,scope='global');change(self.root,'$schema',None)
+        self.assertEqual(project_checks(self.root),[{'name':'unit','command':['true']}])
 
     def test_an_older_file_that_cannot_move_stops_only_its_own_project(self):
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True);register(other,'Other')
@@ -255,21 +293,16 @@ class ConfigTest(unittest.TestCase):
         change(self.root,'review_rounds','4',scope='global');change(self.root,'tasks_per_batch','9');change(self.root,'review_rounds','4')
         exported=self.temp/'profile.json';export_profile(self.root,exported)
         clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
-        self.assertIn('shared with the project already named Fixture',import_profile(clone,exported)['settings'])
-        self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':9,'review_rounds':4})  # a pin equal to yours is no difference
-        change(self.root,'tasks_per_batch',None)  # an empty section of a registered project is still that project's
-        second=self.temp/'second';subprocess.run(['git','init','-q',str(second)],check=True)
-        with self.assertRaisesRegex(Refused,'already has different settings for Fixture'):import_profile(second,exported)
-        self.assertEqual(self.read()['projects']['Fixture'],{'review_rounds':4})
-        value=json.loads(exported.read_text());value['profile']['name']='Moved'
-        (self.temp/'moved.json').write_text(json.dumps(value))
-        other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
+        with self.assertRaisesRegex(Refused,'already named Fixture'):import_profile(clone,exported)
         change(self.root,'review_rounds','6',scope='global')
-        import_profile(other,self.temp/'moved.json')
-        self.assertEqual(self.read()['projects']['Moved'],{'tasks_per_batch':9,'review_rounds':4})
-        value['config']['tasks_per_batch']=3;(self.temp/'clash.json').write_text(json.dumps(value))
-        third=self.temp/'third';subprocess.run(['git','init','-q',str(third)],check=True)
-        with self.assertRaisesRegex(Refused,'already has different settings for Moved'):import_profile(third,self.temp/'clash.json')
+        import_profile(clone,exported,'Fixture clone')
+        self.assertEqual(self.read()['projects']['Fixture clone'],{'tasks_per_batch':9,'review_rounds':4})
+        # A section left by an earlier project of that name is reused only when it holds the same settings.
+        self.write(self.read()|{'projects':self.read()['projects']|{'Old':{'tasks_per_batch':9,'review_rounds':4,'checks':[]}}})
+        for name,root in (('Old','old'),('Other','other')):subprocess.run(['git','init','-q',str(self.temp/root)],check=True)
+        import_profile(self.temp/'old',exported,'Old')  # an empty checks list is no checks
+        self.write(self.read()|{'projects':self.read()['projects']|{'Other':{'tasks_per_batch':3}}})
+        with self.assertRaisesRegex(Refused,'already has different settings under projects.Other'):import_profile(self.temp/'other',exported,'Other')
 
     def test_every_approval_names_its_limits(self):
         from .prepared import limits

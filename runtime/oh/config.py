@@ -155,10 +155,17 @@ def protected_paths():
 
 def project_name(root, required=True):
     """The section of settings.json that holds this project's settings: projects.<name>. None only for
-    a checkout that was never registered; any other registry problem is reported."""
+    a checkout that was never registered; any other registry problem is reported. A section belongs to
+    one project, so a name two projects share is refused until one is renamed."""
     from .registry import index_path, profile
     if not required and not index_path(root).exists():return None
-    return profile(root)['name']
+    value = profile(root)
+    others = projects_named(value['name']) - {value['id']}
+    if others:
+        raise Refused(f'More than one OH project is named {value["name"]}, so OH can\'t tell whose settings projects.{value["name"]} '
+                      f'holds. Give one of them its own name: oh --root <checkout> rename <new name> (the others: '
+                      f'{", ".join(sorted(r for p in others for r in registrations()[p]))})')
+    return value['name']
 
 
 def project_id(root):
@@ -166,24 +173,36 @@ def project_id(root):
     return lookup(root)['project'] if root is not None and index_path(root).exists() else None
 
 
-def live_projects():
-    """Project ids a checkout is registered to now; a replaced or moved registration no longer counts."""
+def registrations():
+    """{project id: [checkout folders]} for current registrations; replaced or moved-away ones are left out."""
     from .storage import state_home
-    ids = set()
+    result = {}
     for path in (state_home() / 'registry/checkouts').glob('*.json'):
         try:value = read_json(path)
         except (OSError, ValueError, Refused):continue
-        if isinstance(value, dict) and value.get('checkout') and isinstance(value.get('project'), str):ids.add(value['project'])
-    return ids
+        if isinstance(value, dict) and value.get('checkout') and isinstance(value.get('project'), str):
+            root = (value.get('identity') or {}).get('root')
+            result.setdefault(value['project'], []).append(root if isinstance(root, str) else '')
+    return result
+
+
+def name_of(project):
+    from .storage import state_home
+    try:return read_json(state_home() / 'projects' / project / 'profile.json')['name']
+    except (OSError, ValueError, KeyError, TypeError, Refused):return None
+
+
+def present_projects():
+    """Registered projects with a checkout folder that still exists; a deleted clone doesn't hold its name."""
+    return {p for p, roots in registrations().items() if any(r and Path(r).exists() for r in roots)}
+
+
+def projects_named(name):
+    return {p for p in present_projects() if name_of(p) == name}
 
 
 def registered_names():
-    from .storage import state_home
-    names = set()
-    for project in live_projects():
-        try:names.add(read_json(state_home() / 'projects' / project / 'profile.json')['name'])
-        except (OSError, ValueError, KeyError, TypeError, Refused):pass
-    return names
+    return {name for name in map(name_of, present_projects()) if name is not None}
 
 
 def strict_json(text):
@@ -224,7 +243,7 @@ def read_file(root=None, *, upgrade_first=True, creating=False):
     """settings.json exactly as written, or {} before it exists. Older settings files that couldn't be
     moved into it stop only the projects they belong to, or every project for the shared one."""
     if upgrade_first:
-        stuck = upgrade()
+        stuck = upgrade(creating=creating)
         for key in ('', project_id(root)):
             if key in stuck:raise Refused(stuck[key])
     check_location(creating=creating)
@@ -437,13 +456,13 @@ def absorb(data, folder, files):
             raise Refused(f'Cannot move {label} into {settings_file()}: its projects section is not an object')
         try:validate_layer(values, f'projects.{name}.', project=True)
         except Refused as exc:raise Refused(f'Cannot move {label} into {settings_file()}: {exc}') from None
-        # Every project with this name uses the section, so it must end up exactly what this project had.
+        # The section may already hold this project's values (an older OH wrote the files again, say).
         section = projects.get(name) or {}
         found = section_differences(section, values, combine(deepcopy(defaults()), top))
         if section and found:
-            raise Refused(f'Projects named {name} share projects.{name} in {settings_file()}, and it differs from {label} in '
-                          f'{", ".join("projects." + name + "." + key for key in found)}. Make projects.{name} what every project '
-                          f'named {name} should use, then delete {"that file" if len(files) == 1 else "those files"}.')
+            raise Refused(f'projects.{name} in {settings_file()} differs from {label} in '
+                          f'{", ".join("projects." + name + "." + key for key in found)}. Keep what you want in projects.{name}, '
+                          f'then delete {"that file" if len(files) == 1 else "those files"}.')
         if not section:projects[name] = values
         return
     try:validate_layer(values, '', project=False)
@@ -471,8 +490,9 @@ def differences(first, second):
 def section_differences(section, values, base):
     """Keys where a project section differs from `values` (both compared with `base`, the settings
     every project gets, so a value pinned to what applies anyway is no difference)."""
-    own = prune({k: v for k, v in section.items() if k != 'checks'}, base) | ({'checks': section['checks']} if 'checks' in section else {})
-    return differences(own, values)
+    def checks(value):return {'checks': value['checks']} if value.get('checks') else {}  # an empty list is no checks
+    own = prune({k: v for k, v in section.items() if k != 'checks'}, base) | checks(section)
+    return differences(own, {k: v for k, v in values.items() if k != 'checks'} | checks(values))
 
 
 def rename_keys(data):
@@ -489,7 +509,7 @@ def rename_keys(data):
     return changed
 
 
-def upgrade():
+def upgrade(*, creating=False):
     """After OH changes: move older settings files into settings.json and apply renamed keys, keeping a
     copy of every file it replaces or moves in backups/. Returns {'' or project id: why} for older
     files that stay where they are until you resolve them."""
@@ -503,16 +523,22 @@ def upgrade():
         if settings_file().exists():refresh_schema()
         return {}
     with snapshot_guard(), lock(config_home() / '.lock'):
-        data = read_file(upgrade_first=False)
+        data = read_file(upgrade_first=False, creating=creating)
         record = state_home() / 'settings-moved.json'  # what is already in settings.json, if a move was interrupted
         try:done = set(read_json(record))
         except (OSError, ValueError, TypeError, Refused):done = set()
-        before, moved, unused, stuck, live = deepcopy(data), {}, [], {}, live_projects()
+        before, moved, unused, stuck, registered, present = deepcopy(data), {}, [], {}, registrations(), present_projects()
         for folder, files in legacy_groups():
             key = folder.name if folder else ''
             if key in done:moved[key] = files;continue
-            if folder is not None and key not in live:unused += files;continue  # a replaced or removed registration
+            name = name_of(key) if folder else None
+            # A replaced or removed registration, or a deleted checkout whose name a present project now uses.
+            if folder is not None and (key not in registered or (key not in present and projects_named(name))):
+                unused += files;continue
             try:
+                if folder is not None and len(projects_named(name) | {key}) > 1:
+                    raise Refused(f'More than one OH project is named {name}, so OH can\'t tell which one {", ".join(map(str, files))} '
+                                  f'belongs in. Give one of them its own name: oh --root <checkout> rename <new name>')
                 candidate = deepcopy(data);absorb(candidate, folder, files)
                 data = candidate;moved[key] = files
             except Refused as exc:
@@ -565,12 +591,13 @@ def remove(data, parts):
         if not parent[part]:parent.pop(part)
 
 
-def edit(root, scope, apply):
-    """Read, change and check settings.json as one step; nothing invalid is ever written."""
+def edit(root, scope, apply, *, creating=False):
+    """Read, change and check settings.json as one step; nothing invalid is ever written. Only a
+    change you ask for (`creating`) may start a new file where a recorded one went missing."""
     from .storage import lock
-    upgrade()
+    upgrade(creating=creating)
     with lock(config_home() / '.lock'):
-        data = read_file(upgrade_first=False, creating=True)
+        data = read_file(upgrade_first=False, creating=creating)
         before = deepcopy(data)
         try:layers(data);valid = True
         except Refused:valid = False  # a broken file is repaired one setting at a time
@@ -611,21 +638,30 @@ def change(root, key, raw=None, *, scope=None):
     if scope == 'project' and not name:
         raise Refused('This checkout is not an OH project: add --global to change your settings for every project, '
                       'or register it with oh init --name <name>')
-    if key == 'checks' and scope == 'global':raise Refused('checks belong to one project; run this in the project, without --global')
-    keys = {k for k, _, _ in rules()}
-    known = key == 'checks' or key in keys
-    parts = key.split('.')
+    keys, parts, creating = {k for k, _, _ in rules()}, key.split('.'), raw is not None  # only a set may start a new file
+    known = key in keys or (key == 'checks' and scope == 'project')
+    if raw is not None and key == 'checks' and scope == 'global':raise Refused('checks belong to one project; run this in the project, without --global')
     if raw is not None and not known:raise Refused(f'Unknown setting: {key}. Run oh config to list the settings')
-    if raw is None and not known and (parts[0] in ('projects', '$schema') or key == 'checks' or any(k.startswith(key + '.') for k in keys)):
-        raise Refused(f'{key} is not one setting; unset settings one at a time (oh config lists them)')
+    if raw is None and scope == 'global' and parts[0] in ('projects', '$schema'):
+        raise Refused(f'{key} is not a setting; change a project\'s settings from inside it, or edit the file with oh config open')
+    if raw is None and not known:
+        # Unsetting what isn't a setting repairs a broken file: allowed only for what is there, one value at a time.
+        upgrade()
+        data = read_file(upgrade_first=False)
+        layer = data if scope == 'global' else sections(data).get(name, {})
+        if not isinstance(layer, dict) or not present(layer, parts):
+            raise Refused('checks belong to one project; run this in the project, without --global' if key == 'checks'
+                          else f'Unknown setting: {key}. Run oh config to list the settings')
+        if isinstance(get(layer, parts), dict) and any(k.startswith(key + '.') for k in keys):
+            raise Refused(f'{key} groups several settings; unset them one at a time (oh config lists them)')
     value = parse(key, raw) if raw is not None else None
     where = f'projects.{name}' if scope == 'project' else 'your settings for every project'
     def current():
         try:return project_checks(root) if key == 'checks' else lookup_key(load(root) if scope == 'project' else load_global(), key)
         except (Refused, KeyError):pass
         # While another setting is still broken, report what this layer holds, or the default.
-        data = read_file(upgrade_first=False, creating=True)
-        layer = data if scope == 'global' else data.get('projects', {}).get(name, {})
+        data = read_file(upgrade_first=False, creating=creating)
+        layer = data if scope == 'global' else sections(data).get(name, {})
         if isinstance(layer, dict) and present(layer, parts):return get(layer, parts)
         try:return [] if key == 'checks' else lookup_key(defaults(), key)
         except KeyError:return None
@@ -636,23 +672,20 @@ def change(root, key, raw=None, *, scope=None):
             remove(layer, parts);return True
         if present(layer, parts) and type(get(layer, parts)) is type(value) and get(layer, parts) == value:return False
         put(layer, parts, value);return True
-    if raw is None and not known and not present_anywhere(root, scope, parts):
-        raise Refused(f'Unknown setting: {key}. Run oh config to list the settings')
-    changed = edit(root, scope, apply)
+    changed = edit(root, scope, apply, creating=creating)
     result = {'setting': key, 'scope': where, 'file': str(settings_file())}
     if changed is False:
         return result | {'unchanged': True, 'note': f'Not set in {where}' if raw is None else 'Already set to this value'}
     after = current()
     note = 'Applies to the next run you start; a run in progress keeps the settings it was approved with.'
-    if scope == 'global' and name and key != 'checks' and present(read_file(upgrade_first=False, creating=True).get('projects', {}).get(name, {}), parts):
+    if scope == 'global' and name and key != 'checks' and present(sections(read_file(upgrade_first=False)).get(name, {}), parts):
         note += f' projects.{name} sets its own value, which wins in this project.'
     return result | {'from': before, 'to': after, 'note': note}
 
 
-def present_anywhere(root, scope, parts):
-    data = read_file(upgrade_first=False, creating=True)
-    layer = data if scope == 'global' else data.get('projects', {}).get(project_name(root), {})
-    return isinstance(layer, dict) and present(layer, parts)
+def sections(data):
+    value = data.get('projects', {})
+    return value if isinstance(value, dict) else {}
 
 
 def load_global():
@@ -667,9 +700,11 @@ def ensure_project(root):
 
 
 def open_settings(root):
-    """Creates settings.json when needed and opens it in the app that edits JSON files."""
-    if project_name(root, required=False):ensure_project(root)
-    elif not settings_file().exists():edit(root, 'global', lambda layer: False)
+    """Opens settings.json in the app that edits JSON files, even a broken one, which is what you'd fix
+    there. Only when there is no file yet does it create one, with this project's section."""
+    check_location(creating=True)
+    if not settings_file().exists():
+        edit(root, 'project' if project_name(root, required=False) else 'global', lambda layer: False, creating=True)
     path = str(settings_file())
     try:launch(path);opened = True
     except OSError:opened = False
@@ -700,7 +735,7 @@ def describe(root):
     if name:
         result['checks'] = project_checks(root, data)
         if not result['checks']:notes.append(f'{name} has no checks yet: add them with oh config set checks \'<JSON list>\'')
-    unknown = sorted(set(data.get('projects', {})) - registered_names())
+    unknown = sorted(set(sections(data)) - registered_names())
     if unknown:notes.append(f'No OH project on this machine is named {", ".join(unknown)}; those sections do nothing. '
                             f'Projects: {", ".join(sorted(registered_names())) or "none yet"}')
     if notes:result['note'] = ' '.join(notes)

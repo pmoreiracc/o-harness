@@ -47,7 +47,8 @@ class RegistryTests(unittest.TestCase):
         self.git('clone', '-q', str(self.root), str(clone))
         with self.assertRaises(Refused):
             register(clone, 'Fixture', attach=original['id'])
-        other = register(clone, 'Fixture')
+        with self.assertRaisesRegex(Refused, 'already named Fixture'): register(clone, 'Fixture')  # names pick settings
+        other = register(clone, 'Fixture clone')
         self.assertNotEqual(original['id'], other['id'])
         sibling = self.base / 'sibling'
         self.git('worktree', 'add', '-qb', 'sibling', str(sibling))

@@ -101,7 +101,7 @@ class PluginTransitions(unittest.TestCase):
         self.assertNotIn('id',value['profile'])
         clone=Path(self.temp.name)/'clone'
         subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True)
-        imported=import_profile(clone,destination)
+        imported=import_profile(clone,destination,'Fixture clone')
         self.assertFalse(imported['authorized'])
         self.assertNotEqual(lookup(clone)['checkout'],lookup(self.root)['checkout'])
         self.assertNotEqual(imported['profile']['id'],self.project_id)
@@ -109,7 +109,7 @@ class PluginTransitions(unittest.TestCase):
         self.assertFalse(pending_file(clone).exists())
         self.assertFalse((clone/'.oh').exists())
         subprocess.run([shutil.which('bash'),'checks.sh','main'],cwd=clone,check=True)
-        with self.assertRaises(Refused):import_profile(clone,destination)
+        with self.assertRaises(Refused):import_profile(clone,destination,'Fixture clone')
 
     def test_portable_checks_refuse_secret_arguments_and_invalid_supported_fields(self):
         from .profiles import export_profile,import_profile,validate_document
@@ -176,7 +176,7 @@ class PluginTransitions(unittest.TestCase):
         destination=Path(self.temp.name)/'direct.json';export_profile(self.root,destination)
         clone=Path(self.temp.name)/'direct-clone'
         subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True)
-        imported=import_profile(clone,destination)
+        imported=import_profile(clone,destination,'Fixture clone')
         shadow=Path(self.temp.name)/'shadow';shadow.mkdir()
         wrong=shadow/'checks.sh';wrong.write_text('#!/bin/sh\nexit 97\n');wrong.chmod(0o755)
         search=[str(shadow)]+[p for p in os.environ['PATH'].split(os.pathsep) if p and p!='.' and Path(p).resolve() not in (clone.resolve(),self.root.resolve())]

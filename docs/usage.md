@@ -52,7 +52,8 @@ stop the batch. It never discards your edits.
 - A new checkout at an old path: `oh init --name <name> --replace`.
 
 To reuse a project's settings and checks elsewhere, run `oh profile-export <file>` and
-`oh --root <other-checkout> profile-import <file>`. Exports contain no credentials,
+`oh --root <other-checkout> profile-import <file>` (add `--name <name>` when a project on
+that machine already has the name). Exports contain no credentials,
 sessions or evidence. Export fails unless every check runs a script tracked in the
 repository, such as `["./scripts/check.sh"]`.
 

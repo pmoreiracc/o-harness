@@ -22,7 +22,7 @@ class ServiceTest(unittest.TestCase):
         path=Path(tmp)/'Library/LaunchAgents'/f'{LABEL}.plist';path.parent.mkdir(parents=True);path.write_bytes(b'prior');return path
 
     def test_replacement_bootstraps_only_after_launchd_releases_the_label(self):
-        with tempfile.TemporaryDirectory() as tmp,patch('oh.service.sys.platform','darwin'),patch('pathlib.Path.home',return_value=Path(tmp)),patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
+        with tempfile.TemporaryDirectory() as tmp,patch('oh.service.sys.platform','darwin'),patch('pathlib.Path.home',return_value=Path(tmp)),patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state','XDG_CONFIG_HOME':tmp+'/xdg'}):
             path=self.installed(tmp);state={'loaded':'prior','teardown':None};calls=[]
             def launch(args,**kwargs):
                 calls.append(args[1])
@@ -36,6 +36,7 @@ class ServiceTest(unittest.TestCase):
                 state['loaded']=path.read_bytes();return subprocess.CompletedProcess(args,0)
             with patch('oh.service.subprocess.run',side_effect=launch),patch('oh.service.time.sleep'):install()
             self.assertEqual(calls.count('bootstrap'),1);self.assertIn(b'serve',state['loaded']);self.assertNotEqual(path.read_bytes(),b'prior')
+            self.assertIn((tmp+'/xdg').encode(),state['loaded'])  # the dashboard finds your settings where you keep them
 
     def test_failed_upgrade_restores_prior_registration_and_running_service(self):
         with tempfile.TemporaryDirectory() as tmp,patch('oh.service.sys.platform','darwin'),patch('pathlib.Path.home',return_value=Path(tmp)),patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):

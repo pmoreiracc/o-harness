@@ -43,7 +43,8 @@ Each layer overrides the one before it, key by key:
 2. Your top-level settings, for every project
 3. The project's section, `projects.<name>`
 
-Projects registered with the same name share a section.
+A section belongs to one project, so two projects can't have the same name: `oh init` asks
+for another one, and `oh rename <new name>` renames a project (its section follows it).
 
 ## Changing settings
 
@@ -67,10 +68,12 @@ for you once and keeps the previous file in `backups/` next to `settings.json`. 
 files from older versions of OH (`checks.json`, `config.json` and `config.local.json` in a
 project's OH folder, and `settings/defaults.json`) are moved into `settings.json` the same
 way, and each project keeps the values it had. A file OH can't move (a value it doesn't
-accept, or settings that differ from the section another project with the same name already
-uses) stays where it is and stops only its own project (the shared `settings/defaults.json`
-stops every project), with the reason named. Files of registrations that were replaced or
-moved are kept in `backups/` without being applied.
+accept, or a value its section already sets differently) stays where it is and stops only
+its own project (the shared `settings/defaults.json` stops every project), with the reason
+named. Projects registered under the same name before this version stop until you give one
+of them another name with `oh rename`. Files of registrations that were replaced, or of
+deleted checkouts whose name another project now uses, are kept in `backups/` without being
+applied.
 
 Workers can't write the settings folder. `oh backup` includes `settings.json`.
 

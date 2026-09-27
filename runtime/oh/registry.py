@@ -100,6 +100,7 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
             old = home / 'registry/checkouts' / (digest(previous['identity']['root']) + '.json')
             atomic_json(old, previous | {'moved_to': str(root), 'checkout': None})
             return profile(root)
+        if not attach:free(name)
         project_id = validate_id(attach) if attach else (validate_id(imported['id']) if imported else identifier())
         destination = home / 'projects' / project_id / 'profile.json'
         if attach:
@@ -116,3 +117,32 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
         entry = {'schema_version': 1, 'checkout': identifier(), 'project': project_id, 'identity': current}
         atomic_json(path, entry, immutable=True)
         return value
+
+
+def free(name, project=None):
+    """A project name picks its section of the settings file, so no two present projects share one."""
+    from .config import projects_named, registrations
+    others = projects_named(name) - {project}
+    if others:
+        where = ', '.join(sorted(r for p in others for r in registrations()[p]))
+        raise Refused(f'Another OH project is already named {name} ({where}); choose another name')
+
+
+@state_writer
+def rename(root, name):
+    """Gives a project a new name. Its section of the settings file follows it, unless another
+    project still has the old name (then the section stays theirs)."""
+    from .config import edit, projects_named
+    if not isinstance(name, str) or not name.strip() or name != name.strip():raise Refused('A project name needs text without surrounding spaces')
+    with lock(state_home() / 'registry' / '.lock'):
+        value = profile(root)
+        if value['name'] == name:return value
+        free(name, value['id'])
+        old = value['name']
+        def move(data):
+            projects = data.get('projects')
+            if isinstance(projects, dict) and old in projects and name not in projects and not projects_named(old) - {value['id']}:
+                projects[name] = projects.pop(old)
+        edit(root, 'global', move)
+        atomic_json(state_home() / 'projects' / value['id'] / 'profile.json', value | {'name': name})
+    return profile(root)

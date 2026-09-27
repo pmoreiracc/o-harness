@@ -100,25 +100,25 @@ def export_profile(root,destination):
 
 
 @state_writer
-def import_profile(root,source):
+def import_profile(root,source,name=None):
     from .registry import index_path
     value=validate_document(read_json(Path(source).expanduser().resolve()),root)
     if index_path(root).exists():raise Refused('Import requires an unregistered checkout; it never replaces an existing profile or its grants')
-    from .config import edit,load_global,prune,registered_names,section_differences,settings_file
-    name=value['profile']['name'];mine=load_global();shared=name in registered_names()
+    from .config import edit,load_global,prune,section_differences,settings_file
+    from .registry import free
+    name=name or value['profile']['name'];mine=load_global();free(name)
     # Settings are saved before the checkout is registered: a failure leaves an unused section, never a
     # registered project without its checks. Only what differs from your own settings is kept, so later
-    # OH defaults and your changes still apply. Projects with the same name share one section, so an
-    # import may join a registered project only when their settings already agree.
+    # OH defaults and your changes still apply. A section left by an earlier project of this name is
+    # reused only when it already holds the same settings.
     def apply(data):
         projects=data.setdefault('projects',{})
         section=prune(value['config'],mine)|({'checks':value['checks']} if value['checks'] else {})
         existing=projects.get(name) or {}
-        if (existing or shared) and section_differences(existing,section,mine):
-            raise Refused(f'{settings_file()} already has different settings for {name} (projects.{name}), '
-                          f'and projects with the same name share them. Change the name in {source}, or make the settings agree first.')
+        if existing and section_differences(existing,section,mine):
+            raise Refused(f'{settings_file()} already has different settings under projects.{name}; remove them, '
+                          f'or import with --name <another name>')
         if not existing:projects[name]=section
     edit(root,'global',apply)
-    result=register(root,name,value['profile']['kind'],imported=value['profile']|{'id':identifier()})
-    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False,
-            'settings':f'{settings_file()} (projects.{name}'+(', shared with the project already named '+name if shared else '')+')'}
+    result=register(root,name,value['profile']['kind'],imported=value['profile']|{'id':identifier(),'name':name})
+    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False,'settings':f'{settings_file()} (projects.{name})'}
