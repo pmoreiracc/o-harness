@@ -36,6 +36,14 @@ def layout(root, location=None):
     base = Path(root) if location == 'repo' else state_home() / 'projects' / project(root)['id'] / 'plans'
     where = {'location': location, 'base': base, 'roadmap': base / settings['roadmap'],
              'designs': base / settings['designs'], 'decisions': base / settings['decisions']}
+    if location == 'repo':
+        for key in ('roadmap', 'designs', 'decisions'):
+            path = where[key]
+            for part in (path, *path.parents):
+                if part == base:break
+                if part.is_symlink():raise Refused(f'Repository plan paths cannot use symlinks: {part}')
+            if not path.resolve().is_relative_to(base.resolve()):
+                raise Refused(f'Repository plan paths must stay inside the checkout: {path}')
     def folded(path):return Path(os.path.realpath(path).casefold())  # case-insensitive file systems share folders
     designs, decisions = folded(where['designs']), folded(where['decisions'])
     if designs.is_relative_to(decisions) or decisions.is_relative_to(designs):
@@ -63,7 +71,7 @@ def section_prose(text):
     if fenced(text.split('\n')+['## OH section boundary'])[-1]:
         raise Refused('Decision prose has an unclosed code fence that would hide OH sections')
     for _, line in outside(text.split('\n')):
-        if re.match(r' {0,3}(#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$|<h[1-6](?:[ >]))', line, re.I):
+        if re.match(r' {0,3}(#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)', line) or re.search(r'<h[1-6](?:\s|/?>|$)', line, re.I):
             raise Refused('Decision prose cannot contain structural headings; OH owns the decision sections')
 
 
@@ -274,7 +282,7 @@ def write_decision(root, where, title, context, alternatives, consequences, deci
     """A decision record plus its log row. Without a decision it is proposed, its Decision left to a human, with the
     proposer's recommendation when there is one."""
     title = one_line(title, 'The decision title')
-    for text in (context,alternatives,consequences,decision,recommendation):section_prose(text)
+    for text in (title,context,alternatives,consequences,decision,recommendation):section_prose(text)
     if '|' in title:raise Refused('The decision title can\'t contain a pipe')
     folder = Path(where['decisions']);number = next_number(folder)
     slug = decision_slug(title)
@@ -455,7 +463,8 @@ def design_manifest(root, slug):
     row = initiative(root, where, slug)
     try:verify_roadmap(root, where)
     except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
-    planned = [Path(where['designs']) / f'{next_number(where["designs"])}-{slug}.md', Path(where['roadmap'])]
+    planned = [Path(where['designs']) / f'{next_number(where["designs"])}-{slug}.md', Path(where['roadmap']),
+               Path(where['decisions']) / f'{next_number(where["decisions"])}-decision.md', Path(where['decisions']) / 'README.md']
     if (skipped := ignored(root, [Path(p).relative_to(root).as_posix() for p in planned])):
         raise Refused(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
     shown = {key: Path(where[key]).relative_to(root).as_posix() for key in ('roadmap', 'designs', 'decisions')}
@@ -490,11 +499,14 @@ def answer(value):
         raise Refused('The answer must be the JSON object the output schema describes, with every field a string')
     if value['kind'] not in ('design', 'decision'):raise Refused("kind must be 'design' or 'decision'")
     one_line(value['title'], 'The title')
+    section_prose(value['title'])
     if len(value['title'].strip()) > TITLE_CHARS:raise Refused(f'The title is longer than {TITLE_CHARS} characters')
     if len(value['summary'].strip()) > SUMMARY_CHARS:raise Refused(f'The summary is longer than {SUMMARY_CHARS} characters')
-    needed = ('body',) if value['kind'] == 'design' else ('context', 'alternatives', 'consequences', 'summary')
+    needed = ('body', 'summary') if value['kind'] == 'design' else ('context', 'alternatives', 'consequences', 'summary')
     missing = [k for k in needed if not value[k].strip()]
     if missing:raise Refused(f"A {value['kind']} needs {', '.join(missing)}")
+    unused = ('context', 'alternatives', 'consequences') if value['kind'] == 'design' else ('body',)
+    if any(value[k].strip() for k in unused):raise Refused(f"A {value['kind']} requires empty unused fields: {', '.join(unused)}")
     if value['kind'] == 'decision' and '|' in value['title']:raise Refused('A decision title cannot contain |')
     if value['kind'] == 'decision':
         for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
