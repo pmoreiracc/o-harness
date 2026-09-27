@@ -4,8 +4,8 @@ description: Explicit OH workflow through the shared external runner.
 ---
 Use the absolute `<plugin>/scripts/oh` entry supplied by the invoking skill. Resolve the
 selected Git checkout. Run `--root <checkout> config`; if unregistered, perform explicit
-one-time `init --name <name>` and save appropriate ordinary project checks in the returned
-external profile directory. OH requires no files, hooks or settings in the product; an `oh.json` exists only when the user chose it through `oh config`.
+one-time `init --name <name>` and save appropriate ordinary project checks with
+`config set checks '<JSON list>'`. No OH files, hooks or settings belong in the product.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
 For already prepared scope, run `--root <checkout> start` to verify the native human
@@ -13,7 +13,7 @@ invocation and execute its batch. For new scope, inspect the agreed work, save a
 JSON manifest under the project's external OH directory, and call `prepare <absolute-path>`.
 Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
 Use explicit simple/standard/complex difficulty with rationale when known. Present the
-scope and returned trigger once; only a new genuine human invocation grants that prepared
+scope, the returned `limits` sentence and the trigger once; only a new genuine human invocation grants that prepared
 scope. Never echo the trigger yourself and treat it as approval. For a product with the
 external consumer-v1 profile, `prepare-design <number> [track]` binds its approved design.
 

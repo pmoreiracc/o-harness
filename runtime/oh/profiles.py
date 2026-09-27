@@ -5,8 +5,8 @@ import math
 import re
 import stat
 from .config import HOME, merge, validate
-from .registry import lookup, profile, profile_path, register
-from .storage import Refused, git, atomic_json, identifier, read_json, state_home, state_writer
+from .registry import lookup, profile, register
+from .storage import Refused, git, atomic_json, identifier, read_json, state_writer
 
 FIELDS={'schema_version','profile','config','checks'}
 
@@ -88,13 +88,13 @@ def portable_command(command,root,probe=False):
 
 @state_writer
 def export_profile(root,destination):
-    from .config import load
+    from .config import load,project_checks
     destination=Path(destination).expanduser().resolve()
     if destination.exists() or destination.is_relative_to(Path(root).resolve()):
         raise Refused('Export to a new file outside the product checkout')
     source=profile(root)
     value={'schema_version':1,'profile':{k:source[k] for k in ('name','kind','design_profile') if k in source},
-           'config':load(root),'checks':read_json(profile_path(root,'checks.json')) if profile_path(root,'checks.json').exists() else []}
+           'config':load(root),'checks':project_checks(root)}
     validate_document(value,root);atomic_json(destination,value,immutable=True)
     return {'exported':str(destination),'contents':'profile, effective non-secret settings and check definitions only; no identities, authority, host trust or transcripts'}
 
@@ -104,14 +104,17 @@ def import_profile(root,source):
     from .registry import index_path
     value=validate_document(read_json(Path(source).expanduser().resolve()),root)
     if index_path(root).exists():raise Refused('Import requires an unregistered checkout; it never replaces an existing profile or its grants')
-    project_id=identifier();target=state_home()/'projects'/project_id
-    # Publish profile resources before registering the checkout. Failure leaves inert data,
-    # never an active binding with missing checks or old authority.
-    # A committed oh.json already carries this repository's settings; a private copy would conflict with it.
-    from .config import committed_entry
-    skipped=bool(committed_entry(root))
-    if not skipped:atomic_json(target/'config.json',value['config'],immutable=True)
-    atomic_json(target/'checks.json',value['checks'],immutable=True)
-    result=register(root,value['profile']['name'],value['profile']['kind'],imported=value['profile']|{'id':project_id})
-    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False,
-            **({'settings':'Kept the committed oh.json; the profile\'s settings were not imported'} if skipped else {})}
+    from .config import edit,load_global,prune,settings_file
+    name=value['profile']['name'];mine=load_global()
+    # Settings are saved before the checkout is registered: a failure leaves an unused section, never a
+    # registered project without its checks. Only what differs from your own settings is kept, so later
+    # OH defaults and your changes still apply. Projects with the same name share one section.
+    def apply(data):
+        projects=data.setdefault('projects',{})
+        section=prune(value['config'],mine)|({'checks':value['checks']} if value['checks'] else {})
+        if projects.get(name) not in (None,{},section):
+            raise Refused(f'{settings_file()} already has other settings for {name} (projects.{name}); remove them or import under another project name')
+        projects[name]=section
+    edit(root,'global',apply)
+    result=register(root,name,value['profile']['kind'],imported=value['profile']|{'id':identifier()})
+    return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False,'settings':f'{settings_file()} (projects.{name})'}

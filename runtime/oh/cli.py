@@ -69,8 +69,8 @@ def main(argv=None):
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
     sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
-    settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
-    settings.add_argument('--location',choices=['repo','private'])
+    settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
+    settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
     hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
     serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4318)
     sub.add_parser('service-install');sub.add_parser('service-uninstall')
@@ -109,8 +109,9 @@ def main(argv=None):
             # Host trust is machine-wide: the current folder is a project only when --root names it.
             result=trust(args.host,args.path,args.root.resolve() if args.root else None)
         elif args.command=='init':
-            from .registry import register, profile_path
-            result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace)
+            from .registry import register
+            from .config import ensure_project
+            result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace)|ensure_project(root)
         elif args.command=='backup':
             from .backup import backup
             result=backup(args.destination)
@@ -118,10 +119,11 @@ def main(argv=None):
             from .backup import restore
             result=restore(args.source)
         elif args.command=='config':
-            from .config import change,describe
+            from .config import change,describe,open_settings
             if not args.action:result=describe(root)
+            elif args.action=='open':result=open_settings(root)
             elif not args.key or (args.action=='set')!=(args.value is not None):raise Refused('Use: oh config set <key> <value>, or oh config unset <key>')
-            else:result=change(root,args.key,args.value if args.action=='set' else None,location=args.location)
+            else:result=change(root,args.key,args.value if args.action=='set' else None,scope='global' if args.everywhere else None)
         elif args.command=='status':result=checkpoint(root)
         elif args.command in ('pause','stop'):
             from .controls import request

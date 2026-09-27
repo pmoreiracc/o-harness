@@ -63,7 +63,8 @@ class ControlsTest(unittest.TestCase):
         from .storage import atomic_json
         signal_file=Path(self.temp.name)/'check-started'
         code='import pathlib,time,signal; signal.signal(signal.SIGTERM,signal.SIG_IGN); pathlib.Path('+repr(str(signal_file))+').touch(); time.sleep(90)'
-        atomic_json(profile_path(self.root,'checks.json'),[{'name':'blocking','command':[sys.executable,'-c',code]}])
+        from .test_workflow import configure
+        configure(self.root,checks=[{'name':'blocking','command':[sys.executable,'-c',code]}])
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         outcomes=[]
         def execute():

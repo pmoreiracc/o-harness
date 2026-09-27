@@ -20,7 +20,7 @@ saved outside your repository, and nothing is implemented.
 OH then runs the tasks on a branch (it creates one if you are on `main`). For each task a
 fresh worker implements it, your project checks run, an independent reviewer checks the
 exact result, blockers get fixed, and the reviewed tree is committed. Workers can't write
-OH's state or Git internals.
+OH's state, your settings or Git internals.
 
 A batch has 5 tasks and each task gets up to 3 review rounds by default; change that with
 `/oh-config` ([configuration](configuration.md)). If a task still has findings after its review rounds,

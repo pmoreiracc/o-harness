@@ -39,7 +39,7 @@ def lookup(root):
 
 
 def profile_path(root, name='profile.json'):
-    if name not in ('profile.json', 'config.json', 'config.local.json', 'checks.json'):
+    if name != 'profile.json':
         raise Refused('Unknown project profile resource')
     return state_home() / 'projects' / lookup(root)['project'] / name
 

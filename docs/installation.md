@@ -35,13 +35,8 @@ and creates the `oh` command at `~/.local/share/o-harness/bin/oh`. Add that fold
 1. Start a new agent session in your project and run `/oh-propose <idea>`
    (Codex: `$oh-propose <idea>`). The first time, OH installs itself and the agent registers
    the project with `oh init`, saving your project's checks: the commands OH must pass
-   before it commits. Nothing runs yet. Example `checks.json`:
-
-   ```json
-   [{"name": "tests", "command": ["npm", "test"]}]
-   ```
-
-   `oh config` prints the folder where the project's settings and checks are saved.
+   before it commits, in your settings file (`~/.config/o-harness/settings.json`). Nothing
+   runs yet. `/oh-config` shows them, and `oh config open` opens the file.
 2. Run `/oh-propose <idea>` again.
 
 OH finds your `claude` or `codex` binary on `PATH` each time it starts a worker. It starts

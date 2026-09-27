@@ -130,17 +130,10 @@ def lock(path, *, wait=True):
 
 
 def git(root, *args):
-    return git_bytes(root, *args).decode().strip()
-
-
-def git_bytes(root, *args, quiet=False):
     env = {k: v for k, v in os.environ.items() if k not in {
         'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
-        'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_PREFIX',
-        'GIT_LITERAL_PATHSPECS', 'GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS',
-        'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT'} and not k.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_'))}
-    return subprocess.check_output(['git', '-C', str(root), *args], env=env,
-                                   stderr=subprocess.DEVNULL if quiet else None)
+        'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_PREFIX'}}
+    return subprocess.check_output(['git', '-C', str(root), *args], env=env).decode().strip()
 
 
 def checkout_id(root):

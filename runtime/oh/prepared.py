@@ -1,8 +1,7 @@
-from .registry import profile_path
 """Pre-event scope snapshots. Preparation never grants execution authority."""
 from datetime import datetime
 from pathlib import Path
-from .config import snapshot
+from .config import project_checks, snapshot
 from .storage import Refused,atomic_json,checkout_id,digest,git,now,project,read_json,state_home,state_writer
 
 
@@ -13,7 +12,7 @@ def directory(root):return state_home()/'projects'/project(root)['id']/'prepared
 def prepare(root,manifest=None,doc=None,track=''):
     if (manifest is None)==(doc is None):raise Refused('Prepare either tasks or one design')
     value={'created':now(),'project':project(root)['id'],'checkout':checkout_id(root),'base':git(root,'rev-parse','HEAD'),
-           'snapshot':snapshot(root),'project_checks':read_json(profile_path(root, 'checks.json')) if profile_path(root, 'checks.json').exists() else []}
+           'snapshot':snapshot(root),'project_checks':project_checks(root)}
     if manifest is not None:
         from .workflow import validate_tasks
         path=(Path(root)/manifest).resolve()
@@ -27,7 +26,16 @@ def prepare(root,manifest=None,doc=None,track=''):
         value.update(kind='design',doc=doc,track=track,manifest=data)
     key=digest(value);atomic_json(directory(root)/(key+'.json'),value,immutable=True)
     trigger=('$o-harness:oh-deliver request:'+key if manifest is not None else '$o-harness:oh-deliver '+doc+(' '+track if track else '')+' request:'+key)
-    return {'request':key,'trigger':trigger,'tasks_per_batch':value['snapshot']['config']['tasks_per_batch'],'review_rounds':value['snapshot']['config']['review_rounds']}
+    config=value['snapshot']['config']
+    return {'request':key,'trigger':trigger,'tasks_per_batch':config['tasks_per_batch'],'review_rounds':config['review_rounds'],
+            'limits':limits(len(data['tasks']),config)}
+
+
+def limits(count,config):
+    """The numbers the human approves, said once with every approval."""
+    batch,rounds=min(count,config['tasks_per_batch']),config['review_rounds']
+    tasks=f'Runs {batch} of {count} tasks, then asks you to continue' if count>batch else f'Runs {count} task'+('s' if count!=1 else '')
+    return f'{tasks}, up to {rounds} review round'+('s' if rounds!=1 else '')+' each. Change this with /oh-config.'
 
 
 def resolve(root,name,event,kind):
