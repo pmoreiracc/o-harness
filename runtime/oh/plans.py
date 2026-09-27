@@ -68,11 +68,18 @@ def layout_snapshot(where):
 
 def section_prose(text):
     """The renderer owns decision headings; fields may contain prose and fenced examples only."""
+    prose_controls(text)
     if fenced(text.split('\n')+['## OH section boundary'])[-1]:
         raise Refused('Decision prose has an unclosed code fence that would hide OH sections')
     for _, line in outside(text.split('\n')):
         if re.match(r' {0,3}(#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)', line) or re.search(r'<h[1-6](?:\s|/?>|$)', line, re.I):
             raise Refused('Decision prose cannot contain structural headings; OH owns the decision sections')
+        if re.search(r'<(?:/?[A-Za-z]|[!?])',line):raise Refused('Raw HTML is not allowed in plan prose; put examples in fenced code')
+
+
+def prose_controls(text):
+    if re.search(r'[\x00-\x08\x0b-\x1f\x7f]',text):
+        raise Refused('Plan prose cannot contain control characters; use LF line endings')
 
 
 def raw(path):
@@ -112,12 +119,14 @@ def outside(rows):
 
 def write(path, text):
     import tempfile
+    import stat
     from .system import replace
     path = Path(path);path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.oh-plan-', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:stream.write(text.encode() if isinstance(text, str) else text)
-        mask = os.umask(0);os.umask(mask);os.chmod(temporary, 0o666 & ~mask)
+        mask = os.umask(0);os.umask(mask)
+        os.chmod(temporary, stat.S_IMODE(path.stat().st_mode) if path.is_file() else 0o666 & ~mask)
         replace(temporary, path)
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
@@ -135,11 +144,14 @@ def all_or_nothing(*paths):
     guard = snapshot_guard() if any(Path(p).resolve().is_relative_to(state_home().resolve()) for p in paths) else contextlib.nullcontext()
     with guard:
         before = {Path(p): raw(p) for p in paths}
+        modes = {Path(p): file_identity(p)['mode'] for p in paths if Path(p).is_file()}
         try:yield
         except BaseException:
             for path, data in before.items():
                 if data is None:path.unlink(missing_ok=True)
-                else:write(path, data)
+                else:
+                    write(path, data)
+                    os.chmod(path,modes[path])
             raise
 
 
@@ -510,8 +522,7 @@ def answer(value):
     if value['kind'] == 'decision' and '|' in value['title']:raise Refused('A decision title cannot contain |')
     if value['kind'] == 'decision':
         for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
-    if any(re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', text) for text in value.values()):
-        raise Refused('Plan prose cannot contain control characters')
+    for text in value.values():prose_controls(text)
     if value['kind'] == 'design':
         rows=value['body'].split('\n')
         if fenced(rows+['## OH boundary'])[-1]:
@@ -521,6 +532,7 @@ def answer(value):
                 raise Refused('Code blocks cannot contain parser-significant heading or task lines')
         tracks=set()
         for _, line in outside(rows):
+            if re.search(r'<(?:/?[A-Za-z]|[!?])',line):raise Refused('Raw HTML is not allowed in plan prose; put examples in fenced code')
             if re.match(r' {0,3}#(?:[ \t]|$)',line):
                 raise Refused('The body starts below the title: use ## sections, not a # heading')
             if re.match(r' {0,3}(?:=+|-+)[ \t]*$',line) or re.search(r'<h[1-6](?:\s|/?>|$)',line,re.I):

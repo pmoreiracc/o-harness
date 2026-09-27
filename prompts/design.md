@@ -63,3 +63,5 @@ contain lines starting with `##` or `- [`. Other code, `#` comments included, is
 `summary` tells the person approving what the design decides, in two or three sentences
 (at most 1000 characters); for a decision it is your recommendation, which OH writes into the
 record. A `title` has at most 150 characters. Fields your kind doesn't use are empty strings.
+Use LF line endings in every field; carriage returns (including CRLF) are refused.
+Raw HTML and HTML comments are allowed only inside fenced code examples.
