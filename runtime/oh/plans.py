@@ -2,8 +2,7 @@
 
 Models write prose; this module owns every structural edit (rows, numbers, links, logs). Adding a
 milestone, an initiative, a claim, a design doc or a decision is all or nothing: if a document would
-break a rule afterwards, every file the edit touched is put back byte for byte. The formats follow
-Geoffrey's documents."""
+break a rule afterwards, every file the edit touched is put back byte for byte."""
 import contextlib
 from datetime import date
 import os
@@ -20,7 +19,7 @@ DEFAULTS = {'roadmap': 'docs/roadmap.md', 'designs': 'docs/design', 'decisions':
 
 
 def layout(root, location=None):
-    """Where this project's plans live. Geoffrey's document profile keeps them in the repository."""
+    """Where this project's plans live. The consumer-v1 document profile keeps them in the repository."""
     from .config import load
     from .storage import project, state_home
     settings = load(root)['plans']
@@ -28,7 +27,7 @@ def layout(root, location=None):
     if project(root).get('design_profile') == 'consumer-v1':
         # Delivery of that profile reads docs/design in the repository; plans can't live anywhere else.
         if location not in ('ask', 'repo') or any(settings[k] != v for k, v in DEFAULTS.items()):
-            raise Refused('This project uses Geoffrey\'s document profile, whose plans live in the repository at '
+            raise Refused('This project uses the consumer-v1 document profile, whose plans live in the repository at '
                           'docs/roadmap.md, docs/design and docs/decisions; keep the default plans settings')
         location = 'repo'
     if location == 'ask':
@@ -124,7 +123,7 @@ def all_or_nothing(*paths):
 
 def initiatives(root, where):
     """[(slug, milestone, depends, design)] from the roadmap in document order, refusing one that doesn't parse.
-    The shared parser (Geoffrey's roadmap.sh) reads code blocks too, so a fenced milestone heading, or a fenced
+    The shared parser (design_parse, from the former roadmap.sh) reads code blocks too, so a fenced milestone heading, or a fenced
     heading, row or bar inside a milestone, is refused. Structure is read from the parser's own raw lines."""
     if not Path(where['roadmap']).is_file():raise Refused('Start the roadmap first')
     rows_all, section = lines(where['roadmap']), None

@@ -204,7 +204,7 @@ class PlansTest(unittest.TestCase):
             with self.assertRaises(Refused):plans.write_design(self.root,where,'store','Store',body,'approved')
         self.assertEqual(list(where['designs'].glob('*.md')),[])
 
-    def test_roadmap_checks_match_geoffreys_on_duplicates_and_milestone_cycles(self):
+    def test_roadmap_checks_refuse_duplicates_and_milestone_cycles(self):
         where=self.repo();plans.start_roadmap(where,'Fixture')
         plans.add_milestone(self.root,where,'M1','One','Done');plans.add_milestone(self.root,where,'M2','Two','Done')
         plans.add_initiative(self.root,where,'M1','alpha','A',[]);plans.add_initiative(self.root,where,'M2','beta','B',['alpha'])
@@ -230,7 +230,7 @@ class PlansTest(unittest.TestCase):
         change(self.root,'plans.location','repo');change(self.root,'plans.decisions','docs/design/adr')
         with self.assertRaisesRegex(Refused,'overlap'):plans.layout(self.root)
 
-    def test_geoffreys_document_profile_keeps_plans_in_the_repository(self):
+    def test_the_document_profile_keeps_plans_in_the_repository(self):
         from .registry import profile_path
         from .storage import atomic_json, read_json
         path=profile_path(self.root);value=read_json(path)|{'design_profile':'consumer-v1'}

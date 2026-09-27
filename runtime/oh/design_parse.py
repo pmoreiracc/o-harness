@@ -30,7 +30,7 @@ def number(a,b):
 
 
 def places(root,layout=None):
-    """The design folder and roadmap file: Geoffrey's layout by default, or a project's plans layout."""
+    """The design folder and roadmap file: OH's default layout, or a project's plans layout."""
     if layout:return Path(layout['designs']),Path(layout['roadmap'])
     return Path(root)/'docs/design',Path(root)/'docs/roadmap.md'
 
@@ -127,7 +127,7 @@ def plan(root,doc,layout=None):
 
 
 def link_prefix(root,layout=None):
-    """How the roadmap links to design docs: ./design/ in Geoffrey's layout."""
+    """How the roadmap links to design docs: ./design/ in the default layout."""
     import os
     designs,roadmap_path=places(root,layout)
     return './'+os.path.relpath(designs,roadmap_path.parent).replace(os.sep,'/')+'/'
