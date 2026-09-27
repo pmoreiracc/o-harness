@@ -96,7 +96,9 @@ def reduce(records):
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
-        elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}
+        elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
+        elif kind=='subject.existing':state['rendered']=d['plan']
+        elif kind=='private.approval.intent':state['private_approval']=d
         elif kind=='branch.creating':state['branch_creation']=d
         elif kind=='branch.moving':
             state['branch_move']=d;state.pop('branch_creation',None)
@@ -363,15 +365,22 @@ def review_limit(state,task):
 def checkpoint(root):
     journal,state=load_run(root)
     left=len([t for t in state['tasks'] if t['id'] not in state['done']])
+    private_diff={}
+    if state['status']=='approval_checkpoint' and state.get('plans',{}).get('location')=='private' and state.get('rendered',{}).get('files'):
+        from .plans import changed_text,validate_outputs
+        validate_outputs(root,state['rendered'],state['plans']['base'])
+        private_diff={'private_diff':changed_text(root,state['rendered'])}
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
             'config_hash':state['config_hash'],'version':state['harness_version']}|(
-            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
+            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}
+                    |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
+             if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
             {'proposal':{k:v for k,v in state['rendered'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent')}
                         |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
              if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(
-            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
+            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {}) | private_diff
 
 
 def continue_limits(left,config):

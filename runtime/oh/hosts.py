@@ -170,6 +170,8 @@ def command(host,profile,root,role,schema_path,compact_tokens):
     from .config import protected_paths
     protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
     if role in ('review','analysis'):protected.append(str(root))
+    private=private_plans(root)
+    if private:protected.append(str(private))  # workers read private plans; only OH writes them
     settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
       'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':['Agent','Task']+[f'Edit(/{p}/**)' for p in protected]}}
     args=[executable(host,root),'--settings',json.dumps(settings),'--tools','Read,Glob,Grep,Bash' if role in ('review','analysis') else 'Read,Glob,Grep,Bash,Edit,Write','--print','--output-format','stream-json','--verbose',
@@ -177,7 +179,16 @@ def command(host,profile,root,role,schema_path,compact_tokens):
           '--permission-mode','plan' if role in ('review','analysis') else 'acceptEdits',
           '--permission-prompts','none']
     if schema_path:args+=['--json-schema',schema_path.read_text()]
+    if private:args+=['--add-dir',str(private)]
     return args
+
+
+def private_plans(root):
+    """This project's private plans folder, or None when its plans live in the repository or aren't chosen yet."""
+    from .plans import layout
+    try:where=layout(root)
+    except Refused:return None
+    return where['base'] if where['location']=='private' else None
 
 
 def parse_usage(host,event,attempt):

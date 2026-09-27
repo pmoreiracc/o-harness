@@ -96,7 +96,7 @@ def export_profile(root,destination):
     value={'schema_version':1,'profile':{k:source[k] for k in ('name','kind','design_profile') if k in source},
            'config':load(root),'checks':project_checks(root)}
     validate_document(value,root);atomic_json(destination,value,immutable=True)
-    return {'exported':str(destination),'contents':'profile, effective non-secret settings and check definitions only; no identities, authority, host trust or transcripts'}
+    return {'exported':str(destination),'contents':'profile, effective non-secret settings and check definitions only; private plan documents and their approvals are excluded, as are identities, authority, host trust and transcripts'}
 
 
 @state_writer

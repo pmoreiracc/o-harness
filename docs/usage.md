@@ -30,8 +30,15 @@ design. When a question has to be answered before the design can be written, OH 
 proposed decision record instead, with the question, the options and a recommendation, and
 leaves the decision to you.
 
-Both need plans in the repository (`plans.location` `repo`); the first time, they ask where
-plans live ([configuration](configuration.md)).
+The first time, choose where plans live ([configuration](configuration.md)). The repository
+flow above uses pull requests. With `plans.location=private`, documents live outside the
+checkout, normally in `~/oh-plans/<project name>/`, with no Git branch or commit. Both commands
+wait for **approve**, **refine: <what to change>**, or **reconsider** after independent review.
+Approving a private design records its exact content hash; later edits invalidate approval.
+Run `/oh-design <slug>` on an edited private design to review the existing text and approve it
+again. `oh plans list` distinguishes approved, draft, and edited-since-approval designs.
+A proposed decision document still needs a human decision; approving its saved text does not
+choose an option. Delivery from private design documents is a separate upcoming workflow step.
 
 ## Build: oh-deliver
 
