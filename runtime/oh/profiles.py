@@ -104,7 +104,7 @@ def import_profile(root,source):
     from .registry import index_path
     value=validate_document(read_json(Path(source).expanduser().resolve()),root)
     if index_path(root).exists():raise Refused('Import requires an unregistered checkout; it never replaces an existing profile or its grants')
-    from .config import edit,load_global,prune,registered_names,settings_file
+    from .config import edit,load_global,prune,registered_names,section_differences,settings_file
     name=value['profile']['name'];mine=load_global();shared=name in registered_names()
     # Settings are saved before the checkout is registered: a failure leaves an unused section, never a
     # registered project without its checks. Only what differs from your own settings is kept, so later
@@ -113,10 +113,11 @@ def import_profile(root,source):
     def apply(data):
         projects=data.setdefault('projects',{})
         section=prune(value['config'],mine)|({'checks':value['checks']} if value['checks'] else {})
-        if projects.get(name,{} if shared else None) not in ((section,) if shared else (None,{},section)):
+        existing=projects.get(name) or {}
+        if (existing or shared) and section_differences(existing,section,mine):
             raise Refused(f'{settings_file()} already has different settings for {name} (projects.{name}), '
                           f'and projects with the same name share them. Change the name in {source}, or make the settings agree first.')
-        projects[name]=section
+        if not existing:projects[name]=section
     edit(root,'global',apply)
     result=register(root,name,value['profile']['kind'],imported=value['profile']|{'id':identifier()})
     return {'profile':result,'checkout':lookup(root)['checkout'],'authorized':False,

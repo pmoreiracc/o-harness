@@ -73,7 +73,7 @@ class ConfigTest(unittest.TestCase):
         self.assertIn('projects.Fixture sets its own value',change(self.root,'tasks_per_batch','8',scope='global')['note'])
         change(self.root,'tasks_per_batch',None)
         self.assertEqual(load(self.root)['tasks_per_batch'],8)
-        for key in ('projects','models.claude','$schema'):
+        for key in ('projects','projects.Fixture','models.claude','$schema'):
             with self.assertRaisesRegex(Refused,'not one setting'):change(self.root,key,None,scope='global')
         self.assertIn('Fixture',self.read()['projects'])
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)
@@ -91,6 +91,8 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'Unknown setting: nothing'):change(self.root,'nothing',None)
         change(self.root,'retired',None)
         self.assertEqual(load(self.root)['review_rounds'],4)
+        self.write({'projects':{'Fixture':5}})
+        with self.assertRaisesRegex(Refused,'projects.Fixture must be an object'):change(self.root,'review_rounds','4')
 
     def legacy(self,root=None):
         home=state_home();return home/'projects'/next(p.name for p in (home/'projects').iterdir()
@@ -111,12 +113,31 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.legacy_files())
         moved=list((config_home()/'backups').glob('*-moved-into-settings/projects/*/checks.json'))
         self.assertEqual(len(moved),1)
-        # A copy left behind by an interrupted move, or put back by an older OH, moves again only when it agrees.
-        (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
-        load(self.root);self.assertFalse(config.legacy_files())
+        # A file an interrupted move left behind is already in settings.json: it only moves to backups.
         (project/'checks.json').write_text('[{"name": "other", "command": ["false"]}]')
-        with self.assertRaisesRegex(Refused,'already sets projects.Fixture.checks differently'):load(self.root)
+        (home/'settings-moved.json').write_text(json.dumps([project.name]))
+        self.assertEqual(project_checks(self.root),[{'name':'tests','command':['true']}])
+        self.assertFalse(config.legacy_files());self.assertFalse((home/'settings-moved.json').exists())
+        # Any other older file must match the section every project with this name shares.
+        (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
+        with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.max_escalations, projects.Fixture.tasks_per_batch'):load(self.root)
         self.assertTrue((project/'checks.json').exists())
+
+    def test_same_name_and_replaced_registrations_never_change_a_project(self):
+        home=state_home();clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
+        register(clone,'Fixture')  # a second registration with the same name
+        first,second=sorted((p for p in (home/'projects').iterdir()),key=lambda p:p.name)
+        (first/'config.local.json').write_text('{"tasks_per_batch": 2}');(first/'checks.json').write_text('[{"name": "unit", "command": ["true"]}]')
+        (second/'config.json').write_text('{"review_rounds": 9}')
+        roots={json.loads(p.read_text())['project']:Path(json.loads(p.read_text())['identity']['root']) for p in (home/'registry/checkouts').glob('*.json')}
+        with self.assertRaisesRegex(Refused,'Projects named Fixture share projects.Fixture'):load(roots[second.name])
+        self.assertEqual((load(roots[first.name])['tasks_per_batch'],load(roots[first.name])['review_rounds']),(2,3))
+        # A registration replaced by oh init --replace no longer counts: its files are kept aside, never merged.
+        (second/'config.json').unlink();retired=home/'projects/retired-project';retired.mkdir()
+        (retired/'profile.json').write_text(json.dumps({'id':'retired-project','name':'Fixture','kind':'product','schema_version':1}))
+        (retired/'config.json').write_text('{"tasks_per_batch": 20, "max_escalations": 2}')
+        self.assertEqual((load(self.root)['tasks_per_batch'],load(self.root)['max_escalations']),(2,1))
+        self.assertTrue(list((config_home()/'backups').glob('*-unused-project-settings/projects/retired-project/config.json')))
 
     def test_an_older_file_that_cannot_move_stops_only_its_own_project(self):
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True);register(other,'Other')
@@ -171,6 +192,12 @@ class ConfigTest(unittest.TestCase):
 
     def test_a_process_that_looks_elsewhere_is_refused_instead_of_using_defaults(self):
         change(self.root,'review_rounds','4')
+        from .backup import backup
+        with patch('oh.config.config_home',return_value=self.temp/'elsewhere'):
+            with self.assertRaisesRegex(Refused,'Your settings are in'):backup(self.temp/'backup')
+        if os.name!='nt':  # the same file through a symlinked folder is the same settings
+            (self.temp/'alias').symlink_to(config_home(),target_is_directory=True)
+            with patch('oh.config.config_home',return_value=self.temp/'alias'):self.assertEqual(load(self.root)['review_rounds'],4)
         elsewhere=self.temp/'elsewhere'
         with patch('oh.config.config_home',return_value=elsewhere):
             with self.assertRaisesRegex(Refused,'Your settings are in .*settings.json, but OH now reads'):load(self.root)
@@ -211,7 +238,9 @@ class ConfigTest(unittest.TestCase):
                 self.assertIn('Kept your current settings.json',restore(self.temp/'backup')['note'])
             self.assertEqual(load(self.root)['review_rounds'],5)
         # A backup of a separate data folder carries its settings and their history to where you keep yours.
-        (state_home()/'config').rmdir();(mine/'settings.json').unlink();change(self.root,'review_rounds','6');change(self.root,'review_rounds','7')
+        (state_home()/'config').rmdir();(mine/'settings.json').unlink()
+        with self.assertRaisesRegex(Refused,'mine/settings.json is missing'):load(self.root)
+        change(self.root,'review_rounds','6');change(self.root,'review_rounds','7')
         keep=config_home()/'backups/20000101-000000-settings';keep.mkdir(parents=True);(keep/'settings.json').write_text('{}')
         backup(self.temp/'inside')
         home=self.temp/'home'
@@ -223,15 +252,15 @@ class ConfigTest(unittest.TestCase):
 
     def test_an_imported_profile_keeps_only_what_differs_from_your_settings(self):
         from .profiles import export_profile,import_profile
-        change(self.root,'review_rounds','4',scope='global');change(self.root,'tasks_per_batch','9')
+        change(self.root,'review_rounds','4',scope='global');change(self.root,'tasks_per_batch','9');change(self.root,'review_rounds','4')
         exported=self.temp/'profile.json';export_profile(self.root,exported)
         clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
         self.assertIn('shared with the project already named Fixture',import_profile(clone,exported)['settings'])
-        self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':9})
+        self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':9,'review_rounds':4})  # a pin equal to yours is no difference
         change(self.root,'tasks_per_batch',None)  # an empty section of a registered project is still that project's
         second=self.temp/'second';subprocess.run(['git','init','-q',str(second)],check=True)
         with self.assertRaisesRegex(Refused,'already has different settings for Fixture'):import_profile(second,exported)
-        self.assertEqual(self.read()['projects']['Fixture'],{})
+        self.assertEqual(self.read()['projects']['Fixture'],{'review_rounds':4})
         value=json.loads(exported.read_text());value['profile']['name']='Moved'
         (self.temp/'moved.json').write_text(json.dumps(value))
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True)

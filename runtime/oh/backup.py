@@ -59,8 +59,10 @@ def durable(directory):
 
 
 def backup(destination):
+    from .config import check_location
     destination=Path(destination).expanduser().resolve();home=state_home()
     if destination.exists() or destination.is_relative_to(home):raise Refused('Choose a new backup directory outside OH data')
+    check_location()  # a process that looks for settings elsewhere would leave them out
     destination.parent.mkdir(parents=True,exist_ok=True)
     with snapshot_guard(exclusive=True):
         temporary=Path(tempfile.mkdtemp(prefix='.oh-backup-',dir=destination.parent))
@@ -126,6 +128,9 @@ def restore(source):
             validate(temporary);(temporary/'backup.json').unlink()
             settings=restore_settings(temporary);durable(temporary)
             replace(temporary,home);sync_parent(home)
+            from .config import check_location
+            try:check_location()  # records where the restored settings are
+            except Refused:pass  # reported, with its reason, the next time OH reads settings
         finally:
             if temporary.exists():shutil.rmtree(temporary)
     return {'restored':str(home)}|settings

@@ -13,8 +13,8 @@ its own data folder (`OH_DATA_HOME`), that folder keeps its own settings in
 `<OH_DATA_HOME>/config/settings.json`, so it never reads or changes yours.
 
 OH remembers where your settings are. If a process looks elsewhere, for example a host that
-doesn't see the `XDG_CONFIG_HOME` your shell sets, OH stops and says so instead of using its
-defaults.
+doesn't see the `XDG_CONFIG_HOME` your shell sets, or the file disappears, OH stops and says
+so instead of using its defaults. `oh config open` or `oh config set` starts a new file.
 
 Top-level values apply to every project. A project's section under `projects`, named as you
 named the project at `oh init`, overrides them for that project and holds its checks:
@@ -66,9 +66,11 @@ Updates never rewrite your settings. If a release renames or removes a setting, 
 for you once and keeps the previous file in `backups/` next to `settings.json`. Settings
 files from older versions of OH (`checks.json`, `config.json` and `config.local.json` in a
 project's OH folder, and `settings/defaults.json`) are moved into `settings.json` the same
-way, with the same results as before. A file OH can't move (a value it doesn't accept, or one
-`settings.json` already sets differently) stays where it is and stops only its own project
-(the shared `settings/defaults.json` stops every project), with the reason named.
+way, and each project keeps the values it had. A file OH can't move (a value it doesn't
+accept, or settings that differ from the section another project with the same name already
+uses) stays where it is and stops only its own project (the shared `settings/defaults.json`
+stops every project), with the reason named. Files of registrations that were replaced or
+moved are kept in `backups/` without being applied.
 
 Workers can't write the settings folder. `oh backup` includes `settings.json`.
 
