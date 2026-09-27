@@ -3,7 +3,7 @@ name: oh-config
 description: Show or change your OH settings.
 disable-model-invocation: true
 ---
-Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory. Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly.
+Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory (from PowerShell or cmd on Windows, use `scripts\oh.cmd` there). Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly.
 
 Run `<plugin>/scripts/oh --root <project-root> config`. It returns every setting that exists, with its value, default, source, allowed values and meaning, this project's `checks`, and the settings `file`. That list is the only source of truth: never mention, suggest or write a setting that isn't in it.
 

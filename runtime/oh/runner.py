@@ -4,7 +4,10 @@ from .storage import checkout_file
 
 from .storage import state_writer
 
+import hashlib
 import json
+import os
+import subprocess
 from datetime import datetime,timezone
 import time
 from pathlib import Path
@@ -43,6 +46,9 @@ def prompt_for(root,state,task,role,feedback=''):
                  'For design, return a clear bounded task plan with dependencies, three-level difficulty rationale, '
                  'acceptance checks, relevant invariants and risks. Do not invent approval or impose an ADR process.\n')
     else:common+='Implement and self-review this task. The runner executes required mechanical checks afterward.\n'
+    if state['host']=='claude' and hosts.WINDOWS:
+        common+=('On Windows this worker has no shell: read and edit files only. OH runs the project\'s checks '
+                 'afterwards and sends failures back to you.\n')
     return common+text
 
 
@@ -63,6 +69,13 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     directory.mkdir(parents=True,exist_ok=True,mode=0o700)
     prompt=prompt_for(root,state,task,role,feedback)
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
+    if role=='review' and git_tree:
+        # The exact change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
+        diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','HEAD',git_tree],capture_output=True,check=True,
+                            env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout
+        (directory/'subject.diff').write_bytes(diff)
+        data['diff']={'path':str(directory/'subject.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
+        prompt+='\nThe exact change under review, from HEAD to the reviewed tree, is in '+str(directory/'subject.diff')+'.'
     if role=='review' and state.get('workflow','deliver')!='deliver':
         workers=[a for a in reduce(journal.records())['attempts'] if a['role']=='analysis' and a.get('outcome')=='implemented']
         artifact=Path(workers[-1]['evidence'])/'result.json'

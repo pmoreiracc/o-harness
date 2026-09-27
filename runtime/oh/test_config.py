@@ -247,7 +247,8 @@ class ConfigTest(unittest.TestCase):
             args=command('claude',{'model':'opus','effort':'high'},self.root,'implementation',None,60000)
         sandbox=json.loads(args[args.index('--settings')+1])
         self.assertIn(str(config_home()),sandbox['sandbox']['filesystem']['denyWrite'])
-        self.assertIn(f'Edit(/{config_home()}/**)',sandbox['permissions']['deny'])
+        from .hosts import rule_path
+        self.assertIn(f'Edit({rule_path(config_home())}/**)',sandbox['permissions']['deny'])
 
     def test_a_process_that_looks_elsewhere_is_refused_instead_of_using_defaults(self):
         change(self.root,'review_rounds','4')

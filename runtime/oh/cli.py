@@ -80,6 +80,13 @@ def main(argv=None):
     deliver=sub.add_parser('deliver');deliver.add_argument('doc');deliver.add_argument('track',nargs='?',default='')
     resource=sub.add_parser('resource');resource.add_argument('path')
     args=parser.parse_args(argv);root=(args.root or Path.cwd()).resolve()
+    from .system import WINDOWS
+    if WINDOWS:
+        # CreateProcess searches OH's own current folder for bare commands whatever that variable says, so OH
+        # leaves the checkout for its own installed folder once every path argument is absolute.
+        for name,value in vars(args).items():
+            if isinstance(value,Path):setattr(args,name,value.resolve())
+        os.chdir(HOME)
     try:
         if args.command=='build-plugin':
             from .installation import build

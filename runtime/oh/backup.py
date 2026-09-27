@@ -68,13 +68,13 @@ def backup(destination):
         temporary=Path(tempfile.mkdtemp(prefix='.oh-backup-',dir=destination.parent))
         try:
             for path in home.rglob('*'):
-                if 'versions' not in path.relative_to(home).parts and path.is_symlink():raise Refused('OH state contains a symlink; inspect it before backup')
+                if 'versions' not in path.relative_to(home).parts and path.relative_to(home).parts[0]!='python' and path.is_symlink():raise Refused('OH state contains a symlink; inspect it before backup')
             with connect() as source:
                 target=sqlite3.connect(temporary/'analytics.sqlite3')
                 try:source.backup(target);target.execute('PRAGMA journal_mode=DELETE');target.commit()
                 finally:target.close()
             for path in home.iterdir():
-                if path.is_dir() and path.name not in ('versions','logs'):shutil.copytree(path,temporary/path.name)
+                if path.is_dir() and path.name not in ('versions','logs','python'):shutil.copytree(path,temporary/path.name)  # python: Windows setup fetches it again
             settings=outside_settings()
             if settings:(temporary/'user-settings').mkdir();shutil.copyfile(settings,temporary/'user-settings/settings.json')
             validate(temporary,manifest=False);atomic_json(temporary/'backup.json',{'schema':2,'inventory':inventory(temporary)})

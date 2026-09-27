@@ -1,5 +1,6 @@
 """The few operating-system differences in OH. Each has one POSIX and one Windows branch."""
 import errno
+import functools
 import os
 import shutil
 import signal
@@ -9,6 +10,9 @@ import time
 WINDOWS=os.name=='nt'
 
 if WINDOWS:
+    # Windows also looks for a bare command such as git in the current folder, which can be a checkout a
+    # worker writes. This variable turns that off for OH and every process it starts (see also cli.main).
+    os.environ['NoDefaultCurrentDirectoryInExePath']='1'
     import ctypes
     from ctypes import wintypes
     import msvcrt
@@ -24,6 +28,15 @@ if WINDOWS:
                         ('TerminateJobObject',[wintypes.HANDLE,wintypes.UINT]),('CloseHandle',[wintypes.HANDLE])):
         getattr(_kernel32,_name).argtypes=_args;getattr(_kernel32,_name).restype=wintypes.BOOL
     _kernel32.CreateJobObjectW.argtypes=[ctypes.c_void_p,wintypes.LPCWSTR];_kernel32.CreateJobObjectW.restype=wintypes.HANDLE
+    _advapi32=ctypes.WinDLL('advapi32',use_last_error=True)
+    _advapi32.GetNamedSecurityInfoW.argtypes=[wintypes.LPCWSTR,ctypes.c_int,wintypes.DWORD]+[ctypes.POINTER(ctypes.c_void_p)]*5
+    _advapi32.GetNamedSecurityInfoW.restype=wintypes.DWORD
+    _advapi32.ConvertSidToStringSidW.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_wchar_p)];_advapi32.ConvertSidToStringSidW.restype=wintypes.BOOL
+    _advapi32.GetAce.argtypes=[ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(ctypes.c_void_p)];_advapi32.GetAce.restype=wintypes.BOOL
+    _advapi32.OpenProcessToken.argtypes=[wintypes.HANDLE,wintypes.DWORD,ctypes.POINTER(wintypes.HANDLE)];_advapi32.OpenProcessToken.restype=wintypes.BOOL
+    _advapi32.GetTokenInformation.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(wintypes.DWORD)]
+    _advapi32.GetTokenInformation.restype=wintypes.BOOL
+    _kernel32.GetCurrentProcess.restype=wintypes.HANDLE;_kernel32.LocalFree.argtypes=[ctypes.c_void_p];_kernel32.LocalFree.restype=ctypes.c_void_p
     _ntdll=ctypes.WinDLL('ntdll');_ntdll.NtResumeProcess.argtypes=[wintypes.HANDLE];_ntdll.NtResumeProcess.restype=ctypes.c_long
 else:
     import fcntl
@@ -133,6 +146,58 @@ def sync_directory(path):
 def sync_file(path):
     # Windows flushes only a handle opened for writing.
     with open(path,'r+b' if WINDOWS else 'rb') as stream:os.fsync(stream.fileno())
+
+
+# Who may change a trusted file on Windows: you, the system, administrators and the installer service.
+TRUSTED_SIDS={'S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'}
+# Rights that let someone replace or change what runs: DELETE, WRITE_DAC, WRITE_OWNER and GENERIC_ALL anywhere;
+# writing the file itself; adding a file (a planted DLL) or deleting one in its folder; deleting in any folder above.
+_ALWAYS=0x10000|0x40000|0x80000|0x10000000
+_RIGHTS={'file':_ALWAYS|0x2|0x4|0x40000000,'folder':_ALWAYS|0x2|0x40|0x40000000,'above':_ALWAYS|0x40}
+
+
+def _sid_text(sid):
+    text=ctypes.c_wchar_p()
+    if not _advapi32.ConvertSidToStringSidW(sid,ctypes.byref(text)):raise ctypes.WinError(ctypes.get_last_error())
+    try:return text.value
+    finally:_kernel32.LocalFree(ctypes.cast(text,ctypes.c_void_p))
+
+
+@functools.cache
+def _current_user():
+    token=wintypes.HANDLE()
+    if not _advapi32.OpenProcessToken(_kernel32.GetCurrentProcess(),0x0008,ctypes.byref(token)):  # TOKEN_QUERY
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        size=wintypes.DWORD()
+        _advapi32.GetTokenInformation(token,1,None,0,ctypes.byref(size))  # TokenUser
+        buffer=ctypes.create_string_buffer(size.value)
+        if not _advapi32.GetTokenInformation(token,1,buffer,size,ctypes.byref(size)):raise ctypes.WinError(ctypes.get_last_error())
+        return _sid_text(ctypes.cast(buffer,ctypes.POINTER(ctypes.c_void_p))[0])
+    finally:_kernel32.CloseHandle(token)
+
+
+def untrusted(path,kind):
+    """Why someone other than you, the system or administrators can change this Windows file or folder, or
+    None. kind: 'file' (the program), 'folder' (the folder holding it) or 'above' (any folder further up)."""
+    owner,dacl,descriptor=ctypes.c_void_p(),ctypes.c_void_p(),ctypes.c_void_p()
+    error=_advapi32.GetNamedSecurityInfoW(str(path),1,0x1|0x4,ctypes.byref(owner),None,ctypes.byref(dacl),None,ctypes.byref(descriptor))
+    if error:raise ctypes.WinError(error)
+    try:
+        trusted=TRUSTED_SIDS|{_current_user()}
+        if _sid_text(owner) not in trusted:return 'is owned by '+_sid_text(owner)
+        if not dacl.value:return 'has no access list, so everyone can change it'
+        count=ctypes.cast(dacl.value+4,ctypes.POINTER(ctypes.c_ushort))[0]  # ACL: revision, padding, size, AceCount
+        for index in range(count):
+            ace=ctypes.c_void_p()
+            if not _advapi32.GetAce(dacl,index,ctypes.byref(ace)):raise ctypes.WinError(ctypes.get_last_error())
+            kind_of,flags=ctypes.cast(ace,ctypes.POINTER(ctypes.c_ubyte))[0:2]
+            if kind_of in (1,6,10,12) or flags&0x08:continue  # deny entries, and ones only inherited by children
+            if kind_of!=0:return 'has an access entry of a kind OH does not read'  # fail closed
+            mask=ctypes.cast(ace.value+4,ctypes.POINTER(wintypes.DWORD))[0]
+            if mask&_RIGHTS[kind] and (who:=_sid_text(ace.value+8)) not in trusted:return 'lets '+who+' change it'
+        return None
+    finally:_kernel32.LocalFree(descriptor)
 
 
 def uname():

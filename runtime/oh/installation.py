@@ -9,6 +9,12 @@ from .storage import Refused, atomic_json, lock, read_json, state_home
 from .system import replace
 
 
+# The launcher finds Python through these: python.sh from sh and Git Bash, oh.cmd from PowerShell and cmd,
+# and get-python.ps1 fetches the official Python on Windows during setup when none is installed.
+HELPERS=('python.sh','oh.cmd','get-python.ps1')
+LAUNCHERS=(b'#!/usr/bin/env -S python3 -I\n"""Resolve bundled setup',b'#!/bin/sh\n""":"\nexec sh "$(dirname "$0")/python.sh" --launcher')
+
+
 def inventory(root):
     files={}
     for path in sorted(root.rglob('*')):
@@ -30,6 +36,7 @@ def build(destination, host):
     core=destination/'core';core.mkdir()
     shutil.copy2(HOME/'oh',core/'oh')
     shutil.copy2(source/'scripts/oh',core/'launcher')
+    for helper in HELPERS:shutil.copy2(source/'scripts'/helper,core/helper)
     for directory in ('runtime','config','prompts','workflows','dashboard'):
         shutil.copytree(HOME/directory,core/directory,ignore=shutil.ignore_patterns('__pycache__','test_*.py'))
     atomic_json(core/'revision.json',{'revision':revision,'version':read_json(source/'.claude-plugin/plugin.json')['version']})
@@ -85,8 +92,11 @@ def setup(*, development=False, if_newer=False):
                 if staging.exists():shutil.rmtree(staging)
         launcher=home/'bin/oh';launcher.parent.mkdir(parents=True,exist_ok=True)
         content=(destination/'launcher').read_bytes()
-        if launcher.exists() and not launcher.read_bytes().startswith(b'#!/usr/bin/env -S python3 -I\n\"\"\"Resolve bundled setup'):
+        if launcher.exists() and not launcher.read_bytes().startswith(LAUNCHERS):
             raise Refused('Existing OH CLI conflicts with setup; preserve it and select a clean OH data home')
-        temporary=launcher.with_suffix('.pending');temporary.write_bytes(content);temporary.chmod(0o755);replace(temporary,launcher)
+        # Helpers first: a new launcher must never run without the python.sh it calls.
+        for name,data in [*((h,(destination/h).read_bytes()) for h in HELPERS),('oh',content)]:
+            target=launcher.parent/name;temporary=target.with_name(name+'.pending')
+            temporary.write_bytes(data);temporary.chmod(0o755);replace(temporary,target)
         atomic_json(active,{'revision':revision,'version':version,'schema_version':1})
     return {'core':str(destination),'revision':revision,'cli':str(home/'bin/oh'),'next':'Register the project with oh init, then configure its external checks. Existing runs keep their recorded runtime.'}
