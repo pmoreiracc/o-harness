@@ -31,6 +31,13 @@ DESIGN_SCHEMA={'type':'object','additionalProperties':False,
  'required':['kind','title','body','context','alternatives','consequences','summary'],'properties':{
  'kind':{'type':'string','enum':['design','decision']},
  **{key:{'type':'string'} for key in ('title','body','context','alternatives','consequences','summary')}}}
+# An intake worker routes one idea and writes its prose; OH writes the row, task or decision record.
+PROPOSAL_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['route','understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
+             'depends','design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary'],
+ 'properties':{'route':{'type':'string','enum':['roadmap','task','improvement','unclear']},'depends':{'type':'array','items':{'type':'string'}},
+   **{key:{'type':'string'} for key in ('understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
+                                        'design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary')}}}
 
 def script(stream):
     """A wrapper that needs an interpreter, not a native binary. Windows binaries start with MZ."""

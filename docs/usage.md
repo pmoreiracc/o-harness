@@ -5,8 +5,22 @@ login page" never starts OH. Claude uses `/`, Codex uses `$`.
 
 ## Plan: oh-propose and oh-design
 
-`/oh-propose <idea>` returns options and a recommendation. An independent reviewer checks
-it; it is saved outside your repository and nothing is implemented.
+`/oh-propose <idea>` finds where the idea belongs, such as
+`/oh-propose search across my notes`. A fresh worker reads your roadmap, designs, decisions
+and code and picks one route:
+
+- a new **roadmap row** (and a new milestone, or a proposed decision record when where it
+  belongs is genuinely contested);
+- a **task** added to an approved design;
+- an **improvement** to existing behaviour, which needs no document;
+- or **unclear**, with the two readings and the question to answer.
+
+OH writes the row, milestone, decision record or task itself (on a new `propose/<topic>`
+branch when you start from `main`), runs your checks and has it reviewed independently. Then
+it shows what it understood, the route and why, and exactly what it wrote, and waits for you
+to type **approve** (commit it), **refine: <what to change>** (ask again with your words), or
+**reconsider** (undo it and write nothing). After approve, **pr** opens the pull request;
+merging it approves the plan change.
 
 `/oh-design <slug>` writes the design doc for one row of your roadmap, such as
 `/oh-design auth`. A fresh worker writes the design; OH numbers the doc, links it from the
@@ -16,8 +30,8 @@ design. When a question has to be answered before the design can be written, OH 
 proposed decision record instead, with the question, the options and a recommendation, and
 leaves the decision to you.
 
-`/oh-design` needs plans in the repository (`plans.location` `repo`); the first time, it
-asks where plans live ([configuration](configuration.md)).
+Both need plans in the repository (`plans.location` `repo`); the first time, they ask where
+plans live ([configuration](configuration.md)).
 
 ## Build: oh-deliver
 
