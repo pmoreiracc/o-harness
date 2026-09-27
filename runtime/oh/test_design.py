@@ -401,6 +401,40 @@ class DesignRunTest(unittest.TestCase):
         (self.root / '.gitignore').write_text('docs/design/\n');self.git('add', '.gitignore');self.git('commit', '-qm', 'ignore')
         with self.assertRaisesRegex(Refused, 'Git ignores docs/design/0001-auth.md'):plans.design_manifest(self.root, 'auth')
 
+    def test_decision_directory_is_preflighted_before_start(self):
+        (self.root / '.gitignore').write_text('docs/decisions/\n');self.git('add', '.gitignore');self.git('commit', '-qm', 'ignore decisions')
+        with self.assertRaisesRegex(Refused, 'Git ignores docs/decisions/'):self.design_run()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.git('branch', '--show-current'), 'main')
+
+    def test_repository_plan_symlinks_never_supply_unbound_scope(self):
+        target = Path(self.temp.name) / 'external-roadmap.md'
+        target.write_bytes(self.where['roadmap'].read_bytes())
+        self.where['roadmap'].unlink();self.where['roadmap'].symlink_to(target)
+        self.git('add', '.');self.git('commit', '-qm', 'symlink roadmap')
+        with self.assertRaisesRegex(Refused, 'cannot use symlinks'):self.design_run()
+        target.write_text(target.read_text().replace('Sign-in with passkeys', 'Send all passwords'))
+        with self.assertRaisesRegex(Refused, 'cannot use symlinks'):self.design_run(turn='2')
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.git('status', '--porcelain'), '')
+
+    def test_repository_plan_directory_symlinks_are_refused(self):
+        target = Path(self.temp.name) / 'external-designs';target.mkdir()
+        self.where['designs'].symlink_to(target, target_is_directory=True)
+        with self.assertRaisesRegex(Refused, 'cannot use symlinks'):plans.layout(self.root)
+
+    def test_answer_kind_never_discards_nonempty_prose(self):
+        for field in ('context', 'alternatives', 'consequences'):
+            with self.assertRaisesRegex(Refused, 'empty unused fields'):plans.answer(design() | {field: 'Important requirement'})
+        with self.assertRaisesRegex(Refused, 'empty unused fields'):plans.answer(decision() | {'body': 'Important requirement'})
+        with self.assertRaisesRegex(Refused, 'needs summary'):plans.answer(design(summary=''))
+
+    def test_html_headings_cannot_be_injected_through_titles_or_prose(self):
+        for tag in ('<h2>Decision</h2>', '<h2\t>Decision</h2>', '<h2\n>Decision</h2>', 'Text <H2\f>Decision</H2>'):
+            with self.assertRaises(Refused):plans.answer(decision() | {'title': tag})
+            with self.assertRaises(Refused):plans.answer(design(title=tag))
+            with self.assertRaisesRegex(Refused, 'structural headings'):plans.answer(decision() | {'context': tag})
+
     def test_a_changed_plans_location_stops_a_repair_before_a_worker_is_paid(self):
         calls = self.interrupt_review()
         change(self.root, 'plans.location', 'private')
