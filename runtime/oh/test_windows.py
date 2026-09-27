@@ -89,6 +89,25 @@ class WindowsTest(unittest.TestCase):
         with patch('sys.stdout'):main(['--root', str(test.root), 'config', 'set', 'checks', '@' + str(value)])
         self.assertEqual(project_checks(test.root), [{'name': 't', 'command': ['git', 'diff', '--check']}])
 
+    def test_relative_config_file_uses_invocation_directory_even_with_root_override(self):
+        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+        test.setUp();self.addCleanup(test.doCleanups)
+        from .cli import main
+        from .config import project_checks,change
+        invocation=Path(test.temp.name)
+        (invocation/'checks.json').write_text('[{"name":"relative","command":["git","status"]}]')
+        original=Path.cwd()
+        def save(*args,**kwargs):
+            # Simulate only the CLI's Windows directory change; storage uses the real platform lock.
+            with patch('oh.system.WINDOWS',os.name=='nt'):return change(*args,**kwargs)
+        try:
+            os.chdir(invocation)
+            with patch('oh.system.WINDOWS', True), patch('oh.config.change',save), patch('sys.stdout'):
+                main(['--root',str(test.root),'config','set','checks','@checks.json'])
+            self.assertEqual(Path.cwd(),HOME)
+            self.assertEqual(project_checks(test.root),[{'name':'relative','command':['git','status']}])
+        finally:os.chdir(original)
+
     def test_codex_is_never_trusted_from_inside_the_project(self):
         from .capabilities import validate_profile
         with patch('oh.hosts.executable', side_effect=RuntimeError('stop')) as executable:
@@ -209,6 +228,65 @@ class TaskScheduler:
 
 @unittest.skipUnless(os.name == 'nt', 'Windows only')
 class NativeWindowsTest(unittest.TestCase):
+    def test_simultaneous_python_bootstraps_keep_the_first_complete_interpreter(self):
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp);data=folder/'data';wrapper=folder/'bootstrap.ps1'
+            quote=lambda value:"'"+str(value).replace("'","''")+"'"
+            wrapper.write_text("\n".join([
+                'param([string]$Name)', "$ErrorActionPreference = 'Stop'",
+                '$env:OH_DATA_HOME = '+quote(data),
+                '$env:OH_PYTHON_DOWNLOAD = $null',
+                '$fixture = '+quote(folder),
+                'function Invoke-WebRequest { param($UseBasicParsing, $Uri, $OutFile) Set-Content $OutFile "fixture" }'.replace('$UseBasicParsing','[switch]$UseBasicParsing'),
+                "function Get-FileHash { param($Algorithm, $Path) [pscustomobject]@{Hash='d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15'} }",
+                "$env:PROCESSOR_ARCHITECTURE='AMD64'; $env:PROCESSOR_ARCHITEW6432=$null",
+                'function Expand-Archive { param($Path, $DestinationPath)',
+                '  New-Item -ItemType Directory $DestinationPath | Out-Null',
+                "  Set-Content (Join-Path $DestinationPath 'python.exe') $Name",
+                "  Set-Content (Join-Path $fixture ($Name+'.expanded')) 'ready'",
+                "  if ($Name -eq 'first') {",
+                '    $deadline=[DateTime]::UtcNow.AddSeconds(30)',
+                "    while (-not (Test-Path (Join-Path $fixture 'release'))) {",
+                "      if ([DateTime]::UtcNow -gt $deadline) { throw 'barrier timeout' }; Start-Sleep -Milliseconds 50",
+                '    }',
+                '  }',
+                '}',
+                "Set-Content (Join-Path $fixture ($Name+'.started')) 'ready'",
+                '& '+quote(SCRIPTS/'get-python.ps1'),
+            ]))
+            children=[]
+            def start(name):
+                child=subprocess.Popen(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',str(wrapper),name],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                children.append(child);return child
+            def wait_for(name):
+                deadline=time.monotonic()+20
+                while not (folder/name).exists():
+                    if time.monotonic()>deadline:self.fail('Bootstrap barrier timeout: '+name)
+                    time.sleep(.05)
+            try:
+                start('first');wait_for('first.expanded')
+                start('second');wait_for('second.started')
+                # Without serialization, the second setup publishes while the first is paused.
+                time.sleep(1)
+                self.assertFalse((folder/'second.expanded').exists())
+                (folder/'release').touch()
+                for child in children:
+                    out,err=child.communicate(timeout=30)
+                    self.assertEqual(child.returncode,0,out+err)
+                self.assertEqual((data/'python/3.14.7/python.exe').read_text().strip(),'first')
+                self.assertEqual((data/'python/current').read_text().strip(),'3.14.7')
+                self.assertFalse((folder/'second.expanded').exists())
+                # Recovery after directory publication but before marker publication preserves the winner.
+                (data/'python/current').unlink()
+                recovery=start('recovery');out,err=recovery.communicate(timeout=30)
+                self.assertEqual(recovery.returncode,0,out+err)
+                self.assertEqual((data/'python/3.14.7/python.exe').read_text().strip(),'first')
+            finally:
+                for child in children:
+                    if child.poll() is None:child.kill()
+                    child.communicate()
+
     def test_acceptance_check_selects_installed_and_private_python(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder=Path(tmp);data=folder/'custom data';private=data/'python/3.14.7/python.exe'

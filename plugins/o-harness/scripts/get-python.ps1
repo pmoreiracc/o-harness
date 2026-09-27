@@ -15,6 +15,19 @@ $data = if ($env:OH_DATA_HOME) { $env:OH_DATA_HOME } else { Join-Path $env:USERP
 $root = Join-Path $data 'python'
 $current = Join-Path $root 'current'
 $target = Join-Path $root $version
+# The bootstrap runs before Python's setup lock exists. An exclusive file handle also
+# serializes different hosts/sessions and is released by Windows if a process dies.
+New-Item -ItemType Directory -Force -Path $root | Out-Null
+$lock = $null
+$deadline = [DateTime]::UtcNow.AddMinutes(5)
+while ($null -eq $lock) {
+    try { $lock = [IO.File]::Open((Join-Path $root '.install.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+    catch [IO.IOException] {
+        if ([DateTime]::UtcNow -ge $deadline) { throw 'Another OH Python setup is still running. Wait for it to finish, then run setup again.' }
+        Start-Sleep -Milliseconds 100
+    }
+}
+try {
 $named = if (Test-Path $current) { (Get-Content -Raw $current).Trim() } else { '' }
 if ($named -eq $version -and (Test-Path (Join-Path $target 'python.exe'))) { return }
 if ($Refresh -and -not $named) { return }
@@ -24,7 +37,6 @@ if ($env:OH_PYTHON_DOWNLOAD -eq '0') {
 }
 $url = "https://www.python.org/ftp/python/$version/python-$version-embed-$arch.zip"
 [Console]::Error.WriteLine("OH is downloading Python $version from python.org (the official Windows embeddable package, about 12 MB, SHA-256 checked) into $target. No admin rights or PATH changes; delete $root to remove it.")
-New-Item -ItemType Directory -Force -Path $root | Out-Null
 $unique = [guid]::NewGuid()
 $zip = Join-Path $root ".download-$unique.zip"
 $staging = Join-Path $root ".stage-$unique"
@@ -34,17 +46,24 @@ try {
     $actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
     if ($actual -ne $hashes[$arch]) { throw "The download from $url doesn't match its pinned SHA-256 (got $actual); nothing was installed." }
     Expand-Archive -Path $zip -DestinationPath $staging
-    # A folder left by an interrupted setup is replaced; another setup finishing first is fine.
-    if (Test-Path $target) { Remove-Item -Recurse -Force -Path $target -ErrorAction SilentlyContinue }
-    if (-not (Test-Path $target)) { Move-Item -Path $staging -Destination $target }
+    # The lock covers the winner recheck through marker publication. Never remove an
+    # interpreter another completed setup published, including after a marker-write failure.
+    if (-not (Test-Path (Join-Path $target 'python.exe'))) {
+        if (Test-Path $target) { Remove-Item -Recurse -Force -Path $target }
+        [IO.Directory]::Move($staging, $target)
+    }
     if (-not (Test-Path (Join-Path $target 'python.exe'))) { throw "Python $version is not complete in $target; run setup again." }
     $next = Join-Path $root ".current-$unique"
     Set-Content -NoNewline -Encoding ascii -Path $next -Value $version
-    Move-Item -Force -Path $next -Destination $current
+    if (Test-Path $current) { [IO.File]::Replace($next, $current, $null) }
+    else { [IO.File]::Move($next, $current) }
     # Older versions go when nothing uses them; one still running stays until the next setup.
     Get-ChildItem -Directory -Path $root | Where-Object { $_.Name -ne $version -and $_.Name -match '^[0-9]+\.[0-9]+\.[0-9]+$' } |
         ForEach-Object { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction SilentlyContinue }
 } finally {
     Remove-Item -Force -ErrorAction SilentlyContinue -Path $zip
     if (Test-Path $staging) { Remove-Item -Recurse -Force -Path $staging -ErrorAction SilentlyContinue }
+}
+} finally {
+    $lock.Dispose()
 }

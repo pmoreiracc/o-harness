@@ -79,7 +79,7 @@ def main(argv=None):
     suggest=sub.add_parser('suggest');suggest.add_argument('--host',choices=['codex','claude'],default='codex')
     deliver=sub.add_parser('deliver');deliver.add_argument('doc');deliver.add_argument('track',nargs='?',default='')
     resource=sub.add_parser('resource');resource.add_argument('path')
-    args=parser.parse_args(argv);root=(args.root or Path.cwd()).resolve()
+    args=parser.parse_args(argv);invocation=Path.cwd();root=(args.root or invocation).resolve()
     from .system import WINDOWS
     if WINDOWS:
         # CreateProcess searches OH's own current folder for bare commands whatever that variable says, so OH
@@ -141,7 +141,7 @@ def main(argv=None):
             else:
                 value=args.value
                 # @file reads the value from a file: JSON passes through PowerShell and cmd without losing its quotes.
-                if value and value.startswith('@') and len(value)>1:value=Path(value[1:]).expanduser().read_text(encoding='utf-8-sig')
+                if value and value.startswith('@') and len(value)>1:value=(invocation/Path(value[1:]).expanduser()).read_text(encoding='utf-8-sig')
                 result=change(root,args.key,value if args.action=='set' else None,scope='global' if args.everywhere else None)
         elif args.command=='plans':
             from .plans import check,layout
