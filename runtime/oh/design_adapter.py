@@ -14,7 +14,7 @@ def document(root, doc):
 
 def manifest(root, doc, track=''):
     if project(root).get('design_profile')!='consumer-v1':
-        raise Refused('This project does not use OH\'s plan documents (roadmap and numbered design docs); use a generic task plan')
+        raise Refused('Design delivery needs the consumer-v1 document profile; use a generic task plan')
     path=document(root,doc);relative=path.relative_to(root).as_posix()
     approved=git(root,'show','origin/main:'+relative)
     if not re.search(r'^status:\s*approved\s*$',approved,re.M):
