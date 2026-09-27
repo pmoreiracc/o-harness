@@ -97,6 +97,19 @@ def reduce(records):
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}
+        elif kind=='branch.creating':state['branch_creation']=d
+        elif kind=='branch.moving':
+            state['branch_move']=d;state.pop('branch_creation',None)
+        elif kind=='branch.moved':
+            state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
+            state.pop('branch_move',None)
+        elif kind=='proposal.discard':state['discard']=d
+        elif kind=='proposal.discarded':
+            pending=state.pop('discard',{})
+            if pending.get('resume'):
+                state.update(branch=pending['return_to'],incarnation=pending['return_incarnation'])
+                state.pop('moved_from',None)
+        elif kind=='proposal':state.setdefault('proposals',{})[d['attempt']]=d
         elif kind=='subject.prepared':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Rendered subject without one implementation attempt')
@@ -136,8 +149,9 @@ def _start(root, manifest, event, prepared=None, plan=None):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
     original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
-    if plan and workflow=='design' and committed(plan) and original not in ('main','master'):
-        raise Refused('Committed designs must start from main or master; switch to that branch before typing /oh-design again')
+    if plan and workflow in ('design','propose') and committed(plan) and original not in ('main','master'):
+        label='designs' if workflow=='design' else 'proposals'
+        raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
     try:
         if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
             created='codex/oh-'+run[:8]
@@ -189,6 +203,9 @@ def _choose(root, choice, event):
     events=[]
     def append(kind,data):events.append({'kind':kind,'data':data})
     source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+    if state.get('discard'):
+        discard_proposal(root,journal,state)
+        state=reduce(journal.records())
     if source in state['decisions']:return state
     if event['host']!=state['host']:
         raise Refused('Resume through the host that owns this run')
@@ -216,6 +233,29 @@ def _choose(root, choice, event):
         append('run.status',{'status':state.get('pause_return_status','running') if choice=='resume' else 'running'})
         append('task.intervention',{'task':task})
         best_effort('task.intervention',state['project'],state['id'],task,reason=choice)
+    elif choice in ('approve','reconsider') or choice.startswith('refine:'):
+        if state['status']!='approval_checkpoint':raise Refused('No proposal is waiting for approve, refine or reconsider')
+        task=state['tasks'][0]['id'];last=[a for a in state['attempts'] if a['task']==task][-1]
+        if choice=='reconsider':
+            # Write nothing: undo what OH wrote and leave the branch it cut, when that branch holds no commit.
+            from .plans import undo
+            if git(root,'branch','--show-current')!=state['branch'] or git(root,'rev-parse','HEAD')!=state['base']:
+                raise Refused('Return to the proposal branch and its recorded base before reconsidering')
+            from .branches import incarnation
+            if incarnation(root,state['branch'])!=state['incarnation']:raise Refused('The proposal branch was recreated; preserve it and stop this run')
+            undo(root,state.get('rendered'),check_only=True)
+            append('proposal.discard',{'branch':state['branch'],'incarnation':state['incarnation'],
+                'base':state['base'],'return_to':state.get('moved_from')})
+            append('decision',{'source':source,'choice':choice})
+            append('run.status',{'status':'stopped'})
+        else:
+            words=choice[len('refine:'):].strip() if choice.startswith('refine:') else ''
+            if choice.startswith('refine:') and not words:raise Refused('Say what to change: refine: <what to change>')
+            decided='refine' if words else 'approve'
+            append('proposal',{'attempt':last['id'],'choice':decided,'feedback':words,'source':source})
+            append('decision',{'source':source,'choice':decided})
+            append('run.status',{'status':'running'})
+            if words:append('task.intervention',{'task':task})
     elif choice in ('pr','stop'):
         if choice=='pr' and not committed(state):raise Refused('Planning does not authorize product publication')
         if choice=='pr' and state['status'] not in ('checkpoint','completed'):
@@ -223,8 +263,9 @@ def _choose(root, choice, event):
         decision={'source':source,'choice':choice}
         if choice=='pr':
             head=git(root,'rev-parse','HEAD');branch=git(root,'branch','--show-current')
-            commits=[item['commit'] for item in state['summaries']]
-            if not commits or head!=commits[-1] or branch!=state['branch']:
+            commits=[item['commit'] for item in state['summaries'] if 'commit' in item]
+            if not commits:raise Refused('Nothing was committed, so there is nothing to publish')
+            if head!=commits[-1] or branch!=state['branch']:
                 raise Refused('PR choice must cover the exact completed branch head')
             decision.update(head=head,branch=branch,commits=commits)
         append('decision',decision)
@@ -262,16 +303,47 @@ def _choose(root, choice, event):
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':'running'})
     else:raise Refused('Unknown human choice')
-    if state['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','needs_attention') and any(item['kind']=='run.status' and item['data']['status']=='running' for item in events):
+    if state['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','approval_checkpoint','needs_attention') and any(item['kind']=='run.status' and item['data']['status']=='running' for item in events):
         pending=next((t['id'] for t in state['tasks'] if t['id'] not in state['done']),None)
         from datetime import datetime,timezone
-        waits=[entry for entry in journal.records() if entry['kind']=='run.status' and entry['data']['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','needs_attention')]
+        waits=[entry for entry in journal.records() if entry['kind']=='run.status' and entry['data']['status'] in ('checkpoint','review_checkpoint','findings_checkpoint','approval_checkpoint','needs_attention')]
         if pending and waits:
             best_effort('phase.finished',state['project'],state['id'],pending,phase='waiting',duration_ms=(datetime.now(timezone.utc)-datetime.fromisoformat(waits[-1]['at'])).total_seconds()*1000)
     journal.append('transition',{'source':event,'events':events})
     for item in events:
         if item['kind']=='run.status':best_effort('run.status',state['project'],state['id'],**item['data'])
+    state=reduce(journal.records())
+    if state.get('discard'):discard_proposal(root,journal,state)
     return reduce(journal.records())
+
+
+def discard_proposal(root,journal,state):
+    """Finish a durably recorded reconsideration; retries never grant work."""
+    from .plans import undo
+    from .branches import incarnation
+    pending=state['discard'];branch=pending['branch'];target=pending['return_to']
+    if target and pending.get('return_incarnation') and incarnation(root,target)!=pending['return_incarnation']:
+        raise Refused('The original branch was recreated; restore its recorded identity before cleanup')
+    current=git(root,'branch','--show-current')
+    exists=bool(git(root,'branch','--list',branch))
+    if current not in (branch,target) or git(root,'rev-parse','HEAD')!=pending['base']:
+        raise Refused('Proposal cleanup is pending; restore its recorded branch/base and run OH again')
+    if exists and (git(root,'rev-parse',branch)!=pending['base'] or incarnation(root,branch)!=pending['incarnation']):
+        raise Refused('The proposal branch changed; preserve it and restore its recorded identity before cleanup')
+    if current==branch:
+        undo(root,state.get('rendered'))
+        if git(root,'status','--porcelain'):raise Refused('Preserve unrelated edits before retrying proposal cleanup')
+        if target:
+            if git(root,'rev-parse',target)!=pending['base']:raise Refused('The original branch moved; restore its base before retrying proposal cleanup')
+            git(root,'switch',target)
+    elif git(root,'status','--porcelain'):
+        raise Refused('Preserve new edits before retrying proposal cleanup')
+    if target and exists:
+        from subprocess import CalledProcessError
+        try:git(root,'update-ref','-d','refs/heads/'+branch,pending['base'])
+        except CalledProcessError:
+            raise Refused('The proposal branch changed during cleanup; preserve it and inspect it before retrying') from None
+    journal.append('proposal.discarded',{})
 
 
 def next_task(state):
@@ -295,7 +367,10 @@ def checkpoint(root):
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
             'config_hash':state['config_hash'],'version':state['harness_version']}|(
-            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') else {})|(
+            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
+            {'proposal':{k:v for k,v in state['rendered'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent')}
+                        |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
+             if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
 
 
