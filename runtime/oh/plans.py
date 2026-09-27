@@ -742,6 +742,7 @@ def proposal(value):
         if len(value[key].strip()) > limit:raise Refused(f'{key} is longer than {limit} characters')
     if '|' in value['decision_title']:raise Refused('A decision title cannot contain |')
     if value['route'] == 'roadmap':
+        if len(value['slug']) > 60:raise Refused('A roadmap slug must be at most 60 characters')
         if not re.fullmatch(SLUG, value['slug']):raise Refused(f"'{value['slug']}' is not a kebab-case slug")
         if not re.fullmatch(r'M[0-9]+', value['milestone']):raise Refused(f"'{value['milestone']}' is not a milestone id like M3")
         decision = [value[k].strip() for k in ('decision_title', 'decision_context', 'decision_alternatives', 'decision_consequences')]
@@ -760,6 +761,7 @@ def add_task(root, where, design, track, text, depends):
     """Append one pending task to an approved design's track, numbered after the doc's last task."""
     path = design_file(root, design, where)
     if not path:raise Refused(f'There is no design doc {design}')
+    ordinary_outputs(path)
     status = status_of(path)
     if status != 'approved':
         raise Refused(f"Design doc {design} is {status or 'missing a status'}: only an approved design takes new tasks"
@@ -819,6 +821,7 @@ def render_proposal(root, value, record, move):
         intent = [Path(p).relative_to(root).as_posix() for p in paths]
         skipped = ignored(root, intent)
         if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+        ordinary_outputs(*paths)
         blocked(lambda: move(topic))
         record(intent)
         before_identities={p:file_identity(Path(root)/p) for p in intent}

@@ -338,7 +338,11 @@ def discard_proposal(root,journal,state):
             git(root,'switch',target)
     elif git(root,'status','--porcelain'):
         raise Refused('Preserve new edits before retrying proposal cleanup')
-    if target and exists:git(root,'branch','-D',branch)
+    if target and exists:
+        from subprocess import CalledProcessError
+        try:git(root,'update-ref','-d','refs/heads/'+branch,pending['base'])
+        except CalledProcessError:
+            raise Refused('The proposal branch changed during cleanup; preserve it and inspect it before retrying') from None
     journal.append('proposal.discarded',{})
 
 

@@ -106,21 +106,25 @@ class ProposeTest(unittest.TestCase):
 
     def test_approval_preserves_a_human_mode_change(self):
         self.propose();run(self.root,self.worker([idea()]))
-        path=self.where['roadmap'];path.chmod(0o600)
+        path=self.where['roadmap'];path.chmod(0o444)
+        mode=path.stat().st_mode & 0o777
         self.say('approve')
-        with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([]))
-        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        try:
+            with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([]))
+            self.assertEqual(path.stat().st_mode & 0o777,mode)
+        finally:path.chmod(0o600)
         self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','main'))
 
     def test_render_and_failed_render_keep_existing_permissions(self):
         path=self.where['roadmap'];before=path.read_bytes();path.chmod(0o600)
+        mode=path.stat().st_mode & 0o777
         with patch('oh.plans.add_initiative',side_effect=Refused('render failed')):
             with self.assertRaisesRegex(Refused,'render failed'):
                 plans.render_proposal(self.root,idea(milestone='M2',milestone_title='New',milestone_done_when='Done'),lambda intent:None,lambda topic:None)
-        self.assertEqual(path.read_bytes(),before);self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.assertEqual(path.read_bytes(),before);self.assertEqual(path.stat().st_mode & 0o777,mode)
         self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
-        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.assertEqual(path.stat().st_mode & 0o777,mode)
 
     def test_contested_proposal_controls_return_as_feedback(self):
         bad=idea(decision_title='Choice?',decision_context='A\x00B',decision_alternatives='Options',decision_consequences='Effects')
@@ -217,7 +221,7 @@ class ProposeTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'Preserve unrelated edits'):run(self.root,self.worker([]))
         self.assertEqual(human.read_text(),'keep me');human.unlink()
         def fail_delete(root,*args,**kwargs):
-            if args[:2]==('branch','-D'):raise OSError('delete interrupted')
+            if args[:2]==('update-ref','-d'):raise OSError('delete interrupted')
             return git(root,*args,**kwargs)
         with patch('oh.workflow.git',fail_delete):
             with self.assertRaisesRegex(OSError,'delete interrupted'):run(self.root,self.worker([]))
@@ -302,6 +306,84 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(self.git('branch','--list','propose/*'),'')
         self.assertEqual(self.git('branch','--show-current'),'main')
 
+    def test_failed_creation_cleanup_preserves_a_concurrent_human_commit(self):
+        from .storage import Journal
+        original=Journal.append
+        human=self.git('commit-tree','HEAD^{tree}','-p','HEAD','-m','Human work')
+        def fail(journal,kind,data):
+            if kind=='branch.moving':
+                self.git('update-ref','refs/heads/'+data['branch'],human)
+                raise OSError('publication failed')
+            return original(journal,kind,data)
+        self.propose()
+        with patch.object(Journal,'append',fail):
+            with self.assertRaisesRegex(Refused,'changed during cleanup'):
+                run(self.root,self.worker([idea()]))
+        self.assertEqual(self.git('rev-parse','propose/search'),human)
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        with self.assertRaisesRegex(Refused,'changed or created elsewhere'):
+            run(self.root,self.worker([]))
+        self.assertEqual(self.git('rev-parse','propose/search'),human)
+        self.assertEqual([c[0] for c in self.calls],['analysis'])
+
+    def test_reconsider_cleanup_preserves_a_ref_changed_after_switch(self):
+        from .storage import git
+        self.propose();run(self.root,self.worker([idea()]))
+        human=self.git('commit-tree','HEAD^{tree}','-p','HEAD','-m','Human work')
+        def race(root,*args,**kwargs):
+            result=git(root,*args,**kwargs)
+            if args==('switch','main'):self.git('update-ref','refs/heads/propose/search',human)
+            return result
+        with patch('oh.workflow.git',race):
+            with self.assertRaisesRegex(Refused,'changed during cleanup'):self.say('reconsider')
+        self.assertEqual(self.git('rev-parse','propose/search'),human)
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertIn('discard',load_run(self.root)[1])
+        with self.assertRaisesRegex(Refused,'proposal branch changed'):run(self.root,self.worker([]))
+        self.assertEqual(self.git('rev-parse','propose/search'),human)
+        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
+
+    def test_oversized_slug_returns_feedback_before_any_branch_creation(self):
+        from .storage import Journal
+        original=Journal.append;created=[]
+        def record(journal,kind,data):
+            if kind=='branch.creating':created.append(data['branch'])
+            return original(journal,kind,data)
+        self.propose()
+        with patch.object(Journal,'append',record):
+            result=run(self.root,self.worker([idea(slug='x'*300),idea(slug='x'*60)]))
+        self.assertEqual(result['status'],'approval_checkpoint')
+        self.assertEqual(created,['propose/'+'x'*60])
+        self.assertIn('at most 60 characters',[c[1] for c in self.calls if c[0]=='analysis'][1])
+        self.assertEqual([c[0] for c in self.calls],['analysis','analysis','review'])
+        self.say('reconsider')
+        self.assertEqual(self.git('branch','--list','propose/*'),'')
+
+    @unittest.skipIf(__import__('os').name=='nt','Symlink creation requires Windows privileges')
+    def test_proposal_output_symlinks_are_refused_before_branch_or_write(self):
+        from pathlib import Path
+        cases=[(self.where['designs']/'0001-auth.md',idea('task')),
+               (self.where['decisions']/'README.md',idea(decision_title='Which index?',
+                decision_context='Context',decision_alternatives='Alternatives',decision_consequences='Effects'))]
+        for path,value in cases:
+            with self.subTest(path=path):
+                target=Path(self.temp.name)/'external.md'
+                target.write_bytes(path.read_bytes() if path.exists() else b'Human log\n')
+                target.chmod(0o600);before=target.read_bytes();mode=target.stat().st_mode & 0o777
+                path.parent.mkdir(parents=True,exist_ok=True);path.unlink(missing_ok=True);path.symlink_to(target)
+                self.git('add','.');self.git('commit','-qm','linked output')
+                with self.assertRaisesRegex(Refused,'ordinary file'):
+                    plans.render_proposal(self.root,value,lambda intent:self.fail('must not record intent'),
+                                          lambda topic:self.fail('must not create a branch'))
+                if value['route']=='task':
+                    with self.assertRaisesRegex(Refused,'ordinary file'):
+                        plans.add_task(self.root,self.where,'0001','Core','Add a task',[])
+                self.assertTrue(path.is_symlink());self.assertEqual(target.read_bytes(),before)
+                self.assertEqual(target.stat().st_mode & 0o777,mode)
+                self.assertEqual(self.git('status','--porcelain'),'')
+                path.unlink();path.write_bytes(before)
+                self.git('add','.');self.git('commit','-qm','restore ordinary output')
+
     def test_branch_identity_failure_removes_only_the_unpublished_branch(self):
         from .branches import incarnation
         self.propose()
@@ -334,7 +416,7 @@ class ProposeTest(unittest.TestCase):
         from .storage import git
         self.propose();run(self.root,self.worker([idea()]))
         def fail(root,*args,**kwargs):
-            if args[:2]==('branch','-D'):raise OSError('delete interrupted')
+            if args[:2]==('update-ref','-d'):raise OSError('delete interrupted')
             return git(root,*args,**kwargs)
         with patch('oh.workflow.git',fail):
             with self.assertRaisesRegex(OSError,'delete interrupted'):self.say('reconsider')

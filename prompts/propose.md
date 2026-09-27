@@ -13,7 +13,7 @@ wrong, and the cheapest to catch. Then pick one `route` and give the one-line `r
 
 - **roadmap**: new work that needs several pull requests, or has more than one defensible
   approach, or adds a new area of the product (new tables, a new bounded context). Give
-  `slug` (kebab-case, new), `text` (the initiative in one line, no `|`), `milestone` and
+  `slug` (kebab-case, new, at most 60 characters), `text` (the initiative in one line, no `|`), `milestone` and
   `depends`. Choose the milestone by what the work unblocks, not by when it is wanted; a
   shipped milestone (✅) takes no new rows. For a new milestone give an unused `M` id,
   `milestone_title` and `milestone_done_when` (one line each); OH assigns the next number. `depends` lists only

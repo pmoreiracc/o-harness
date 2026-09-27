@@ -398,7 +398,10 @@ def create_proposal_branch(root,journal,state):
         journal.append('branch.moving',pending|{'incarnation':incarnation(root,name,create=True)})
     except Exception:
         if not reduce(journal.records()).get('branch_move'):
-            git(root,'branch','-D',name)
+            from subprocess import CalledProcessError
+            try:git(root,'update-ref','-d',ref,pending['base'])
+            except CalledProcessError:
+                raise Refused('The proposal branch changed during cleanup; preserve it and inspect it before retrying') from None
         raise
 
 
