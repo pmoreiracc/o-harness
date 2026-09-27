@@ -73,7 +73,7 @@ def private_base(folder, name):
 
 def one_line(text, what):
     """A single line of text: no line break of any kind, which Markdown or the parser would split on."""
-    if not isinstance(text, str) or not text.strip() or len(text.splitlines()) != 1 or '\x1f' in text:
+    if not isinstance(text, str) or not text.strip() or len(text.splitlines()) != 1 or any(ord(c)<32 or ord(c)==127 for c in text):
         raise Refused(f'{what} must be one non-empty line')
     return text.strip()
 
@@ -129,12 +129,14 @@ def outside(rows):
 
 def write(path, text):
     import tempfile
+    import stat
     from .system import replace
     path = Path(path);path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.oh-plan-', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:stream.write(text.encode() if isinstance(text, str) else text)
-        mask = os.umask(0);os.umask(mask);os.chmod(temporary, 0o666 & ~mask)
+        mask = os.umask(0);os.umask(mask)
+        os.chmod(temporary, stat.S_IMODE(path.stat().st_mode) if path.is_file() else 0o666 & ~mask)
         replace(temporary, path)
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
@@ -294,14 +296,14 @@ def write_design(root, where, slug, title, body, status):
     return number, path
 
 
-def write_decision(root, where, title, context, alternatives, consequences, decision='', recommendation=''):
+def write_decision(root, where, title, context, alternatives, consequences, decision='', recommendation='', filename_slug=None):
     """A decision record plus its log row. Without a decision it is proposed, its Decision left to a human, with the
     proposer's recommendation when there is one."""
     title = one_line(title, 'The decision title')
     for text in (title,context,alternatives,consequences,decision,recommendation):section_prose(text)
     if '|' in title:raise Refused('The decision title can\'t contain a pipe')
     folder = Path(where['decisions']);number = next_number(folder)
-    slug = decision_slug(title)
+    slug = filename_slug or decision_slug(title)
     status = 'accepted' if decision.strip() else 'proposed'
     today = date.today().isoformat()
     path, log = folder / f'{number}-{slug}.md', folder / 'README.md'
@@ -567,8 +569,29 @@ def answer(value):
     if value['kind'] == 'decision' and '|' in value['title']:raise Refused('A decision title cannot contain |')
     if value['kind'] == 'decision':
         for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
-    if value['kind'] == 'design' and any(re.match(r'#' + WS, line) for _, line in outside(value['body'].split('\n'))):
-        raise Refused('The body starts below the title: use ## sections, not a # heading')
+    if any(re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', text) for text in value.values()):
+        raise Refused('Plan prose cannot contain control characters')
+    if value['kind'] == 'design':
+        rows=value['body'].split('\n')
+        if fenced(rows+['## OH boundary'])[-1]:
+            raise Refused('Design prose has an unclosed code fence')
+        for line, inside in zip(rows,fenced(rows)):
+            if inside and re.match(r'##|-'+WS+r'*\[',line):
+                raise Refused('Code blocks cannot contain parser-significant heading or task lines')
+        tracks=set()
+        for _, line in outside(rows):
+            if re.match(r' {0,3}#(?:[ \t]|$)',line):
+                raise Refused('The body starts below the title: use ## sections, not a # heading')
+            if re.match(r' {0,3}(?:=+|-+)[ \t]*$',line) or re.search(r'<h[1-6](?:\s|/?>|$)',line,re.I):
+                raise Refused('Design sections use numbered ## headings, not Setext or HTML headings')
+            if re.match(r' {0,3}##[ \t]',line) and not re.match(r'##[ \t]+[0-9]+\.[ \t]+\S',line):
+                raise Refused('Design sections use numbered ## headings')
+            if re.match(r' {0,3}###[ \t]',line):
+                match=re.fullmatch(r'###[ \t]+(\S+)[ \t]+[Tt]rack[ \t]*',line)
+                if not match:raise Refused('Track headings use ### <one-word name> track')
+                owner=match[1].lower()
+                if owner in tracks:raise Refused('Each track name must be unique')
+                tracks.add(owner)
     return value
 
 
@@ -613,6 +636,28 @@ def snapshot(paths):
     return {str(p): (base64.b64encode(Path(p).read_bytes()).decode() if Path(p).is_file() else None) for p in paths}
 
 
+def file_identity(path):
+    """File type, mode and content; never follow a link when binding a rendered document."""
+    import hashlib,stat
+    path=Path(path)
+    if not path.exists() and not path.is_symlink():return None
+    info=path.lstat()
+    kind='file' if stat.S_ISREG(info.st_mode) else 'symlink' if stat.S_ISLNK(info.st_mode) else 'other'
+    body=path.read_bytes() if kind=='file' else os.readlink(path).encode() if kind=='symlink' else b''
+    return {'kind':kind,'mode':stat.S_IMODE(info.st_mode),'hash':hashlib.sha256(body).hexdigest()}
+
+
+def validate_outputs(root, rendered, base=None):
+    """Planning outputs remain ordinary files inside their bound plan location."""
+    base=Path(base or root).resolve()
+    for name in rendered['intent']:
+        path=Path(root)/name;identity=file_identity(path)
+        if (not identity or identity['kind']!='file' or not path.resolve().is_relative_to(base)
+                or any(p.is_symlink() for p in (path,*path.parents) if p!=base and base in p.parents)
+                or identity!=rendered.get('identities',{}).get(name)):
+            raise Blocked(f'A check changed {name} after OH wrote it (file type, mode or content); preserve the change and stop this run')
+
+
 def undo(root, previous, check_only=False):
     with editing(root):return _undo(root,previous,check_only)
 
@@ -629,6 +674,10 @@ def _undo(root, previous, check_only=False):
     if before is not None:
         import hashlib
         original = {key: (hashlib.sha256(base64.b64decode(data)).hexdigest() if data is not None else None) for key, data in before.items()}
+        for name,expected in previous.get('identities',{}).items():
+            current=file_identity(resolved(root,name))
+            if current not in (expected,previous.get('before_identities',{}).get(name)):
+                raise Blocked(f'{name} changed after OH wrote it (file type, mode or content); stop this run and preserve the edit')
         for key in previous.get('intent', []):
             current = digest_of(resolved(root, key))
             if current == original.get(key):continue  # already as it was
@@ -641,10 +690,18 @@ def _undo(root, previous, check_only=False):
         for key in previous.get('intent', []):
             if digest_of(resolved(root, key)) == original.get(key):continue
             if before.get(key) is None:resolved(root, key).unlink(missing_ok=True)
-            else:write(resolved(root, key), base64.b64decode(before[key]))
+            else:
+                write(resolved(root, key), base64.b64decode(before[key]))
+                prior=previous.get('before_identities',{}).get(key)
+                if prior:os.chmod(resolved(root,key),prior['mode'])
         return
     # An ignored file OH wrote isn't in git status, so a new file counts as changed whenever it exists.
-    dirty = set(changes(root))
+    written, dirty = previous.get('files', {}), set(changes(root))
+    for name, expected in previous.get('identities',{}).items():
+        current=file_identity(Path(root)/name)
+        if current==previous.get('before_identities',{}).get(name):continue
+        if current!=expected:raise Blocked(f'{name} changed after OH wrote it (file type, mode or content); stop this run and preserve the edit')
+        dirty.add(name)
     dirty |= {r for r in previous.get('intent', []) if (Path(root) / r).exists() and not git(root, 'ls-tree', '--name-only', 'HEAD', '--', r)}
     for relative in previous.get('intent', []):
         if relative not in dirty:continue  # already as HEAD has it
@@ -657,7 +714,10 @@ def _undo(root, previous, check_only=False):
     if check_only:return
     for relative in previous.get('intent', []):
         if relative not in dirty:continue
-        if git(root, 'ls-tree', '--name-only', 'HEAD', '--', relative):git(root, 'checkout', 'HEAD', '--', relative)
+        if git(root, 'ls-tree', '--name-only', 'HEAD', '--', relative):
+            git(root, 'checkout', 'HEAD', '--', relative)
+            prior=previous.get('before_identities',{}).get(relative)
+            if prior:os.chmod(Path(root)/relative,prior['mode'])
         else:(Path(root) / relative).unlink(missing_ok=True)
 
 
@@ -690,10 +750,11 @@ def render(root, slug, value, record, existing=None):
                 paths = [Path(where['designs']) / f'{number}-{slug}.md', Path(where['roadmap'])]
             else:
                 number = blocked(lambda: next_number(where['decisions']))
-                paths = [Path(where['decisions']) / f'{number}-{decision_slug(value["title"])}.md', Path(where['decisions']) / 'README.md']
+                paths = [Path(where['decisions']) / f'{number}-decision.md', Path(where['decisions']) / 'README.md']
         intent = [located(root, where, p) for p in paths]
         if not private and (skipped := ignored(root, intent)):
             raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+        before_identities={p:file_identity(resolved(root,p)) for p in intent}
         before = snapshot(paths) if private else None
         if private:record(intent, before)
         else:record(intent)
@@ -710,12 +771,13 @@ def render(root, slug, value, record, existing=None):
                 tasks = len(rows)
             else:
                 written, path = blocked(lambda: write_decision(root, where, value['title'], value['context'], value['alternatives'],
-                                                               value['consequences'], recommendation=value['summary']))
+                                                      value['consequences'], recommendation=value['summary'], filename_slug='decision'))
                 tasks = 0
             if written != number or Path(path) != paths[0]:raise Blocked('The plan was written under another number')
         files = {key: digest_of(resolved(root, key)) for key in intent}
     return {'kind': value['kind'], 'number': number, 'title': value['title'].strip(), 'path': intent[0], 'tasks': tasks,
-            'summary': value['summary'].strip(), 'intent': intent, 'files': files} | ({'before': before} if private else {})
+            'summary': value['summary'].strip(), 'intent': intent, 'files': files, 'before_identities':before_identities,
+            'identities':{p:file_identity(resolved(root,p)) for p in intent}} | ({'before': before} if private else {})
 
 
 def decision_slug(title):
@@ -835,6 +897,7 @@ def render_proposal(root, value, record, move):
         if not private:
             if (skipped := ignored(root, intent)):raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
             blocked(lambda: move(topic))
+        before_identities={p:file_identity(resolved(root,p)) for p in intent}
         before = snapshot(paths) if private else None
         if private:record(intent, before)
         else:record(intent)
@@ -857,7 +920,8 @@ def render_proposal(root, value, record, move):
                 _, task = add_task(root, where, value['design'], value['track'], value['text'], value['depends'])
                 lines.append(task);shown['design'] = value['design']
         files = {key: digest_of(resolved(root, key)) for key in intent}
-    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines} | ({'before': before} if private else {})
+    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines, 'before_identities':before_identities,
+                    'identities':{p:file_identity(resolved(root,p)) for p in intent}} | ({'before': before} if private else {})
 
 
 def approvals_file(root):
@@ -901,7 +965,8 @@ def existing_plan(root, number):
     rows = [row.split(US) for row in plan(root, number, where).split('\n') if row]
     title = next((line.split(' — ', 1)[-1] for line in rows_of(path)[0] if line.startswith('# ')), path.stem)
     return {'kind': 'design', 'number': number, 'title': title, 'path': str(path), 'tasks': len(rows), 'summary': '',
-            'intent': [str(path)], 'files': {str(path): digest_of(path)}, 'before': snapshot([path])}
+            'intent': [str(path)], 'files': {str(path): digest_of(path)}, 'before': snapshot([path]),
+            'identities':{str(path):file_identity(path)},'before_identities':{str(path):file_identity(path)}}
 
 
 def listing(root):
@@ -957,6 +1022,11 @@ def finish_private(root, state, profile, journal, files):
     current=current_files(root,files)
     if intent['before']!=files or any(current[k] not in (intent['before'][k],intent['after'][k]) for k in files):
         raise Refused('The plan files changed after their review; preserve the edit and stop this run')
+    identities=rendered.get('identities',{})
+    for key in files:
+        identity=file_identity(resolved(root,key));expected=identities.get(key)
+        if not expected or not identity or identity != expected | {'hash':current[key]}:
+            raise Refused('The plan files changed after their review (file type, mode or content); preserve the edit and stop this run')
     if intent['write']:
         item=intent['write']
         if current[item['path']]!=intent['after'][item['path']]:write(item['path'],base64.b64decode(item['bytes']))

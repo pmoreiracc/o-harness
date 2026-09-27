@@ -52,12 +52,23 @@ class PrivatePlansTest(unittest.TestCase):
 
     def test_private_reconsider_restores_every_plan_file(self):
         before=self.where['roadmap'].read_bytes()
+        self.where['roadmap'].chmod(0o600)
         self.design_run();run(self.root,self.worker([design()]))
         self.say('reconsider')
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertEqual(self.where['roadmap'].read_bytes(),before)
+        self.assertEqual(self.where['roadmap'].stat().st_mode & 0o777,0o600)
         self.assertFalse((self.where['designs']/'0001-auth.md').exists())
         self.assertEqual(self.git('branch','--show-current'),'main')
+
+    def test_private_approval_and_reconsider_preserve_a_human_mode_change(self):
+        self.design_run();run(self.root,self.worker([design()]))
+        path=self.where['designs']/'0001-auth.md';path.chmod(0o600)
+        with self.assertRaisesRegex(Refused,'file type, mode or content'):self.say('reconsider')
+        self.say('approve')
+        with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([]))
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.assertEqual(plans.approval(self.root,self.where,'0001'),'draft')
 
     def test_private_paths_refuse_escaping_names_and_checkout_storage(self):
         for name in ('../escape','a/b','a\\b','..','CON','name.'):

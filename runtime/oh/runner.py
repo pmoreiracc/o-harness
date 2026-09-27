@@ -107,7 +107,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         # Private plans: the subject is the files OH wrote outside the repository, bound by their hashes.
         from .plans import changed_text
         rendered=state['rendered']
-        data['artifact']={'files':rendered['files'],'hash':digest(rendered['files'])}
+        data['artifact']={'files':rendered['files'],'hash':digest(rendered['files']),'identities':rendered['identities']}
         (directory/'subject.diff').write_text(changed_text(root,rendered))
         prompt+=('\nThe subject is the plan files OH wrote: '+', '.join(rendered['files'])+'. Their exact change is in '
                  +str(directory/'subject.diff')+'. The unchanged code tree is not the review subject by itself.')
@@ -152,8 +152,10 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         outcome,findings=hosts.review_result(result)
         if after!=before or private_changed:outcome='review_mutated_tree'
         if 'files' in (data.get('artifact') or {}):
-            from .plans import current_files
+            from .plans import current_files,file_identity,resolved
             if current_files(root,data['artifact']['files'])!=data['artifact']['files']:outcome='review_mutated_tree'
+            if {p:file_identity(resolved(root,p)) for p in data['artifact']['files']}!=data['artifact']['identities']:
+                outcome='review_mutated_tree'
     else:
         outcome='failed' if result['failed'] else 'implemented';findings=[]
         if outcome=='implemented' and (designing(task) or intake(task)):
@@ -318,6 +320,8 @@ def _run(root,invoke):
             if designing(task) or intake(task):
                 from .plans import Blocked,changes,digest_of
                 rendered=reduce(journal.records())['rendered']
+                from .plans import validate_outputs,layout
+                validate_outputs(root,rendered,layout(root)['base'])
                 extra=[p for p in changes(root) if p not in rendered['intent']]
                 if extra:raise Blocked(f"The checks left files OH didn't write ({', '.join(extra[:5])}); a plan commit holds only "
                                        'its plan files. Make the checks clean up, or list those files in .git/info/exclude, then run OH again')
@@ -441,6 +445,9 @@ def complete_reviewed(root,journal,state,task,review):
     with lock(checkout_file(root, 'oh-control.lock')):
         state=reduce(journal.records())
         if state['status']!='running':return
+        if (designing(task) or intake(task)) and committed(state):
+            from .plans import validate_outputs
+            validate_outputs(root,state['rendered'])
         task_id=task['id'];expected=review.get('git_tree')
         if state.get('plans',{}).get('location')=='private' and blocked_layout(root,state):raise Refused(blocked_layout(root,state))
         if intake(task):

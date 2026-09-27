@@ -30,11 +30,17 @@ then **approve** / **refine: <what to change>** / **reconsider**. Approval binds
 file contents; editing an approved design invalidates that approval. Run `run` after the
 human choice. An edited existing private design goes directly to review, preserving the
 person's text. A proposed decision remains undecided after approval of the document.
-For recovery checkpoints, show the returned reason and choices: **retry** / **stop** for
-`needs_attention`, **grant review** / **stop** for `review_checkpoint`, and the exact retained
-finding dispositions or fixes for `findings_checkpoint`. Never publish incomplete work.
+Handle the returned status before offering publication:
+- `review_checkpoint`: explain the retained findings and offer **grant review** / **stop**.
+- `needs_attention`: show the failure and its concrete recovery step, then **retry** / **stop**.
+- `findings_checkpoint`: show every finding. Offer **fix concerns** for concerns, **fix scope**
+  for scope, or **fix findings** for both. The disposition choices are **accept concerns**,
+  **route scope**, or **accept concerns and route scope**, matching exactly the retained
+  severities, plus **stop**. Never treat prose or silence as a disposition.
+After a recovery choice, call `run` again. For `paused`, wait for **resume** or **stop**;
+for `pausing` or `stopping`, report the pending state. A stopped run offers no publication.
 
-At completion, present the returned `plan`:
+Only when `completed`, present the returned `plan`:
 - a design: its path, task count and `summary`. Say that approving the design means merging
   its pull request for repository plans; private approval is bound to the file contents.
 - a decision record: the question, the recommendation in `summary`, and that the design

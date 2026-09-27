@@ -163,10 +163,10 @@ class DesignRunTest(unittest.TestCase):
         self.design_run()
         result = run(self.root, self.worker([decision()]))
         self.assertEqual(result['plan']['kind'], 'decision')
-        record = self.root / 'docs/decisions/0001-passkeys-or-passwords.md'
+        record = self.root / 'docs/decisions/0001-decision.md'
         self.assertIn('status: proposed', record.read_text());self.assertIn('_Not decided yet.', record.read_text())
         self.assertIn('## Recommendation\n\nRecommend passkeys.', record.read_text())
-        self.assertIn('[0001](./0001-passkeys-or-passwords.md)', (self.root / 'docs/decisions/README.md').read_text())
+        self.assertIn('[0001](./0001-decision.md)', (self.root / 'docs/decisions/README.md').read_text())
         self.assertFalse((self.root / 'docs/design').exists())
         self.assertIn('| `auth` | Sign-in with passkeys | — | — |', self.where['roadmap'].read_text())
         self.assertEqual(self.git('log', '-1', '--format=%s'), 'decision 0001: Passkeys or passwords?')
@@ -434,6 +434,52 @@ class DesignRunTest(unittest.TestCase):
             with self.assertRaises(Refused):plans.answer(decision() | {'title': tag})
             with self.assertRaises(Refused):plans.answer(design(title=tag))
             with self.assertRaisesRegex(Refused, 'structural headings'):plans.answer(decision() | {'context': tag})
+
+    def test_design_grammar_has_one_title_and_distinct_one_word_tracks(self):
+        for body in ('Extra title\n====\n'+BODY,'<h1>Extra title</h1>\n'+BODY,
+                     BODY.replace('Core track','Core API track'),BODY+'\n### Core track\n',
+                     BODY.replace('## 2. Tasks','## Tasks')):
+            with self.subTest(body=body):
+                with self.assertRaises(Refused):plans.answer(design(body=body))
+        with self.assertRaises(Refused):plans.answer(design(title='Bad\x00title'))
+        with self.assertRaises(Refused):plans.answer(design(body=BODY+'\x00'))
+
+    def test_actual_decision_filename_is_preflighted_before_any_worker(self):
+        (self.root/'.gitignore').write_text('docs/decisions/0001-decision.md\n')
+        self.git('add','.gitignore');self.git('commit','-qm','ignore exact decision')
+        with self.assertRaisesRegex(Refused,'Git ignores docs/decisions/0001-decision.md'):self.design_run()
+        self.assertEqual(self.calls,[])
+
+    def test_fenced_structure_and_alternate_headings_cannot_change_visible_tasks(self):
+        for marker in ('### API track','## 3. Other','- [ ] **99.** Example only.','-[ ] **99.** Example only.'):
+            for fence in ('```md','~~~'):
+                body=BODY.replace('- [ ] **1.**',fence+'\n'+marker+'\n'+fence[:3]+'\n\n- [ ] **1.**')
+                with self.subTest(marker=marker,fence=fence):
+                    with self.assertRaisesRegex(Refused,'parser-significant'):plans.answer(design(body=body))
+        for prefix in (' # Extra title','   # Extra title','#','Other section\n---',
+                       '<h2>Other section</h2>','Text <H3\n>API track</H3>'):
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(Refused):plans.answer(design(body=prefix+'\n'+BODY))
+        with self.assertRaisesRegex(Refused,'unclosed code fence'):plans.answer(design(body=BODY+'\n```'))
+        safe=plans.answer(design(body=BODY.replace('- [ ] **1.**','```sh\n# example comment\n```\n\n- [ ] **1.**')))
+        result=plans.render(self.root,'auth',safe,lambda intent:None)
+        rows=plans.plan(self.root,result['number']).splitlines()
+        self.assertEqual([(row.split(plans.US)[0],row.split(plans.US)[2]) for row in rows],[('1','core'),('2','core')])
+
+    def test_check_cannot_replace_plan_with_same_byte_symlink(self):
+        import sys
+        target=Path(self.temp.name)/'external-design.md'
+        script='from pathlib import Path; p=Path("docs/design/0001-auth.md"); t=Path('+repr(str(target))+'); t.write_bytes(p.read_bytes()); p.unlink(); p.symlink_to(t)'
+        fixtures.configure(self.root,checks=[{'name':'swap','command':[sys.executable,'-c',script]}])
+        self.design_run()
+        with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([design()]))
+        self.assertEqual([c[0] for c in self.calls],['analysis'])
+
+    def test_human_mode_only_edit_is_preserved_before_repair(self):
+        self.interrupt_review()
+        path=self.where['designs']/'0001-auth.md';path.chmod(0o600)
+        with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([design()]))
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
 
     def test_a_changed_plans_location_stops_a_repair_before_a_worker_is_paid(self):
         calls = self.interrupt_review()
