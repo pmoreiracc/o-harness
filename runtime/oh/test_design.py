@@ -210,10 +210,11 @@ class DesignRunTest(unittest.TestCase):
         written = plans.render(self.root, 'auth', design(), intents.append)
         self.assertEqual(intents, [['docs/design/0001-auth.md', 'docs/roadmap.md']])
         doc = self.root / 'docs/design/0001-auth.md'
-        doc.write_text(doc.read_text() + 'A human note.\n')
+        original = doc.read_bytes()
+        doc.write_bytes(original + b'A human note.\n')
         with self.assertRaisesRegex(Refused, 'changed after OH wrote it'):plans.undo(self.root, written)
         self.assertTrue(doc.exists())
-        doc.write_text(doc.read_text().replace('A human note.\n', ''))
+        doc.write_bytes(original)  # Undo needs the exact original bytes, including LF on Windows.
         for _ in range(2):plans.undo(self.root, written)  # safe to repeat
         self.assertFalse(doc.exists());self.assertEqual(self.git('status', '--porcelain'), '')
         # A crash between recording the intent and saving the hashes leaves files OH can't prove it wrote: a person decides.
