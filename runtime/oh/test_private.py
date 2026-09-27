@@ -375,10 +375,12 @@ class PrivatePlansTest(unittest.TestCase):
     def test_import_does_not_adopt_deleted_projects_private_documents(self):
         from .registry import index_path
         from .profiles import export_profile,import_profile
-        import shutil
+        import os,shutil,stat
         change(self.root,'checks','[]')
         target=Path(self.temp.name)/'profile.json';export_profile(self.root,target)
-        before=self.where['roadmap'].read_bytes();shutil.rmtree(self.root)
+        before=self.where['roadmap'].read_bytes()
+        shutil.rmtree(self.root,onerror=lambda remove,path,_:(os.chmod(path,stat.S_IWRITE),remove(path)))  # Git's read-only files, on Windows
+        self.assertFalse(self.root.exists())
         other=self.other_repository('other')
         with self.assertRaisesRegex(Refused,'belongs to another project'):import_profile(other,target)
         self.assertFalse(index_path(other).exists())
