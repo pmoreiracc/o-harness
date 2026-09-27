@@ -58,6 +58,20 @@ def one_line(text, what):
     return text.strip()
 
 
+def layout_snapshot(where):
+    """Bind both the location and resolved document paths, including symlink destinations."""
+    return {key: str(value.resolve()) if isinstance(value, Path) else value for key, value in where.items()}
+
+
+def section_prose(text):
+    """The renderer owns decision headings; fields may contain prose and fenced examples only."""
+    if fenced(text.split('\n')+['## OH section boundary'])[-1]:
+        raise Refused('Decision prose has an unclosed code fence that would hide OH sections')
+    for _, line in outside(text.split('\n')):
+        if re.match(r' {0,3}(#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$|<h[1-6](?:[ >]))', line, re.I):
+            raise Refused('Decision prose cannot contain structural headings; OH owns the decision sections')
+
+
 def raw(path):
     return Path(path).read_bytes() if Path(path).exists() else None
 
@@ -264,6 +278,7 @@ def write_decision(root, where, title, context, alternatives, consequences, deci
     """A decision record plus its log row. Without a decision it is proposed, its Decision left to a human, with the
     proposer's recommendation when there is one."""
     title = one_line(title, 'The decision title')
+    for text in (context,alternatives,consequences,decision,recommendation):section_prose(text)
     if '|' in title:raise Refused('The decision title can\'t contain a pipe')
     folder = Path(where['decisions']);number = next_number(folder)
     slug = decision_slug(title)
@@ -461,7 +476,7 @@ def design_manifest(root, slug):
                        "person asks; keep what they wrote otherwise." if existing else ''))
     return ({'workflow': 'design', 'tasks': [{'id': 'design', 'title': f'Design {slug}', 'instructions': instructions,
                                               'transition': {'profile': 'plans', 'slug': slug} | ({'existing': existing} if existing else {})}]},
-            {'workflow': 'design', 'plans': {'location': where['location']}, 'slug': slug})
+            {'workflow': 'design', 'plans': layout_snapshot(where), 'slug': slug})
 
 
 def branch_for(root, slug, run, kind='design'):
@@ -489,10 +504,12 @@ def answer(value):
     one_line(value['title'], 'The title')
     if len(value['title'].strip()) > TITLE_CHARS:raise Refused(f'The title is longer than {TITLE_CHARS} characters')
     if len(value['summary'].strip()) > SUMMARY_CHARS:raise Refused(f'The summary is longer than {SUMMARY_CHARS} characters')
-    needed = ('body',) if value['kind'] == 'design' else ('context', 'alternatives', 'consequences')
+    needed = ('body',) if value['kind'] == 'design' else ('context', 'alternatives', 'consequences', 'summary')
     missing = [k for k in needed if not value[k].strip()]
     if missing:raise Refused(f"A {value['kind']} needs {', '.join(missing)}")
     if value['kind'] == 'decision' and '|' in value['title']:raise Refused('A decision title cannot contain |')
+    if value['kind'] == 'decision':
+        for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
     if value['kind'] == 'design' and any(re.match(r'#' + WS, line) for _, line in outside(value['body'].split('\n'))):
         raise Refused('The body starts below the title: use ## sections, not a # heading')
     return value
@@ -657,7 +674,7 @@ def propose_manifest(root, idea):
         except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
     return ({'workflow': 'propose', 'tasks': [{'id': 'propose', 'title': 'Propose: ' + idea.splitlines()[0][:60],
                                                'instructions': instructions, 'transition': {'profile': 'intake'}}]},
-            {'workflow': 'propose', 'plans': {'location': where['location']}})
+            {'workflow': 'propose', 'plans': layout_snapshot(where)})
 
 
 def proposal(value):
@@ -682,6 +699,9 @@ def proposal(value):
         if not re.fullmatch(r'M[0-9]+', value['milestone']):raise Refused(f"'{value['milestone']}' is not a milestone id like M3")
         decision = [value[k].strip() for k in ('decision_title', 'decision_context', 'decision_alternatives', 'decision_consequences')]
         if any(decision) and not all(decision):raise Refused('A contested choice needs its decision title, context, alternatives and consequences')
+        if any(decision):
+            if not value['summary'].strip():raise Refused('A contested choice needs a recommendation in summary')
+            for key in ('decision_context','decision_alternatives','decision_consequences','summary'):section_prose(value[key])
     if value['route'] == 'task':
         if not re.fullmatch(r'[0-9]{4}', value['design']):raise Refused(f"'{value['design']}' is not a four-digit design number")
         if not value['track'].strip():raise Refused('A task names the track it joins')

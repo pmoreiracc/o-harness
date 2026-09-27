@@ -68,9 +68,39 @@ class DesignRunTest(unittest.TestCase):
     def design_run(self, slug='auth', turn='1'):
         return host_hook(self.root, 'codex', {'prompt': f'/oh-design {slug}'}, verified=self.event(turn, f'/oh-design {slug}'))
 
-    def test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed(self):
+    def test_a_failed_start_restores_the_branch_before_a_fresh_command(self):
+        from .workflow import active_file
+        for failure in ('identity', 'active pointer'):
+            with self.subTest(failure=failure):
+                target = 'oh.branches.incarnation' if failure == 'identity' else 'oh.workflow.atomic_json'
+                with unittest.mock.patch(target, side_effect=OSError('start failed')):
+                    with self.assertRaises(OSError):
+                        self.design_run(turn=failure)
+                self.assertEqual(self.git('branch', '--show-current'), 'main')
+                self.assertEqual(self.git('branch', '--list', 'design/auth'), '')
+                self.assertFalse(active_file(self.root).exists())
+        self.design_run(turn='fresh')
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+
+    def test_a_start_error_after_publishing_the_pointer_keeps_the_run_branch(self):
+        from .storage import atomic_json
+        def publish_then_fail(*args, **kwargs):
+            atomic_json(*args, **kwargs)
+            raise OSError('directory sync failed')
+        with unittest.mock.patch('oh.workflow.atomic_json', side_effect=publish_then_fail):
+            with self.assertRaises(OSError):
+                self.design_run()
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+        self.assertEqual(load_run(self.root)[1]['branch'], 'design/auth')
         self.design_run()
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+
+    def test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed(self):
+        main = self.git('rev-parse', 'main')
+        self.design_run()
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+        self.assertEqual(self.git('rev-parse', 'HEAD'), main)
+        self.assertEqual(load_run(self.root)[1]['base'], main)
         result = run(self.root, self.worker([design()]))
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['plan'], {'kind': 'design', 'number': '0001', 'title': 'Sign-in', 'path': 'docs/design/0001-auth.md', 'tasks': 2,
@@ -87,6 +117,26 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(self.git('diff', '--name-only', 'main', 'HEAD').split(), ['docs/design/0001-auth.md', 'docs/roadmap.md'])
         choose(self.root, 'pr', self.event('2', 'pr'))
         self.assertEqual(load_run(self.root)[1]['status'], 'pr')
+
+    def test_feature_and_detached_starts_leave_no_run_or_branch(self):
+        from .storage import state_home
+        from .workflow import active_file
+        for detached in (False, True):
+            with self.subTest(detached=detached):
+                if detached:self.git('switch', '--detach', 'main')
+                else:self.git('switch', '-c', 'feature/payments')
+                before = sorted(str(p) for p in state_home().rglob('*') if p.is_file() and p.suffix != '.lock')
+                with unittest.mock.patch('oh.workflow.Journal') as journal:
+                    with self.assertRaisesRegex(Refused, 'must start from main or master'):
+                        self.design_run(turn=str(detached))
+                    journal.assert_not_called()
+                self.assertFalse(active_file(self.root).exists())
+                self.assertEqual(self.git('branch', '--list', 'design/*'), '')
+                self.assertEqual(sorted(str(p) for p in state_home().rglob('*') if p.is_file() and p.suffix != '.lock'), before)
+                self.assertEqual(self.calls, [])
+        self.git('switch', 'main')
+        self.design_run(turn='fresh')
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
 
     def test_an_answer_oh_cannot_use_goes_back_to_the_worker(self):
         broken = design(body=BODY.replace('- [ ] **2.**', '- [ ] 2.'))
@@ -183,6 +233,25 @@ class DesignRunTest(unittest.TestCase):
             with self.subTest(words):
                 with self.assertRaisesRegex(Refused, words):plans.answer(value)
         plans.answer(design(body='## 1. Approach\n\n```sh\n# apply the migration\n```\n\n' + BODY))  # a fenced comment is code
+
+    def test_decision_fields_cannot_supply_human_owned_sections_or_omit_recommendation(self):
+        for key in ('context','alternatives','consequences','summary'):
+            for text in ('Background\n\n## Decision\n\nUse passwords.', 'Decision\n========\nUse passwords.', '<h2>Decision</h2>\nUse passwords.'):
+                with self.subTest(key=key,text=text):
+                    with self.assertRaisesRegex(Refused,'structural headings'):plans.answer(decision()|{key:text})
+        with self.assertRaisesRegex(Refused,'needs summary'):plans.answer(decision()|{'summary':' '})
+        with self.assertRaisesRegex(Refused,'unclosed code fence'):plans.answer(decision()|{'context':'```\nexample'})
+
+    def test_changed_plan_paths_stop_before_a_worker_or_render(self):
+        self.design_run()
+        before=self.git('status','--porcelain')
+        for key,value in (('roadmap','alternate/roadmap.md'),('designs','alternate/design'),('decisions','alternate/decisions')):
+            with self.subTest(key=key):
+                change(self.root,'plans.'+key,value)
+                with self.assertRaisesRegex(Refused,'Plan paths changed'):run(self.root,self.worker([design()]))
+                self.assertEqual(self.calls,[])
+                self.assertEqual(self.git('status','--porcelain'),before)
+                change(self.root,'plans.'+key,plans.DEFAULTS[key])
 
     def test_task_lines_are_the_parser_s_and_new_tasks_are_open(self):
         for body, words in ((BODY.replace('- [ ] **1.**', '- [x] **1.**'), 'only open tasks'),
@@ -345,7 +414,7 @@ class DesignRunTest(unittest.TestCase):
     def test_a_new_design_never_lands_on_another_plan_s_branch(self):
         self.design_run();run(self.root, self.worker([design()]))
         choose(self.root, 'pr', self.event('2', 'pr'))
-        with self.assertRaisesRegex(Refused, 'on design/auth, the branch of another plan'):self.design_run('ledger', turn='3')
+        with self.assertRaisesRegex(Refused, 'must start from main or master'):self.design_run('ledger', turn='3')
 
 
 if __name__ == '__main__':

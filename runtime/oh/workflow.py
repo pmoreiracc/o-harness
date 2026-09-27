@@ -98,7 +98,12 @@ def reduce(records):
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
         elif kind=='subject.existing':state['rendered']=d['plan']
-        elif kind=='branch.moved':state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
+        elif kind=='branch.moving':state['branch_move']=d
+        elif kind=='branch.moved':
+            state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
+            state.pop('branch_move',None)
+        elif kind=='proposal.discard':state['discard']=d
+        elif kind=='proposal.discarded':state.pop('discard',None)
         elif kind=='proposal':state.setdefault('proposals',{})[d['attempt']]=d
         elif kind=='subject.prepared':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
@@ -138,30 +143,48 @@ def _start(root, manifest, event, prepared=None, plan=None):
     if git(root,'status','--porcelain'):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
-    if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
-        git(root,'switch','-c','codex/oh-'+run[:8])
-    import re
-    current=git(root,'branch','--show-current')
-    if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
-        raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main (or your working branch) first')
-    if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
-        from .plans import branch_for
-        git(root,'switch','-c',branch_for(root,plan['slug'],run))
-    from .branches import incarnation
-    branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
-    for task in tasks:
-        task['difficulty'],task['difficulty_reason']=classify(task)
-    data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
-          'host':event['host'],'checkout':checkout,'source':source,'human':event,
-          'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
-          'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
-          **(plan or {}),
-          'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
-    journal=Journal(p['id'],run)
-    journal.append('run.started',data)
-    ids=[t['id'] for t in tasks[:data['config']['tasks_per_batch']]]
-    journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
-    atomic_json(active_file(root),{'project':p['id'],'run':run,'checkout':checkout})
+    original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
+    if plan and workflow in ('design','propose') and committed(plan) and original not in ('main','master'):
+        label='designs' if workflow=='design' else 'proposals'
+        raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
+    try:
+        if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
+            created='codex/oh-'+run[:8]
+            git(root,'switch','-c',created)
+        import re
+        current=git(root,'branch','--show-current')
+        if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
+            raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main first')
+        if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
+            from .plans import branch_for
+            created=branch_for(root,plan['slug'],run)
+            git(root,'switch','-c',created)
+        from .branches import incarnation
+        branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
+        for task in tasks:
+            task['difficulty'],task['difficulty_reason']=classify(task)
+        data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
+              'host':event['host'],'checkout':checkout,'source':source,'human':event,
+              'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
+              'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
+              **(plan or {}),
+              'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
+        journal=Journal(p['id'],run)
+        journal.append('run.started',data)
+        ids=[t['id'] for t in tasks[:data['config']['tasks_per_batch']]]
+        journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
+        atomic_json(active_file(root),{'project':p['id'],'run':run,'checkout':checkout})
+    except Exception:
+        # A start that never published its active pointer must not strand the checkout
+        # on a plan branch which the next typed command will refuse. Retain its journal.
+        active=read_json(active_file(root)) if active_file(root).exists() else {}
+        if created and active.get('run')!=run:
+            if (git(root,'branch','--show-current')!=created or git(root,'rev-parse','HEAD')!=base
+                    or git(root,'status','--porcelain')):
+                raise Refused('Run start failed and the checkout changed; inspect it, then switch back to '+original+' before typing the command again')
+            git(root,'switch',original)
+            git(root,'branch','-D',created)
+        raise
     best_effort('run.started',p['id'],run,name=p['name'],work_kind=p['kind'],host=event['host'],
                 version=data['harness_version'],config_hash=data['config_hash'])
     return journal,reduce(journal.records())
@@ -172,6 +195,9 @@ def _choose(root, choice, event):
     events=[]
     def append(kind,data):events.append({'kind':kind,'data':data})
     source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+    if state.get('discard'):
+        discard_proposal(root,journal,state)
+        state=reduce(journal.records())
     if source in state['decisions']:return state
     if event['host']!=state['host']:
         raise Refused('Resume through the host that owns this run')
@@ -205,9 +231,13 @@ def _choose(root, choice, event):
         if choice=='reconsider':
             # Write nothing: undo what OH wrote and leave the branch it cut, when that branch holds no commit.
             from .plans import undo
-            undo(root,state.get('rendered'))
-            if state.get('moved_from') and git(root,'rev-parse','HEAD')==state['base'] and not git(root,'status','--porcelain'):
-                git(root,'switch',state['moved_from']);git(root,'branch','-D',state['branch'])
+            if git(root,'branch','--show-current')!=state['branch'] or git(root,'rev-parse','HEAD')!=state['base']:
+                raise Refused('Return to the proposal branch and its recorded base before reconsidering')
+            from .branches import incarnation
+            if incarnation(root,state['branch'])!=state['incarnation']:raise Refused('The proposal branch was recreated; preserve it and stop this run')
+            undo(root,state.get('rendered'),check_only=True)
+            append('proposal.discard',{'branch':state['branch'],'incarnation':state['incarnation'],
+                'base':state['base'],'return_to':state.get('moved_from')})
             append('decision',{'source':source,'choice':choice})
             append('run.status',{'status':'stopped'})
         else:
@@ -274,7 +304,32 @@ def _choose(root, choice, event):
     journal.append('transition',{'source':event,'events':events})
     for item in events:
         if item['kind']=='run.status':best_effort('run.status',state['project'],state['id'],**item['data'])
+    state=reduce(journal.records())
+    if state.get('discard'):discard_proposal(root,journal,state)
     return reduce(journal.records())
+
+
+def discard_proposal(root,journal,state):
+    """Finish a durably recorded reconsideration; retries never grant work."""
+    from .plans import undo
+    from .branches import incarnation
+    pending=state['discard'];branch=pending['branch'];target=pending['return_to']
+    current=git(root,'branch','--show-current')
+    exists=bool(git(root,'branch','--list',branch))
+    if current not in (branch,target) or git(root,'rev-parse','HEAD')!=pending['base']:
+        raise Refused('Proposal cleanup is pending; restore its recorded branch/base and run OH again')
+    if exists and (git(root,'rev-parse',branch)!=pending['base'] or incarnation(root,branch)!=pending['incarnation']):
+        raise Refused('The proposal branch changed; preserve it and restore its recorded identity before cleanup')
+    if current==branch:
+        undo(root,state.get('rendered'))
+        if git(root,'status','--porcelain'):raise Refused('Preserve unrelated edits before retrying proposal cleanup')
+        if target:
+            if git(root,'rev-parse',target)!=pending['base']:raise Refused('The original branch moved; restore its base before retrying proposal cleanup')
+            git(root,'switch',target)
+    elif git(root,'status','--porcelain'):
+        raise Refused('Preserve new edits before retrying proposal cleanup')
+    if target and exists:git(root,'branch','-D',branch)
+    journal.append('proposal.discarded',{})
 
 
 def next_task(state):

@@ -267,9 +267,13 @@ def review_result(result):
     if not evidence['anchors'] or not evidence['attacks']:return 'failed',[]
     if not isinstance(evidence['lenses'],dict) or set(evidence['lenses'])!=set(LENSES) or any(not isinstance(v,str) or not v.strip() for v in evidence['lenses'].values()):return 'failed',[]
     findings=value['findings']
+    if value['verdict'] not in REVIEW_SCHEMA['properties']['verdict']['enum']:return 'failed',[]
     if not isinstance(findings,list) or not isinstance(value['summary'],str):return 'failed',[]
-    if any(not isinstance(f,dict) or f.get('severity') not in ('blocking','concern','scope')
-           or not isinstance(f.get('description'),str) or not isinstance(f.get('path'),str) for f in findings):
+    shape=REVIEW_SCHEMA['properties']['findings']['items']
+    if any(not isinstance(f,dict) or set(f)!=set(shape['required'])
+           or any(not isinstance(v,str) for v in f.values())
+           or f['severity'] not in shape['properties']['severity']['enum']
+           or f['relation'] not in shape['properties']['relation']['enum'] for f in findings):
         return 'failed',[]
     if value['verdict']=='clean' and not findings:return 'clean',[]
     # Never trust a declared clean count over visible findings.
