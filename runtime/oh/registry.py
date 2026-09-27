@@ -235,4 +235,16 @@ def rename(root, name):
         except BaseException:
             if read_json(path).get('name') == name:atomic_json(path, value)  # the settings weren't written
             raise
-    return profile(root) | outcome
+    return profile(root) | outcome | move_private_plans(root, old, name)
+
+
+def move_private_plans(root, old, name):
+    """Private plans live in a folder named after the project, so they follow a rename."""
+    from .config import load
+    from .plans import private_base
+    folder = load(root)['plans']['private_folder']
+    source, target = private_base(folder, old), private_base(folder, name)
+    if not source.is_dir():return {}
+    if target.exists():return {'plans': f'Your private plans stay in {source}: {target} already exists. Merge them yourself.'}
+    source.rename(target)
+    return {'plans': f'Your private plans moved to {target}'}

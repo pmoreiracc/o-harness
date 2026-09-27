@@ -768,7 +768,7 @@ def render_proposal(root, value, record, move):
                     lines.append(f"Decision record {number} (proposed): {value['decision_title'].strip()}")
             else:
                 _, task = add_task(root, where, value['design'], value['track'], value['text'], value['depends'])
-                lines.append(task)
+                lines.append(task);shown['design'] = value['design']
         files = {key: digest_of(resolved(root, key)) for key in intent}
     return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines} | ({'before': before} if private else {})
 
@@ -827,3 +827,31 @@ def listing(root):
         if design:item |= {'design': design, 'status': approval(root, where, design), 'path': str(design_file(root, design, where))}
         result.append(item)
     return {'location': where['location'], 'roadmap': str(where['roadmap']), 'initiatives': result}
+
+
+def current_files(root, files):
+    return {key: digest_of(resolved(root, key)) for key in files}
+
+
+def changed_text(root, rendered):
+    """A unified diff of what a private render changed, from the bytes saved before it."""
+    import base64
+    import difflib
+    parts = []
+    for key in rendered['intent']:
+        old = rendered.get('before', {}).get(key)
+        old = base64.b64decode(old).decode(errors='replace') if old is not None else ''
+        path = resolved(root, key)
+        new = path.read_text(errors='replace') if path.is_file() else ''
+        parts += difflib.unified_diff(old.splitlines(True), new.splitlines(True), f'a/{key}', f'b/{key}')
+    return ''.join(parts)
+
+
+def finish_private(root, state, profile):
+    """After the person approved a reviewed private plan: a design becomes approved, bound to its content; a
+    task added to an approved design keeps that design approved with the task in it."""
+    where = layout(root)
+    rendered = state['rendered']
+    if profile == 'plans' and rendered.get('kind') == 'design':return approve(root, where, rendered['number'], state['id'], flip=True)
+    if profile == 'intake' and rendered.get('route') == 'task':return approve(root, where, rendered['design'], state['id'], flip=False)
+    return None

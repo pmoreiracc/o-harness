@@ -96,7 +96,8 @@ def reduce(records):
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
-        elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}
+        elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
+        elif kind=='subject.existing':state['rendered']=d['plan']
         elif kind=='branch.moved':state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
         elif kind=='proposal':state.setdefault('proposals',{})[d['attempt']]=d
         elif kind=='subject.prepared':
@@ -297,7 +298,9 @@ def checkpoint(root):
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
             'config_hash':state['config_hash'],'version':state['harness_version']}|(
-            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
+            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}
+                    |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
+             if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
             {'proposal':{k:v for k,v in state['rendered'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent')}
                         |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
              if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(

@@ -74,6 +74,12 @@ def intake(task):
     return (task.get('transition') or {}).get('profile')=='intake'
 
 
+def gated(state,task):
+    """Whether a reviewed plan waits for the person's approve, refine or reconsider: every proposal, and a design
+    whose plans are private (in the repository, merging its pull request approves it)."""
+    return intake(task) or (designing(task) and not committed(state))
+
+
 def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke):
     current=reduce(journal.records())
     if current['status'] != 'running':
@@ -93,7 +99,15 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     directory.mkdir(parents=True,exist_ok=True,mode=0o700)
     prompt=prompt_for(root,state,task,role,feedback)
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
-    if role=='review' and not committed(state):
+    if role=='review' and not committed(state) and (designing(task) or intake(task)) and (state.get('rendered') or {}).get('files'):
+        # Private plans: the subject is the files OH wrote outside the repository, bound by their hashes.
+        from .plans import changed_text
+        rendered=state['rendered']
+        data['artifact']={'files':rendered['files'],'hash':digest(rendered['files'])}
+        (directory/'subject.diff').write_text(changed_text(root,rendered))
+        prompt+=('\nThe subject is the plan files OH wrote: '+', '.join(rendered['files'])+'. Their exact change is in '
+                 +str(directory/'subject.diff')+'. The unchanged code tree is not the review subject by itself.')
+    elif role=='review' and not committed(state):
         workers=[a for a in reduce(journal.records())['attempts'] if a['role']=='analysis' and a.get('outcome')=='implemented']
         artifact=Path(workers[-1]['evidence'])/'result.json'
         from .storage import read_json
@@ -209,15 +223,15 @@ def _run(root,invoke):
             profile=profiles[task['difficulty']]
             worker_attempts=[a for a in previous if a['role'] in ('implementation','analysis')]
             reviews=[a for a in previous if a['role']=='review']
-            decided=state.get('proposals',{}).get(previous[-1]['id']) if intake(task) and previous else None
-            if intake(task) and previous and not decided and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']
+            decided=state.get('proposals',{}).get(previous[-1]['id']) if gated(state,task) and previous else None
+            if gated(state,task) and previous and not decided and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']
                     or (previous[-1]['role']=='analysis' and (state.get('rendered') or {}).get('attempt')==previous[-1]['id']
                         and not state['rendered'].get('files'))):
                 # A reviewed proposal, or an improvement with nothing to write, waits for approve, refine or reconsider.
                 status(journal,state,'approval_checkpoint');return checkpoint(root)
             if decided and decided['choice']=='approve':
                 complete_reviewed(root,journal,state,task,previous[-1]);continue
-            if not intake(task) and previous and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']):
+            if not gated(state,task) and previous and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']):
                 complete_reviewed(root,journal,state,task,previous[-1]);continue
             if len(reviews)>=review_limit(state,task_id):
                 status(journal,state,'review_checkpoint');return checkpoint(root)
@@ -237,7 +251,14 @@ def _run(root,invoke):
             reusable=(retained and retained.get('outcome')=='implemented' and retained.get('tree')==tree(root)
                 and (last is retained or last.get('outcome') in ('failed','interrupted')) and not refined)
             work=retained
-            if not reusable:
+            existing=designing(task) and task['transition'].get('existing')
+            if existing and not previous:
+                # A private design someone edited: its first review is of the doc as it is, with no worker.
+                if not state.get('rendered'):
+                    from .plans import existing_plan
+                    journal.append('subject.existing',{'plan':existing_plan(root,existing)})
+                work=None
+            elif not reusable:
                 parent=state['summaries'][-1].get('commit',state['base']) if state['summaries'] else state['base']
                 if git(root,'rev-parse','HEAD')!=parent:raise Refused('HEAD changed outside the runner; restore the recorded task parent')
                 if designing(task) or intake(task):
@@ -253,7 +274,7 @@ def _run(root,invoke):
                 if work['outcome']!='implemented':continue
             apply_pending(root)
             if reduce(journal.records())['status']!='running':return checkpoint(root)
-            if designing(task) or intake(task):
+            if (designing(task) or intake(task)) and work is not None:
                 with lock(checkout_file(root,'oh-control.lock')):
                     from .controls import check
                     check(root)
@@ -299,7 +320,7 @@ def _run(root,invoke):
             check(root)
             review=attempt(root,journal,state,task,'review',profiles['review'],json.dumps(check_results)[:4000],invoke)
             if review['outcome']=='clean':
-                if not intake(task):complete_reviewed(root,journal,state,task,review)
+                if not gated(state,task):complete_reviewed(root,journal,state,task,review)
             elif review['outcome']=='needs_resolution':
                 status(journal,state,'findings_checkpoint');return checkpoint(root)
             elif review['outcome']=='review_mutated_tree':
@@ -316,10 +337,11 @@ def write_plan(root,journal,state,task,work):
     previous=reduce(journal.records()).get('rendered')
     if blocked_layout(root,state):raise Blocked(blocked_layout(root,state))  # before undo throws the paid answer's render away
     undo(root,previous)  # refuses to discard a human edit: that stops the run, it isn't the worker's to fix
-    record=lambda intent:journal.append('subject.preparing',{'attempt':work['id'],'intent':intent})
+    def record(intent,before=None):
+        journal.append('subject.preparing',{'attempt':work['id'],'intent':intent}|({'before':before} if before is not None else {}))
     try:
         if intake(task):plan=render_proposal(root,value,record,lambda topic:move(root,journal,topic))
-        else:plan=render(root,state['slug'],value,record)
+        else:plan=render(root,state['slug'],value,record,existing=task['transition'].get('existing'))
     except Blocked:raise
     except Refused as exc:
         journal.append('verification.failed',{'attempt':work['id'],'task':task['id'],
@@ -366,6 +388,18 @@ def complete_reviewed(root,journal,state,task,review):
             # An approved improvement or unclear idea: nothing was written, so nothing is committed.
             journal.append('task.completed',{'task':task_id,'route':state['rendered']['route'],'summary':state['rendered']['summary'],
                 'evidence':review['evidence']})
+            return
+        artifact=review.get('artifact') or {}
+        if not committed(state) and 'files' in artifact:
+            # Private plans, approved by the person just now: bound to exactly the reviewed files.
+            from .plans import current_files,finish_private
+            if current_files(root,artifact['files'])!=artifact['files']:
+                raise Refused('The plan files changed after their review; stop this run, then plan again')
+            if git(root,'rev-parse','HEAD')!=review['head'] or tree(root)!=review['tree']:
+                raise Refused('The project changed while the plan was reviewed')
+            approved=finish_private(root,state,task['transition']['profile'])
+            journal.append('task.completed',{'task':task_id,'artifact':artifact,'review':review['id'],'approved':approved,
+                'summary':review['summary'],'evidence':review['evidence']})
             return
         if not committed(state):
             from .storage import read_json
