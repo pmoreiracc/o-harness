@@ -450,6 +450,22 @@ class DesignRunTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'Git ignores docs/decisions/0001-decision.md'):self.design_run()
         self.assertEqual(self.calls,[])
 
+    def test_fenced_structure_and_alternate_headings_cannot_change_visible_tasks(self):
+        for marker in ('### API track','## 3. Other','- [ ] **99.** Example only.','-[ ] **99.** Example only.'):
+            for fence in ('```md','~~~'):
+                body=BODY.replace('- [ ] **1.**',fence+'\n'+marker+'\n'+fence[:3]+'\n\n- [ ] **1.**')
+                with self.subTest(marker=marker,fence=fence):
+                    with self.assertRaisesRegex(Refused,'parser-significant'):plans.answer(design(body=body))
+        for prefix in (' # Extra title','   # Extra title','#','Other section\n---',
+                       '<h2>Other section</h2>','Text <H3\n>API track</H3>'):
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(Refused):plans.answer(design(body=prefix+'\n'+BODY))
+        with self.assertRaisesRegex(Refused,'unclosed code fence'):plans.answer(design(body=BODY+'\n```'))
+        safe=plans.answer(design(body=BODY.replace('- [ ] **1.**','```sh\n# example comment\n```\n\n- [ ] **1.**')))
+        result=plans.render(self.root,'auth',safe,lambda intent:None)
+        rows=plans.plan(self.root,result['number']).splitlines()
+        self.assertEqual([(row.split(plans.US)[0],row.split(plans.US)[2]) for row in rows],[('1','core'),('2','core')])
+
     def test_check_cannot_replace_plan_with_same_byte_symlink(self):
         import sys
         target=Path(self.temp.name)/'external-design.md'

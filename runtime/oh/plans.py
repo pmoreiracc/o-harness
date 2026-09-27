@@ -510,15 +510,21 @@ def answer(value):
     if value['kind'] == 'decision' and '|' in value['title']:raise Refused('A decision title cannot contain |')
     if value['kind'] == 'decision':
         for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
-    if value['kind'] == 'design' and any(re.match(r'#' + WS, line) for _, line in outside(value['body'].split('\n'))):
-        raise Refused('The body starts below the title: use ## sections, not a # heading')
     if any(re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', text) for text in value.values()):
         raise Refused('Plan prose cannot contain control characters')
     if value['kind'] == 'design':
+        rows=value['body'].split('\n')
+        if fenced(rows+['## OH boundary'])[-1]:
+            raise Refused('Design prose has an unclosed code fence')
+        for line, inside in zip(rows,fenced(rows)):
+            if inside and re.match(r'##|-'+WS+r'*\[',line):
+                raise Refused('Code blocks cannot contain parser-significant heading or task lines')
         tracks=set()
-        for _, line in outside(value['body'].split('\n')):
-            if re.match(r' {0,3}=+[ \t]*$',line) or re.search(r'<h1(?:\s|/?>|$)',line,re.I):
-                raise Refused('The body starts below the title: use ## sections, not a level-one heading')
+        for _, line in outside(rows):
+            if re.match(r' {0,3}#(?:[ \t]|$)',line):
+                raise Refused('The body starts below the title: use ## sections, not a # heading')
+            if re.match(r' {0,3}(?:=+|-+)[ \t]*$',line) or re.search(r'<h[1-6](?:\s|/?>|$)',line,re.I):
+                raise Refused('Design sections use numbered ## headings, not Setext or HTML headings')
             if re.match(r' {0,3}##[ \t]',line) and not re.match(r'##[ \t]+[0-9]+\.[ \t]+\S',line):
                 raise Refused('Design sections use numbered ## headings')
             if re.match(r' {0,3}###[ \t]',line):
