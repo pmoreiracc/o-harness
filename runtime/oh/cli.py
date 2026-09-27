@@ -115,7 +115,9 @@ def main(argv=None):
         elif args.command=='init':
             from .registry import register
             from .config import ensure_project
-            result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace)|ensure_project(root)
+            registered=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace);settings=ensure_project(root)
+            notes=[n for n in (registered.get('note'),settings.get('note')) if n]
+            result=registered|settings|({'note':' '.join(notes)} if notes else {})
         elif args.command=='backup':
             from .backup import backup
             result=backup(args.destination)
@@ -181,5 +183,5 @@ def main(argv=None):
             if not path.is_relative_to(HOME):raise Refused('Resource outside OH')
             print(path.read_text());return
         if result is not None:print(json.dumps(result,indent=2))
-    except (Refused,FileNotFoundError,ValueError,KeyError) as exc:
+    except (Refused,OSError,ValueError,KeyError) as exc:
         print(f'OH: {exc}',file=sys.stderr);raise SystemExit(2)

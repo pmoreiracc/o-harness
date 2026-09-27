@@ -86,16 +86,28 @@ class RegistryTests(unittest.TestCase):
     def test_a_name_is_checked_before_a_replacement_changes_anything(self):
         from .registry import index_path
         register(self.root,'Fixture')
+        other=self.base/'other';self.git('init','-q',str(other),root=self.base);register(other,'Taken')
+        (self.root/'.git').rename(self.base/'old-git');self.git('init','-q')
+        with self.assertRaisesRegex(Refused,'already named Taken'):register(self.root,'Taken',replace=True)
+        self.assertTrue(index_path(self.root).exists())  # refused before anything changed
+        self.assertEqual(register(self.root,'Fixture',replace=True)['name'],'Fixture')  # the replaced registration doesn't hold it
+
+    def test_worktrees_join_their_project_even_when_recreated_or_restored(self):
+        project=register(self.root,'Fixture')['id']
         sibling=self.base/'sibling';self.git('worktree','add','-qb','sibling',str(sibling))
         joined=register(sibling,'Fixture')  # a worktree that asks for its project's name joins it
-        self.assertEqual((joined['id'],'joined' in joined['note']),(profile(self.root)['id'],True))
-        (self.root/'.git').rename(self.base/'old-git');self.git('init','-q')
-        with self.assertRaisesRegex(Refused,'already named Fixture'):register(self.root,'Fixture',replace=True)
-        self.assertTrue(index_path(self.root).exists())  # refused before anything changed
-        register(self.root,'Fixture 2',replace=True)
-        other=self.base/'other';self.git('init','-q',str(other),root=self.base)
-        register(other,'Solo');(other/'.git').rename(self.base/'solo-git');self.git('init','-q',root=other)
-        self.assertEqual(register(other,'Solo',replace=True)['name'],'Solo')  # the replaced registration doesn't hold it
+        self.assertEqual((joined['id'],joined['joined']),(project,'Fixture'))
+        self.git('worktree','remove',str(sibling));self.git('worktree','add','-q',str(sibling),'sibling')
+        with self.assertRaisesRegex(Refused,'--replace'):register(sibling,'Fixture')
+        old=lookup(self.root)['checkout']
+        self.assertEqual(register(sibling,'Fixture',replace=True)['id'],project)  # same project, fresh checkout, no grants
+        # A repository restored from a copy: every registration is stale, so the name is free again.
+        import shutil
+        copy=self.base/'copy';shutil.copytree(self.root,copy,symlinks=True);shutil.rmtree(self.root);copy.rename(self.root)
+        self.git('worktree','repair',str(sibling))
+        restored=register(self.root,'Fixture',replace=True)
+        self.assertNotEqual((restored['id'],lookup(self.root)['checkout']),(project,old))
+        self.assertEqual(register(sibling,'Fixture',replace=True)['id'],restored['id'])
 
     def test_a_moved_checkout_cannot_come_back_to_a_name_taken_meanwhile(self):
         register(self.root,'Fixture');old=lookup(self.root)

@@ -164,7 +164,7 @@ def project_name(root, required=True):
     if others:
         raise Refused(f'More than one OH project is named {value["name"]}, so OH can\'t tell whose settings projects.{value["name"]} '
                       f'holds. Give one of them its own name: oh --root <checkout> rename <new name> (the others: '
-                      f'{", ".join(sorted(r for p in others for r in registrations()[p]))})')
+                      f'{", ".join(sorted(e["root"] for p in others for e in registrations()[p]))})')
     return value['name']
 
 
@@ -174,15 +174,15 @@ def project_id(root):
 
 
 def registrations():
-    """{project id: [checkout folders]} for current registrations; replaced or moved-away ones are left out."""
+    """{project id: [checkout identities]} for current registrations; replaced or moved-away ones are left out."""
     from .storage import state_home
     result = {}
     for path in (state_home() / 'registry/checkouts').glob('*.json'):
         try:value = read_json(path)
         except (OSError, ValueError, Refused):continue
-        if isinstance(value, dict) and value.get('checkout') and isinstance(value.get('project'), str):
-            root = (value.get('identity') or {}).get('root')
-            result.setdefault(value['project'], []).append(root if isinstance(root, str) else '')
+        if isinstance(value, dict) and value.get('checkout') and isinstance(value.get('project'), str) \
+                and isinstance(value.get('identity'), dict) and isinstance(value['identity'].get('root'), str):
+            result.setdefault(value['project'], []).append(value['identity'])
     return result
 
 
@@ -193,9 +193,10 @@ def name_of(project):
 
 
 def present_projects(excluding_root=None):
-    """Registered projects with a checkout folder that still exists; a deleted clone doesn't hold its
-    name, nor does the registration a checkout is replacing (`excluding_root`)."""
-    return {p for p, roots in registrations().items() if any(r and r != excluding_root and Path(r).exists() for r in roots)}
+    """Registered projects with a checkout that is still the one registered. A deleted, recreated or
+    restored checkout doesn't hold its name, nor does the registration one is replacing (`excluding_root`)."""
+    from .registry import verified
+    return {p for p, found in registrations().items() if any(e['root'] != excluding_root and verified(e) for e in found)}
 
 
 def projects_named(name, excluding_root=None):
@@ -611,7 +612,9 @@ def edit(root, scope, apply, *, creating=False):
             if not isinstance(layer, dict):raise Refused(f'{settings_file()}: projects.{name} must be an object; fix it with oh config open')
         result = apply(layer)
         if valid:layers(data)  # a valid file stays valid
-        if data != before or not settings_file().exists():write_file(data)
+        if data != before or not settings_file().exists():
+            try:write_file(data)
+            except OSError as exc:raise Refused(f'Cannot write {settings_file()}: {exc.strerror or exc}') from None
     return result
 
 

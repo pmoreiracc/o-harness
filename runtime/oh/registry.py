@@ -11,16 +11,24 @@ def identity(root):
         raise Refused('Select the repository root, not a subdirectory')
     admin = Path(git(root, 'rev-parse', '--absolute-git-dir')).resolve(strict=True)
     common = Path(git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')).resolve(strict=True)
-    def stamp(path):
-        st = path.stat()
-        value = {'device': st.st_dev, 'inode': st.st_ino}
-        # Directory mtime/ctime change during normal Git work. Birth time does not.
-        if hasattr(st, 'st_birthtime'):
-            value['birth'] = st.st_birthtime
-        return value
     return {'root': str(root), 'admin': str(admin), 'common': str(common),
             'root_identity': stamp(root), 'admin_identity': stamp(admin),
             'common_identity': stamp(common)}
+
+
+def stamp(path):
+    st = Path(path).stat()
+    value = {'device': st.st_dev, 'inode': st.st_ino}
+    # Directory mtime/ctime change during normal Git work. Birth time does not.
+    if hasattr(st, 'st_birthtime'):
+        value['birth'] = st.st_birthtime
+    return value
+
+
+def verified(recorded):
+    """Whether a recorded checkout is still there, with the same folder and Git folders (no Git call)."""
+    try:return all(stamp(recorded[key]) == recorded[key + '_identity'] for key in ('root', 'admin', 'common'))
+    except (OSError, KeyError, TypeError, ValueError):return False
 
 
 def index_path(root):
@@ -33,7 +41,8 @@ def lookup(root):
         raise Refused('Project is not registered. Run oh init once for this checkout.')
     value = read_json(path)
     if value.get('schema_version') != 1 or value.get('identity') != identity(root):
-        raise Refused('Checkout identity changed. Register the new checkout or explicitly reattach the moved checkout; old grants were not reused.')
+        raise Refused('Checkout identity changed. For a new checkout at this path, run oh init --name <name> --replace; '
+                      'for a moved one, reattach it. Old grants were not reused.')
     validate_id(value['checkout']); validate_id(value['project'])
     return value
 
@@ -69,20 +78,24 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
             admin=Path(current['admin'])
             if any((admin/name).exists() for name in ('oh-active-run.json','oh-design-run.json')):
                 raise Refused('An old run binding exists. Finish or stop it with its retained runtime and archive its binding before importing this checkout.')
-        note = None
+        note, joined = None, False
         if not (attach or reattach) and (replace or not path.exists()):
             # A new project needs a free name, checked before anything changes so a refusal changes nothing.
-            # A worktree of the project that has the name joins it, as --attach would.
-            from .config import projects_named
-            holders = projects_named(name, excluding_root=str(Path(root).resolve()))
-            known = [read_json(p) for p in (home / 'registry/checkouts').glob('*.json')]
-            same = [h for h in holders if any(v.get('project') == h and v.get('checkout')
-                    and v['identity']['common_identity'] == current['common_identity'] for v in known)]
-            if len(holders) == 1 and same and not (replace or imported):
-                attach, note = same[0], f'This checkout is a worktree of {name}, so it joined that project: its settings and checks apply here.'
-            else:free(name, excluding_root=str(Path(root).resolve()))
+            # A checkout of the Git repository of the project that has the name (a worktree, or one recreated
+            # at an old path) joins that project, as --attach would, with a fresh checkout id and no grants.
+            # Without birth times (Linux), a folder id can be reused, so only a registration still in place counts.
+            from .config import name_of, projects_named, registrations
+            here = str(Path(root).resolve())
+            holders = projects_named(name, excluding_root=here)
+            same = {p for p, found in registrations().items() if name_of(p) == name and any(
+                    e.get('common_identity') == current['common_identity'] and e['root'] != here
+                    and (verified(e) or 'birth' in current['common_identity']) for e in found)}
+            if len(same) == 1 and holders <= same and not imported:
+                attach, joined = next(iter(same)), True
+                note = f'This checkout belongs to the Git repository of {name}, so it joined that project: its settings and checks apply here.'
+            else:free(name, excluding_root=here)
         if replace:
-            if attach or reattach or imported:raise Refused('Replacement needs a fresh profile; it cannot import old grants')
+            if (attach and not joined) or reattach or imported:raise Refused('Replacement needs a fresh profile; it cannot import old grants')
             if not path.exists():raise Refused('No prior checkout registration exists to replace')
             previous=read_json(path)
             if previous.get('identity')==current:raise Refused('This checkout has not been replaced; its existing registration remains authoritative')
@@ -132,7 +145,7 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
                 atomic_json(destination, value, immutable=True)
         entry = {'schema_version': 1, 'checkout': identifier(), 'project': project_id, 'identity': current}
         atomic_json(path, entry, immutable=True)
-        return value | ({'note': note} if note else {})
+        return value | ({'note': note, 'joined': name} if joined else {})
 
 
 def free(name, project=None, excluding_root=None):
@@ -140,7 +153,7 @@ def free(name, project=None, excluding_root=None):
     from .config import projects_named, registrations
     others = projects_named(name, excluding_root) - {project}
     if others:
-        where = ', '.join(sorted(r for p in others for r in registrations()[p] if r != excluding_root))
+        where = ', '.join(sorted(e['root'] for p in others for e in registrations()[p] if e['root'] != excluding_root))
         raise Refused(f'Another OH project is already named {name} ({where}); choose another name')
 
 

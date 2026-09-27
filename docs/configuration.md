@@ -44,7 +44,9 @@ Each layer overrides the one before it, key by key:
 3. The project's section, `projects.<name>`
 
 A section belongs to one project, so two projects can't have the same name: `oh init` asks
-for another one, except in a worktree of the project that has it, which joins that project.
+for another one, except in a checkout of the same Git repository (a worktree, or a worktree
+recreated at its old path with `--replace`), which joins that project. A registration whose
+checkout was deleted, recreated or restored from a copy doesn't hold its name.
 `oh rename <new name>` renames a project and its section; it refuses a name whose section
 already holds other settings. If a section is left from an earlier project with that name,
 `oh init` says which settings in it apply.

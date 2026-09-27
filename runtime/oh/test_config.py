@@ -161,6 +161,9 @@ class ConfigTest(unittest.TestCase):
         self.assertNotIn('Fixture',self.read()['projects']);self.assertEqual(load(self.root)['review_rounds'],7)
         other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True);register(other,'Site')
         self.assertIn('those settings apply',config.ensure_project(other)['note'])  # a section left behind is announced
+        with patch('oh.config.write_file',side_effect=PermissionError(13,'Permission denied')):
+            with self.assertRaisesRegex(Refused,'Cannot write .*Permission denied'):rename(self.root,'Renamed')
+        self.assertEqual(config.project_name(self.root),'Same')  # the profile went back with the settings
 
     def legacy_by(self,root):
         from .registry import lookup
