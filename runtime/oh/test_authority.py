@@ -44,11 +44,11 @@ class AuthorityTest(unittest.TestCase):
             path=home/'.codex/sessions/session.jsonl';path.parent.mkdir(parents=True)
             records=[{'type':'session_meta','payload':{'id':'session','cwd':str(root),'source':'vscode','originator':'Codex Desktop'}},
               {'type':'event_msg','payload':{'type':'task_started','turn_id':'one'}},
-              {'type':'event_msg','payload':{'type':'user_message','message':'$o-harness:oh-design Describe the next change'}}]
+              {'type':'event_msg','payload':{'type':'user_message','message':'$o-harness:oh-propose Describe the next change'}}]
             def save():path.write_text(''.join(json.dumps(x)+'\n' for x in records))
             records[-1]['payload']['message']='$o-harness:oh-deliver implement a new idea'
             save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
-            records[-1]['payload']['message']='$o-harness:oh-design Describe the next change'
+            records[-1]['payload']['message']='$o-harness:oh-propose Describe the next change'
             save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()
             records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'two'}},{'type':'event_msg','payload':{'type':'user_message','message':'Discuss a different subject'}}]
             save();desktop_pending(root);self.assertFalse(pending_file(root).exists())

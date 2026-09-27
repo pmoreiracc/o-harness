@@ -26,6 +26,11 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
      'lenses':{'type':'object','additionalProperties':False,'required':list(LENSES),
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
+# A design worker returns prose only; OH adds the number, frontmatter, roadmap link and decision log row.
+DESIGN_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['kind','title','body','context','alternatives','consequences','summary'],'properties':{
+ 'kind':{'type':'string','enum':['design','decision']},
+ **{key:{'type':'string'} for key in ('title','body','context','alternatives','consequences','summary')}}}
 
 def script(stream):
     """A wrapper that needs an interpreter, not a native binary. Windows binaries start with MZ."""

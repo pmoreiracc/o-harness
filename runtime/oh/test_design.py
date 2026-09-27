@@ -1,0 +1,182 @@
+import json
+import unittest
+from pathlib import Path
+from . import plans
+from . import test_workflow as fixtures
+from .cli import host_hook
+from .config import change
+from .hosts import DESIGN_SCHEMA
+from .runner import run
+from .storage import Refused
+from .workflow import choose, load_run
+
+BODY = '''## 1. Why this, and why now
+
+People need to sign in before anything else works.
+
+## 2. Tasks
+
+### Core track
+
+- [ ] **1.** Add the credential store.
+- [ ] **2.** Add the sign-in endpoint. Depends on task 1.
+'''
+
+
+def design(title='Sign-in', body=BODY, summary='Two tasks.'):
+    return {'kind': 'design', 'title': title, 'body': body, 'context': '', 'alternatives': '', 'consequences': '', 'summary': summary}
+
+
+def decision():
+    return {'kind': 'decision', 'title': 'Passkeys or passwords?', 'body': '', 'context': 'Sign-in needs one method.',
+            'alternatives': 'Passkeys: phishing-proof. Passwords: familiar.', 'consequences': 'The store follows the choice.',
+            'summary': 'Recommend passkeys.'}
+
+
+class DesignRunTest(unittest.TestCase):
+    setUp_workflow = fixtures.WorkflowTest.setUp
+    git = fixtures.WorkflowTest.git
+    event = fixtures.WorkflowTest.event
+
+    def setUp(self):
+        self.setUp_workflow()
+        self.git('switch', '-q', 'main')
+        change(self.root, 'plans.location', 'repo')
+        self.where = plans.layout(self.root)
+        plans.start_roadmap(self.where, 'Fixture')
+        plans.add_milestone(self.root, self.where, 'M1', 'First slice', 'A person can sign in')
+        plans.add_initiative(self.root, self.where, 'M1', 'auth', 'Sign-in with passkeys', [])
+        plans.add_initiative(self.root, self.where, 'M1', 'ledger', 'Accounts and entries', ['auth'])
+        self.git('add', '.');self.git('commit', '-qm', 'roadmap')
+        self.calls = []
+
+    def worker(self, answers, reviews=None):
+        """A fake host: analysis attempts return the next answer, reviews the next verdict (clean by default)."""
+        answers, reviews = list(answers), list(reviews or [])
+        def invoke(host, root, profile, prompt, role, directory, context, **kwargs):
+            self.calls.append((role, prompt, kwargs.get('schema'), (root / 'docs/design').exists() and sorted(p.name for p in (root / 'docs/design').iterdir())))
+            if role == 'analysis':
+                return {'failed': False, 'returncode': 0, 'duration_ms': 1, 'text': 'answer', 'structured': answers.pop(0), 'usage_observed': False}
+            verdict = reviews.pop(0) if reviews else 'clean'
+            findings = [] if verdict == 'clean' else [{'severity': 'blocking', 'description': 'Task 2 is really two', 'path': 'docs/design',
+                                                      'family': 'size', 'relation': 'original'}]
+            return {'failed': False, 'returncode': 0, 'duration_ms': 1, 'text': 'review',
+                    'structured': {'verdict': verdict, 'summary': 'Reviewed', 'findings': findings, 'evidence': fixtures.EVIDENCE}, 'usage_observed': False}
+        return invoke
+
+    def design_run(self, slug='auth', turn='1'):
+        return host_hook(self.root, 'codex', {'prompt': f'/oh-design {slug}'}, verified=self.event(turn, f'/oh-design {slug}'))
+
+    def test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed(self):
+        self.design_run()
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+        result = run(self.root, self.worker([design()]))
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['plan'], {'kind': 'design', 'number': '0001', 'title': 'Sign-in', 'path': 'docs/design/0001-auth.md', 'tasks': 2,
+                                          'summary': 'Two tasks.'})
+        (role, prompt, schema, _), (review, review_prompt, _, seen) = self.calls
+        self.assertEqual((role, schema, review), ('analysis', DESIGN_SCHEMA, 'review'))
+        self.assertIn('Writing a design', prompt);self.assertIn('Sign-in with passkeys', prompt)
+        self.assertEqual(seen, ['0001-auth.md']);self.assertIn('The subject is a plan', review_prompt)
+        doc = (self.root / 'docs/design/0001-auth.md').read_text()
+        self.assertIn('status: approved', doc);self.assertIn('# 0001 — Sign-in', doc)
+        self.assertIn('| `auth` | Sign-in with passkeys | — | [0001](./design/0001-auth.md) |', self.where['roadmap'].read_text())
+        self.assertEqual(self.git('log', '-1', '--format=%s'), 'design 0001: Sign-in')
+        self.assertEqual(self.git('status', '--porcelain'), '')
+        self.assertEqual(self.git('diff', '--name-only', 'main', 'HEAD').split(), ['docs/design/0001-auth.md', 'docs/roadmap.md'])
+        choose(self.root, 'pr', self.event('2', 'pr'))
+        self.assertEqual(load_run(self.root)[1]['status'], 'pr')
+
+    def test_an_answer_oh_cannot_use_goes_back_to_the_worker(self):
+        broken = design(body=BODY.replace('- [ ] **2.**', '- [ ] 2.'))
+        for index, (bad, words) in enumerate(((None, 'OH could not use the answer'), (broken, 'unrecognised task line'))):
+            with self.subTest(words):
+                if index:self.setUp()
+                self.design_run()
+                result = run(self.root, self.worker([bad, design()]))
+                self.assertEqual(result['status'], 'completed')
+                prompts = [prompt for role, prompt, _, _ in self.calls if role == 'analysis']
+                self.assertIn(words, prompts[1])
+                self.assertEqual(sorted(p.name for p in (self.root / 'docs/design').iterdir()), ['0001-auth.md'])
+
+    def test_a_repair_rewrites_the_same_doc_from_the_reviewed_parent(self):
+        self.design_run()
+        result = run(self.root, self.worker([design(), design(title='Sign-in, split')], ['blocking']))
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(self.calls[2][3], ['0001-auth.md'])  # the next worker reads the reviewed doc
+        self.assertEqual(sorted(p.name for p in (self.root / 'docs/design').iterdir()), ['0001-auth.md'])
+        self.assertIn('# 0001 — Sign-in, split', (self.root / 'docs/design/0001-auth.md').read_text())
+        self.assertEqual(self.where['roadmap'].read_text().count('[0001]'), 1)
+
+    def test_an_owed_decision_is_proposed_without_a_design(self):
+        self.design_run()
+        result = run(self.root, self.worker([decision()]))
+        self.assertEqual(result['plan']['kind'], 'decision')
+        record = self.root / 'docs/decisions/0001-passkeys-or-passwords.md'
+        self.assertIn('status: proposed', record.read_text());self.assertIn('_Not decided yet.', record.read_text())
+        self.assertIn('[0001](./0001-passkeys-or-passwords.md)', (self.root / 'docs/decisions/README.md').read_text())
+        self.assertFalse((self.root / 'docs/design').exists())
+        self.assertIn('| `auth` | Sign-in with passkeys | — | — |', self.where['roadmap'].read_text())
+        self.assertEqual(self.git('log', '-1', '--format=%s'), 'decision 0001: Passkeys or passwords?')
+
+    def test_only_an_unclaimed_roadmap_row_starts_a_design(self):
+        from .entry import receive
+        refused = receive(self.root, 'codex', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': 't', 'prompt': '/oh-design a login page'})
+        self.assertFalse(refused['authorized']);self.assertIn('/oh-design <slug>', refused['next'])
+        with self.assertRaisesRegex(Refused, "no initiative 'login'. Initiatives without a design: auth, ledger"):plans.design_manifest(self.root, 'login')
+        self.design_run();run(self.root, self.worker([design()]))
+        with self.assertRaisesRegex(Refused, "'auth' already has design doc 0001"):plans.design_manifest(self.root, 'auth')
+        change(self.root, 'plans.location', 'private')
+        with self.assertRaisesRegex(Refused, 'private plans'):plans.design_manifest(self.root, 'ledger')
+        change(self.root, 'plans.location', 'ask')
+        with self.assertRaisesRegex(Refused, 'Choose where plans live'):plans.design_manifest(self.root, 'ledger')
+
+    def test_a_design_branch_never_reuses_an_existing_branch(self):
+        self.git('branch', 'design/auth')
+        self.design_run()
+        self.assertRegex(self.git('branch', '--show-current'), r'^design/auth-[0-9a-f]{8}$')
+
+    def test_undo_restores_only_what_oh_wrote_and_never_a_human_edit(self):
+        intents = []
+        written = plans.render(self.root, 'auth', design(), intents.append)
+        self.assertEqual(intents, [['docs/design/0001-auth.md', 'docs/roadmap.md']])
+        doc = self.root / 'docs/design/0001-auth.md'
+        doc.write_text(doc.read_text() + 'A human note.\n')
+        with self.assertRaisesRegex(Refused, 'changed after OH wrote it'):plans.undo(self.root, written)
+        self.assertTrue(doc.exists())
+        doc.write_text(doc.read_text().replace('A human note.\n', ''))
+        for _ in range(2):plans.undo(self.root, written)  # safe to repeat
+        self.assertFalse(doc.exists());self.assertEqual(self.git('status', '--porcelain'), '')
+        # A crash between recording the intent and saving the hashes still undoes the write.
+        plans.render(self.root, 'auth', design(), lambda intent: None)
+        plans.undo(self.root, {'intent': intents[0]})
+        self.assertEqual(self.git('status', '--porcelain'), '')
+
+    def test_a_design_commit_holds_only_its_plan_files(self):
+        (self.root / 'notes.txt').write_text('unrelated')
+        with self.assertRaisesRegex(Refused, r"changes OH didn't write \(notes.txt\)"):plans.render(self.root, 'auth', design(), lambda intent: None)
+        (self.root / 'notes.txt').unlink()
+        (self.root / '.gitignore').write_text('docs/design/\n');self.git('add', '.gitignore');self.git('commit', '-qm', 'ignore')
+        with self.assertRaisesRegex(Refused, 'Git ignores docs/design/0001-auth.md'):plans.render(self.root, 'auth', design(), lambda intent: None)
+        self.assertEqual(self.git('status', '--porcelain'), '')
+
+    def test_a_prepared_task_list_cannot_become_a_plan_run(self):
+        from .prepared import prepare
+        from .registry import profile_path
+        from .storage import atomic_json
+        path = profile_path(self.root).parent / 'tasks.json'
+        for manifest in ({'workflow': 'design', 'plans': {'location': 'repo'}, 'slug': 'auth', 'tasks': [{'id': 'd', 'title': 'D', 'instructions': 'x'}]},
+                         {'tasks': [{'id': 'd', 'title': 'D', 'instructions': 'x', 'transition': {'profile': 'plans', 'slug': 'auth'}}]}):
+            atomic_json(path, manifest)
+            with self.assertRaisesRegex(Refused, 'only tasks and checks'):prepare(self.root, str(path))
+
+    def test_answers_carry_prose_only(self):
+        for value, words in ((design() | {'extra': ''}, 'JSON object'), (design(title='Two\nlines'), 'one non-empty line'),
+                             (design(body='# 0009 — Mine\n\n' + BODY), 'use ## sections'), (decision() | {'context': ' '}, 'needs context'),
+                             (design() | {'kind': 'essay'}, "kind must be")):
+            with self.subTest(words):
+                with self.assertRaisesRegex(Refused, words):plans.answer(value)
+
+
+if __name__ == '__main__':
+    unittest.main()

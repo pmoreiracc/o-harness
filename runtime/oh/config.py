@@ -801,6 +801,8 @@ def snapshot(root):
 
 def classify(task):
     # Stable pre-execution signals; spend and outcome never change the assigned cohort.
+    if (task.get('transition') or {}).get('profile') == 'plans':
+        return 'complex', 'A design decides how a whole initiative is built (rubric 1)'
     text = (task['title'] + ' ' + task.get('instructions', '')).lower()
     critical = ('authorization', 'migration', 'concurrency', 'security boundary', 'cryptograph', 'transaction')
     if any(word in text for word in critical) or len(task.get('paths', [])) > 6:

@@ -21,7 +21,10 @@ def host_hook(root,host,payload,*,verified):
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
     if planning:
         kind,intent=planning.groups()
-        start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
+        if kind=='design':
+            from .plans import design_manifest
+            start(root,design_manifest(root,intent.strip()),verified)
+        else:start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
         return checkpoint(root)
     delivery=re.fullmatch(r'[$/](?:o-harness:)?oh-deliver\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
     if delivery:

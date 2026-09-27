@@ -18,6 +18,9 @@ def prepare(root,manifest=None,doc=None,track=''):
         path=(Path(root)/manifest).resolve()
         if not path.is_relative_to(directory(root).parent):raise Refused('Save task manifests in this project’s external OH storage')
         data=read_json(path);validate_tasks(data['tasks'])
+        # A prepared list is delivery work: the workflow, plan settings and document transitions come only from OH.
+        if not isinstance(data,dict) or set(data)-{'tasks','checks'} or any('transition' in task for task in data['tasks']):
+            raise Refused('A prepared task list holds only tasks and checks')
         value.update(kind='tasks',manifest=data)
     else:
         if project(root).get('design_profile')!='consumer-v1':raise Refused('Design preparation requires a consumer-owned profile')

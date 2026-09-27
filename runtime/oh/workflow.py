@@ -29,6 +29,12 @@ def validate_tasks(tasks):
     return tasks
 
 
+def committed(state):
+    """Whether this run commits its reviewed tree: delivery, and designs whose plans live in the repository.
+    Other planning runs review a saved artifact and leave the product untouched."""
+    return state.get('workflow','deliver')=='deliver' or state.get('plans',{}).get('location')=='repo'
+
+
 def human_event(payload, host):
     if host not in ('codex','claude') or payload.get('hook_event_name') != 'UserPromptSubmit':
         raise Refused('Only a host UserPromptSubmit event can grant work')
@@ -82,10 +88,12 @@ def reduce(records):
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
+        elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}
         elif kind=='subject.prepared':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Rendered subject without one implementation attempt')
             matches[0]['tree']=d['tree']
+            if d.get('plan'):state['rendered']=d['plan']
         elif kind=='verification.failed':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Verification failure without an admitted implementation')
@@ -116,6 +124,9 @@ def _start(root, manifest, event, prepared=None):
     run=identifier();checkout=checkout_id(root)
     if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
         git(root,'switch','-c','codex/oh-'+run[:8])
+    if committed(manifest) and workflow=='design' and git(root,'branch','--show-current') in ('main','master'):
+        from .plans import branch_for
+        git(root,'switch','-c',branch_for(root,manifest['slug'],run))
     from .branches import incarnation
     branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
     for task in tasks:
@@ -124,6 +135,7 @@ def _start(root, manifest, event, prepared=None):
           'host':event['host'],'checkout':checkout,'source':source,'human':event,
           'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
           'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
+          **({'plans':manifest['plans'],'slug':manifest['slug']} if 'plans' in manifest else {}),
           'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
     journal=Journal(p['id'],run)
     journal.append('run.started',data)
@@ -168,7 +180,7 @@ def _choose(root, choice, event):
         append('task.intervention',{'task':task})
         best_effort('task.intervention',state['project'],state['id'],task,reason=choice)
     elif choice in ('pr','stop'):
-        if choice=='pr' and state.get('workflow','deliver')!='deliver':raise Refused('Planning does not authorize product publication')
+        if choice=='pr' and not committed(state):raise Refused('Planning does not authorize product publication')
         if choice=='pr' and state['status'] not in ('checkpoint','completed'):
             raise Refused('PR choice requires completed work at a checkpoint')
         decision={'source':source,'choice':choice}
@@ -246,6 +258,7 @@ def checkpoint(root):
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
             'config_hash':state['config_hash'],'version':state['harness_version']}|(
+            {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}} if state.get('rendered',{}).get('files') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {})
 
 
