@@ -56,7 +56,7 @@ def layout(root, location=None):
 
 def one_line(text, what):
     """A single line of text: no line break of any kind, which Markdown or the parser would split on."""
-    if not isinstance(text, str) or not text.strip() or len(text.splitlines()) != 1 or '\x1f' in text:
+    if not isinstance(text, str) or not text.strip() or len(text.splitlines()) != 1 or any(ord(c)<32 or ord(c)==127 for c in text):
         raise Refused(f'{what} must be one non-empty line')
     return text.strip()
 
@@ -278,14 +278,14 @@ def write_design(root, where, slug, title, body, status):
     return number, path
 
 
-def write_decision(root, where, title, context, alternatives, consequences, decision='', recommendation=''):
+def write_decision(root, where, title, context, alternatives, consequences, decision='', recommendation='', filename_slug=None):
     """A decision record plus its log row. Without a decision it is proposed, its Decision left to a human, with the
     proposer's recommendation when there is one."""
     title = one_line(title, 'The decision title')
     for text in (title,context,alternatives,consequences,decision,recommendation):section_prose(text)
     if '|' in title:raise Refused('The decision title can\'t contain a pipe')
     folder = Path(where['decisions']);number = next_number(folder)
-    slug = decision_slug(title)
+    slug = filename_slug or decision_slug(title)
     status = 'accepted' if decision.strip() else 'proposed'
     today = date.today().isoformat()
     path, log = folder / f'{number}-{slug}.md', folder / 'README.md'
@@ -512,6 +512,21 @@ def answer(value):
         for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
     if value['kind'] == 'design' and any(re.match(r'#' + WS, line) for _, line in outside(value['body'].split('\n'))):
         raise Refused('The body starts below the title: use ## sections, not a # heading')
+    if any(re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', text) for text in value.values()):
+        raise Refused('Plan prose cannot contain control characters')
+    if value['kind'] == 'design':
+        tracks=set()
+        for _, line in outside(value['body'].split('\n')):
+            if re.match(r' {0,3}=+[ \t]*$',line) or re.search(r'<h1(?:\s|/?>|$)',line,re.I):
+                raise Refused('The body starts below the title: use ## sections, not a level-one heading')
+            if re.match(r' {0,3}##[ \t]',line) and not re.match(r'##[ \t]+[0-9]+\.[ \t]+\S',line):
+                raise Refused('Design sections use numbered ## headings')
+            if re.match(r' {0,3}###[ \t]',line):
+                match=re.fullmatch(r'###[ \t]+(\S+)[ \t]+[Tt]rack[ \t]*',line)
+                if not match:raise Refused('Track headings use ### <one-word name> track')
+                owner=match[1].lower()
+                if owner in tracks:raise Refused('Each track name must be unique')
+                tracks.add(owner)
     return value
 
 
@@ -541,6 +556,28 @@ def digest_of(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest() if Path(path).is_file() else None
 
 
+def file_identity(path):
+    """File type, mode and content; never follow a link when binding a rendered document."""
+    import hashlib,stat
+    path=Path(path)
+    if not path.exists() and not path.is_symlink():return None
+    info=path.lstat()
+    kind='file' if stat.S_ISREG(info.st_mode) else 'symlink' if stat.S_ISLNK(info.st_mode) else 'other'
+    body=path.read_bytes() if kind=='file' else os.readlink(path).encode() if kind=='symlink' else b''
+    return {'kind':kind,'mode':stat.S_IMODE(info.st_mode),'hash':hashlib.sha256(body).hexdigest()}
+
+
+def validate_outputs(root, rendered):
+    """All committed planning outputs remain ordinary files inside the repository."""
+    base=Path(root).resolve()
+    for name in rendered['intent']:
+        path=Path(root)/name;identity=file_identity(path)
+        if (not identity or identity['kind']!='file' or not path.resolve().is_relative_to(base)
+                or any(p.is_symlink() for p in (path,*path.parents) if p!=base and base in p.parents)
+                or identity!=rendered.get('identities',{}).get(name)):
+            raise Blocked(f'A check changed {name} after OH wrote it (file type, mode or content); preserve the change and stop this run')
+
+
 def undo(root, previous, check_only=False):
     """Put back what this run's last render wrote, so a repair starts from the reviewed parent. Safe to repeat.
     It never discards a change it can't prove OH made: a file edited after OH wrote it, or a file OH was writing
@@ -550,6 +587,11 @@ def undo(root, previous, check_only=False):
     if not previous:return
     # An ignored file OH wrote isn't in git status, so a new file counts as changed whenever it exists.
     written, dirty = previous.get('files', {}), set(changes(root))
+    for name, expected in previous.get('identities',{}).items():
+        current=file_identity(Path(root)/name)
+        if current==previous.get('before_identities',{}).get(name):continue
+        if current!=expected:raise Blocked(f'{name} changed after OH wrote it (file type, mode or content); stop this run and preserve the edit')
+        dirty.add(name)
     dirty |= {r for r in previous.get('intent', []) if (Path(root) / r).exists() and not git(root, 'ls-tree', '--name-only', 'HEAD', '--', r)}
     for relative in previous.get('intent', []):
         if relative not in dirty:continue  # already as HEAD has it
@@ -563,7 +605,10 @@ def undo(root, previous, check_only=False):
     if check_only:return
     for relative in previous.get('intent', []):
         if relative not in dirty:continue
-        if git(root, 'ls-tree', '--name-only', 'HEAD', '--', relative):git(root, 'checkout', 'HEAD', '--', relative)
+        if git(root, 'ls-tree', '--name-only', 'HEAD', '--', relative):
+            git(root, 'checkout', 'HEAD', '--', relative)
+            prior=previous.get('before_identities',{}).get(relative)
+            if prior:os.chmod(Path(root)/relative,prior['mode'])
         else:(Path(root) / relative).unlink(missing_ok=True)
 
 
@@ -584,11 +629,12 @@ def render(root, slug, value, record):
             paths = [Path(where['designs']) / f'{number}-{slug}.md', Path(where['roadmap'])]
         else:
             number = blocked(lambda: next_number(where['decisions']))
-            paths = [Path(where['decisions']) / f'{number}-{decision_slug(value["title"])}.md', Path(where['decisions']) / 'README.md']
+            paths = [Path(where['decisions']) / f'{number}-decision.md', Path(where['decisions']) / 'README.md']
         intent = [Path(p).relative_to(root).as_posix() for p in paths]
         skipped = ignored(root, intent)
         if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
         record(intent)
+        before_identities={p:file_identity(Path(root)/p) for p in intent}
         with all_or_nothing(*paths):
             if value['kind'] == 'design':
                 written, path = write_design(root, where, slug, value['title'], value['body'], 'approved')
@@ -600,12 +646,13 @@ def render(root, slug, value, record):
                 tasks = len(rows)
             else:
                 written, path = blocked(lambda: write_decision(root, where, value['title'], value['context'], value['alternatives'],
-                                                               value['consequences'], recommendation=value['summary']))
+                                                      value['consequences'], recommendation=value['summary'], filename_slug='decision'))
                 tasks = 0
             if written != number or Path(path) != paths[0]:raise Blocked('The plan was written under another number')
         files = {relative: hashlib.sha256((Path(root) / relative).read_bytes()).hexdigest() for relative in intent}
     return {'kind': value['kind'], 'number': number, 'title': value['title'].strip(), 'path': intent[0], 'tasks': tasks,
-            'summary': value['summary'].strip(), 'intent': intent, 'files': files}
+            'summary': value['summary'].strip(), 'intent': intent, 'files': files,
+            'before_identities':before_identities,'identities':{p:file_identity(Path(root)/p) for p in intent}}
 
 
 def decision_slug(title):

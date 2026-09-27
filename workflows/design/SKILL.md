@@ -24,7 +24,17 @@ OH numbers the doc, links it from the row, checks its task list, has it reviewed
 independently and commits the reviewed files. Never write or edit plan files yourself, and
 never run your own worker or review loop. If `run` refuses, relay its reason; it names the fix.
 
-At the end, present the returned `plan`:
+Handle the returned status before offering publication:
+- `review_checkpoint`: explain the retained findings and offer **grant review** / **stop**.
+- `needs_attention`: show the failure and its concrete recovery step, then **retry** / **stop**.
+- `findings_checkpoint`: show every finding. Offer **fix concerns** for concerns, **fix scope**
+  for scope, or **fix findings** for both. The disposition choices are **accept concerns**,
+  **route scope**, or **accept concerns and route scope**, matching exactly the retained
+  severities, plus **stop**. Never treat prose or silence as a disposition.
+After a recovery choice, call `run` again. For `paused`, wait for **resume** or **stop**;
+for `pausing` or `stopping`, report the pending state. A stopped run offers no publication.
+
+Only when `completed`, present the returned `plan`:
 - a design: its path, task count and `summary`. Say that approving the design means merging
   its pull request.
 - a decision record: the question, the recommendation in `summary`, and that the design
