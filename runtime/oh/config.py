@@ -752,8 +752,8 @@ def describe(root):
     notes = [] if name else [
         f'This checkout is not registered yet. It belongs to the Git repository of the OH project {known[0]}: '
         f'oh init joins it.' if len(known) == 1 else
-        f'This checkout is not registered yet. OH projects of its Git repository: {", ".join(known)}; oh init with one of '
-        'those names joins it.' if known else 'This checkout is not an OH project yet: oh init registers it, named after its repository.']
+        f'This checkout is not registered yet. OH projects of its Git repository: {", ".join(known)}; '
+        'oh init --name <one of them> joins it.' if known else 'This checkout is not an OH project yet: oh init registers it, named after its repository.']
     if len(known) == 1:result['join'] = known[0]
     if name:
         result['checks'] = project_checks(root, data)

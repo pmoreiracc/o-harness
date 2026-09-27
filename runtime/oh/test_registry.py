@@ -158,6 +158,14 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(register(other,'Chosen')['name'],'Chosen')
         old=lookup(other)['checkout'];moved=self.base/'moved';other.rename(moved)
         self.assertEqual(register(moved,reattach=old)['name'],'Chosen')  # a moved checkout needs no name
+        from .config import change,project_checks
+        change(moved,'checks','[{"name": "tests", "command": ["true"]}]')
+        (moved/'.git').rename(self.base/'chosen-git');self.git('init','-q',root=moved)
+        self.assertEqual(register(moved,replace=True)['name'],'Chosen')  # a re-cloned checkout keeps its project's name
+        self.assertEqual(project_checks(moved),[{'name':'tests','command':['true']}])  # and its checks
+        with patch('oh.registry.joinable',return_value=['Alpha','Beta']):
+            fresh=self.base/'fresh';self.git('worktree','add','-qb','fresh',str(fresh))
+            with self.assertRaisesRegex(Refused,'pass --name'):register(fresh)  # never a silent third project
 
     def test_a_moved_checkout_cannot_come_back_to_a_name_taken_meanwhile(self):
         register(self.root,'Fixture');old=lookup(self.root)

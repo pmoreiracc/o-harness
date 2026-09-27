@@ -108,8 +108,13 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
     checkout joins the project of its Git repository, or starts one named after the repository."""
     current = identity(root)
     if name is None and not (attach or reattach or imported):
+        # A replaced checkout keeps its project's name, so its settings and checks still apply.
+        from .config import name_of
+        previous = name_of(read_json(index_path(root)).get('project', '')) if replace and index_path(root).is_file() else None
         known = joinable(root)
-        name = known[0] if len(known) == 1 else repository_name(current)
+        if not previous and len(known) > 1:
+            raise Refused(f'OH projects of this repository: {", ".join(known)}; pass --name with the one this checkout belongs to')
+        name = previous or (known[0] if known else repository_name(current))
     if kind not in ('product', 'harness') or not (attach or reattach or isinstance(name, str) and name.strip()):
         raise Refused('A project needs a name and product/harness kind')
     home = state_home()
