@@ -104,6 +104,14 @@ class ProposeTest(unittest.TestCase):
         record = (self.where['decisions'] / '0001-one-search-index-or-one-per-space.md').read_text()
         self.assertIn('status: proposed', record);self.assertIn('## Recommendation\n\nRecommend one index per space.', record)
 
+    def test_approval_preserves_a_human_mode_change(self):
+        self.propose();run(self.root,self.worker([idea()]))
+        path=self.where['roadmap'];path.chmod(0o600)
+        self.say('approve')
+        with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([]))
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','main'))
+
     def test_a_task_joins_an_approved_design(self):
         self.propose('Rate-limit sign-in')
         result = run(self.root, self.worker([idea('task')]))

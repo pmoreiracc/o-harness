@@ -776,6 +776,7 @@ def render_proposal(root, value, record, move):
         if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
         blocked(lambda: move(topic))
         record(intent)
+        before_identities={p:file_identity(Path(root)/p) for p in intent}
         lines = []
         with all_or_nothing(*paths):
             if value['route'] == 'roadmap':
@@ -795,4 +796,5 @@ def render_proposal(root, value, record, move):
                 _, task = add_task(root, where, value['design'], value['track'], value['text'], value['depends'])
                 lines.append(task)
         files = {relative: hashlib.sha256((Path(root) / relative).read_bytes()).hexdigest() for relative in intent}
-    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines}
+    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines,
+                    'before_identities':before_identities,'identities':{p:file_identity(Path(root)/p) for p in intent}}

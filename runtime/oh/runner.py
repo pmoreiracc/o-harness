@@ -407,7 +407,7 @@ def complete_reviewed(root,journal,state,task,review):
     with lock(checkout_file(root, 'oh-control.lock')):
         state=reduce(journal.records())
         if state['status']!='running':return
-        if designing(task):
+        if designing(task) or intake(task):
             from .plans import validate_outputs
             validate_outputs(root,state['rendered'])
         task_id=task['id'];expected=review.get('git_tree')
