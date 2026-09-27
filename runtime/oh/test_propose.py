@@ -112,6 +112,22 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(path.stat().st_mode & 0o777,0o600)
         self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','main'))
 
+    def test_render_and_failed_render_keep_existing_permissions(self):
+        path=self.where['roadmap'];before=path.read_bytes();path.chmod(0o600)
+        with patch('oh.plans.add_initiative',side_effect=Refused('render failed')):
+            with self.assertRaisesRegex(Refused,'render failed'):
+                plans.render_proposal(self.root,idea(milestone='M2',milestone_title='New',milestone_done_when='Done'),lambda intent:None,lambda topic:None)
+        self.assertEqual(path.read_bytes(),before);self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
+        self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+
+    def test_contested_proposal_controls_return_as_feedback(self):
+        bad=idea(decision_title='Choice?',decision_context='A\x00B',decision_alternatives='Options',decision_consequences='Effects')
+        self.propose();run(self.root,self.worker([bad,idea()]))
+        self.assertIn('control characters',[c[1] for c in self.calls if c[0]=='analysis'][1])
+        self.assertFalse(self.where['decisions'].exists())
+
     def test_a_task_joins_an_approved_design(self):
         self.propose('Rate-limit sign-in')
         result = run(self.root, self.worker([idea('task')]))
@@ -253,6 +269,38 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual([c[0] for c in self.calls],['analysis','review'])
         self.assertNotIn('branch_move',load_run(self.root)[1])
         self.assertEqual(self.where['roadmap'].read_text().count('`search`'),1)
+
+    def test_branch_creation_recovers_after_ref_write_without_another_worker(self):
+        from . import runner
+        original=runner.git
+        def interrupt(root,*args,**kwargs):
+            result=original(root,*args,**kwargs)
+            if args[0]=='update-ref':raise KeyboardInterrupt('killed after ref creation')
+            return result
+        self.propose()
+        with patch.object(runner,'git',interrupt):
+            with self.assertRaises(KeyboardInterrupt):run(self.root,self.worker([idea()]))
+        self.assertIn('branch_creation',load_run(self.root)[1])
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertEqual(run(self.root,self.worker([]))['status'],'approval_checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
+        self.assertEqual(self.git('branch','--list','propose/*'),'* propose/search')
+        self.say('reconsider');self.assertEqual(self.git('branch','--list','propose/*'),'')
+
+    def test_stop_prevents_pending_branch_creation_recovery(self):
+        from .storage import Journal
+        original=Journal.append
+        def interrupt(journal,kind,data):
+            result=original(journal,kind,data)
+            if kind=='branch.creating':raise KeyboardInterrupt('killed before creation')
+            return result
+        self.propose()
+        with patch.object(Journal,'append',interrupt):
+            with self.assertRaises(KeyboardInterrupt):run(self.root,self.worker([idea()]))
+        self.say('stop')
+        self.assertEqual(run(self.root,self.worker([]))['status'],'stopped')
+        self.assertEqual(self.git('branch','--list','propose/*'),'')
+        self.assertEqual(self.git('branch','--show-current'),'main')
 
     def test_branch_identity_failure_removes_only_the_unpublished_branch(self):
         from .branches import incarnation

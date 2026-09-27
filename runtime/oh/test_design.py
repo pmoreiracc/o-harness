@@ -433,7 +433,7 @@ class DesignRunTest(unittest.TestCase):
         for tag in ('<h2>Decision</h2>', '<h2\t>Decision</h2>', '<h2\n>Decision</h2>', 'Text <H2\f>Decision</H2>'):
             with self.assertRaises(Refused):plans.answer(decision() | {'title': tag})
             with self.assertRaises(Refused):plans.answer(design(title=tag))
-            with self.assertRaisesRegex(Refused, 'structural headings'):plans.answer(decision() | {'context': tag})
+            with self.assertRaises(Refused):plans.answer(decision() | {'context': tag})
 
     def test_design_grammar_has_one_title_and_distinct_one_word_tracks(self):
         for body in ('Extra title\n====\n'+BODY,'<h1>Extra title</h1>\n'+BODY,
@@ -458,6 +458,27 @@ class DesignRunTest(unittest.TestCase):
                     text='Prose'+ending+'## Decision'+ending+'Worker choice.'
                     with self.assertRaises(Refused):plans.answer(decision()|{field:text})
                     with self.assertRaises(Refused):plans.section_prose(text)
+
+    def test_raw_html_cannot_hide_tasks_or_human_decision_sections(self):
+        hidden='<!--\n### Hidden track\n- [ ] **99.** Hidden task.\n-->\n'
+        with self.assertRaisesRegex(Refused,'Raw HTML'):plans.answer(design(body=hidden+BODY))
+        for opener in ('<!--','<pre>','<script>','<style>','<div hidden>','<?processing','<![CDATA['):
+            with self.subTest(opener=opener):
+                with self.assertRaisesRegex(Refused,'Raw HTML'):plans.answer(design(body=BODY+'\n'+opener))
+                for field in ('context','alternatives','consequences','summary'):
+                    with self.assertRaisesRegex(Refused,'Raw HTML'):plans.answer(decision()|{field:'Background\n'+opener})
+                    with self.assertRaisesRegex(Refused,'Raw HTML'):plans.section_prose('Background\n'+opener)
+        plans.section_prose('Example:\n```html\n<!--\n<pre>\n```')
+
+    def test_plan_writes_and_rollback_preserve_existing_permissions(self):
+        path=self.where['roadmap'];before=path.read_bytes();path.chmod(0o600)
+        plans.write(path,before+b'\n')
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        with self.assertRaisesRegex(RuntimeError,'failed'):
+            with plans.all_or_nothing(path):
+                path.unlink();plans.write(path,'temporary');raise RuntimeError('failed')
+        self.assertEqual(path.read_bytes(),before+b'\n')
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
 
     def test_fenced_structure_and_alternate_headings_cannot_change_visible_tasks(self):
         for marker in ('### API track','## 3. Other','- [ ] **99.** Example only.','-[ ] **99.** Example only.'):

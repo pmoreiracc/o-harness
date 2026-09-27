@@ -99,7 +99,9 @@ def reduce(records):
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
         elif kind=='subject.existing':state['rendered']=d['plan']
         elif kind=='private.approval.intent':state['private_approval']=d
-        elif kind=='branch.moving':state['branch_move']=d
+        elif kind=='branch.creating':state['branch_creation']=d
+        elif kind=='branch.moving':
+            state['branch_move']=d;state.pop('branch_creation',None)
         elif kind=='branch.moved':
             state.update(branch=d['branch'],incarnation=d['incarnation'],moved_from=d['from'])
             state.pop('branch_move',None)
