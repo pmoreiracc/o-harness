@@ -69,6 +69,7 @@ def layout_snapshot(where):
 def section_prose(text):
     """The renderer owns decision headings; fields may contain prose and fenced examples only."""
     prose_controls(text)
+    no_reference_definitions(text)
     if fenced(text.split('\n')+['## OH section boundary'])[-1]:
         raise Refused('Decision prose has an unclosed code fence that would hide OH sections')
     for _, line in outside(text.split('\n')):
@@ -80,6 +81,16 @@ def section_prose(text):
 def prose_controls(text):
     if re.search(r'[\x00-\x08\x0b-\x1f\x7f]',text):
         raise Refused('Plan prose cannot contain control characters; use LF line endings')
+
+
+def no_reference_definitions(text):
+    """Reference definitions render no text and can swallow task/track lines in multiline labels or titles.
+    Inspect the whole label before consulting fences: a fence-looking line can itself be part of a label.
+    Inline links and definitions inside actual fenced examples remain available."""
+    inside = fenced(text.split('\n'))
+    for match in re.finditer(r'(?m)^ {0,3}\[(?:\\[\s\S]|[^\[\]\\])*\]:', text):
+        if not inside[text.count('\n', 0, match.start())]:
+            raise Refused('Link reference definitions are not allowed in plan prose; use inline links or fenced examples')
 
 
 def raw(path):
@@ -121,7 +132,7 @@ def write(path, text):
     import tempfile
     import stat
     from .system import replace
-    path = Path(path);path.parent.mkdir(parents=True, exist_ok=True)
+    path = Path(path);ordinary_outputs(path);path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.oh-plan-', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:stream.write(text.encode() if isinstance(text, str) else text)
@@ -143,6 +154,7 @@ def all_or_nothing(*paths):
     # Plans in OH's folder are OH state: hold the state guard so a backup never sees half an edit.
     guard = snapshot_guard() if any(Path(p).resolve().is_relative_to(state_home().resolve()) for p in paths) else contextlib.nullcontext()
     with guard:
+        ordinary_outputs(*paths)
         before = {Path(p): raw(p) for p in paths}
         modes = {Path(p): file_identity(p)['mode'] for p in paths if Path(p).is_file()}
         try:yield
@@ -477,6 +489,7 @@ def design_manifest(root, slug):
     except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
     planned = [Path(where['designs']) / f'{next_number(where["designs"])}-{slug}.md', Path(where['roadmap']),
                Path(where['decisions']) / f'{next_number(where["decisions"])}-decision.md', Path(where['decisions']) / 'README.md']
+    ordinary_outputs(*planned)
     if (skipped := ignored(root, [Path(p).relative_to(root).as_posix() for p in planned])):
         raise Refused(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
     shown = {key: Path(where[key]).relative_to(root).as_posix() for key in ('roadmap', 'designs', 'decisions')}
@@ -524,6 +537,7 @@ def answer(value):
         for key in ('context', 'alternatives', 'consequences', 'summary'):section_prose(value[key])
     for text in value.values():prose_controls(text)
     if value['kind'] == 'design':
+        no_reference_definitions(value['body'])
         rows=value['body'].split('\n')
         if fenced(rows+['## OH boundary'])[-1]:
             raise Refused('Design prose has an unclosed code fence')
@@ -585,6 +599,14 @@ def file_identity(path):
     return {'kind':kind,'mode':stat.S_IMODE(info.st_mode),'hash':hashlib.sha256(body).hexdigest()}
 
 
+def ordinary_outputs(*paths):
+    """Never replace a link/special file or snapshot its followed bytes as a regular file."""
+    for path in paths:
+        identity=file_identity(path)
+        if identity and identity['kind']!='file':
+            raise Blocked(f'Plan output must be an ordinary file, not a symlink or special file: {path}')
+
+
 def validate_outputs(root, rendered):
     """All committed planning outputs remain ordinary files inside the repository."""
     base=Path(root).resolve()
@@ -626,7 +648,9 @@ def undo(root, previous, check_only=False):
         if git(root, 'ls-tree', '--name-only', 'HEAD', '--', relative):
             git(root, 'checkout', 'HEAD', '--', relative)
             prior=previous.get('before_identities',{}).get(relative)
-            if prior:os.chmod(Path(root)/relative,prior['mode'])
+            restored=file_identity(Path(root)/relative)
+            if prior and prior['kind']=='file' and restored and restored['kind']=='file':
+                os.chmod(Path(root)/relative,prior['mode'])
         else:(Path(root) / relative).unlink(missing_ok=True)
 
 
@@ -651,6 +675,7 @@ def render(root, slug, value, record):
         intent = [Path(p).relative_to(root).as_posix() for p in paths]
         skipped = ignored(root, intent)
         if skipped:raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
+        ordinary_outputs(*paths)
         record(intent)
         before_identities={p:file_identity(Path(root)/p) for p in intent}
         with all_or_nothing(*paths):
