@@ -656,7 +656,7 @@ def proposal(value):
         if any(decision) and not all(decision):raise Refused('A contested choice needs its decision title, context, alternatives and consequences')
         if any(decision):
             if not value['summary'].strip():raise Refused('A contested choice needs a recommendation in summary')
-            for key in ('decision_context','decision_alternatives','decision_consequences','summary'):section_prose(value[key])
+            for key in ('decision_title','decision_context','decision_alternatives','decision_consequences','summary'):section_prose(value[key])
     if value['route'] == 'task':
         if not re.fullmatch(r'[0-9]{4}', value['design']):raise Refused(f"'{value['design']}' is not a four-digit design number")
         if not value['track'].strip():raise Refused('A task names the track it joins')
@@ -673,6 +673,8 @@ def add_task(root, where, design, track, text, depends):
         raise Refused(f"Design doc {design} is {status or 'missing a status'}: only an approved design takes new tasks"
                       + ('; a frozen design has shipped, so new work is a roadmap row or an improvement' if status == 'frozen' else ''))
     text = one_line(text, 'The task text')
+    if 'Depends on' in text or 'Blocked on ' in text:
+        raise Refused('Task prose cannot contain Depends on or Blocked on clauses; use the structured depends field')
     rows = [row.split(US) for row in plan(root, design, where).strip('\n').split('\n')]
     owner = track.strip().split()[0].lower()
     if owner not in {row[2] for row in rows}:
@@ -732,9 +734,11 @@ def render_proposal(root, value, record, move):
             if value['route'] == 'roadmap':
                 if not Path(where['roadmap']).exists():blocked(lambda: start_roadmap(where, project(root)['name']))
                 if value['milestone'] not in dict(milestones(where)):
-                    add_milestone(root, where, value['milestone'], value['milestone_title'], value['milestone_done_when'])
-                    lines.append(f"### {value['milestone']} — {value['milestone_title'].strip()}")
-                add_initiative(root, where, value['milestone'], value['slug'], value['text'], value['depends'])
+                    milestone = 'M' + str(max([int(m[1:]) for m, _ in milestones(where)] + [0]) + 1)
+                    add_milestone(root, where, milestone, value['milestone_title'], value['milestone_done_when'])
+                    lines.append(f"### {milestone} — {value['milestone_title'].strip()}")
+                else:milestone = value['milestone']
+                add_initiative(root, where, milestone, value['slug'], value['text'], value['depends'])
                 lines.append(next(line for _, line in outside(rows_of(where['roadmap'])[0]) if line.startswith(f"| `{value['slug']}` |")))
                 if value['decision_title'].strip():
                     number, _ = blocked(lambda: write_decision(root, where, value['decision_title'], value['decision_context'],

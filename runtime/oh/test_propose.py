@@ -64,7 +64,7 @@ class ProposeTest(unittest.TestCase):
             if role == 'analysis':
                 return {'failed': False, 'returncode': 0, 'duration_ms': 1, 'text': 'answer', 'structured': answers.pop(0), 'usage_observed': False}
             verdict = reviews.pop(0) if reviews else 'clean'
-            findings = [] if verdict == 'clean' else [{'severity': 'blocking', 'description': 'Duplicates auth', 'path': 'docs/roadmap.md',
+            findings = [] if verdict == 'clean' else [{'severity': 'concern' if verdict == 'concern' else 'blocking', 'description': 'Duplicates auth', 'path': 'docs/roadmap.md',
                                                       'family': 'route', 'relation': 'original'}]
             return {'failed': False, 'returncode': 0, 'duration_ms': 1, 'text': 'review',
                     'structured': {'verdict': verdict, 'summary': 'Reviewed', 'findings': findings, 'evidence': fixtures.EVIDENCE}, 'usage_observed': False}
@@ -127,7 +127,7 @@ class ProposeTest(unittest.TestCase):
         self.propose('Make the sign-in button bigger')
         result = run(self.root, self.worker([idea('improvement', text='Make the sign-in button 48px tall')]))
         self.assertEqual((result['status'], result['proposal']['lines']), ('approval_checkpoint', []))
-        self.assertEqual([c[0] for c in self.calls], ['analysis'])
+        self.assertEqual([c[0] for c in self.calls], ['analysis','review'])
         self.assertEqual(self.git('branch', '--show-current'), 'main')
         self.say('approve')
         self.assertEqual(run(self.root, self.worker([]))['status'], 'completed')
@@ -143,6 +143,71 @@ class ProposeTest(unittest.TestCase):
         self.assertIn('put it in a new milestone M2 called Find things', prompts[1])
         self.assertEqual(result['proposal']['lines'][0], '### M2 — Find things')
         self.assertEqual(self.where['roadmap'].read_text().count('`search`'), 1)
+
+    def test_new_milestone_number_is_assigned_by_code(self):
+        self.propose()
+        result=run(self.root,self.worker([idea(milestone='M99',milestone_title='Find things',milestone_done_when='Found')]))
+        self.assertIn('### M2 — Find things',result['proposal']['lines'])
+        self.assertNotIn('M99',self.where['roadmap'].read_text())
+
+    def test_task_prose_cannot_inject_dependencies_or_blocked_state(self):
+        for text in ('Add rate limiting. Depends on task 1.','Add rate limiting. Blocked on §4.'):
+            with self.assertRaisesRegex(Refused,'Task prose cannot contain'):
+                plans.add_task(self.root,self.where,'0001','Core',text,[])
+        self.assertEqual(self.git('status','--porcelain'),'')
+
+    def test_unclear_proposal_is_reviewed_and_bound_before_approval(self):
+        from .storage import read_json,digest
+        self.propose()
+        result=run(self.root,self.worker([idea('unclear')],reviews=['concern']))
+        self.assertEqual(result['status'],'findings_checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
+        with self.assertRaisesRegex(Refused,'No proposal is waiting'):self.say('approve')
+        review=load_run(self.root)[1]['attempts'][-1]
+        artifact=read_json(review['artifact']['path'])
+        self.assertEqual(digest(artifact),review['artifact']['hash'])
+        self.assertEqual(artifact['answer'],idea('unclear'))
+        self.assertEqual(artifact['rendered']['route'],'unclear')
+
+    def test_refining_to_no_files_returns_to_main_before_approval(self):
+        self.propose();run(self.root,self.worker([idea()]))
+        self.say('refine: this is an improvement')
+        result=run(self.root,self.worker([idea('improvement')]))
+        self.assertEqual(result['status'],'approval_checkpoint')
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertNotIn('propose/search',self.git('branch','--list'))
+        self.assertEqual(self.git('status','--porcelain'),'')
+        self.say('approve');self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
+
+    def test_no_file_cleanup_recovers_each_transition_without_new_analysis(self):
+        from .storage import git,Journal
+        self.propose();run(self.root,self.worker([idea()]))
+        self.say('refine: this is unclear')
+        original=Journal.append
+        def fail_switch(root,*args,**kwargs):
+            if args[:1]==('switch',):raise OSError('switch interrupted')
+            return git(root,*args,**kwargs)
+        with patch('oh.workflow.git',fail_switch):
+            with self.assertRaisesRegex(OSError,'switch interrupted'):run(self.root,self.worker([idea('unclear')]))
+        human=self.root/'human.txt';human.write_text('keep me')
+        with self.assertRaisesRegex(Refused,'Preserve unrelated edits'):run(self.root,self.worker([]))
+        self.assertEqual(human.read_text(),'keep me');human.unlink()
+        def fail_delete(root,*args,**kwargs):
+            if args[:2]==('branch','-D'):raise OSError('delete interrupted')
+            return git(root,*args,**kwargs)
+        with patch('oh.workflow.git',fail_delete):
+            with self.assertRaisesRegex(OSError,'delete interrupted'):run(self.root,self.worker([]))
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        def fail_record(journal,kind,data):
+            if kind=='proposal.discarded':raise OSError('record interrupted')
+            return original(journal,kind,data)
+        with patch.object(Journal,'append',fail_record):
+            with self.assertRaisesRegex(OSError,'record interrupted'):run(self.root,self.worker([]))
+        self.assertNotIn('propose/search',self.git('branch','--list'))
+        self.assertEqual(run(self.root,self.worker([]))['status'],'approval_checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['analysis','review','analysis','review'])
+        self.say('reconsider');self.assertEqual(load_run(self.root)[1]['status'],'stopped')
+        self.assertEqual(self.git('branch','--show-current'),'main')
 
     def test_reconsider_writes_nothing_and_leaves_no_branch(self):
         self.propose()
