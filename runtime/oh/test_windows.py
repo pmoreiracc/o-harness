@@ -379,7 +379,7 @@ class NativeWindowsTest(unittest.TestCase):
                 '  function Get-Command { param($Name, $CommandType, $ErrorAction) if ($Name -eq $script:selected) { [pscustomobject]@{Source=$script:program} } }',
                 '  $script:selected = $name',
                 '  $script:program = '+quote(folder/'python.cmd'),
-                '''  $lines = @('@echo off'); if ($name -eq 'py') { $lines += @('@if not "%~1"=="-3" exit /b 7', '@echo '+$expected); } else { $lines += '@echo '+$expected }; $lines += '@exit /b 0' ''',
+                '''  $lines = @('@echo off'); if ($name -eq 'py') { $lines += @('@if not "%~1"=="-3" exit /b 7', ('@echo '+$expected)); } else { $lines += '@echo '+$expected }; $lines += '@exit /b 0' ''',
                 '  Set-Content -Encoding ascii $script:program $lines',
                 '  $actual = Resolve-CheckPython '+quote(data)+' '+quote(downloader),
                 '  if ($actual -ne $expected -or $global:downloadCalled) { throw "Installed Python not selected: $name / $actual" }',
