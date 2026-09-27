@@ -256,6 +256,94 @@ class PrivatePlansTest(unittest.TestCase):
         self.assertFalse(plans.approvals_file(other).exists())
         self.assertNotEqual(lookup(other)['checkout'],index['checkout'])
 
+    def test_reservation_publish_error_restores_ownership_before_registration_retry(self):
+        from .registry import register,index_path
+        from .storage import atomic_json,read_json,state_home
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        change(self.root,'plans.location','private',scope='global')
+        other=self.other_repository('sync-error');path=state_home()/'registry/private-plans.json';before=read_json(path)
+        def publish_then_error(target,value,**kwargs):
+            atomic_json(target,value,**kwargs)
+            raise OSError('sync failed after publication')
+        with patch('oh.private_storage.atomic_json',side_effect=publish_then_error):
+            with self.assertRaisesRegex(OSError,'sync failed'):register(other,'SyncError')
+        self.assertEqual(read_json(path),before)
+        self.assertFalse(index_path(other).exists())
+        fresh=register(other,'SyncError')
+        from .private_storage import canonical
+        self.assertEqual(read_json(path)[canonical(plans.layout(other)['base'])]['project'],fresh['id'])
+
+    def test_index_publish_error_keeps_registration_and_replacement_consistent(self):
+        from .registry import register,index_path,lookup
+        from .storage import atomic_json,read_json,state_home
+        from .private_storage import canonical
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        change(self.root,'plans.location','private',scope='global')
+        other=self.other_repository('sync-index')
+        def publish_then_error(target,value,**kwargs):
+            atomic_json(target,value,**kwargs)
+            if target==index_path(other):raise OSError('index sync failed after publication')
+        for replacing in (False,True):
+            with self.subTest(replacing=replacing):
+                if replacing:
+                    old=lookup(other)
+                    (other/'.git').rename(Path(self.temp.name)/'old-sync-git')
+                    import subprocess
+                    subprocess.run(['git','init','-q',str(other)],check=True)
+                with patch('oh.registry.atomic_json',side_effect=publish_then_error):
+                    result=register(other,'SyncIndex',replace=replacing)
+                self.assertIn('saved',result['note'])
+                entry=lookup(other);self.assertEqual(entry['project'],result['id'])
+                records=read_json(state_home()/'registry/private-plans.json')
+                self.assertEqual(records[canonical(plans.layout(other)['base'])]['project'],result['id'])
+                self.assertEqual(register(other,'SyncIndex')['id'],result['id'])
+                self.assertFalse(plans.approvals_file(other).exists())
+                if replacing:self.assertNotEqual(entry['project'],old['project'])
+
+    def test_profile_publish_error_leaves_registration_and_rename_retryable(self):
+        from .registry import register,rename,profile,index_path
+        from .storage import atomic_json,read_json,state_home
+        from .config import read_file
+        change(self.root,'plans.private_folder',str(self.where['base'].parent),scope='global')
+        change(self.root,'plans.location','private',scope='global')
+        other=self.other_repository('sync-profile');path=state_home()/'registry/private-plans.json';before=read_json(path)
+        def publish_then_error(target,value,**kwargs):
+            atomic_json(target,value,**kwargs)
+            if target.name=='profile.json':raise OSError('profile sync failed after publication')
+        with patch('oh.registry.atomic_json',side_effect=publish_then_error):
+            with self.assertRaisesRegex(OSError,'profile sync failed'):register(other,'SyncProfile')
+        self.assertEqual(read_json(path),before);self.assertFalse(index_path(other).exists())
+        original=register(other,'SyncProfile');before=read_json(path);settings=read_file()
+        with patch('oh.registry.atomic_json',side_effect=publish_then_error):
+            with self.assertRaisesRegex(OSError,'profile sync failed'):rename(other,'RenamedProfile')
+        self.assertEqual(profile(other),original);self.assertEqual(read_file(),settings);self.assertEqual(read_json(path),before)
+        rename(other,'RenamedProfile')
+        self.assertEqual(profile(other)['name'],'RenamedProfile')
+
+    def test_settings_publish_error_keeps_folder_ownership_and_rename_consistent(self):
+        from .registry import register,rename,profile
+        from .config import write_file,read_file
+        from .storage import read_json,state_home
+        from .private_storage import canonical
+        from contextlib import redirect_stderr
+        import io
+        other=self.other_repository('sync-settings');register(other,'SyncSettings')
+        change(other,'plans.private_folder',str(self.where['base'].parent))
+        def publish_then_error(data):
+            write_file(data)
+            raise OSError('settings error after publication')
+        output=io.StringIO()
+        with patch('oh.config.write_file',side_effect=publish_then_error),redirect_stderr(output):
+            change(other,'plans.location','private')
+            rename(other,'RenamedSettings')
+        self.assertIn('Settings were saved',output.getvalue())
+        owner=profile(other);self.assertEqual(owner['name'],'RenamedSettings')
+        self.assertIn('RenamedSettings',read_file()['projects'])
+        self.assertNotIn('SyncSettings',read_file()['projects'])
+        records=read_json(state_home()/'registry/private-plans.json')
+        self.assertEqual(records[canonical(plans.layout(other)['base'])]['project'],owner['id'])
+        self.assertEqual(register(other,'RenamedSettings')['id'],owner['id'])
+
     def test_private_folder_rejects_cwd_relative_expansion(self):
         import os
         invalid=['~oh_user_that_does_not_exist_927/plans','~relative','relative/plans']

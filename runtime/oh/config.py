@@ -627,10 +627,16 @@ def edit(root, scope, apply, *, creating=False, reserve_plans=False):
         if valid:layers(data)  # a valid file stays valid
         if data != before or not settings_file().exists():
             from contextlib import nullcontext
-            from .private_storage import reservations,configured_folders
+            from .private_storage import reservations,configured_folders,published
             guard=reservations(configured_folders(data)) if reserve_plans else nullcontext()
             try:
-                with guard:write_file(data)
+                with guard:
+                    try:write_file(data)
+                    except OSError as exc:
+                        if not published(settings_file(),data|{'$schema':data.get('$schema','./'+SCHEMA_NAME)}):raise
+                        # A committed settings file must retain its reservations (and renamed profile).
+                        import sys
+                        print(f'OH: Settings were saved, but publication reported an error: {exc}. Run oh config to inspect them.',file=sys.stderr)
             except OSError as exc:raise Refused(f'Cannot write {settings_file()}: {exc.strerror or exc}') from None
     return result
 

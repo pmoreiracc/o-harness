@@ -14,6 +14,12 @@ def folder_lock(base):
     return state_home() / 'registry/private-plan-locks' / (digest(canonical(base)) + '.lock')
 
 
+def published(path, value):
+    """A write can publish before directory sync reports failure; inspect the target under its lock."""
+    try:return read_json(path)==value
+    except (OSError, ValueError, Refused):return False
+
+
 @contextmanager
 def reservations(candidates, *, claim=True):
     """Reserve a group under one lock; publication errors restore the prior ownership map."""
@@ -40,10 +46,14 @@ def reservations(candidates, *, claim=True):
                 records[key]={'project':owner['id'],'path':str(base)}
         for transfer in sorted(transfers):guards.enter_context(lock(transfer,wait=False))
         changed=claim and records!=before
-        if changed:atomic_json(path,records)
-        try:yield
+        try:
+            if changed:atomic_json(path,records)
+            yield
         except BaseException:
-            if changed:atomic_json(path,before)
+            if changed and not published(path,before):
+                try:atomic_json(path,before)
+                except OSError:
+                    if not published(path,before):raise
             raise
 
 

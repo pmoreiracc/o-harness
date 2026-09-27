@@ -220,8 +220,13 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             if not destination.exists():
                 atomic_json(destination, value, immutable=True)
         entry = {'schema_version': 1, 'checkout': identifier(), 'project': project_id, 'identity': current}
-        atomic_json(path, entry, immutable=not replace)
-        return value | ({'note': note, 'joined': name} if joined else {})
+        try:atomic_json(path, entry, immutable=not replace)
+        except OSError as exc:
+            from .private_storage import published
+            if not published(path,entry):raise
+            # The published index is authoritative. Keep its profile and folder ownership.
+            note=(note+' ' if note else '')+f'Registration was saved, but its durability could not be confirmed: {exc}. Run oh config to inspect it.'
+        return value | ({'note':note} if note else {}) | ({'joined':name} if joined else {})
 
 
 def free(name, project=None, excluding_root=None):
