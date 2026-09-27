@@ -44,7 +44,10 @@ Each layer overrides the one before it, key by key:
 3. The project's section, `projects.<name>`
 
 A section belongs to one project, so two projects can't have the same name: `oh init` asks
-for another one, and `oh rename <new name>` renames a project (its section follows it).
+for another one, except in a worktree of the project that has it, which joins that project.
+`oh rename <new name>` renames a project and its section; it refuses a name whose section
+already holds other settings. If a section is left from an earlier project with that name,
+`oh init` says which settings in it apply.
 
 ## Changing settings
 

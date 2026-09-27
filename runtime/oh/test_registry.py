@@ -83,6 +83,26 @@ class RegistryTests(unittest.TestCase):
         self.assertNotEqual(lookup(self.root)['checkout'],old['checkout'])
         self.assertEqual(len(list((self.base/'state/registry/retired').glob('*.json'))),1)
 
+    def test_a_name_is_checked_before_a_replacement_changes_anything(self):
+        from .registry import index_path
+        register(self.root,'Fixture')
+        sibling=self.base/'sibling';self.git('worktree','add','-qb','sibling',str(sibling))
+        joined=register(sibling,'Fixture')  # a worktree that asks for its project's name joins it
+        self.assertEqual((joined['id'],'joined' in joined['note']),(profile(self.root)['id'],True))
+        (self.root/'.git').rename(self.base/'old-git');self.git('init','-q')
+        with self.assertRaisesRegex(Refused,'already named Fixture'):register(self.root,'Fixture',replace=True)
+        self.assertTrue(index_path(self.root).exists())  # refused before anything changed
+        register(self.root,'Fixture 2',replace=True)
+        other=self.base/'other';self.git('init','-q',str(other),root=self.base)
+        register(other,'Solo');(other/'.git').rename(self.base/'solo-git');self.git('init','-q',root=other)
+        self.assertEqual(register(other,'Solo',replace=True)['name'],'Solo')  # the replaced registration doesn't hold it
+
+    def test_a_moved_checkout_cannot_come_back_to_a_name_taken_meanwhile(self):
+        register(self.root,'Fixture');old=lookup(self.root)
+        moved=self.base/'moved';self.root.rename(moved)
+        other=self.base/'other';self.git('init','-q',str(other),root=self.base);register(other,'Fixture')
+        with self.assertRaisesRegex(Refused,'took the name Fixture'):register(moved,'Fixture',reattach=old['checkout'])
+
     def test_import_refuses_an_old_active_binding(self):
         from .storage import identifier
         (self.root/'.git/oh-active-run.json').write_text('{}')

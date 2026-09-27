@@ -47,7 +47,8 @@ stop the batch. It never discards your edits.
 ## Projects
 
 - `oh init --name <name>` registers a checkout. It grants no work.
-- Another worktree of the same project: `oh init --name <name> --attach <project-id>`.
+- Another worktree of the same project: `oh init --name <its name>` joins that project (or
+  `--attach <project-id>`).
 - A checkout you moved: `oh init --name <name> --reattach <checkout-id>`.
 - A new checkout at an old path: `oh init --name <name> --replace`.
 

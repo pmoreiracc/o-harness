@@ -192,13 +192,14 @@ def name_of(project):
     except (OSError, ValueError, KeyError, TypeError, Refused):return None
 
 
-def present_projects():
-    """Registered projects with a checkout folder that still exists; a deleted clone doesn't hold its name."""
-    return {p for p, roots in registrations().items() if any(r and Path(r).exists() for r in roots)}
+def present_projects(excluding_root=None):
+    """Registered projects with a checkout folder that still exists; a deleted clone doesn't hold its
+    name, nor does the registration a checkout is replacing (`excluding_root`)."""
+    return {p for p, roots in registrations().items() if any(r and r != excluding_root and Path(r).exists() for r in roots)}
 
 
-def projects_named(name):
-    return {p for p in present_projects() if name_of(p) == name}
+def projects_named(name, excluding_root=None):
+    return {p for p in present_projects(excluding_root) if name_of(p) == name}
 
 
 def registered_names():
@@ -694,9 +695,14 @@ def load_global():
 
 
 def ensure_project(root):
-    """Creates settings.json with this project's section, so there is always a file to open."""
-    edit(root, 'project', lambda layer: False)
-    return {'settings': str(settings_file()), 'section': f'projects.{project_name(root)}'}
+    """Creates settings.json with this project's section, so there is always a file to open. Says which
+    settings the section already holds (left by an earlier project of this name, say): they apply here."""
+    found = {}
+    def apply(layer):found.update(layer);return False
+    edit(root, 'project', apply)
+    return {'settings': str(settings_file()), 'section': f'projects.{project_name(root)}'} | (
+        {'applies': sorted(found), 'note': f'projects.{project_name(root)} already sets {", ".join(sorted(found))}; '
+                                           'those settings apply to this project (oh config shows them)'} if found else {})
 
 
 def open_settings(root):

@@ -69,6 +69,18 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
             admin=Path(current['admin'])
             if any((admin/name).exists() for name in ('oh-active-run.json','oh-design-run.json')):
                 raise Refused('An old run binding exists. Finish or stop it with its retained runtime and archive its binding before importing this checkout.')
+        note = None
+        if not (attach or reattach) and (replace or not path.exists()):
+            # A new project needs a free name, checked before anything changes so a refusal changes nothing.
+            # A worktree of the project that has the name joins it, as --attach would.
+            from .config import projects_named
+            holders = projects_named(name, excluding_root=str(Path(root).resolve()))
+            known = [read_json(p) for p in (home / 'registry/checkouts').glob('*.json')]
+            same = [h for h in holders if any(v.get('project') == h and v.get('checkout')
+                    and v['identity']['common_identity'] == current['common_identity'] for v in known)]
+            if len(holders) == 1 and same and not (replace or imported):
+                attach, note = same[0], f'This checkout is a worktree of {name}, so it joined that project: its settings and checks apply here.'
+            else:free(name, excluding_root=str(Path(root).resolve()))
         if replace:
             if attach or reattach or imported:raise Refused('Replacement needs a fresh profile; it cannot import old grants')
             if not path.exists():raise Refused('No prior checkout registration exists to replace')
@@ -94,13 +106,17 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
                 raise Refused('This is not the original moved checkout; register it separately')
             if Path(previous['identity']['root']).exists():
                 raise Refused('Original checkout still exists; do not alias its active grants')
+            from .config import name_of, projects_named
+            taken = projects_named(name_of(previous['project'])) - {previous['project']}
+            if taken:
+                raise Refused(f'Another project took the name {name_of(previous["project"])} while this checkout was away. '
+                              'Rename that project first (oh --root <its checkout> rename <new name>), then reattach.')
             entry = previous | {'identity': current}
             atomic_json(path, entry, immutable=True)
             # Old locator becomes a tombstone; it can never silently authorize a replacement.
             old = home / 'registry/checkouts' / (digest(previous['identity']['root']) + '.json')
             atomic_json(old, previous | {'moved_to': str(root), 'checkout': None})
             return profile(root)
-        if not attach:free(name)
         project_id = validate_id(attach) if attach else (validate_id(imported['id']) if imported else identifier())
         destination = home / 'projects' / project_id / 'profile.json'
         if attach:
@@ -116,33 +132,46 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
                 atomic_json(destination, value, immutable=True)
         entry = {'schema_version': 1, 'checkout': identifier(), 'project': project_id, 'identity': current}
         atomic_json(path, entry, immutable=True)
-        return value
+        return value | ({'note': note} if note else {})
 
 
-def free(name, project=None):
+def free(name, project=None, excluding_root=None):
     """A project name picks its section of the settings file, so no two present projects share one."""
     from .config import projects_named, registrations
-    others = projects_named(name) - {project}
+    others = projects_named(name, excluding_root) - {project}
     if others:
-        where = ', '.join(sorted(r for p in others for r in registrations()[p]))
+        where = ', '.join(sorted(r for p in others for r in registrations()[p] if r != excluding_root))
         raise Refused(f'Another OH project is already named {name} ({where}); choose another name')
 
 
 @state_writer
 def rename(root, name):
-    """Gives a project a new name. Its section of the settings file follows it, unless another
-    project still has the old name (then the section stays theirs)."""
-    from .config import edit, projects_named
+    """Gives a project a new name, and its section of the settings file with it. Refuses to take over a
+    section that already holds other settings; when another project still has the old name (from before
+    names were unique), the section stays theirs and this project starts from an empty one."""
+    from .config import edit, load_global, projects_named, section_differences
     if not isinstance(name, str) or not name.strip() or name != name.strip():raise Refused('A project name needs text without surrounding spaces')
     with lock(state_home() / 'registry' / '.lock'):
         value = profile(root)
         if value['name'] == name:return value
         free(name, value['id'])
-        old = value['name']
+        old, base, outcome, path = value['name'], load_global(), {}, state_home() / 'projects' / value['id'] / 'profile.json'
         def move(data):
-            projects = data.get('projects')
-            if isinstance(projects, dict) and old in projects and name not in projects and not projects_named(old) - {value['id']}:
-                projects[name] = projects.pop(old)
-        edit(root, 'global', move)
-        atomic_json(state_home() / 'projects' / value['id'] / 'profile.json', value | {'name': name})
-    return profile(root)
+            projects = data.setdefault('projects', {})
+            if not isinstance(projects, dict):raise Refused('projects in the settings file must be an object; fix it with oh config open')
+            shared = bool(projects_named(old) - {value['id']})
+            mine, theirs = ({} if shared else projects.get(old) or {}), projects.get(name) or {}
+            if theirs and (not mine or section_differences(theirs, mine, base)):
+                raise Refused(f'projects.{name} already holds settings of an earlier project named {name}'
+                              + (f' ({", ".join(section_differences(theirs, mine, base))} differ)' if mine else '')
+                              + '; remove them with oh config open, or choose another name')
+            if mine or not shared:projects.pop(old, None)
+            projects[name] = theirs or mine
+            outcome['section'] = (f'projects.{old} stays with the other project named {old}; projects.{name} starts empty'
+                                  if shared else f'projects.{old} is now projects.{name}')
+            atomic_json(path, value | {'name': name})  # under the settings lock, so no change lands in between
+        try:edit(root, 'global', move)
+        except BaseException:
+            if read_json(path).get('name') == name:atomic_json(path, value)  # the settings weren't written
+            raise
+    return profile(root) | outcome

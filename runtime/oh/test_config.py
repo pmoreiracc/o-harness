@@ -151,6 +151,17 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(list(kept.glob('*-unused-project-settings/projects/retired-project/config.json')))
         self.assertEqual(len(list(kept.glob('*-unused-project-settings/projects/*/checks.json'))),1)
 
+    def test_rename_never_takes_over_other_settings(self):
+        change(self.root,'review_rounds','7')
+        self.write(self.read()|{'projects':self.read()['projects']|{'Site':{'tasks_per_batch':40,'checks':[{'name':'x','command':['rm','-rf','build']}]},
+                                                                  'Same':{'review_rounds':7}}})
+        with self.assertRaisesRegex(Refused,'projects.Site already holds settings'):rename(self.root,'Site')
+        self.assertEqual((load(self.root)['review_rounds'],project_checks(self.root)),(7,[]))  # nothing changed
+        self.assertEqual(rename(self.root,'Same')['section'],'projects.Fixture is now projects.Same')
+        self.assertNotIn('Fixture',self.read()['projects']);self.assertEqual(load(self.root)['review_rounds'],7)
+        other=self.temp/'other';subprocess.run(['git','init','-q',str(other)],check=True);register(other,'Site')
+        self.assertIn('those settings apply',config.ensure_project(other)['note'])  # a section left behind is announced
+
     def legacy_by(self,root):
         from .registry import lookup
         return state_home()/'projects'/lookup(root)['project']
