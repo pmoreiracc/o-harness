@@ -617,7 +617,7 @@ def propose_manifest(root, idea):
         except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
     return ({'workflow': 'propose', 'tasks': [{'id': 'propose', 'title': 'Propose: ' + idea.splitlines()[0][:60],
                                                'instructions': instructions, 'transition': {'profile': 'intake'}}]},
-            {'workflow': 'propose', 'plans': {'location': 'repo'}})
+            {'workflow': 'propose', 'plans': layout_snapshot(where)})
 
 
 def proposal(value):
@@ -642,6 +642,9 @@ def proposal(value):
         if not re.fullmatch(r'M[0-9]+', value['milestone']):raise Refused(f"'{value['milestone']}' is not a milestone id like M3")
         decision = [value[k].strip() for k in ('decision_title', 'decision_context', 'decision_alternatives', 'decision_consequences')]
         if any(decision) and not all(decision):raise Refused('A contested choice needs its decision title, context, alternatives and consequences')
+        if any(decision):
+            if not value['summary'].strip():raise Refused('A contested choice needs a recommendation in summary')
+            for key in ('decision_context','decision_alternatives','decision_consequences','summary'):section_prose(value[key])
     if value['route'] == 'task':
         if not re.fullmatch(r'[0-9]{4}', value['design']):raise Refused(f"'{value['design']}' is not a four-digit design number")
         if not value['track'].strip():raise Refused('A task names the track it joins')

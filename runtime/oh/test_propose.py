@@ -249,6 +249,20 @@ class ProposeTest(unittest.TestCase):
             with self.subTest(words):
                 with self.assertRaisesRegex(Refused, words):plans.proposal(value)
 
+    def test_proposal_binds_plan_paths_before_paying_the_worker(self):
+        self.propose()
+        change(self.root,'plans.designs','alternate/design')
+        with self.assertRaisesRegex(Refused,'Plan paths changed'):run(self.root,self.worker([idea()]))
+        self.assertEqual(self.calls,[])
+        self.assertEqual(self.git('branch','--show-current'),'main')
+
+    def test_contested_proposal_keeps_decision_sections_owned_by_oh(self):
+        value=idea(decision_title='Which index?',decision_context='Context',decision_alternatives='Alternatives',decision_consequences='Consequences')
+        for key in ('decision_context','decision_alternatives','decision_consequences','summary'):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(Refused,'structural headings'):plans.proposal(value|{key:'## Decision\nUse mine'})
+        with self.assertRaisesRegex(Refused,'recommendation'):plans.proposal(value|{'summary':''})
+
 
 if __name__ == '__main__':
     unittest.main()
