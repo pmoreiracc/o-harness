@@ -241,9 +241,9 @@ def rename(root, name):
                                   if shared else f'projects.{old} is now projects.{name}')
             from .plans import private_base
             folder_name=value.get('private_plans_name',old)
-            from .config import load
             try:
-                if not private_base(load(root)['plans']['private_folder'],folder_name).is_dir():folder_name=name
+                folder=mine.get('plans',{}).get('private_folder',base['plans']['private_folder'])
+                if not private_base(folder,folder_name).is_dir():folder_name=name
             except Refused:folder_name=name  # renaming can repair a nonportable old name
             atomic_json(path, value | {'name': name, 'private_plans_name': folder_name})
         try:edit(root, 'global', move)
