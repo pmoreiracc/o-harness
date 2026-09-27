@@ -135,30 +135,45 @@ def _start(root, manifest, event, prepared=None, plan=None):
     if git(root,'status','--porcelain'):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
-    if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
-        git(root,'switch','-c','codex/oh-'+run[:8])
-    import re
-    current=git(root,'branch','--show-current')
-    if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
-        raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main (or your working branch) first')
-    if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
-        from .plans import branch_for
-        git(root,'switch','-c',branch_for(root,plan['slug'],run))
-    from .branches import incarnation
-    branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
-    for task in tasks:
-        task['difficulty'],task['difficulty_reason']=classify(task)
-    data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
-          'host':event['host'],'checkout':checkout,'source':source,'human':event,
-          'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
-          'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
-          **(plan or {}),
-          'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
-    journal=Journal(p['id'],run)
-    journal.append('run.started',data)
-    ids=[t['id'] for t in tasks[:data['config']['tasks_per_batch']]]
-    journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
-    atomic_json(active_file(root),{'project':p['id'],'run':run,'checkout':checkout})
+    original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
+    try:
+        if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
+            created='codex/oh-'+run[:8]
+            git(root,'switch','-c',created)
+        import re
+        current=git(root,'branch','--show-current')
+        if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
+            raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main (or your working branch) first')
+        if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
+            from .plans import branch_for
+            created=branch_for(root,plan['slug'],run)
+            git(root,'switch','-c',created)
+        from .branches import incarnation
+        branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
+        for task in tasks:
+            task['difficulty'],task['difficulty_reason']=classify(task)
+        data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
+              'host':event['host'],'checkout':checkout,'source':source,'human':event,
+              'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
+              'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
+              **(plan or {}),
+              'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
+        journal=Journal(p['id'],run)
+        journal.append('run.started',data)
+        ids=[t['id'] for t in tasks[:data['config']['tasks_per_batch']]]
+        journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
+        atomic_json(active_file(root),{'project':p['id'],'run':run,'checkout':checkout})
+    except Exception:
+        # A start that never published its active pointer must not strand the checkout
+        # on a plan branch which the next typed command will refuse. Retain its journal.
+        active=read_json(active_file(root)) if active_file(root).exists() else {}
+        if created and active.get('run')!=run:
+            if (git(root,'branch','--show-current')!=created or git(root,'rev-parse','HEAD')!=base
+                    or git(root,'status','--porcelain')):
+                raise Refused('Run start failed and the checkout changed; inspect it, then switch back to '+original+' before typing the command again')
+            git(root,'switch',original)
+            git(root,'branch','-D',created)
+        raise
     best_effort('run.started',p['id'],run,name=p['name'],work_kind=p['kind'],host=event['host'],
                 version=data['harness_version'],config_hash=data['config_hash'])
     return journal,reduce(journal.records())

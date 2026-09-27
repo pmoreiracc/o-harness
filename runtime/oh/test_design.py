@@ -68,6 +68,33 @@ class DesignRunTest(unittest.TestCase):
     def design_run(self, slug='auth', turn='1'):
         return host_hook(self.root, 'codex', {'prompt': f'/oh-design {slug}'}, verified=self.event(turn, f'/oh-design {slug}'))
 
+    def test_a_failed_start_restores_the_branch_before_a_fresh_command(self):
+        from .workflow import active_file
+        for failure in ('identity', 'active pointer'):
+            with self.subTest(failure=failure):
+                target = 'oh.branches.incarnation' if failure == 'identity' else 'oh.workflow.atomic_json'
+                with unittest.mock.patch(target, side_effect=OSError('start failed')):
+                    with self.assertRaises(OSError):
+                        self.design_run(turn=failure)
+                self.assertEqual(self.git('branch', '--show-current'), 'main')
+                self.assertEqual(self.git('branch', '--list', 'design/auth'), '')
+                self.assertFalse(active_file(self.root).exists())
+        self.design_run(turn='fresh')
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+
+    def test_a_start_error_after_publishing_the_pointer_keeps_the_run_branch(self):
+        from .storage import atomic_json
+        def publish_then_fail(*args, **kwargs):
+            atomic_json(*args, **kwargs)
+            raise OSError('directory sync failed')
+        with unittest.mock.patch('oh.workflow.atomic_json', side_effect=publish_then_fail):
+            with self.assertRaises(OSError):
+                self.design_run()
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+        self.assertEqual(load_run(self.root)[1]['branch'], 'design/auth')
+        self.design_run()
+        self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+
     def test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed(self):
         self.design_run()
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')

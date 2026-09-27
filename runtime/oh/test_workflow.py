@@ -82,7 +82,7 @@ class WorkflowTest(unittest.TestCase):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         def blocked(*args,**kw):
             value=self.fake(*args,**kw)
-            if args[4]=='review':value['structured']={'verdict':'blocking','summary':'Fix it','findings':[{'severity':'blocking','description':'Wrong','path':'output.txt'}],'evidence':EVIDENCE}
+            if args[4]=='review':value['structured']={'verdict':'blocking','summary':'Fix it','findings':[{'severity':'blocking','description':'Wrong','path':'output.txt','family':'wrong-output','relation':'original'}],'evidence':EVIDENCE}
             return value
         self.assertEqual(run(self.root,blocked)['status'],'review_checkpoint')
         reviews=sum(c[0]=='review' for c in self.calls);self.assertEqual(reviews,3)
@@ -259,5 +259,26 @@ class WorkflowTest(unittest.TestCase):
             result=subprocess.run([*RUN,str(HOME/'oh'),'--root',str(self.root),'pr-summary',*args],capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0,result.stdout)
             self.assertNotIn('Review history',result.stdout)
+
+class ReviewResultTest(unittest.TestCase):
+    def test_malformed_host_results_cannot_become_review_evidence(self):
+        from copy import deepcopy
+        from .hosts import review_result
+        finding={'severity':'concern','description':'A claim exceeds its evidence','path':'docs/usage.md',
+                 'family':'claims','relation':'original'}
+        result={'failed':False,'structured':{'verdict':'concern','summary':'Reviewed','findings':[finding],'evidence':EVIDENCE}}
+        self.assertEqual(review_result(result),('needs_resolution',[finding]))
+        mutations=[('family',None),('relation','unknown'),('relation',None),('extra','field'),('path',42)]
+        for key,value in mutations:
+            broken=deepcopy(result)
+            if value is None:del broken['structured']['findings'][0][key]
+            else:broken['structured']['findings'][0][key]=value
+            with self.subTest(key=key,value=value):self.assertEqual(review_result(broken),('failed',[]))
+        broken=deepcopy(result);broken['structured']['verdict']='accepted'
+        self.assertEqual(review_result(broken),('failed',[]))
+        # A declared clean result never erases a visible, valid blocker.
+        result['structured']['verdict']='clean';finding['severity']='blocking'
+        self.assertEqual(review_result(result),('blocking',[finding]))
+
 
 if __name__=='__main__':unittest.main()
