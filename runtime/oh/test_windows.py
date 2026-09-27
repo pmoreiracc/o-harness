@@ -230,8 +230,19 @@ class TaskScheduler:
 class NativeWindowsTest(unittest.TestCase):
     def test_simultaneous_python_bootstraps_keep_the_first_complete_interpreter(self):
         import time
+        from . import service
         with tempfile.TemporaryDirectory() as tmp:
             folder=Path(tmp);data=folder/'data';wrapper=folder/'bootstrap.ps1'
+            old=data/'python/3.13.0';old.mkdir(parents=True)
+            for name in ('python.exe','pythonw.exe'):(old/name).write_text('old interpreter')
+            (data/'python/current').write_text('3.13.0')
+            (data/'bin').mkdir();(data/'bin/oh').write_text('launcher')
+            with patch.dict(os.environ,{'OH_DATA_HOME':str(data)}), patch('oh.service.sys.executable',str(old/'python.exe')), patch('oh.service.schtasks',TaskScheduler()):
+                service.install_windows()
+            from xml.etree import ElementTree
+            task=ElementTree.fromstring((data/'service/dashboard-task.xml').read_text(encoding='utf-16'))
+            action=Path(task.find('.//{*}Command').text)
+            self.assertEqual(action,old/'pythonw.exe')
             quote=lambda value:"'"+str(value).replace("'","''")+"'"
             wrapper.write_text("\n".join([
                 'param([string]$Name)', "$ErrorActionPreference = 'Stop'",
@@ -276,6 +287,8 @@ class NativeWindowsTest(unittest.TestCase):
                     self.assertEqual(child.returncode,0,out+err)
                 self.assertEqual((data/'python/3.14.7/python.exe').read_text().strip(),'first')
                 self.assertEqual((data/'python/current').read_text().strip(),'3.14.7')
+                self.assertEqual(action.read_text(),'old interpreter')
+                self.assertEqual((old/'python.exe').read_text(),'old interpreter')
                 self.assertFalse((folder/'second.expanded').exists())
                 # Recovery after directory publication but before marker publication preserves the winner.
                 (data/'python/current').unlink()

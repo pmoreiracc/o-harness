@@ -102,6 +102,11 @@ data folder.
 Batches already in progress finish on the version they started with. The dashboard service
 restarts itself on the new version; if you installed it before version 0.3.0, run
 `oh service-install` once more.
+On Windows, OH retains earlier downloaded Python versions because an installed dashboard
+task or an existing batch can still reference them. `python/current` selects the new version
+for new commands. Reinstall the service with `oh service-install` to select the current
+interpreter; remove old Python folders only after their batches have ended and no scheduled
+task references them.
 
 ## Uninstall
 

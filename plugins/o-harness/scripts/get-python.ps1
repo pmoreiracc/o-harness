@@ -57,9 +57,8 @@ try {
     Set-Content -NoNewline -Encoding ascii -Path $next -Value $version
     if (Test-Path $current) { [IO.File]::Replace($next, $current, $null) }
     else { [IO.File]::Move($next, $current) }
-    # Older versions go when nothing uses them; one still running stays until the next setup.
-    Get-ChildItem -Directory -Path $root | Where-Object { $_.Name -ne $version -and $_.Name -match '^[0-9]+\.[0-9]+\.[0-9]+$' } |
-        ForEach-Object { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction SilentlyContinue }
+    # Keep older complete versions: an installed dashboard task or an in-flight batch
+    # may still name that interpreter even when no process currently has it open.
 } finally {
     Remove-Item -Force -ErrorAction SilentlyContinue -Path $zip
     if (Test-Path $staging) { Remove-Item -Recurse -Force -Path $staging -ErrorAction SilentlyContinue }
