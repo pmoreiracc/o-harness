@@ -124,7 +124,7 @@ class WindowsTest(unittest.TestCase):
     def test_packaged_codex_hook_runs_through_outer_cmd_quotes(self):
         from .installation import build
         with tempfile.TemporaryDirectory(prefix='OH hook spaces ') as tmp:
-            package=Path(tmp)/'Codex Plugin';build(package,'codex')
+            package=Path(tmp)/'o-harness';build(package,'codex')
             # Keep the packaged hook.cmd, python.cmd and human-event.py. Replace only the
             # OH subprocess boundary: host attestation is tested separately, never forged here.
             (package/'scripts/oh').write_text('import json,sys\nassert sys.argv[-2:]==["--host","codex"]\nprint(json.dumps({"received":json.load(sys.stdin),"authorized":False}))\n')
