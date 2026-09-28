@@ -14,9 +14,10 @@ from .mcp_server import TOOLS, serve
 
 def play(messages, respond=None, launcher=None):
     """Play the Codex host: send `messages`, answer each menu the server opens with `respond`, and hang up once
-    every request has its response. Returns everything the server sent, in order."""
+    every request it did not cancel has its response. Returns everything the server sent, in order."""
     output, pending, answered = io.StringIO(), list(messages), set()
-    wanted = {m['id'] for m in messages if 'method' in m and 'id' in m}
+    cancelled = {m['params']['requestId'] for m in messages if m.get('method') == 'notifications/cancelled'}
+    wanted = {m['id'] for m in messages if 'method' in m and 'id' in m} - cancelled
     def sent():
         return [json.loads(line) for line in output.getvalue().split('\n')[:-1]]  # whole lines only
     class Host:
@@ -55,7 +56,10 @@ class CodexToolsTest(unittest.TestCase):
         self.setUp_workflow()
         self.home = Path(self.temp.name).resolve() / 'home'
         patcher = patch('pathlib.Path.home', return_value=self.home);patcher.start();self.addCleanup(patcher.stop)
-        environment = patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex')});environment.start();self.addCleanup(environment.stop)
+        # The person's shell, as the server reads it once: it adds a value Codex does not pass.
+        shell = Path(self.temp.name) / 'shell'
+        shell.write_text('#!/bin/sh\nprintf __OH_SHELL_ENVIRONMENT__\nFROM_SHELL=yes OH_DATA_HOME=/wrong env -0\n', newline='\n');shell.chmod(0o755)
+        environment = patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex'), 'SHELL': str(shell)});environment.start();self.addCleanup(environment.stop)
         codex_session(self.home, 't1', self.root)
         # A stand-in launcher that reports what it was asked to run, from which conversation.
         self.launcher = Path(self.temp.name) / 'oh-launcher'
@@ -64,7 +68,8 @@ class CodexToolsTest(unittest.TestCase):
             'print("OH task 1: implementation", file=sys.stderr, flush=True)\n'
             'time.sleep(float(os.environ.get("FAKE_WAIT", "0")))\n'
             'if "fail" in sys.argv:print("OH: nothing to run", file=sys.stderr);sys.exit(2)\n'
-            'print(json.dumps({"argv": sys.argv[1:], "thread": os.environ.get("CODEX_THREAD_ID")}))\n', newline='\n')
+            'print(json.dumps({"argv": sys.argv[1:], "thread": os.environ.get("CODEX_THREAD_ID")}))\n'
+            'print(json.dumps({"shell": os.environ.get("FROM_SHELL"), "data": os.environ.get("OH_DATA_HOME")}), file=sys.stderr)\n', newline='\n')
 
     def call(self, name, arguments, meta=None, launcher=None, ident=2):
         sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
@@ -77,6 +82,7 @@ class CodexToolsTest(unittest.TestCase):
         names = {t['name'] for t in TOOLS}
         self.assertEqual(names, {'status', 'config', 'init', 'plans', 'resource', 'deliver', 'prepare', 'prepare_design',
                                  'start', 'run', 'pause', 'resume', 'stop', 'pr_summary', 'choose'})
+        self.assertTrue(next(t for t in TOOLS if t['name'] == 'stop')['annotations']['destructiveHint'])  # a stop is final
         config = next(t for t in TOOLS if t['name'] == 'config')
         self.assertEqual(set(config['inputSchema']['properties']), {'root'})  # reading only: `config set` stays in the shell
         init = next(t for t in TOOLS if t['name'] == 'init')
@@ -95,7 +101,13 @@ class CodexToolsTest(unittest.TestCase):
 
     def test_tools_act_only_on_the_checkout_of_the_conversation_that_calls(self):
         other = Path(self.temp.name) / 'other';other.mkdir()
-        self.assertIn('works outside', self.call('status', {'root': str(other)})[0])
+        self.assertIn('not the root of a Git checkout', self.call('status', {'root': str(other)})[0])
+        (self.root / 'docs').mkdir()
+        self.assertIn('not the root of a Git checkout', self.call('status', {'root': str(self.root / 'docs')})[0])
+        # A conversation in a checkout nested inside this one (a worktree, a submodule) can't act on the outer one.
+        nested = self.root / '.claude/worktrees/wt';nested.mkdir(parents=True);(nested / '.git').write_text('gitdir: elsewhere')
+        codex_session(self.home, 't2', nested)
+        self.assertIn('does not work in', self.call('stop', {'root': str(self.root)}, meta=calling('t2'))[0])
         self.assertIn('does not say which conversation', self.call('status', {'root': str(self.root)}, meta={})[0])
         self.assertIn('saved session', self.call('status', {'root': str(self.root)}, meta=calling('unknown'))[0])
         self.assertIn('absolute path', self.call('status', {'root': 'project'})[0])
@@ -109,6 +121,60 @@ class CodexToolsTest(unittest.TestCase):
         path = Path(argv[-1])
         self.assertTrue(path.is_relative_to(state_home() / 'projects' / project(self.root)['id']))
         self.assertEqual(read_json(path), {'tasks': tasks})
+
+    def test_commands_get_the_person_s_shell_setup_with_codex_s_values_on_top(self):
+        sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
+                     {'id': 2, 'method': 'tools/call', 'params': {'name': 'run', 'arguments': {'root': str(self.root)}} | calling('t1', progressToken='p')}],
+                    launcher=self.launcher)
+        seen = json.loads([m for m in sent if m.get('method') == 'notifications/progress'][-1]['params']['message'])
+        self.assertEqual(seen, {'shell': 'yes', 'data': os.environ['OH_DATA_HOME']})
+
+    def test_the_runner_reports_progress_where_the_server_forwards_it(self):
+        import contextlib
+        from .runner import run
+        from .workflow import start
+        fixtures.configure(self.root, tasks_per_batch=1)
+        start(self.root, {'tasks': [{'id': '1', 'title': 'One', 'instructions': 'Do it'}]}, fixtures.WorkflowTest.event(self))
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            run(self.root, lambda *a, **k: fixtures.WorkflowTest.fake(self, *a, **k))
+        self.assertIn('OH task 1: implementation', err.getvalue());self.assertNotIn('OH task', out.getvalue())
+
+    def test_a_cancelled_call_gets_no_reply_and_an_unexpected_error_gets_one(self):
+        with patch.dict(os.environ, {'FAKE_WAIT': '0.5'}):
+            sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
+                         {'id': 2, 'method': 'tools/call', 'params': {'name': 'run', 'arguments': {'root': str(self.root)}} | calling('t1')},
+                         {'method': 'notifications/cancelled', 'params': {'requestId': 2}}, {'id': 3, 'method': 'ping'}], launcher=self.launcher)
+            time.sleep(1.5)  # the stand-in run finishes; its reply must not follow
+        self.assertFalse(any(m.get('id') == 2 for m in sent))
+        with patch('oh.mcp_server.command', side_effect=TypeError('broken')):
+            text, error = self.call('status', {'root': str(self.root)})
+        self.assertTrue(error);self.assertIn('unexpectedly', text)
+
+    def test_the_tools_exist_before_setup(self):
+        import subprocess
+        from .installation import build
+        plugin = Path(self.temp.name) / 'dist/o-harness';plugin.parent.mkdir()
+        build(plugin, 'codex')
+        requests = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
+                    {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}]
+        empty = Path(self.temp.name) / 'no-oh-yet'
+        done = subprocess.run([sys.executable, '-I', str(plugin / 'scripts/mcp-server')], input=''.join(json.dumps(r) + '\n' for r in requests),
+                              capture_output=True, text=True, env=dict(os.environ, OH_DATA_HOME=str(empty)), timeout=60)
+        tools = next(json.loads(line) for line in done.stdout.splitlines() if json.loads(line).get('id') == 2)['result']['tools']
+        self.assertIn('run', {t['name'] for t in tools})
+
+    def test_oh_reads_codex_conversations_from_codex_home(self):
+        from .authority import attest
+        home = Path(self.temp.name) / 'custom-codex'
+        path = home / 'sessions/rollout-x-t9.jsonl';path.parent.mkdir(parents=True)
+        records = [{'type': 'session_meta', 'payload': {'id': 't9', 'cwd': str(self.root), 'source': 'cli'}},
+                   {'type': 'event_msg', 'payload': {'type': 'task_started', 'turn_id': 'turn'}},
+                   {'type': 'response_item', 'payload': {'role': 'user', 'content': [{'type': 'input_text', 'text': 'continue'}]}}]
+        path.write_text(''.join(json.dumps(r) + '\n' for r in records), newline='\n')
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 't9', 'turn_id': 'turn', 'prompt': 'continue', 'transcript_path': str(path)}
+        with patch.dict(os.environ, {'CODEX_HOME': str(home)}):
+            self.assertEqual(attest('codex', payload, self.root)['turn'], 'turn')
 
     def test_a_long_command_reports_progress_and_the_server_keeps_answering(self):
         with patch.dict(os.environ, {'FAKE_WAIT': '1'}):

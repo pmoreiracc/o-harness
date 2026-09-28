@@ -5,6 +5,7 @@ from .storage import checkout_file
 from .storage import state_writer
 
 import json
+import sys
 from datetime import datetime,timezone
 import time
 from pathlib import Path
@@ -88,7 +89,8 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     from .delivery import guard
     guard(root,state)
     if state.get('plans',{}).get('location')=='private' and blocked_layout(root,current):raise Refused(blocked_layout(root,current))
-    print(f"OH task {task['id']}: {role} · {profile['model']} / {profile['effort']}",flush=True)
+    # Progress goes to stderr: stdout carries only the result, which tools and scripts read.
+    print(f"OH task {task['id']}: {role} · {profile['model']} / {profile['effort']}",file=sys.stderr,flush=True)
     attempt_id=identifier();before=tree(root)
     git_tree=candidate_tree(root) if role=='review' else None
     directory=journal.path/'attempts'/attempt_id

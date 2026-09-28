@@ -154,12 +154,18 @@ def authentication(host,root):
         raise Refused(f'{host}: subscription login could not be confirmed. Sign in with the installed CLI; no API fallback was attempted.')
 
 
+def codex_home():
+    """Codex's own folder: CODEX_HOME when set, as Codex itself reads it."""
+    import os
+    return Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
+
+
 def oh_plugins():
     """OH's plugin as installed in Codex, under each marketplace that provides it."""
     import re
     import tomllib
     import os
-    home=Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
+    home=codex_home()
     try:plugins=tomllib.loads((home/'config.toml').read_text()).get('plugins',{})
     except (OSError,ValueError):return []
     return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))

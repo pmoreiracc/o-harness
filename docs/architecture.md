@@ -41,11 +41,17 @@ In Codex, the agent runs OH through that same server rather than the shell. Code
 shell commands write only inside the project, while OH's state lives in its own folder so the
 model can't write it; Codex runs a plugin's MCP server outside that sandbox. Each everyday OH
 command (status, init, deliver, prepare, start, run, pause, resume, stop and a few read-only ones)
-is a tool that runs the command through the plugin's `oh` launcher, exactly as the shell would.
+is a tool that runs the command through the plugin's `oh` launcher, as the shell would: with the
+person's own shell setup (read once from their login shell, since Codex gives the server almost
+none of it) and Codex's values for OH on top. OH's progress lines become progress notifications.
+The server runs from the core the plugin carries, so its tools exist before setup and right after
+an update; the launcher still picks and activates the installed core. Stopping a tool call does
+not stop OH, which keeps working within its grant; `status` and `stop` still apply.
 Commands that change what OH runs on the machine (settings and checks, setup, host trust,
 backups, services) are not tools, so Codex asks the person before they run. Codex puts the
 calling conversation in each request's metadata, which the model can't set: a tool acts only on
-the checkout that conversation works in (read from Codex's saved session), a menu answers only in
+the Git checkout that conversation works in (read from Codex's saved session), never on a
+repository around a nested one, a menu answers only in
 the conversation that started the run, and OH checks a typed choice against that conversation's
 saved turn as before. The server is started only by Codex from the plugin, never by an `oh`
 command. OH's worker commands turn OH's Codex plugin off, and the server refuses any tool when an

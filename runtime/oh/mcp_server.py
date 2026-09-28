@@ -23,11 +23,14 @@ ROOT = {'type': 'string', 'description': 'Absolute path of the project checkout 
 TEXT = {'type': 'string'}
 
 
-def tool(name, title, description, properties=None, required=(), read_only=False):
+def tool(name, title, description, properties=None, required=(), read_only=False, destructive=False):
     return {'name': name, 'title': title, 'description': description,
             'inputSchema': {'type': 'object', 'required': ['root', *required], 'additionalProperties': False,
                             'properties': {'root': ROOT} | (properties or {})},
-            'annotations': {'readOnlyHint': read_only, 'destructiveHint': False, 'idempotentHint': read_only, 'openWorldHint': False}}
+            'annotations': {'readOnlyHint': read_only, 'destructiveHint': destructive, 'idempotentHint': read_only, 'openWorldHint': False}}
+
+
+LONG = ' It can take a long time. Stopping this call does not stop OH: call `status` to follow it and `stop` to end it.'
 
 
 TOOLS = [
@@ -41,18 +44,17 @@ TOOLS = [
     tool('resource', 'OH workflow', 'Returns one of OH\'s workflow instructions, such as workflows/deliver/SKILL.md.',
          {'path': TEXT}, ['path'], read_only=True),
     tool('deliver', 'Deliver', 'Runs `deliver` with the person\'s arguments: none lists ready work, a design number delivers '
-         'it, and prose proposes a quick fix.', {'arguments': {'type': 'array', 'items': TEXT}}),
+         'it, and prose proposes a quick fix.' + LONG, {'arguments': {'type': 'array', 'items': TEXT}}),
     tool('prepare', 'Prepare tasks', 'Saves a task list in OH\'s storage for the person to approve. Returns the exact '
          'trigger the person types to approve it.', {'tasks': {'type': 'array', 'items': {'type': 'object'},
          'description': 'Tasks with id, title, instructions and optional needs, ordered by dependency'}}, ['tasks']),
     tool('prepare_design', 'Prepare a design', 'Binds an approved design document for delivery.',
          {'doc': TEXT, 'track': TEXT}, ['doc']),
-    tool('start', 'Start prepared work', 'Verifies the person\'s approval and runs the prepared work.', {'request': TEXT}),
-    tool('run', 'Run OH', 'Verifies the person\'s latest choice and carries it out, or continues the current run. '
-         'It can take a long time.'),
+    tool('start', 'Start prepared work', 'Verifies the person\'s approval and runs the prepared work.' + LONG, {'request': TEXT}),
+    tool('run', 'Run OH', 'Verifies the person\'s latest choice and carries it out, or continues the current run.' + LONG),
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
-    tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.'),
-    tool('stop', 'Stop', 'Ends the current run, keeping its work and evidence.'),
+    tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
+    tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
     tool('pr_summary', 'PR summary', 'The review summary for this branch\'s pull request.', {'base': TEXT}, read_only=True),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
          'as a menu and records their click in OH. Call it when OH output has a `gate`, in the conversation that '
@@ -126,19 +128,47 @@ def folder(thread):
 
 
 def checkout(arguments, thread):
+    """The checkout a tool acts on: the Git repository root, and the one the conversation works in, never a
+    repository around it (a nested worktree, submodule or vendored repository has its own)."""
+    from .authority import within
+    from .storage import git
     root = arguments.get('root')
     if not isinstance(root, str) or not Path(root).is_absolute() or not Path(root).is_dir():
         raise Refused('Pass the absolute path of the project checkout as root.')
     root = Path(root).resolve()
-    if not folder(thread).is_relative_to(root):
-        raise Refused(f'This conversation works outside {root}; OH acts only on the checkout the conversation is in.')
+    try:top = Path(git(root, 'rev-parse', '--show-toplevel')).resolve()
+    except (Refused, OSError, subprocess.SubprocessError):top = None
+    if top != root:raise Refused(f'{root} is not the root of a Git checkout.')
+    if not within(folder(thread), root):
+        raise Refused(f'This conversation does not work in {root}; OH acts only on the checkout the conversation is in.')
     return root
+
+
+# Values Codex passes this server that describe OH and the hosts, not the person's shell: these win.
+FORWARDED = {'OH_CHILD_ATTEMPT', 'OH_DATA_HOME', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
+MARK = '__OH_SHELL_ENVIRONMENT__'
+
+
+def shell_environment():
+    """The environment the person's login shell sets up, read once as terminals and editors do. Empty on Windows
+    (Codex passes its environment through there) or when the shell can't be read in time."""
+    if os.name == 'nt':return {}
+    shell = os.environ.get('SHELL')
+    if not shell:
+        import pwd  # windows-ok: POSIX only, after the Windows return above
+        shell = pwd.getpwuid(os.getuid()).pw_shell  # windows-ok: POSIX only
+    if not shell or not Path(shell).is_absolute():return {}
+    try:done = subprocess.run([shell, '-ilc', f'printf {MARK}; env -0'], stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):return {}
+    if done.returncode or MARK.encode() not in done.stdout:return {}
+    pairs = done.stdout.split(MARK.encode(), 1)[1].split(b'\0')
+    return dict(p.decode('utf-8', 'replace').split('=', 1) for p in pairs if b'=' in p)
 
 
 class Server:
     def __init__(self, stdin, stdout, launcher=None):
         self.stdin, self.stdout, self.launcher, self.client = stdin, stdout, launcher, {}
-        self.lock, self.replies, self.cancelled = threading.Lock(), {}, {}
+        self.lock, self.replies, self.cancelled, self.shell = threading.Lock(), {}, {}, None
 
     def send(self, message):
         with self.lock:
@@ -171,8 +201,11 @@ class Server:
         ident, params = message['id'], message.get('params') or {}
         try:text, error = self.tool(params.get('name'), params.get('arguments') or {}, params.get('_meta') or {}, ident), False
         except (Refused, OSError, ValueError, KeyError) as exc:text, error = f'OH: {exc}', True
-        finally:self.cancelled.pop(ident, None)
-        self.send({'id': ident, 'result': {'content': [{'type': 'text', 'text': text}], 'isError': error}})
+        except Exception as exc:text, error = f'OH failed unexpectedly: {exc!r}', True  # never leave a call unanswered
+        cancelled = self.cancelled.pop(ident)
+        # The host gave up on this call (the person interrupted it, or it timed out): it expects no reply.
+        # OH itself was not stopped; `status` shows where it is.
+        if not cancelled.is_set():self.send({'id': ident, 'result': {'content': [{'type': 'text', 'text': text}], 'isError': error}})
 
     def tool(self, name, arguments, meta, ident):
         if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('OH workers cannot use OH\'s tools.')
@@ -183,10 +216,18 @@ class Server:
         if name == 'choose':return self.choose(root, thread, ident)
         return self.oh(root, command(name, arguments, root), thread, meta.get('progressToken'))
 
+    def environment(self, thread):
+        """What an OH command gets in Codex's shell: the person's own shell setup (PATH additions, JAVA_HOME, proxies...),
+        which Codex does not give this server, with Codex's forwarded values on top."""
+        with self.lock:
+            if self.shell is None:self.shell = shell_environment()
+        forwarded = {k: v for k, v in os.environ.items() if k not in self.shell or k in FORWARDED}
+        return {k: v for k, v in self.shell.items() if k != 'OH_CHILD_ATTEMPT'} | forwarded | {'CODEX_THREAD_ID': thread}
+
     def oh(self, root, argv, thread, token):
         """Run one OH command through the plugin's launcher, as the shell would, in the calling conversation.
         OH's progress lines become progress notifications when the host asked for them."""
-        environment = dict(os.environ, CODEX_THREAD_ID=thread)
+        environment = self.environment(thread)
         output, lines = [], []
         with subprocess.Popen([sys.executable, '-I', str(self.launcher), '--root', str(root), *argv], stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, text=True, encoding='utf-8', errors='replace') as process:
