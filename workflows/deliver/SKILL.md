@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Explicit OH workflow through the shared external runner.
+description: Deliver approved design tasks, prepare an approved quick fix, or list ready work through the shared runner.
 ---
 Use the absolute `<plugin>/scripts/oh` entry supplied by the invoking skill. Resolve the
 selected Git checkout. Run `--root <checkout> config`; if unregistered, run `init` once: it
@@ -11,14 +11,25 @@ project checks with `config set checks '<JSON list>'` and tell the user which; n
 existing checks here. No OH files, hooks or settings belong in the product.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
-For already prepared scope, run `--root <checkout> start` to verify the native human
-invocation and execute its batch. For new scope, inspect the agreed work, save a bounded
-JSON manifest under the project's external OH directory, and call `prepare <absolute-path>`.
-Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
-Use explicit simple/standard/complex difficulty with rationale when known. Present the
-scope, the returned `limits` sentence and the trigger once; only a new genuine human invocation grants that prepared
-scope. Never echo the trigger yourself and treat it as approval. For a product with the
-external consumer-v1 profile, `prepare-design <number> [track]` binds its approved design.
+Pass the user's arguments to `--root <checkout> deliver [arguments]`; quote prose as one
+argument. OH's parser selects the mode; do not infer a different workflow:
+
+- No arguments lists ready designs and unavailable designs with their reasons. Show the
+  ready commands and limits. Do not run an older active batch merely because the list is empty.
+- `0005 [track]` verifies the native human invocation and immediately runs the next ready
+  tasks from that approved design. Plans can live in the repository or privately. There is
+  no prepare step or second trigger. Show the resulting checkpoint and limits.
+- Prose returns `quick_fix` with the original intent. Inspect that fix, save a bounded JSON
+  manifest under the project's external OH directory, and call `prepare <absolute-path>`.
+  Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
+  Use simple/standard/complex difficulty with rationale when known. Present the proposed
+  tasks, returned `limits` sentence and exact trigger once. Only a new genuine human
+  invocation approves that prepared scope; never echo the trigger as approval.
+- `request:<id>` verifies and runs the already prepared quick-fix scope. The older
+  `0005 [track] request:<id>` consumer-profile spelling remains supported.
+
+If OH refuses a command, explain its concrete recovery step. Do not reinterpret a refused
+design number as permission for a quick fix, or run a different active design.
 
 The runner owns automatic models, fresh workers, checks, review, final rendering, commits
 and batch boundaries. Do not reproduce that loop in the parent conversation. At a batch

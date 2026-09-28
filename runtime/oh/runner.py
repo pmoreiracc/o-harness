@@ -84,7 +84,9 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     current=reduce(journal.records())
     if current['status'] != 'running':
         raise Refused('The run was stopped or reached a checkpoint; no new attempt started')
-    state=state|{'rendered':current.get('rendered')}  # the reviewer sees what OH wrote for this attempt
+    state=state|{'rendered':current.get('rendered'),'delivery_render':current.get('delivery_render')}  # the reviewer sees what OH wrote for this attempt
+    from .delivery import guard
+    guard(root,state)
     if state.get('plans',{}).get('location')=='private' and blocked_layout(root,current):raise Refused(blocked_layout(root,current))
     print(f"OH task {task['id']}: {role} · {profile['model']} / {profile['effort']}",flush=True)
     attempt_id=identifier();before=tree(root)
@@ -98,11 +100,16 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
       role=role,phase='review' if role=='review' else ('repair' if feedback else 'implementation'),
       host=state['host'],model=profile['model'],effort=profile['effort'])
     directory.mkdir(parents=True,exist_ok=True,mode=0o700)
-    if state.get('plans',{}).get('location')=='private':
+    if state.get('plans',{}).get('location')=='private' or state.get('delivery',{}).get('layout',{}).get('location')=='private':
         from .plans import private_inputs,layout
         data['private_inputs']=private_inputs(layout(root))
     prompt=prompt_for(root,state,task,role,feedback)
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
+    if role=='review' and state.get('delivery',{}).get('layout',{}).get('location')=='private':
+        from .plans import file_identity,digest_of
+        render=state['delivery_render'];candidate=Path(render['candidate'])
+        data['artifact']={'files':{str(candidate):digest_of(candidate)},'identities':{str(candidate):file_identity(candidate)}}
+        prompt+=f'\nReview the code diff AND the proposed private design progress in {candidate}, compared with {render["path"]}. OH publishes this exact candidate only after the code commit.'
     if role=='review' and not committed(state) and (designing(task) or intake(task)) and (state.get('rendered') or {}).get('files'):
         # Private plans: the subject is the files OH wrote outside the repository, bound by their hashes.
         from .plans import changed_text
@@ -143,6 +150,10 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                 'duration_ms':round((time.monotonic()-started)*1000),'usage_observed':False}
     after=tree(root)
     private_changed='private_inputs' in data and private_inputs(layout(root))!=data['private_inputs']
+    delivery_changed=''
+    try:guard(root,state)
+    except Refused as exc:delivery_changed=str(exc)
+    if private_changed and state.get('delivery'):delivery_changed='A worker changed private delivery documents; preserve edits and stop the run'
     if git(root,'rev-parse','HEAD')!=data['head']:
         atomic_json(directory/'result.json',result|{'outcome':'history_changed'},immutable=True)
         journal.append('attempt.finished',{'id':attempt_id,'outcome':'history_changed','summary':'Child changed HEAD; restore the recorded parent before resuming'})
@@ -166,6 +177,9 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                 outcome='failed';result=result|{'text':f'OH could not use the answer: {exc}\n'+result['text']}
         if role=='analysis' and (after!=before or private_changed):
             outcome='analysis_mutated_tree';status(journal,state,'needs_attention')
+    if delivery_changed:
+        outcome='delivery_context_changed';result=result|{'text':delivery_changed+'\n'+result['text']}
+        status(journal,state,'needs_attention')
     # Preserve the full raw result outside the orchestrator context.
     atomic_json(directory/'result.json',result|{'outcome':outcome,'findings':findings,'tree':after},immutable=True)
     record={'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
@@ -191,7 +205,11 @@ def status(journal,state,value):
 def run(root,invoke=hosts.invoke):
     from .controls import settle, Interrupted
     try:
-        _run(root,invoke)
+        import contextlib
+        _,state=load_run(root)
+        from .plans import editing
+        with editing(root) if state.get('delivery') else contextlib.nullcontext():
+            _run(root,invoke)
     except Interrupted:
         pass
     # An exceptional process cleanup must retain STOPPING, never report false success.
@@ -229,6 +247,8 @@ def _run(root,invoke):
         from .config import version
         if version()!=state['harness_version']:
             raise Refused('Resume with the harness revision that owns this run; upgrades cannot change in-flight authority')
+        from .delivery import recover
+        recover(root,state)
         # An interrupted attempt consumes its slot; a restart never silently erases it.
         for pending in [a for a in state['attempts'] if not a['finished']]:
             journal.append('attempt.finished',{'id':pending['id'],'outcome':'interrupted','summary':'Interrupted before durable completion'})
@@ -310,8 +330,12 @@ def _run(root,invoke):
                 with lock(checkout_file(root,'oh-control.lock')):
                     from .controls import check
                     check(root)
-                    from .design_adapter import render
-                    render(root,task)
+                    if state.get('delivery'):
+                        from .delivery import render
+                        render(root,journal,reduce(journal.records()),task)
+                    else:
+                        from .design_adapter import render
+                        render(root,task)
                     journal.append('subject.prepared',{'attempt':work['id'],'tree':tree(root)})
             from .checks import resolve
             # A design in a project without checks has nothing to run: delivery alone requires checks.
@@ -467,6 +491,8 @@ def complete_reviewed(root,journal,state,task,review):
     with lock(checkout_file(root, 'oh-control.lock')):
         state=reduce(journal.records())
         if state['status']!='running':return
+        from .delivery import reviewed
+        reviewed(root,state,review)
         if (designing(task) or intake(task)) and committed(state):
             from .plans import validate_outputs
             validate_outputs(root,state['rendered'])
@@ -540,6 +566,8 @@ def complete_reviewed(root,journal,state,task,review):
                    'propose: '+state['rendered']['lines'][-1][:120] if intake(task) else f"task {task_id}: {task['title']}")
             git(root,'commit','--allow-empty','-m',f"{title}\n\nOH-Run: {state['id']}\nOH-Review: {review['id']}\nOH-Reviewed-Tree: {expected}\nOH-Evidence: {digest(intent['publication'])}")
             if git(root,'rev-parse','HEAD^{tree}')!=expected or git(root,'rev-parse','HEAD^')!=head:raise Refused('Commit hooks changed the reviewed tree or parent')
+        from .delivery import finish
+        finish(root,state,review)
         journal.append('task.completed',{'task':task_id,'commit':git(root,'rev-parse','HEAD'),'tree':expected,'review':review['id'],
             'summary':review['summary'],'evidence':review['evidence']})
         attempts=[a for a in state['attempts'] if a['task']==task_id]
