@@ -2,10 +2,13 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from . import test_workflow as fixtures
@@ -18,24 +21,53 @@ from .storage import Refused
 from .workflow import choose, human_event, load_run, start
 
 
+def clear(folder):
+    """Remove a test folder, including Git's read-only object files on Windows."""
+    shutil.rmtree(folder, onexc=lambda remove, name, _: (os.chmod(name, stat.S_IWRITE), remove(name)))
+
+
 class GateTest(unittest.TestCase):
     setUp_workflow = fixtures.WorkflowTest.setUp
     git = fixtures.WorkflowTest.git
     fake = fixtures.WorkflowTest.fake
 
+    @classmethod
+    def setUpClass(cls):
+        # Every test works in the same folder, so a run started once per host can be copied back to the same paths.
+        cls.work = Path(tempfile.mkdtemp()).resolve();cls.addClassCleanup(clear, cls.work)
+        cls.started = {}
+
     def setUp(self):
-        self.setUp_workflow()
-        self.home = Path(self.temp.name).resolve() / 'home'
+        folder = self.work / 'test'
+        if folder.exists():clear(folder)
+        folder.mkdir()
+        with patch.object(fixtures.tempfile, 'TemporaryDirectory', return_value=SimpleNamespace(name=str(folder), cleanup=lambda: None)):
+            self.setUp_workflow()
+        self.home = folder / 'home'
         patcher = patch('pathlib.Path.home', return_value=self.home);patcher.start();self.addCleanup(patcher.stop)
         self.transcript = self.home / '.claude/projects/p/s.jsonl';self.transcript.parent.mkdir(parents=True)
         self.records = []
         # A menu needs only one finished task and one left: every task a batch runs costs seconds of Git work.
         fixtures.configure(self.root, tasks_per_batch=1);self.tasks = self.tasks[:2]
 
-    def begin(self, host):
+    def begin(self, host, fresh=False):
+        """Start a run owned by conversation `s` and run it to its first menu. The first test per host does the
+        work; later tests get a copy of that project and OH state at the same paths, which is much faster. A test
+        that runs more tasks needs its own run (`fresh`): OH refuses a branch whose Git history was copied."""
+        folder, saved = self.work / 'test', self.work / ('started-' + host)
+        if host in self.started and not fresh:
+            clear(folder);shutil.copytree(saved, folder, symlinks=True)
+            # OH ties a checkout to its folder's file identity, which a copy changes: record the copy's, as reattaching does.
+            from .registry import identity, index_path
+            from .storage import atomic_json, read_json
+            atomic_json(index_path(self.root), read_json(index_path(self.root)) | {'identity': identity(self.root)})
+            return json.loads(self.started[host])
         prompt = 'oh start .oh/tasks.json'
         start(self.root, {'tasks': self.tasks}, human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '1', 'prompt': prompt}, host))
-        return run(self.root, self.fake)
+        result = run(self.root, self.fake)
+        if host not in self.started:
+            shutil.copytree(folder, saved, symlinks=True);type(self).started[host] = json.dumps(result)
+        return result
 
     def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None, extra=None, raw=None, cwd=None, apply=True):
         """Save a question-tool call and the host's answer in the owner's transcript, as Claude does, then run OH."""
@@ -53,7 +85,7 @@ class GateTest(unittest.TestCase):
         return materialize(self.root) if apply else None
 
     def test_checkpoint_offers_its_choices_as_a_menu_that_expires_when_the_run_moves(self):
-        result = self.begin('claude')
+        result = self.begin('claude', fresh=True)
         self.assertEqual(result['gate']['choices'], ['continue', 'pr', 'stop'])
         question = result['gate']['ask']['questions'][0]
         self.assertEqual([o['label'] for o in question['options']], ['Continue', 'Open a PR', 'Stop'])
@@ -88,14 +120,14 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.click(question, 'Continue', use='toolu_10')['status'], 'running')
 
     def test_stop_on_a_finished_run_closes_its_menu(self):
-        question = self.begin('claude')['gate']['ask']['questions'][0]
+        question = self.begin('claude', fresh=True)['gate']['ask']['questions'][0]
         choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))
         question = run(self.root, self.fake)['gate']['ask']['questions'][0]
         after = self.click(question, 'Stop', use='toolu_stop')
         self.assertEqual((after['status'], after.get('gate')), ('stopped', None))
 
     def test_only_the_latest_click_on_the_current_menu_counts(self):
-        question = self.begin('claude')['gate']['ask']['questions'][0]
+        question = self.begin('claude', fresh=True)['gate']['ask']['questions'][0]
         self.records += [
             {'type': 'assistant', 'sessionId': 's', 'cwd': str(self.root), 'message': {'role': 'assistant', 'content': [
                 {'type': 'tool_use', 'id': 'toolu_first', 'name': 'AskUserQuestion', 'input': {'questions': [question]}}]}},
