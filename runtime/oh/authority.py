@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
-from .storage import Refused,atomic_json,digest,git,lock,read_json,state_home
+from .storage import Refused,atomic_json,digest,git,lock,now,read_json,state_home
 
 
 def pending_file(root):return checkout_file(root, 'oh-pending-human.json')
@@ -31,9 +31,9 @@ def stage(root,host,payload):
     locator={'host':host,'payload':payload,'event':event}
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        if path.exists() and read_json(path)!=locator:
+        if path.exists() and {k:v for k,v in read_json(path).items() if k!='staged_at'}!=locator:
             raise Refused('A prior human choice is pending verification; resolve it before another choice')
-        atomic_json(path,locator)
+        if not path.exists():atomic_json(path,locator|{'staged_at':now()})
     return {'pending':True,'message':'Run OH to verify and apply this native human choice'}
 
 
@@ -57,14 +57,14 @@ def latest_click(path,session,root,question):
             except ValueError:continue
             if not isinstance(x,dict) or x.get('isSidechain') or x.get('sessionId')!=session:continue
             if x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk' or x.get('entrypoint')=='sdk-cli':continue
-            if Path(x.get('cwd','')).resolve()!=Path(root).resolve():continue
+            if not Path(x.get('cwd','')).resolve().is_relative_to(Path(root).resolve()):continue  # the agent may cd into subfolders
             content=(x.get('message') or {}).get('content')
             if not isinstance(content,list):continue
             for c in content:
                 if not isinstance(c,dict):continue
                 if x.get('type')=='assistant' and c.get('type')=='tool_use' and c.get('name')=='AskUserQuestion':
-                    request=c.get('input')
-                    if isinstance(request,dict) and 'answers' not in request and request.get('questions')==[question]:
+                    request=c.get('input');raw=(x.get('wireToolInputs') or {}).get(c.get('id'),request)
+                    if request=={'questions':[question]} and raw==request:
                         asked[c.get('id')]=digest(x)
                 elif x.get('type')=='user' and c.get('type')=='tool_result' and c.get('tool_use_id') in asked and not c.get('is_error'):
                     result=x.get('toolUseResult');answers=result.get('answers') if isinstance(result,dict) else None
@@ -76,6 +76,13 @@ def latest_click(path,session,root,question):
     return list(answered.values())[-1] if answered else None
 
 
+def newer(at,than):
+    """Whether transcript time `at` is later than OH time `than`; unknown times never are."""
+    from datetime import datetime
+    try:return datetime.fromisoformat(str(at).replace('Z','+00:00'))>datetime.fromisoformat(str(than).replace('Z','+00:00'))
+    except ValueError:return False
+
+
 @state_writer
 def click(root):
     """Apply the person's click on the menu OH is waiting on, read from the owner's own Claude transcript. Nothing
@@ -85,7 +92,7 @@ def click(root):
     with lock(pending_file(root).with_suffix('.lock')):return _click(root)
 
 
-def _click(root):
+def _click(root,after=None):
     from .gates import apply,ask,describe,pick
     from .storage import project
     from .workflow import load_run
@@ -93,7 +100,7 @@ def _click(root):
     gate=describe(journal,state) if state['host']=='claude' else None
     path=owner_transcript(state['human']) if gate else None
     found=latest_click(path,state['human']['session'],root,ask(gate)['questions'][0]) if path else None
-    if not found:return None
+    if not found or after is not None and not newer(found.get('at'),after):return None
     used=state_home()/'projects'/project(root)['id']/'human-events'/(digest({k:found[k] for k in ('host','session','turn','prompt')})+'.json')
     if used.exists():return None
     try:result=apply(root,found|{'prompt':pick(gate,found['prompt'])},gate['id'])
@@ -163,8 +170,9 @@ def materialize(root):
         locator=read_json(path)
         try:event=attest(locator['host'],locator['payload'],root)
         except Refused:
-            # The person's verified click on the current menu outranks a typed choice that can't be verified yet.
-            result=_click(root)
+            # A verified click made after this typed choice was staged outranks it while it can't be verified;
+            # an older click never displaces a newer typed choice.
+            result=_click(root,after=locator.get('staged_at'))
             if result is None:raise
             path.unlink();return result
         source=digest({k:event[k] for k in ('host','session','turn','prompt')})

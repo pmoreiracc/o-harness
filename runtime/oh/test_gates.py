@@ -34,17 +34,19 @@ class GateTest(unittest.TestCase):
         start(self.root, {'tasks': self.tasks}, human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '1', 'prompt': prompt}, host))
         return run(self.root, self.fake)
 
-    def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None):
+    def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None, extra=None, raw=None, cwd=None, apply=True):
         """Save a question-tool call and the host's answer in the owner's transcript, as Claude does, then run OH."""
-        request = {'questions': questions or [question]} | ({'answers': prefilled} if prefilled is not None else {})
+        from .storage import now
+        request = {'questions': questions or [question]} | ({'answers': prefilled} if prefilled is not None else {}) | (extra or {})
+        where = str(cwd or self.root)
         self.records += [
-            {'type': 'assistant', 'sessionId': session, 'cwd': str(self.root), 'message': {'role': 'assistant', 'content': [
-                {'type': 'tool_use', 'id': use, 'name': 'AskUserQuestion', 'input': request}]}},
-            {'type': 'user', 'sessionId': session, 'cwd': str(self.root), 'timestamp': '2026-09-28T12:00:00Z',
+            {'type': 'assistant', 'sessionId': session, 'cwd': where, **({'wireToolInputs': {use: raw}} if raw else {}),
+             'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': use, 'name': 'AskUserQuestion', 'input': request}]}},
+            {'type': 'user', 'sessionId': session, 'cwd': where, 'timestamp': now(),
              'toolUseResult': {'questions': request['questions'], 'answers': {question['question']: answer}},
              'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': use, 'content': 'answered'}]}}]
         self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
-        return materialize(self.root)
+        return materialize(self.root) if apply else None
 
     def test_checkpoint_offers_its_choices_as_a_menu_that_expires_when_the_run_moves(self):
         result = self.begin('claude')
@@ -70,7 +72,9 @@ class GateTest(unittest.TestCase):
         cases = [('prefilled', {'prefilled': {question['question']: 'Continue'}}),
                  ('another conversation', {'session': 'other'}),
                  ('altered menu', {'questions': [question | {'options': question['options'][:1] + [{'label': 'Stop', 'description': 'x'}]}]}),
-                 ('mixed with another question', {'questions': [question, {'question': 'Also?'}]})]
+                 ('mixed with another question', {'questions': [question, {'question': 'Also?'}]}),
+                 ('extra input', {'extra': {'metadata': {'source': 'model'}}}),
+                 ('raw input differs', {'raw': {'questions': [question], 'answers': {question['question']: 'Continue'}}})]
         for index, (name, change) in enumerate(cases):
             with self.subTest(name):
                 self.assertIsNone(self.click(question, 'Continue', use=f'toolu_{index + 2}', **change))
@@ -97,6 +101,20 @@ class GateTest(unittest.TestCase):
         self.assertIsNone(materialize(self.root))  # the earlier Stop is on an older menu now: nothing re-applies it
         run(self.root, self.fake)
         self.assertEqual(load_run(self.root)[1]['status'], 'completed')
+
+    def test_a_click_counts_from_a_subfolder_of_the_checkout(self):
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        (self.root / 'docs').mkdir()
+        self.assertEqual(self.click(question, 'Continue', cwd=self.root / 'docs')['status'], 'running')
+
+    def test_an_older_click_never_displaces_a_newer_typed_choice(self):
+        from .authority import pending_file, stage
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        self.click(question, 'Continue', apply=False)  # clicked, but OH didn't run yet
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'later', 'prompt': 'stop'})
+        with self.assertRaises(Refused):materialize(self.root)  # the typed stop isn't saved yet: nothing happens
+        self.assertTrue(pending_file(self.root).exists())
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
 
     def test_a_forged_typed_choice_cannot_displace_a_click(self):
         from .authority import stage
