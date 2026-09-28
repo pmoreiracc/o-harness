@@ -35,22 +35,47 @@ def changed_lines(base):
     return lines
 
 
+def names(node):
+    """What a function uses: `self.x`/`cls.x` members and bare names."""
+    return ({n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in ('self', 'cls')}
+            | {n.id for n in ast.walk(node) if isinstance(n, ast.Name)})
+
+
+def spans(node, edits):
+    return bool(edits & set(range(node.lineno, node.end_lineno + 1)))
+
+
+FIXTURES = {'setUp', 'setUpClass', 'tearDown', 'tearDownClass'}
+
+
 def select(base=None):
     changed = changed_lines(base) if base else {}
+    trees = {path.stem: (path.read_text(encoding='utf-8'), ast.parse(path.read_text(encoding='utf-8'))) for path in sorted(TESTS.glob('test_*.py'))}
+    # Changed module-level helpers, by name: any test that uses one, in any module, is affected.
+    shared = {n.name for module, (_, tree) in trees.items() for n in tree.body
+              if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and not n.name.endswith('Test') and spans(n, changed.get(module, set()))}
     chosen = []
-    for path in sorted(TESTS.glob('test_*.py')):
-        module, source = path.stem, path.read_text(encoding='utf-8')
-        edits = changed.get(module, set())
-        for node in ast.parse(source).body:
+    for module, (source, tree) in trees.items():
+        rows = source.splitlines()
+        # Blank and comment-only lines change nothing a test runs.
+        edits = {n for n in changed.get(module, set()) if 0 < n <= len(rows) and rows[n - 1].strip() and not rows[n - 1].strip().startswith('#')}
+        for node in tree.body:
             if not isinstance(node, ast.ClassDef):continue
             methods = [n for n in node.body if isinstance(n, ast.FunctionDef)]
-            tests = [n for n in methods if n.name.startswith('test_')]
-            # A changed helper or fixture can break any test of its class.
-            shared = any(edits & set(range(n.lineno, n.end_lineno + 1)) for n in methods if not n.name.startswith('test_'))
-            for test in tests:
-                body = ast.get_source_segment(source, test)
-                if (module in CORE or shared or PLATFORM.search(body)
-                        or edits & set(range(test.lineno, test.end_lineno + 1))):
+            helpers = {n.name: n for n in methods if not n.name.startswith('test_')}
+            # A changed fixture or class attribute can break every test of the class; a changed helper only the
+            # tests that use it, directly or through another helper.
+            inside = set().union(*(set(range(n.lineno, n.end_lineno + 1)) for n in methods)) if methods else set()
+            whole = bool(FIXTURES & {n for n, h in helpers.items() if spans(h, edits)}) or bool(edits & (set(range(node.lineno, node.end_lineno + 1)) - inside))
+            touched = {n for n, h in helpers.items() if spans(h, edits) or names(h) & shared}
+            while True:
+                more = {n for n, h in helpers.items() if n not in touched and names(h) & touched}
+                if not more:break
+                touched |= more
+            for test in methods:
+                if not test.name.startswith('test_'):continue
+                if (module in CORE or whole or PLATFORM.search(ast.get_source_segment(source, test))
+                        or spans(test, edits) or names(test) & (touched | shared)):
                     chosen.append(f'oh.{module}.{node.name}.{test.name}')
     return chosen
 

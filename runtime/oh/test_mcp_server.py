@@ -127,7 +127,8 @@ class CodexToolsTest(unittest.TestCase):
                      {'id': 2, 'method': 'tools/call', 'params': {'name': 'run', 'arguments': {'root': str(self.root)}} | calling('t1', progressToken='p')}],
                     launcher=self.launcher)
         seen = json.loads([m for m in sent if m.get('method') == 'notifications/progress'][-1]['params']['message'])
-        self.assertEqual(seen, {'shell': 'yes', 'data': os.environ['OH_DATA_HOME']})
+        # Windows passes Codex's environment through, so there is no login shell to read.
+        self.assertEqual(seen, {'shell': None if os.name == 'nt' else 'yes', 'data': os.environ['OH_DATA_HOME']})
 
     def test_the_runner_reports_progress_where_the_server_forwards_it(self):
         import contextlib
