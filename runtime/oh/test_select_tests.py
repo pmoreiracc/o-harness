@@ -16,4 +16,5 @@ class SelectTestsTest(unittest.TestCase):
         self.assertEqual(selector.edited(old, commented), set())
         chosen = selector.select()
         self.assertTrue(set(selector.CORE) <= {t.removeprefix('oh.') for t in chosen})
-        unittest.defaultTestLoader.loadTestsFromNames(chosen)  # an id unittest cannot load raises here
+        loader = unittest.TestLoader();loader.loadTestsFromNames(chosen)
+        self.assertEqual(loader.errors, [])

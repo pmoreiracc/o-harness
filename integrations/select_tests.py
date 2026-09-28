@@ -70,8 +70,10 @@ def select(base=None):
     sys.path.insert(0, str(ROOT / 'runtime'))
     chosen = [f'oh.{m}' for m in sorted(whole)]
     for case in cases(unittest.defaultTestLoader.discover(str(TESTS), 'test_*.py', str(ROOT / 'runtime'))):
+        if isinstance(case, unittest.loader._FailedTest):  # a module that fails to import runs, so its error shows
+            chosen.append(case._testMethodName);continue
         package, _, module = type(case).__module__.rpartition('.')
-        if package != 'oh' or module in whole:continue  # skips unittest's stand-in for a module that failed to import
+        if package != 'oh' or module in whole:continue
         try:source = inspect.getsource(getattr(type(case), case._testMethodName))
         except (OSError, TypeError):continue
         if PLATFORM.search(source):chosen.append(case.id())
