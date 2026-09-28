@@ -67,8 +67,9 @@ A batch has 5 tasks and each task gets up to 3 review rounds by default; change 
 `/oh-config` ([configuration](configuration.md)). If a task still has findings after its review rounds,
 OH pauses and shows the choices. At the end of a batch, choose **continue**, **pr** or
 **stop**. The agent shows the choices as a menu where the host can show one: Claude's
-question menu, or a Codex pop-up. Typing the word always works too, and is the way to choose
-where no menu can be shown, such as `codex exec`. At an approval, pick **Other** in Claude,
+question menu, or a Codex pop-up. Menus were checked in the Claude CLI, desktop app and phone
+(Remote Control), and in the Codex CLI, desktop app and iPhone. Typing the word always works too,
+and is the way to choose where no menu can be shown, such as `codex exec`. At an approval, pick **Other** in Claude,
 or **Refine** in Codex, to say what to change. **pr** lets the agent push the branch and open a pull request with the
 review summary; you merge it.
 
