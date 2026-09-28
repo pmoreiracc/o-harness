@@ -79,6 +79,13 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(Refused):self.click(question, 'Just keep going', use='toolu_9')  # free text is no choice here
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
 
+    def test_stop_on_a_finished_run_closes_its_menu(self):
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))
+        question = run(self.root, self.fake)['gate']['ask']['questions'][0]
+        after = self.click(question, 'Stop', use='toolu_stop')
+        self.assertEqual((after['status'], after.get('gate')), ('stopped', None))
+
     def test_a_click_on_an_older_menu_is_refused(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
         choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))

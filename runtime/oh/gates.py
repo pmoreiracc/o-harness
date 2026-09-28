@@ -101,7 +101,7 @@ def pick(gate, answer):
 @state_writer
 def apply(root, event, gate_id):
     """Carry out a click on the menu `gate_id` after checking it is still the current menu of this run."""
-    from .workflow import _choose, choose, checkpoint, load_run
+    from .workflow import _choose, checkpoint, load_run
     with lock(checkout_file(root, 'oh-control.lock')):
         journal, state = load_run(root)
         if event['host'] != state['host'] or event['session'] != state['human']['session']:
@@ -109,7 +109,7 @@ def apply(root, event, gate_id):
         gate = describe(journal, state)
         if not gate or gate['id'] != gate_id:
             raise Refused('That menu is out of date: the run moved on after it was shown. Run OH `status` and ask again.')
-        choice = event['prompt']
-        if choice != 'stop':_choose(root, choice, event)
-    if choice == 'stop':choose(root, choice, event)
+        # Every menu waits on a run that isn't executing, so Stop is recorded as this person's decision
+        # directly, and a finished run offered Open a PR / Stop closes instead of asking again.
+        _choose(root, event['prompt'], event)
     return checkpoint(root)
