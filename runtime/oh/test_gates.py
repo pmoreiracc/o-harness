@@ -107,14 +107,24 @@ class GateTest(unittest.TestCase):
         self.assertIn('deny', pre('Continue? [OH gate abc]', answers={'Continue? [OH gate abc]': 'Continue'}))
         self.assertEqual(pre('Continue? [OH gate abc]'), '')
         self.assertEqual(pre('Pick a colour', answers={'Pick a colour': 'Red'}), '')
+        payload = {'hook_event_name': 'PreToolUse', 'tool_input': {'questions': [{'question': 'Continue? [OH gate abc]'}, {'question': 'Also?'}]}}
+        self.assertIn('one question on its own', subprocess.run([sys.executable, str(script), 'pre'], input=json.dumps(payload), capture_output=True, text=True).stdout)
 
     def server(self, root, reply, capabilities=None):
-        messages = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18',
-                     'capabilities': {'elicitation': {}} if capabilities is None else capabilities}},
-                    {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'choose', 'arguments': {'root': str(root)}}},
-                    {'jsonrpc': '2.0', 'id': 'oh-menu-1', 'result': reply}]
+        """Play the Codex host: answer the menu the server opens with `reply`."""
         output = io.StringIO()
-        serve(io.StringIO(''.join(json.dumps(m) + '\n' for m in messages)), output)
+        class Host:
+            queue = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18',
+                      'capabilities': {'elicitation': {}} if capabilities is None else capabilities}},
+                     {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'choose', 'arguments': {'root': str(root)}}}]
+            def readline(self):
+                if not self.queue:
+                    opened = [json.loads(line) for line in output.getvalue().splitlines() if 'elicitation/create' in line]
+                    if not opened or getattr(self, 'answered', False):return ''
+                    self.answered = True
+                    self.queue.append({'jsonrpc': '2.0', 'id': opened[-1]['id'], 'result': reply})
+                return json.dumps(self.queue.pop(0)) + '\n'
+        serve(Host(), output)
         sent = [json.loads(line) for line in output.getvalue().splitlines()]
         return sent, next(m for m in sent if m.get('id') == 2)['result']['content'][0]['text']
 
@@ -124,6 +134,8 @@ class GateTest(unittest.TestCase):
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
         self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
         self.assertIn('Recorded', text)
+        self.assertIn(f'Project Fixture · {self.root.resolve()} · run ', asked['params']['message'])  # the person sees the target
+        self.assertIn('Continue runs 1 of the 1 remaining task', asked['params']['message'])
         _, state = load_run(self.root)
         self.assertEqual((state['status'], state['granted'][-1]), ('running', '6'))
 
@@ -140,10 +152,41 @@ class GateTest(unittest.TestCase):
         self.assertIn('belongs to Claude', self.server(self.root, {})[1])
         self.assertIn('absolute path', self.server(Path('project'), {})[1])
 
-    def test_the_menu_server_only_starts_from_the_plugin(self):
-        launcher = HOME / 'plugins/o-harness/scripts/oh'
-        result = subprocess.run([sys.executable, str(launcher), 'gate-server'], capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        self.assertIn('started by Codex', result.stderr)
+    def test_no_oh_command_reaches_the_menu_server(self):
+        from .cli import main
+        for argv in (['gate-server'], ['--', 'gate-server'], ['--root', str(self.root), '--', 'gate-server']):
+            with self.subTest(argv), patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit):main(argv)
+
+    def test_codex_menu_is_never_shown_to_workers_or_by_a_different_runtime(self):
+        self.begin('codex')
+        with patch.dict(os.environ, {'OH_CHILD_ATTEMPT': '1'}):
+            self.assertIn('workers cannot ask', self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})[1])
+        with patch('oh.config.version', return_value='another-revision'):
+            sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})
+        self.assertIn('updated after this run started', text)
+        self.assertFalse(any(m.get('method') == 'elicitation/create' for m in sent))
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        from .hosts import command
+        config = self.home / '.codex/config.toml';config.parent.mkdir(parents=True)
+        config.write_text('[plugins."o-harness@o-harness"]\nenabled = true\n[plugins."other@x"]\nenabled = true\n')
+        with patch('oh.hosts.executable', return_value='codex'):
+            args = command('codex', {'model': 'm', 'effort': 'low'}, self.root, 'implementation', None, 1000)
+        self.assertIn('plugins."o-harness@o-harness".enabled=false', args)
+        self.assertFalse(any('other@x' in a for a in args))
+
+    def test_a_click_that_can_never_verify_is_set_aside_and_typing_still_works(self):
+        from .authority import stage
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        self.records.append({'type': 'assistant', 'sessionId': 's', 'cwd': str(self.root), 'message': {'role': 'assistant', 'content': [
+            {'type': 'tool_use', 'id': 'toolu_two', 'name': 'AskUserQuestion', 'input': {'questions': [question, question | {'question': 'Also?'}]}}]}})
+        self.records.append({'type': 'user', 'sessionId': 's', 'cwd': str(self.root), 'toolUseResult': {'answers': {question['question']: 'Continue', 'Also?': 'Stop'}},
+                             'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_two', 'content': 'x'}]}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
+        stage_click(self.root, 'claude', {'hook_event_name': 'PostToolUse', 'tool_name': 'AskUserQuestion', 'session_id': 's',
+                                          'tool_use_id': 'toolu_two', 'transcript_path': str(self.transcript)})
+        with self.assertRaises(Refused):materialize(self.root)
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 't2', 'prompt': 'stop'})  # not blocked
 
     def test_each_host_gets_its_own_menu_mechanism(self):
         from .installation import build

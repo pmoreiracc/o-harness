@@ -83,7 +83,6 @@ def main(argv=None):
     install=sub.add_parser('setup');install.add_argument('--development',action='store_true');install.add_argument('--if-newer',action='store_true')
     plugin_hook=sub.add_parser('plugin-hook');plugin_hook.add_argument('--host',choices=['codex','claude'],required=True)
     click=sub.add_parser('plugin-click');click.add_argument('--host',choices=['claude'],required=True)
-    sub.add_parser('gate-server')
     launch=sub.add_parser('start');launch.add_argument('request',nargs='?')
     export=sub.add_parser('profile-export');export.add_argument('destination',type=Path)
     imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
@@ -123,9 +122,6 @@ def main(argv=None):
         elif args.command=='plugin-click':
             from .authority import stage_click
             result=stage_click(root,args.host,json.load(sys.stdin))
-        elif args.command=='gate-server':
-            from .gate_server import serve
-            serve(sys.stdin,sys.stdout);return
         elif args.command in ('prepare','prepare-design'):
             from .prepared import prepare
             result=prepare(root,manifest=args.manifest) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)

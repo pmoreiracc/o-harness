@@ -1,9 +1,17 @@
 #!/usr/bin/env -S python3 -I
-"""Codex starts this from the plugin's .mcp.json to show OH's choices as menus. It is not an `oh` command,
-so a host rule that allows `oh` commands never lets a model start it outside its sandbox."""
+"""Codex starts this from the plugin's .mcp.json to show OH's choices as menus. No `oh` command reaches the
+menu server, so a host rule that allows `oh` commands never lets a model start it outside its sandbox."""
+import json
+import os
 from pathlib import Path
-import runpy
 import sys
-launcher=Path(__file__).resolve().with_name('oh')
-sys.argv=[str(launcher),'gate-server']
-runpy.run_path(str(launcher),init_globals={'OH_GATE_SERVER':True},run_name='__main__')
+sys.dont_write_bytecode=True
+home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
+try:revision=json.loads((home/'runtime/active.json').read_bytes())['revision']
+except (OSError,ValueError,KeyError):raise SystemExit('OH is not set up. Run this plugin scripts/oh setup first.')
+core=home/'versions'/str(revision)
+if Path(str(revision)).name!=revision or not (core/'runtime/oh/gate_server.py').is_file():
+    raise SystemExit('Shared OH core is missing. Rebuild/reinstall the plugin, then run setup.')
+sys.path.insert(0,str(core/'runtime'))
+from oh.gate_server import serve
+serve(sys.stdin,sys.stdout)

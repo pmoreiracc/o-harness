@@ -15,7 +15,7 @@ LABELS = {'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committ
           'accept concerns': ('Accept concerns', 'Keep the work as it is; the concerns stay on record.'),
           'route scope': ('File scope issue', 'File the scope findings as an issue and go on.'),
           'accept concerns and route scope': ('Accept and file', 'Accept the concerns and file the scope findings as an issue.')}
-REFINE = 'To change it, pick Other and type what to change.'
+REFINE = {'claude': 'To change it, pick Other and type what to change.', 'codex': 'To change it, pick Refine and say what to change.'}
 
 
 def options(state):
@@ -32,7 +32,7 @@ def options(state):
         return [('pr', ''), ('stop', '')]
     if status == 'approval_checkpoint':
         what = 'the proposal' if state.get('workflow') == 'propose' else 'this plan'
-        return [('approve', f'Accept {what} exactly as reviewed. {REFINE}'), ('reconsider', '')]
+        return [('approve', f'Accept {what} exactly as reviewed. {REFINE[state["host"]]}'), ('reconsider', '')]
     if status == 'review_checkpoint':return [('grant review', ''), ('stop', '')]
     if status == 'needs_attention':
         task = next((t['id'] for t in state['tasks'] if t['id'] not in state['done']), None)

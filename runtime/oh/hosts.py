@@ -154,6 +154,15 @@ def authentication(host,root):
         raise Refused(f'{host}: subscription login could not be confirmed. Sign in with the installed CLI; no API fallback was attempted.')
 
 
+def oh_plugins():
+    """OH's plugin as installed in Codex, under each marketplace that provides it."""
+    import re
+    import tomllib
+    try:plugins=tomllib.loads((Path.home()/'.codex/config.toml').read_text()).get('plugins',{})
+    except (OSError,ValueError):return []
+    return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
+
+
 def command(host,profile,root,role,schema_path,compact_tokens):
     if host=='codex':
         args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
@@ -162,6 +171,8 @@ def command(host,profile,root,role,schema_path,compact_tokens):
           '--config',f'model_auto_compact_token_limit={compact_tokens}',
           '--sandbox','read-only' if role in ('review','analysis') else 'workspace-write',
           '--cd',str(root)]
+        # Workers never load OH itself: its menu server would run outside their sandbox.
+        for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
         if schema_path:args+=['--output-schema',str(schema_path)]
         return args+['-']
     from .storage import state_home

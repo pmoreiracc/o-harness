@@ -12,9 +12,10 @@ request=payload.get('tool_input') if isinstance(payload.get('tool_input'),dict) 
 questions=request.get('questions') if isinstance(request.get('questions'),list) else []
 if not any(isinstance(q,dict) and 'OH gate ' in str(q.get('question','')) for q in questions):raise SystemExit(0)
 if sys.argv[1]=='pre':
-    if 'answers' in request:
-        print(json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny',
-            'permissionDecisionReason':'OH menus take answers only from the person\'s click. Ask again without an answers field.'}}))
+    reason=('OH menus take answers only from the person\'s click. Ask again without an answers field.' if 'answers' in request else
+            'An OH menu is one question on its own. Ask it again exactly as OH gave it.' if len(questions)!=1 else None)
+    if reason:
+        print(json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':reason}}))
     raise SystemExit(0)
 if os.environ.get('OH_CHILD_ATTEMPT'):raise SystemExit(0)
 entry=Path(__file__).resolve().with_name('oh')

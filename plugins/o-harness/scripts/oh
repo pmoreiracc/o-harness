@@ -14,8 +14,6 @@ parser.add_argument('--root',default=os.getcwd())
 options,remaining=parser.parse_known_args()
 command=remaining[0] if remaining else ''
 payload=None  # only a prompt hook reads its payload from stdin
-if command=='gate-server' and not globals().get('OH_GATE_SERVER'):
-    raise SystemExit('OH: the menu server is started by Codex from this plugin, not as an oh command.')
 if command=='setup':
     entry=plugin/'core/oh'
 else:

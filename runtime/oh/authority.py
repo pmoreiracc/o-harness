@@ -9,6 +9,10 @@ import re
 from .storage import Refused,atomic_json,digest,git,lock,read_json,state_home
 
 
+class NotYet(Refused):
+    """The host hasn't saved the turn yet; the same pending choice can be verified later."""
+
+
 def pending_file(root):return checkout_file(root, 'oh-pending-human.json')
 
 
@@ -64,7 +68,7 @@ def attest_click(payload,root=None):
     allowed=(Path.home()/'.claude/projects').resolve()
     path=Path(payload.get('transcript_path') or '').expanduser().resolve()
     if not path.is_relative_to(allowed) or not path.is_file():
-        raise Refused('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
+        raise NotYet('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
     asked=answered=None;hashes=[];at=None
     with path.open('rb') as stream:
         stream.seek(max(0,path.stat().st_size-8*1024*1024))
@@ -87,7 +91,7 @@ def attest_click(payload,root=None):
                 if found[0].get('is_error'):raise Refused('The question was refused before it was shown; ask again')
                 answered=x.get('toolUseResult');at=x.get('timestamp')
             hashes.append(digest(x))
-    if asked is None or answered is None:raise Refused('No saved answer to that menu yet; no choice was made. Retry OH after the host saves it.')
+    if asked is None or answered is None:raise NotYet('No saved answer to that menu yet; no choice was made. Retry OH after the host saves it.')
     request=asked.get('input') if asked.get('name')=='AskUserQuestion' else None
     if not isinstance(request,dict) or 'answers' in request:
         raise Refused('That answer was written by the model, not clicked by the person; nothing was chosen. Ask again.')
@@ -156,7 +160,13 @@ def materialize(root):
         if not path.exists():return None
     with lock(path.with_suffix('.lock')):
         locator=read_json(path);click=locator.get('kind')=='click'
-        event=attest_click(locator['payload'],root) if click else attest(locator['host'],locator['payload'],root)
+        try:event=attest_click(locator['payload'],root) if click else attest(locator['host'],locator['payload'],root)
+        except NotYet:raise
+        except Refused as exc:
+            if not click:raise
+            # A click that can never verify is spent, so it never blocks the next choice.
+            path.unlink()
+            raise Refused(str(exc)+' OH set this click aside; choose again.') from exc
         source=digest({k:event[k] for k in ('host','session','turn','prompt')})
         from .storage import project
         used=state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')

@@ -18,7 +18,7 @@ TOOL = {'name': 'choose', 'title': 'Ask the person to choose',
 
 class Server:
     def __init__(self, stdin, stdout):
-        self.stdin, self.stdout, self.client, self.calls = stdin, stdout, {}, 0
+        self.stdin, self.stdout, self.client = stdin, stdout, {}
 
     def send(self, message):
         self.stdout.write(json.dumps({'jsonrpc': '2.0'} | message) + '\n');self.stdout.flush()
@@ -37,8 +37,7 @@ class Server:
         elif 'id' in message and 'method' in message:self.send({'id': message['id'], 'error': {'code': -32601, 'message': 'Not supported'}})
 
     def elicit(self, message, schema, call):
-        self.calls += 1
-        ident = f'oh-menu-{self.calls}'
+        ident = 'oh-menu-' + identifier()  # unguessable, so only the host can answer this menu
         self.send({'id': ident, 'method': 'elicitation/create', 'params': {'message': message, 'requestedSchema': schema}})
         while True:
             reply = self.receive()
@@ -47,7 +46,11 @@ class Server:
             self.other(reply)
 
     def choose(self, arguments, call):
+        import os
+        from .config import project_name, version
         from .gates import apply, current
+        from .workflow import load_run
+        if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('OH workers cannot ask the person to choose.')
         root = (arguments or {}).get('root')
         if not isinstance(root, str) or not Path(root).is_absolute() or not Path(root).is_dir():
             raise Refused('Pass the absolute path of the project checkout as root.')
@@ -55,8 +58,11 @@ class Server:
         gate = current(root)
         if not gate:return 'No OH choice is waiting in this checkout.'
         if gate['host'] != 'codex':raise Refused('This run belongs to Claude; ask there.')
+        _, state = load_run(root)
         typed = ', '.join(o['choice'] for o in gate['options']) + (', or refine: <what to change>' if gate['words'] else '')
         fallback = f'No choice was made. Ask the person to type one of: {typed}.'
+        if state['harness_version'] != version():
+            return 'OH was updated after this run started, so its menu is not shown. ' + fallback
         if 'elicitation' not in (self.client.get('capabilities') or {}):
             return 'This Codex surface cannot show OH menus. ' + fallback
         menu = gate['options'] + ([{'choice': 'refine', 'label': 'Refine', 'description': ''}] if gate['words'] else [])
@@ -65,7 +71,9 @@ class Server:
         if gate['words']:
             properties['changes'] = {'type': 'string', 'title': 'What to change (only for Refine)'}
         details = '\n'.join(f'- {o["label"]}: {o["description"]}' for o in gate['options'] if o['description'] != o['label'])
-        message = gate['question'].split(' [')[0] + ('\n' + details if details else '')
+        # The person sees which project, checkout and run the click is for: the model picks the root.
+        message = (f"{gate['question'].split(' [')[0]}\nProject {project_name(root)} · {root} · run {state['id'][:8]}"
+                   + ('\n' + details if details else ''))
         reply = self.elicit(message, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
         result = reply.get('result') or {}
         if result.get('action') != 'accept':
@@ -78,8 +86,6 @@ class Server:
             if not isinstance(words, str) or not words.strip():
                 return 'Refine needs what to change; nothing was recorded. Ask the person to type: refine: <what to change>.'
             choice = 'refine: ' + ' '.join(words.split())
-        from .workflow import load_run
-        _, state = load_run(root)
         # Codex does not tell an MCP server which conversation called it: the click binds to this run's
         # own conversation, the menu it answered and the host.
         event = {'host': 'codex', 'session': state['human']['session'], 'turn': 'menu-' + identifier(),
