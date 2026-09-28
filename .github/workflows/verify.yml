@@ -4,10 +4,15 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # The full Windows suite is slow: it runs nightly and on demand, and a release waits for it.
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
   checks:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
@@ -26,8 +31,9 @@ jobs:
           node-version: '22.18.0'
       - run: bash integrations/test.sh "${{ matrix.suite }}"
   windows:
+    if: github.event_name != 'push'
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 10 || 60 }}
     defaults:
       run:
         shell: bash
@@ -43,4 +49,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18.0'
-      - run: bash integrations/test.sh native
+      # A pull request runs the tests that can break on Windows; nightly and on demand, all of them.
+      - run: bash integrations/test.sh ${{ github.event_name == 'pull_request' && 'windows' || 'native' }}
