@@ -1,0 +1,63 @@
+name: full suite
+# Every test on Linux and Windows: nightly at 04:00 Brasília time (07:00 UTC) on main, and on demand.
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Which tests to run
+        type: choice
+        default: all
+        options: [all, linux, windows, windows-pr-set, syntax]
+      only:
+        description: Optional name pattern, e.g. gates or test_crlf (runs only matching tests; ignored by syntax)
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  linux:
+    if: contains(fromJSON('["all","linux"]'), inputs.suite || 'all')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: bash integrations/test.sh native ${{ inputs.only && format('-k "{0}"', inputs.only) || '' }}
+  syntax:
+    if: contains(fromJSON('["all","syntax"]'), inputs.suite || 'all')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - run: bash integrations/test.sh syntax
+  windows:
+    if: contains(fromJSON('["all","windows","windows-pr-set"]'), inputs.suite || 'all')
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # OH verifies exact bytes; keep the checkout and test repositories free of CRLF conversion.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: bash integrations/test.sh ${{ inputs.suite == 'windows-pr-set' && 'windows origin/main' || 'native' }} ${{ inputs.only && format('-k "{0}"', inputs.only) || '' }}
