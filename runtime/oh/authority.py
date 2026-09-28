@@ -92,17 +92,28 @@ def click(root):
     with lock(pending_file(root).with_suffix('.lock')):return _click(root)
 
 
-def _click(root,after=None):
-    from .gates import apply,ask,describe,pick
-    from .storage import project
+def candidate(root):
+    """The person's latest click on the menu this run waits on, with that menu, or None. Nothing is applied."""
+    from .gates import ask,describe
     from .workflow import load_run
     journal,state=load_run(root)
     gate=describe(journal,state) if state['host']=='claude' else None
     path=owner_transcript(state['human']) if gate else None
     found=latest_click(path,state['human']['session'],root,ask(gate)['questions'][0]) if path else None
-    if not found or after is not None and not newer(found.get('at'),after):return None
-    used=state_home()/'projects'/project(root)['id']/'human-events'/(digest({k:found[k] for k in ('host','session','turn','prompt')})+'.json')
-    if used.exists():return None
+    if not found or used_file(root,found).exists():return None
+    return gate,found,path
+
+
+def used_file(root,event):
+    from .storage import project
+    return state_home()/'projects'/project(root)['id']/'human-events'/(digest({k:event[k] for k in ('host','session','turn','prompt')})+'.json')
+
+
+def _click(root,chosen=None):
+    from .gates import apply,pick
+    chosen=chosen or candidate(root)
+    if not chosen:return None
+    gate,found,_=chosen;used=used_file(root,found)
     try:result=apply(root,found|{'prompt':pick(gate,found['prompt'])},gate['id'])
     except Refused as exc:
         # Said once; the same click is then set aside, so it never blocks the next one.
@@ -110,6 +121,18 @@ def _click(root,after=None):
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
     return result
+
+
+def saved_after(path,session,moment):
+    """Whether the owner's transcript already holds a record of this session saved after `moment`: a typed turn
+    staged at `moment` and still missing then can no longer verify."""
+    with path.open('rb') as stream:
+        stream.seek(max(0,path.stat().st_size-1024*1024))
+        for line in stream:
+            try:x=json.loads(line)
+            except ValueError:continue
+            if isinstance(x,dict) and x.get('sessionId')==session and newer(x.get('timestamp'),moment):return True
+    return False
 
 
 def attest(host,payload,root=None):
@@ -133,7 +156,7 @@ def attest(host,payload,root=None):
             if host=='codex':
                 if x.get('type')=='session_meta':
                     session=p.get('id');source=p.get('source')
-                    if root is not None and Path(p.get('cwd','')).resolve()!=Path(root).resolve():raise Refused('Human turn belongs to another project checkout')
+                    if root is not None and not Path(p.get('cwd','')).resolve().is_relative_to(Path(root).resolve()):raise Refused('Human turn belongs to another project checkout')
                 if p.get('type')=='task_started':turn=p.get('turn_id')
                 # exec/subagent input is model-delegated work, not a new human grant.
                 if isinstance(source,dict) or source in ('exec','subagent'):continue
@@ -146,7 +169,7 @@ def attest(host,payload,root=None):
             else:
                 if x.get('type')!='user' or x.get('isSidechain') or x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk' or x.get('entrypoint')=='sdk-cli':continue
                 if x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
-                if root is not None and Path(x.get('cwd','')).resolve()!=Path(root).resolve():raise Refused('Human turn belongs to another project checkout')
+                if root is not None and not Path(x.get('cwd','')).resolve().is_relative_to(Path(root).resolve()):raise Refused('Human turn belongs to another project checkout')
                 message=x.get('message',{})
                 if message.get('role')!='user':continue
                 text=message.get('content')
@@ -162,26 +185,34 @@ def attest(host,payload,root=None):
 
 @state_writer
 def materialize(root):
+    from .workflow import active_file
     path=pending_file(root)
     if not path.exists():
         desktop_pending(root)
         if not path.exists():return click(root)
     with lock(path.with_suffix('.lock')):
         locator=read_json(path)
+        # The person's latest answer wins, typed or clicked, by the host's own transcript times.
+        chosen=candidate(root) if active_file(root).exists() else None
         try:event=attest(locator['host'],locator['payload'],root)
         except Refused:
-            # A verified click made after this typed choice was staged outranks it while it can't be verified;
-            # an older click never displaces a newer typed choice.
-            result=_click(root,after=locator.get('staged_at'))
-            if result is None:raise
-            path.unlink();return result
-        source=digest({k:event[k] for k in ('host','session','turn','prompt')})
-        from .storage import project
-        used=state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')
+            if not chosen:raise
+            from datetime import datetime,timezone
+            staged=locator.get('staged_at') or datetime.fromtimestamp(path.stat().st_mtime,timezone.utc).isoformat()
+            # A click made after this typed choice was staged wins; so does any click once the typed turn can no
+            # longer verify (the transcript has moved past it). An older click never displaces a typed choice
+            # the host is still saving.
+            if not newer(chosen[1].get('at'),staged) and not saved_after(chosen[2],chosen[1]['session'],staged):raise
+            path.unlink();return _click(root,chosen)
+        used=used_file(root,event)
         if used.exists():
             path.unlink();record=read_json(used)
             if 'refused' in record:raise Refused(record['refused'])
             return record['result']
+        if chosen and newer(chosen[1].get('at'),event.get('at')):
+            # Clicked after typing: the typed turn is spent without effect.
+            atomic_json(used,{'source':event,'refused':'Superseded by a later click on the same menu.'},immutable=True)
+            path.unlink();return _click(root,chosen)
         from .cli import host_hook
         try:
             result=host_hook(root,locator['host'],locator['payload'],verified=event)
@@ -198,7 +229,7 @@ def materialize(root):
         refusal_file(root).unlink(missing_ok=True)
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
-        from .workflow import active_file,load_run
+        from .workflow import load_run
         if active_file(root).exists():
             _,run=load_run(root)
             if run['status']=='running':register(root,locator['host'],locator['payload']|{'transcript_path':event['transcript_path']},run['id'],run['project'])

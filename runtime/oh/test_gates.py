@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from . import test_workflow as fixtures
@@ -37,6 +38,7 @@ class GateTest(unittest.TestCase):
     def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None, extra=None, raw=None, cwd=None, apply=True):
         """Save a question-tool call and the host's answer in the owner's transcript, as Claude does, then run OH."""
         from .storage import now
+        time.sleep(0.01)  # a person answers later than OH's own records, never within the same millisecond
         request = {'questions': questions or [question]} | ({'answers': prefilled} if prefilled is not None else {}) | (extra or {})
         where = str(cwd or self.root)
         self.records += [
@@ -115,6 +117,52 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(Refused):materialize(self.root)  # the typed stop isn't saved yet: nothing happens
         self.assertTrue(pending_file(self.root).exists())
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+
+    def typed(self, prompt, turn, cwd=None, save=True):
+        """The person types a choice: the prompt hook stages it, and Claude saves the turn."""
+        from .authority import stage
+        from .storage import now
+        time.sleep(0.01)
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': turn, 'prompt': prompt,
+                                    'transcript_path': str(self.transcript)})
+        if save:
+            self.records.append({'type': 'user', 'sessionId': 's', 'promptId': turn, 'cwd': str(cwd or self.root), 'timestamp': now(),
+                                 'message': {'role': 'user', 'content': prompt}})
+            self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
+
+    def activity(self):
+        """Claude saves something later in the conversation, such as the agent's next tool call."""
+        from .storage import now
+        self.records.append({'type': 'assistant', 'sessionId': 's', 'cwd': str(self.root), 'timestamp': now(), 'message': {'role': 'assistant', 'content': []}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
+
+    def test_the_latest_answer_wins_typed_or_clicked(self):
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        self.typed('continue', 'typed-1')
+        self.assertEqual(self.click(question, 'Stop', use='toolu_later')['status'], 'stopped')  # the click came after the typing
+        self.assertIsNone(materialize(self.root))  # the typed continue is spent, never replayed
+
+    def test_a_typed_choice_after_a_click_wins(self):
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        self.click(question, 'Stop', apply=False)
+        self.typed('continue', 'typed-2')
+        self.assertEqual(materialize(self.root)['status'], 'running')
+
+    def test_a_typed_choice_that_can_no_longer_verify_never_holds_up_a_click(self):
+        from .authority import pending_file
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        self.click(question, 'Stop', apply=False)
+        self.typed('continue', 'forged', save=False)  # staged after the click, never saved
+        with self.assertRaises(Refused):materialize(self.root)  # Claude might still be saving it
+        self.activity()  # the conversation moved on without it: it can't verify any more
+        self.assertEqual(materialize(self.root)['status'], 'stopped')
+        self.assertFalse(pending_file(self.root).exists())
+
+    def test_a_typed_choice_from_a_subfolder_verifies(self):
+        self.begin('claude')
+        (self.root / 'docs').mkdir()
+        self.typed('continue', 'typed-3', cwd=self.root / 'docs')
+        self.assertEqual(materialize(self.root)['status'], 'running')
 
     def test_a_forged_typed_choice_cannot_displace_a_click(self):
         from .authority import stage
