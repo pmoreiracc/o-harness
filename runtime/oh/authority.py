@@ -31,9 +31,9 @@ def stage(root,host,payload):
     locator={'host':host,'payload':payload,'event':event}
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        if path.exists() and {k:v for k,v in read_json(path).items() if k!='staged_at'}!=locator:
+        if path.exists() and read_json(path)!=locator:
             raise Refused('A prior human choice is pending verification; resolve it before another choice')
-        if not path.exists():atomic_json(path,locator|{'staged_at':now()})
+        atomic_json(path,locator)
     return {'pending':True,'message':'Run OH to verify and apply this native human choice'}
 
 
@@ -46,62 +46,62 @@ def owner_transcript(human):
     return paths[0]
 
 
-def latest_click(path,session,root,question):
-    """The person's latest answer to exactly this menu in the owner's transcript: the model's question-tool call
-    (without answers of its own) and the answer the host returned for it. None when there is no such click."""
-    asked={};answered={}
+def within(cwd,root):
+    """Whether a saved working folder is this checkout or one of its folders, not a checkout nested inside it."""
+    cwd=Path(cwd or '').resolve();root=Path(root).resolve()
+    if not cwd.is_relative_to(root):return False
+    return not any((folder/'.git').exists() for folder in [cwd,*cwd.parents] if folder!=root and folder.is_relative_to(root))
+
+
+def human(x):
+    """A record the person produced, not another agent, a notification or an SDK caller."""
+    origin=x.get('origin') if isinstance(x.get('origin'),dict) else {}
+    return (not x.get('isSidechain') and not x.get('isMeta') and origin.get('kind') in (None,'human')
+            and x.get('turnOrigin') in (None,'human') and x.get('promptSource') not in ('sdk','system') and x.get('entrypoint')!='sdk-cli')
+
+
+def latest_answer(path,session,root,question,since):
+    """The person's single latest answer to the current menu in the owner's transcript: a click on exactly this
+    menu (the model's question-tool call without answers of its own, and the answer the host returned), or a
+    choice they typed after the menu appeared. None when there is none."""
+    from .entry import command
+    asked={};latest=None
     with path.open('rb') as stream:
         stream.seek(max(0,path.stat().st_size-8*1024*1024))
         for line in stream:
             try:x=json.loads(line)
             except ValueError:continue
-            if not isinstance(x,dict) or x.get('isSidechain') or x.get('sessionId')!=session:continue
-            if x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk' or x.get('entrypoint')=='sdk-cli':continue
-            if not Path(x.get('cwd','')).resolve().is_relative_to(Path(root).resolve()):continue  # the agent may cd into subfolders
+            if not isinstance(x,dict) or x.get('sessionId')!=session or not human(x):continue
+            if not within(x.get('cwd'),root):continue  # the agent may cd into the checkout's folders
             content=(x.get('message') or {}).get('content')
+            if x.get('type')=='user' and (isinstance(content,str) or isinstance(content,list) and content and all(isinstance(c,dict) and c.get('type')=='text' for c in content)):
+                text=(content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content)).strip()
+                parsed=command(text)
+                if parsed and parsed[0]=='choice' and x.get('promptId') and newer(x.get('timestamp'),since):
+                    latest={'host':'claude','session':session,'turn':x['promptId'],'prompt':text,'via':'typed',
+                        'at':x.get('timestamp'),'record_hashes':[digest(x)],'transcript_path':str(path)}
+                continue
             if not isinstance(content,list):continue
             for c in content:
                 if not isinstance(c,dict):continue
                 if x.get('type')=='assistant' and c.get('type')=='tool_use' and c.get('name')=='AskUserQuestion':
                     request=c.get('input');raw=(x.get('wireToolInputs') or {}).get(c.get('id'),request)
-                    if request=={'questions':[question]} and raw==request:
-                        asked[c.get('id')]=digest(x)
+                    if request=={'questions':[question]} and raw==request:asked[c.get('id')]=digest(x)
                 elif x.get('type')=='user' and c.get('type')=='tool_result' and c.get('tool_use_id') in asked and not c.get('is_error'):
                     result=x.get('toolUseResult');answers=result.get('answers') if isinstance(result,dict) else None
                     answer=answers.get(question['question']) if isinstance(answers,dict) else None
                     if isinstance(answer,str):
-                        use=c['tool_use_id'];answered.pop(use,None)
-                        answered[use]={'host':'claude','session':session,'turn':use,'prompt':answer,'via':'question',
+                        use=c['tool_use_id']
+                        latest={'host':'claude','session':session,'turn':use,'prompt':answer,'via':'question',
                             'at':x.get('timestamp'),'record_hashes':sorted({asked[use],digest(x)}),'transcript_path':str(path)}
-    return list(answered.values())[-1] if answered else None
+    return latest
 
 
 def newer(at,than):
-    """Whether transcript time `at` is later than OH time `than`; unknown times never are."""
+    """Whether time `at` is later than `than`; unknown times never are."""
     from datetime import datetime
     try:return datetime.fromisoformat(str(at).replace('Z','+00:00'))>datetime.fromisoformat(str(than).replace('Z','+00:00'))
-    except ValueError:return False
-
-
-@state_writer
-def click(root):
-    """Apply the person's click on the menu OH is waiting on, read from the owner's own Claude transcript. Nothing
-    is staged, so no other conversation, forged hook call or older click can stand in for it."""
-    from .workflow import active_file
-    if not active_file(root).exists():return None
-    with lock(pending_file(root).with_suffix('.lock')):return _click(root)
-
-
-def candidate(root):
-    """The person's latest click on the menu this run waits on, with that menu, or None. Nothing is applied."""
-    from .gates import ask,describe
-    from .workflow import load_run
-    journal,state=load_run(root)
-    gate=describe(journal,state) if state['host']=='claude' else None
-    path=owner_transcript(state['human']) if gate else None
-    found=latest_click(path,state['human']['session'],root,ask(gate)['questions'][0]) if path else None
-    if not found or used_file(root,found).exists():return None
-    return gate,found,path
+    except (ValueError,TypeError):return False
 
 
 def used_file(root,event):
@@ -109,30 +109,38 @@ def used_file(root,event):
     return state_home()/'projects'/project(root)['id']/'human-events'/(digest({k:event[k] for k in ('host','session','turn','prompt')})+'.json')
 
 
-def _click(root,chosen=None):
-    from .gates import apply,pick
-    chosen=chosen or candidate(root)
-    if not chosen:return None
-    gate,found,_=chosen;used=used_file(root,found)
-    try:result=apply(root,found|{'prompt':pick(gate,found['prompt'])},gate['id'])
+def menu_waiting(root):
+    """The menu a Claude run waits on, with the run, or None."""
+    from .gates import describe
+    from .workflow import active_file,load_run
+    if not active_file(root).exists():return None
+    journal,state=load_run(root)
+    gate=describe(journal,state) if state['host']=='claude' else None
+    return (gate,state,journal.records()[-1]['at']) if gate else None
+
+
+def answer(root):
+    """Apply the person's latest answer to the menu the run waits on, read from the owner's own transcript.
+    Only that single latest answer counts: once it is applied or refused, no earlier answer can take its place,
+    and applying it moves the menu on so every earlier answer is out of date."""
+    from .gates import apply,ask,pick
+    waiting=menu_waiting(root)
+    if not waiting:return None
+    gate,state,since=waiting
+    path=owner_transcript(state['human'])
+    found=latest_answer(path,state['human']['session'],root,ask(gate)['questions'][0],since) if path else None
+    if not found:return None
+    used=used_file(root,found)
+    if used.exists():return None
+    try:
+        choice=pick(gate,found['prompt']) if found['via']=='question' else found['prompt']
+        result=apply(root,found|{'prompt':choice},gate['id'])
     except Refused as exc:
-        # Said once; the same click is then set aside, so it never blocks the next one.
+        # Said once; this answer is then spent, and it stays the latest, so nothing older applies instead.
         atomic_json(used,{'source':found,'refused':str(exc)},immutable=True)
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
     return result
-
-
-def saved_after(path,session,moment):
-    """Whether the owner's transcript already holds a record of this session saved after `moment`: a typed turn
-    staged at `moment` and still missing then can no longer verify."""
-    with path.open('rb') as stream:
-        stream.seek(max(0,path.stat().st_size-1024*1024))
-        for line in stream:
-            try:x=json.loads(line)
-            except ValueError:continue
-            if isinstance(x,dict) and x.get('sessionId')==session and newer(x.get('timestamp'),moment):return True
-    return False
 
 
 def attest(host,payload,root=None):
@@ -156,7 +164,7 @@ def attest(host,payload,root=None):
             if host=='codex':
                 if x.get('type')=='session_meta':
                     session=p.get('id');source=p.get('source')
-                    if root is not None and not Path(p.get('cwd','')).resolve().is_relative_to(Path(root).resolve()):raise Refused('Human turn belongs to another project checkout')
+                    if root is not None and not within(p.get('cwd'),root):raise Refused('Human turn belongs to another project checkout')
                 if p.get('type')=='task_started':turn=p.get('turn_id')
                 # exec/subagent input is model-delegated work, not a new human grant.
                 if isinstance(source,dict) or source in ('exec','subagent'):continue
@@ -169,7 +177,7 @@ def attest(host,payload,root=None):
             else:
                 if x.get('type')!='user' or x.get('isSidechain') or x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk' or x.get('entrypoint')=='sdk-cli':continue
                 if x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
-                if root is not None and not Path(x.get('cwd','')).resolve().is_relative_to(Path(root).resolve()):raise Refused('Human turn belongs to another project checkout')
+                if root is not None and not within(x.get('cwd'),root):raise Refused('Human turn belongs to another project checkout')
                 message=x.get('message',{})
                 if message.get('role')!='user':continue
                 text=message.get('content')
@@ -187,32 +195,22 @@ def attest(host,payload,root=None):
 def materialize(root):
     from .workflow import active_file
     path=pending_file(root)
-    if not path.exists():
-        desktop_pending(root)
-        if not path.exists():return click(root)
+    if not path.exists():desktop_pending(root)  # stages under the same lock, so before taking it
     with lock(path.with_suffix('.lock')):
-        locator=read_json(path)
-        # The person's latest answer wins, typed or clicked, by the host's own transcript times.
-        chosen=candidate(root) if active_file(root).exists() else None
-        try:event=attest(locator['host'],locator['payload'],root)
-        except Refused:
-            if not chosen:raise
-            from datetime import datetime,timezone
-            staged=locator.get('staged_at') or datetime.fromtimestamp(path.stat().st_mtime,timezone.utc).isoformat()
-            # A click made after this typed choice was staged wins; so does any click once the typed turn can no
-            # longer verify (the transcript has moved past it). An older click never displaces a typed choice
-            # the host is still saving.
-            if not newer(chosen[1].get('at'),staged) and not saved_after(chosen[2],chosen[1]['session'],staged):raise
-            path.unlink();return _click(root,chosen)
+        if path.exists() and bare_choice(read_json(path)) and menu_waiting(root):
+            # A menu answer typed in Claude is read from the transcript like a click, so the person's latest
+            # answer wins whichever way they gave it; the hook's locator only said that one was typed. Wait
+            # while Claude may still be saving that turn, so an older click never wins over it.
+            if not settled(root,read_json(path),path):
+                raise Refused('Your typed choice is not saved in the conversation yet; run OH again in a moment')
+            path.unlink()
+        if not path.exists():return answer(root)
+        locator=read_json(path);event=attest(locator['host'],locator['payload'],root)
         used=used_file(root,event)
         if used.exists():
             path.unlink();record=read_json(used)
             if 'refused' in record:raise Refused(record['refused'])
             return record['result']
-        if chosen and newer(chosen[1].get('at'),event.get('at')):
-            # Clicked after typing: the typed turn is spent without effect.
-            atomic_json(used,{'source':event,'refused':'Superseded by a later click on the same menu.'},immutable=True)
-            path.unlink();return _click(root,chosen)
         from .cli import host_hook
         try:
             result=host_hook(root,locator['host'],locator['payload'],verified=event)
@@ -235,6 +233,50 @@ def materialize(root):
             if run['status']=='running':register(root,locator['host'],locator['payload']|{'transcript_path':event['transcript_path']},run['id'],run['project'])
         path.unlink()
         return result
+
+
+def bare_choice(locator,host='claude'):
+    """A typed menu word (continue, approve, refine: ...), not a command."""
+    from .entry import command
+    parsed=command((locator.get('event') or {}).get('prompt'))
+    return locator.get('host')==host and bool(parsed) and parsed[0]=='choice'
+
+
+def settled(root,locator,path):
+    """Whether the owner's transcript already holds this typed turn, or has moved past the moment it was staged
+    without it (then it never will)."""
+    from datetime import datetime,timezone
+    _,state,_=menu_waiting(root)
+    transcript=owner_transcript(state['human'])
+    if not transcript:return True
+    staged=datetime.fromtimestamp(path.stat().st_mtime,timezone.utc).isoformat()
+    turn=locator['event'].get('turn');session=state['human']['session']
+    with transcript.open('rb') as stream:
+        stream.seek(max(0,transcript.stat().st_size-8*1024*1024))
+        for line in stream:
+            try:x=json.loads(line)
+            except ValueError:continue
+            if isinstance(x,dict) and x.get('sessionId')==session and (x.get('promptId')==turn or newer(x.get('timestamp'),staged)):return True
+    return False
+
+
+def typed_choice(root,host):
+    """The typed menu word waiting to be verified in this checkout, if any."""
+    path=pending_file(root)
+    try:locator=read_json(path)
+    except FileNotFoundError:return None
+    return locator if bare_choice(locator,host) else None
+
+
+def supersede(root,host):
+    """A click made after a typed menu word spends that word: the person's latest answer wins."""
+    path=pending_file(root)
+    with lock(path.with_suffix('.lock')):
+        locator=typed_choice(root,host)
+        if not locator:return
+        used=used_file(root,locator['event'])
+        if not used.exists():atomic_json(used,{'source':locator['event'],'refused':'Superseded by a later click on the same menu.'},immutable=True)
+        path.unlink()
 
 
 def desktop_pending(root):

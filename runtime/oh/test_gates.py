@@ -158,6 +158,23 @@ class GateTest(unittest.TestCase):
         self.assertEqual(materialize(self.root)['status'], 'stopped')
         self.assertFalse(pending_file(self.root).exists())
 
+    def test_a_refused_latest_answer_never_lets_an_older_one_apply(self):
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        self.click(question, 'Continue', apply=False)
+        self.typed('retry', 'typed-4')  # the person's latest answer, which this checkpoint refuses
+        with self.assertRaises(Refused):materialize(self.root)
+        self.assertIsNone(materialize(self.root))  # the older Continue click never takes its place
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+
+    def test_answers_from_a_checkout_nested_inside_do_not_count(self):
+        from .authority import within
+        self.begin('claude')
+        nested = self.root / '.claude/worktrees/other';nested.mkdir(parents=True);(nested / '.git').write_text('gitdir: elsewhere')
+        self.assertFalse(within(nested, self.root));self.assertTrue(within(self.root / 'docs', self.root))
+        self.typed('continue', 'typed-5', cwd=nested)
+        self.assertIsNone(materialize(self.root))
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+
     def test_a_typed_choice_from_a_subfolder_verifies(self):
         self.begin('claude')
         (self.root / 'docs').mkdir()
@@ -190,7 +207,7 @@ class GateTest(unittest.TestCase):
         payload = {'hook_event_name': 'PreToolUse', 'tool_input': {'questions': [{'question': 'Continue? [OH gate abc]'}, {'question': 'Also?'}]}}
         self.assertIn('one question on its own', subprocess.run([sys.executable, str(script), 'pre'], input=json.dumps(payload), capture_output=True, text=True).stdout)
 
-    def server(self, root, reply, capabilities=None):
+    def server(self, root, reply, capabilities=None, while_open=None):
         """Play the Codex host: answer the menu the server opens with `reply`."""
         output = io.StringIO()
         class Host:
@@ -202,6 +219,7 @@ class GateTest(unittest.TestCase):
                     opened = [json.loads(line) for line in output.getvalue().splitlines() if 'elicitation/create' in line]
                     if not opened or getattr(self, 'answered', False):return ''
                     self.answered = True
+                    if while_open:while_open()
                     self.queue.append({'jsonrpc': '2.0', 'id': opened[-1]['id'], 'result': reply})
                 return json.dumps(self.queue.pop(0)) + '\n'
         serve(Host(), output)
@@ -218,6 +236,19 @@ class GateTest(unittest.TestCase):
         self.assertIn('Continue runs 1 of the 1 remaining task', asked['params']['message'])
         _, state = load_run(self.root)
         self.assertEqual((state['status'], state['granted'][-1]), ('running', '6'))
+
+    def test_codex_latest_answer_wins_between_typing_and_the_menu(self):
+        from .authority import pending_file, stage
+        self.begin('codex')
+        typed = {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': 't1', 'prompt': 'stop'}
+        stage(self.root, 'codex', typed)
+        self.assertIn('already typed a choice', self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})[1])
+        pending_file(self.root).unlink()
+        sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}},
+                                 while_open=lambda: stage(self.root, 'codex', typed | {'turn_id': 't2'}))
+        self.assertIn('Recorded', text)  # typed while the menu was open, so older than the click
+        self.assertFalse(pending_file(self.root).exists())
+        self.assertEqual(load_run(self.root)[1]['status'], 'running')
 
     def test_codex_menu_falls_back_to_typing_when_it_cannot_be_shown(self):
         self.begin('codex')

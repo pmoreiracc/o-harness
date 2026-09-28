@@ -61,6 +61,9 @@ class Server:
         _, state = load_run(root)
         typed = ', '.join(o['choice'] for o in gate['options']) + (', or refine: <what to change>' if gate['words'] else '')
         fallback = f'No choice was made. Ask the person to type one of: {typed}.'
+        from .authority import supersede, typed_choice
+        if typed_choice(root, 'codex'):
+            return 'The person already typed a choice; run OH `run` to apply it instead of asking again.'
         if state['harness_version'] != version():
             return 'OH was updated after this run started, so its menu is not shown. ' + fallback
         if 'elicitation' not in (self.client.get('capabilities') or {}):
@@ -90,6 +93,7 @@ class Server:
         # own conversation, the menu it answered and the host.
         event = {'host': 'codex', 'session': state['human']['session'], 'turn': 'menu-' + identifier(),
                  'prompt': choice, 'via': 'elicitation', 'at': now()}
+        supersede(root, 'codex')  # anything typed while the menu was open is older than this click
         after = apply(root, event, gate['id'])
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
         return f'Recorded the person\'s choice: {label}. Run OH `run` to carry it out. Status now: {after["status"]}.'
