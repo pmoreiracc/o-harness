@@ -2,8 +2,14 @@
 name: design
 description: Write the design doc for one roadmap initiative through the shared runner.
 ---
-Use the absolute `<plugin>/scripts/oh` entry supplied by the invoking skill. Resolve the
-selected Git checkout. Run `--root <checkout> config`; if unregistered, run `init` once: it
+How to run OH commands, such as `config`, `init`, `deliver` or `run`: in Codex, call the o-harness tool of
+that name (use `prepare_design` and `pr_summary` for the hyphenated ones) with the checkout's absolute path as
+`root`; never run OH from Codex's shell, which cannot write OH's state. In Claude, run the absolute
+`<plugin>/scripts/oh` entry supplied by the invoking skill as `<plugin>/scripts/oh --root <checkout> <command>`.
+Changing settings (`config set`, `config unset`) is never a tool: run it with `<plugin>/scripts/oh` on either
+host, so the person approves it.
+
+Resolve the selected Git checkout. Run `config`; if unregistered, run `init` once: it
 joins the project of the same repository, or names a new one after the repository (pass
 `--name` only when the user asks for another name, or when `config` or `init` says the name is
 taken or ambiguous; then ask the user which name to use). Existing project checks run when
@@ -13,13 +19,13 @@ The argument is one roadmap slug, such as `/oh-design auth`. Without one, read t
 that `plans path` names and list the initiatives that have no design yet, or say new work
 starts with `/oh-propose`; never pick one yourself.
 
-Run `--root <checkout> plans path`. If it says to choose where plans live, ask the user once:
+Run `plans path`. If it says to choose where plans live, ask the user once:
 in the repository (recommended: the design is reviewed and approved through a pull request)
 or private (OH's folder, nothing in the repository). Save the answer with
 `config set plans.location repo` or `private`. Private plans default to `~/oh-plans/<project name>/`.
 Show the exact folder from `plans path`; `plans.private_folder` changes its parent.
 
-Run `--root <checkout> run`. It verifies the native human invocation and starts the design
+Run `run`. It verifies the native human invocation and starts the design
 (repository plans use a new `design/<slug>` branch from `main` or `master`; private plans need no branch). OH reads the roadmap row, a fresh worker writes the prose, and
 OH numbers the doc, links it from the row, checks its task list, has it reviewed
 independently. Repository plans are committed; private plans wait for your approval. Never write or edit plan files yourself, and
@@ -32,9 +38,8 @@ human choice. An edited existing private design goes directly to review, preserv
 person's text. A proposed decision remains undecided after approval of the document.
 Only drafts and designs edited since approval can be reapproved; frozen and abandoned designs stay closed.
 When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
-with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool with the checkout's
-absolute path as `root`. Then run OH `run`, which carries out the answer, unless the `choose` tool says nothing is
-left to run. Never answer for the person. Typed
+with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool. Then run `run`,
+which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 Handle the returned status before offering publication:
 - `review_checkpoint`: explain the retained findings and offer **grant review** / **stop**.
