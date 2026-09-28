@@ -45,7 +45,7 @@ else:
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')
     revision=json.loads(active.read_bytes())['revision']
     if Path(revision).name!=revision:raise SystemExit('Invalid installed OH revision')
-    if command in ('run','start','deliver','resume','pause','stop','plugin-hook','plugin-click'):
+    if command in ('run','start','deliver','resume','pause','stop','plugin-hook'):
         import hashlib
         key=hashlib.sha256(json.dumps(str(Path(options.root).resolve()),ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
         locator=home/'registry/checkouts'/(key+'.json')

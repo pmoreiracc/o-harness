@@ -80,7 +80,8 @@ def how(gate, root):
     typed = ', '.join(o['choice'] for o in gate['options']) + (', or refine: <what to change>' if gate['words'] else '')
     if gate['host'] == 'claude':
         return ('Ask the person with AskUserQuestion, passing exactly `gate.ask` and never an `answers` field. '
-                'After they answer, run OH `run`; OH reads the click from Claude\'s own record. '
+                'After they answer, run OH `run`; OH reads the click from the saved transcript of the conversation that '
+                'owns this run, so ask only there. '
                 f'Typing works too: {typed}.')
     return (f'Call the o-harness `choose` tool with root "{root}". It shows these choices as a menu and records the click '
             f'itself. Then run OH `run`. If it says the menu could not be shown, ask the person to type one of: {typed}.')

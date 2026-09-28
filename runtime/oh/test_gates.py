@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from . import test_workflow as fixtures
-from .authority import materialize, stage_click
+from .authority import materialize
 from .config import HOME
 from .gates import ask, current, pick
 from .gate_server import serve
@@ -34,17 +34,16 @@ class GateTest(unittest.TestCase):
         start(self.root, {'tasks': self.tasks}, human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '1', 'prompt': prompt}, host))
         return run(self.root, self.fake)
 
-    def click(self, question, answer, use='toolu_1', session='s', prefilled=None):
-        request = {'questions': [question]} | ({'answers': prefilled} if prefilled is not None else {})
+    def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None):
+        """Save a question-tool call and the host's answer in the owner's transcript, as Claude does, then run OH."""
+        request = {'questions': questions or [question]} | ({'answers': prefilled} if prefilled is not None else {})
         self.records += [
             {'type': 'assistant', 'sessionId': session, 'cwd': str(self.root), 'message': {'role': 'assistant', 'content': [
                 {'type': 'tool_use', 'id': use, 'name': 'AskUserQuestion', 'input': request}]}},
             {'type': 'user', 'sessionId': session, 'cwd': str(self.root), 'timestamp': '2026-09-28T12:00:00Z',
-             'toolUseResult': {'questions': [question], 'answers': {question['question']: answer}},
+             'toolUseResult': {'questions': request['questions'], 'answers': {question['question']: answer}},
              'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': use, 'content': 'answered'}]}}]
         self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
-        stage_click(self.root, 'claude', {'hook_event_name': 'PostToolUse', 'tool_name': 'AskUserQuestion', 'session_id': session,
-                                          'tool_use_id': use, 'transcript_path': str(self.transcript)})
         return materialize(self.root)
 
     def test_checkpoint_offers_its_choices_as_a_menu_that_expires_when_the_run_moves(self):
@@ -69,15 +68,16 @@ class GateTest(unittest.TestCase):
     def test_model_written_or_altered_or_foreign_answers_choose_nothing(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
         cases = [('prefilled', {'prefilled': {question['question']: 'Continue'}}),
-                 ('other session', {'session': 'intruder'}),
-                 ('altered menu', {'question': question | {'options': question['options'][:1] + [{'label': 'Stop', 'description': 'x'}]}})]
+                 ('another conversation', {'session': 'other'}),
+                 ('altered menu', {'questions': [question | {'options': question['options'][:1] + [{'label': 'Stop', 'description': 'x'}]}]}),
+                 ('mixed with another question', {'questions': [question, {'question': 'Also?'}]})]
         for index, (name, change) in enumerate(cases):
             with self.subTest(name):
-                with self.assertRaises(Refused):
-                    self.click(change.pop('question', question), 'Continue', use=f'toolu_{index + 2}', **change)
+                self.assertIsNone(self.click(question, 'Continue', use=f'toolu_{index + 2}', **change))
                 self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         with self.assertRaises(Refused):self.click(question, 'Just keep going', use='toolu_9')  # free text is no choice here
-        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        self.assertIsNone(materialize(self.root))  # said once, then set aside
+        self.assertEqual(self.click(question, 'Continue', use='toolu_10')['status'], 'running')
 
     def test_stop_on_a_finished_run_closes_its_menu(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
@@ -86,12 +86,23 @@ class GateTest(unittest.TestCase):
         after = self.click(question, 'Stop', use='toolu_stop')
         self.assertEqual((after['status'], after.get('gate')), ('stopped', None))
 
-    def test_a_click_on_an_older_menu_is_refused(self):
+    def test_only_the_latest_click_on_the_current_menu_counts(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
-        choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))
+        self.records += [
+            {'type': 'assistant', 'sessionId': 's', 'cwd': str(self.root), 'message': {'role': 'assistant', 'content': [
+                {'type': 'tool_use', 'id': 'toolu_first', 'name': 'AskUserQuestion', 'input': {'questions': [question]}}]}},
+            {'type': 'user', 'sessionId': 's', 'cwd': str(self.root), 'toolUseResult': {'answers': {question['question']: 'Stop'}},
+             'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_first', 'content': 'x'}]}}]
+        self.assertEqual(self.click(question, 'Continue', use='toolu_latest')['status'], 'running')  # the person changed their mind
+        self.assertIsNone(materialize(self.root))  # the earlier Stop is on an older menu now: nothing re-applies it
         run(self.root, self.fake)
-        with self.assertRaises(Refused):self.click(question, 'Stop')
         self.assertEqual(load_run(self.root)[1]['status'], 'completed')
+
+    def test_a_forged_typed_choice_cannot_displace_a_click(self):
+        from .authority import stage
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'forged', 'prompt': 'continue'})
+        self.assertEqual(self.click(question, 'Stop')['status'], 'stopped')  # the forged turn never verifies; the click wins
 
     def test_free_text_is_a_change_request_only_where_one_is_allowed(self):
         gate = {'options': [{'choice': 'approve', 'label': 'Approve'}, {'choice': 'reconsider', 'label': 'Reconsider'}], 'words': True}
@@ -176,36 +187,6 @@ class GateTest(unittest.TestCase):
             args = command('codex', {'model': 'm', 'effort': 'low'}, self.root, 'implementation', None, 1000)
         self.assertIn('plugins."o-harness@o-harness".enabled=false', args)
         self.assertFalse(any('other@x' in a for a in args))
-
-    def test_a_click_whose_record_never_arrives_never_blocks_the_next_choice(self):
-        from .authority import pending_file, stage
-        self.begin('claude')
-        bogus = {'hook_event_name': 'PostToolUse', 'tool_name': 'AskUserQuestion', 'session_id': 's', 'tool_use_id': 'toolu_never', 'transcript_path': str(self.transcript)}
-        self.transcript.write_text('')
-        stage_click(self.root, 'claude', bogus)
-        with self.assertRaises(Refused):materialize(self.root)  # not saved yet: kept for a retry
-        self.assertTrue(pending_file(self.root).exists())
-        question = current(self.root) and ask(current(self.root))['questions'][0]
-        self.assertEqual(self.click(question, 'Continue', use='toolu_real')['status'], 'running')  # a newer click replaces it
-        stage_click(self.root, 'claude', bogus | {'transcript_path': '/etc/hosts'})
-        with self.assertRaises(Refused):materialize(self.root)
-        self.assertFalse(pending_file(self.root).exists())  # outside Claude's transcripts: set aside at once
-        stage_click(self.root, 'claude', bogus)
-        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 't9', 'prompt': 'stop'})  # typing replaces it too
-
-    def test_a_click_that_can_never_verify_is_set_aside_and_typing_still_works(self):
-        from .authority import stage
-        question = self.begin('claude')['gate']['ask']['questions'][0]
-        self.records.append({'type': 'assistant', 'sessionId': 's', 'cwd': str(self.root), 'message': {'role': 'assistant', 'content': [
-            {'type': 'tool_use', 'id': 'toolu_two', 'name': 'AskUserQuestion', 'input': {'questions': [question, question | {'question': 'Also?'}]}}]}})
-        self.records.append({'type': 'user', 'sessionId': 's', 'cwd': str(self.root), 'toolUseResult': {'answers': {question['question']: 'Continue', 'Also?': 'Stop'}},
-                             'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_two', 'content': 'x'}]}})
-        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
-        stage_click(self.root, 'claude', {'hook_event_name': 'PostToolUse', 'tool_name': 'AskUserQuestion', 'session_id': 's',
-                                          'tool_use_id': 'toolu_two', 'transcript_path': str(self.transcript)})
-        with self.assertRaises(Refused):materialize(self.root)
-        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
-        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 't2', 'prompt': 'stop'})  # not blocked
 
     def test_each_host_gets_its_own_menu_mechanism(self):
         from .installation import build
