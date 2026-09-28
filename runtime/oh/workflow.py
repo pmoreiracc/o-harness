@@ -384,7 +384,15 @@ def checkpoint(root):
                         |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
              if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else
-            {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | private_diff
+            {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | private_diff | menu(root,journal,state)
+
+
+def menu(root,journal,state):
+    """The current choice as a clickable menu, with how to show it on this run's host."""
+    from .gates import ask,describe,how
+    gate=describe(journal,state)
+    if not gate:return {}
+    return {'gate':{'id':gate['id'],'choices':[o['choice'] for o in gate['options']]}|({'ask':ask(gate)} if gate['host']=='claude' else {})|{'how':how(gate,root)}}
 
 
 def continue_limits(left,config):
