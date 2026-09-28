@@ -302,6 +302,12 @@ class GateTest(unittest.TestCase):
         _, state = load_run(self.root)
         self.assertEqual((state['status'], state['granted'][-1]), ('running', '2'))
 
+    def test_codex_stop_needs_no_further_run(self):
+        self.begin('codex')
+        text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'stop'}})[1]
+        self.assertIn('nothing left to run', text);self.assertNotIn('`run`', text)
+        self.assertEqual(load_run(self.root)[1]['status'], 'stopped')
+
     def test_codex_latest_answer_wins_between_typing_and_the_menu(self):
         from .authority import pending_file, stage
         self.begin('codex')

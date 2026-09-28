@@ -98,6 +98,8 @@ class Server:
         from .authority import answered
         answered(root, 'codex', state['human']['session'], state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
+        if after['status'] in ('stopped', 'completed') and not after.get('gate'):
+            return f'Recorded the person\'s choice: {label}. The run is {after["status"]}; there is nothing left to run.'
         return f'Recorded the person\'s choice: {label}. Run OH `run` to carry it out. Status now: {after["status"]}.'
 
     def serve(self):

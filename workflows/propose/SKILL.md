@@ -35,7 +35,8 @@ When the returned status is `approval_checkpoint`, present `proposal` in this or
 
 When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
 with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool with the checkout's
-absolute path as `root`. Then run OH `run`, which applies the person's answer. Never answer for the person. Typed
+absolute path as `root`. Then run OH `run`, which carries out the answer, unless the `choose` tool says nothing is
+left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 
 After **approve**, run `run` again. Then show **pr** / **stop** when something was committed;
