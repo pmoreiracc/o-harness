@@ -567,7 +567,7 @@ def complete_reviewed(root,journal,state,task,review):
             git(root,'commit','--allow-empty','-m',f"{title}\n\nOH-Run: {state['id']}\nOH-Review: {review['id']}\nOH-Reviewed-Tree: {expected}\nOH-Evidence: {digest(intent['publication'])}")
             if git(root,'rev-parse','HEAD^{tree}')!=expected or git(root,'rev-parse','HEAD^')!=head:raise Refused('Commit hooks changed the reviewed tree or parent')
         from .delivery import finish
-        finish(root,state,review)
+        finish(root,journal,state,review)
         journal.append('task.completed',{'task':task_id,'commit':git(root,'rev-parse','HEAD'),'tree':expected,'review':review['id'],
             'summary':review['summary'],'evidence':review['evidence']})
         attempts=[a for a in state['attempts'] if a['task']==task_id]

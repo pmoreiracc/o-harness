@@ -29,30 +29,51 @@ def document(root,where,doc):
     return found[0]
 
 
-def delivered_base(root,record):
-    """Private progress is usable only in a checkout containing the code that completed it."""
+def delivered_base(root,record,*,progressed=False):
+    """Private progress requires recorded code lineage, even after squash merges."""
     from subprocess import CalledProcessError
-    if record.get('delivery_commit'):
-        try:git(root,'merge-base','--is-ancestor',record['delivery_commit'],'HEAD')
+    commit=record.get('delivery_commit');base=record.get('delivery_base');baseline=record.get('delivery_baseline')
+    if not commit and not progressed:return
+    if not all((commit,base,baseline)):
+        raise Refused('Private progress has no code lineage; review and reapprove the plan with /oh-design from the checkout containing its completed code')
+    try:
+        git(root,'merge-base','--is-ancestor',baseline,base)
+        git(root,'merge-base','--is-ancestor',base,commit)
+        git(root,'merge-base','--is-ancestor',baseline,'HEAD')
+        changed=git(root,'diff','--name-only','-z',base,commit)
+        if not changed and not record.get('delivery_no_code'):
+            raise Refused('Private progress has an unrecorded empty delivery range; restore its original approval record')
+        try:git(root,'merge-base','--is-ancestor',commit,'HEAD')
         except CalledProcessError:
-            # A squash merge can contain the exact delivered changes without their original commits.
-            try:
-                changed=git(root,'diff','--name-only','-z',record['delivery_base'],record['delivery_commit']).split('\0')
-                paths=[path for path in changed if path]
-                if paths:git(root,'--literal-pathspecs','diff','--exit-code',record['delivery_commit'],'HEAD','--',*paths)
-                return
-            except (CalledProcessError,KeyError):pass
-            raise Refused('Private plan progress belongs to code this checkout does not contain; use its delivery branch or merge it first') from None
+            # Squash merges must contain every delivered path, with an inherited baseline.
+            paths=[path for path in changed.split('\0') if path]
+            if paths:git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
+    except CalledProcessError:
+        raise Refused('Private plan progress belongs to code this checkout does not contain; use its delivery branch or merge it first') from None
 
 
-def selection(root,doc,track=''):
-    where=plans.layout(root);path=document(root,where,doc)
+def dependencies(root,where,rows,name):
+    """The roadmap accepts a slug or a whole milestone, including collapsed delivery pointers."""
+    from .design_parse import roadmap
+    by_slug={row[0]:row for row in rows}
+    if name in by_slug:return [by_slug[name][3]]
+    milestones=dict(plans.milestones(where))
+    if name not in milestones:return []
+    if milestones[name]:
+        return [doc for doc,milestone in (row.split(plans.US) for row in roadmap(root,'--delivered',where).splitlines()) if milestone==name]
+    return [row[3] for row in rows if row[1]==name]
+
+
+def selection(root,doc,track='',*,claim=True):
+    where=plans.layout(root,claim=claim);path=document(root,where,doc)
     status=plans.approval(root,where,doc)
     if status!='approved':raise Refused(f'Design {doc} is {status or "missing a status"}; delivery requires approval')
-    if where['location']=='private':delivered_base(root,read_json(plans.approvals_file(root))[doc])
+    approvals={}
     if where['location']=='repo':
         from subprocess import CalledProcessError
         paths=[Path(where[key]).relative_to(root).as_posix() for key in ('roadmap','designs','decisions')]
+        try:git(root,'rev-parse','--verify','origin/main^{commit}')
+        except CalledProcessError:raise Refused('Fetch origin/main before delivering repository plans') from None
         if git(root,'diff','--name-only','origin/main','--',*paths):
             raise Refused('The design and planning context must match origin/main; merge the plans first')
         for filename in inputs(where):
@@ -62,23 +83,27 @@ def selection(root,doc,track=''):
             if not matches:raise Refused('The design and planning context must match origin/main; merge the plans first')
     rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
     if any(len(row)!=6 for row in rows):raise Refused('Malformed design task projection')
+    if where['location']=='private':
+        approvals[doc]=read_json(plans.approvals_file(root))[doc]
+        delivered_base(root,approvals[doc],progressed=any(row[1]=='done' for row in rows))
     tracks={row[2] for row in rows}
     if track and track not in tracks:raise Refused('Unknown design track; choose '+', '.join(sorted(tracks)))
     roadmap=plans.initiatives(root,where)
     named=[row for row in roadmap if row[3]==doc]
     if len(named)!=1:raise Refused('The design must belong to exactly one roadmap initiative')
-    by_slug={row[0]:row for row in roadmap}
     for dependency in filter(None,named[0][2].split(',')):
-        row=by_slug.get(dependency)
-        if not row or not row[3] or plans.approval(root,where,row[3])!='frozen':
+        required=dependencies(root,where,roadmap,dependency)
+        if not required or any(not number or plans.approval(root,where,number)!='frozen' for number in required):
             raise Refused(f'Initiative {named[0][0]} depends on unfinished {dependency}')
-        if where['location']=='private':
-            record=read_json(plans.approvals_file(root)).get(row[3],{})
-            dependency_path=document(root,where,row[3])
-            if record.get('path')!=str(dependency_path) or record.get('sha256')!=plans.digest_of(dependency_path):
-                raise Refused(f'Completed dependency {dependency} changed since its approved delivery')
-            delivered_base(root,record)
-        freeze_render(root,row[3],layout=where)  # a frozen label with pending tasks is not delivery
+        for number in required:
+            if where['location']=='private':
+                record=read_json(plans.approvals_file(root)).get(number,{})
+                dependency_path=document(root,where,number)
+                if record.get('path')!=str(dependency_path) or record.get('sha256')!=plans.digest_of(dependency_path):
+                    raise Refused(f'Completed dependency {dependency} changed since its approved delivery')
+                delivered_base(root,record,progressed=True)
+                approvals[number]=record
+            freeze_render(root,number,layout=where)  # a frozen label with pending tasks is not delivery
     completed={row[0] for row in rows if row[1]=='done'}
     available=set(completed);tasks=[];text=path.read_text()
     pending=[row for row in rows if row[1]=='pending' and (not track or row[2]==track)]
@@ -101,18 +126,18 @@ def selection(root,doc,track=''):
                 'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':'finalize'}}]
     freeze_render(root,doc,'' if tasks[0]['id']=='finalize' else tasks[0]['id'],where)
     return ({'workflow':'deliver','design':doc,'track':track,'tasks':tasks},
-            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc}})
+            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'approvals':approvals}})
 
 
 def listing(root):
     from .prepared import limits
     from .config import load
-    where=plans.layout(root);result={'kind':'list','ready':[],'unavailable':[]}
+    where=plans.layout(root,claim=False);result={'kind':'list','ready':[],'unavailable':[]}
     if not Path(where['roadmap']).exists():return result
     for slug,_,_,doc in plans.initiatives(root,where):
         if not doc:continue
         try:
-            manifest,_=selection(root,doc)
+            manifest,_=selection(root,doc,claim=False)
             result['ready'].append({'design':doc,'slug':slug,'tasks':[{'id':t['id'],'title':t['title']} for t in manifest['tasks']],
                                     'command':'/oh-deliver '+doc,'limits':limits(len(manifest['tasks']),load(root))})
         except Refused as exc:result['unavailable'].append({'design':doc,'slug':slug,'reason':str(exc)})
@@ -129,6 +154,14 @@ def guard(root,state):
     pending=render and where['location']=='private' and render['task'] not in state['done']
     if actual!=expected and not (pending and actual==render['before_inputs']):
         raise Refused('Plan documents changed outside this delivery run; preserve the edits and stop the run')
+    if where['location']=='private':
+        records=read_json(plans.approvals_file(root));intent=state.get('delivery_approval')
+        expected_records=bound['approvals'].copy()
+        if intent:expected_records[bound['doc']]=intent['after']
+        for number,record in expected_records.items():
+            accepted=[record]
+            if intent and number==bound['doc'] and intent['task'] not in state['done']:accepted.append(intent['before'])
+            if records.get(number) not in accepted:raise Refused('Private approval changed during delivery; restore its bound record or stop the run')
     if render and 'candidate' in render and plans.digest_of(Path(render['candidate']))!=render['after_inputs'][render['path']]:
         raise Refused('Delivery candidate changed outside the runner')
 
@@ -177,16 +210,21 @@ def reviewed(root,state,review):
         raise Refused('Private design identity changed after review')
 
 
-def finish(root,state,review):
-    """Called after the reviewed code commit, before task.completed; safe to repeat after a crash."""
+def finish(root,journal,state,review):
+    """Journal the exact approval update after the reviewed commit, before either private write."""
     reviewed(root,state,review)
     if not state.get('delivery') or state['delivery']['layout']['location']!='private':return
+    doc=state['delivery']['doc'];render=state['delivery_render'];intent=state.get('delivery_approval')
+    if not intent or intent['task']!=render['task']:
+        old=intent['after'] if intent else state['delivery']['approvals'][doc]
+        head=git(root,'rev-parse','HEAD');base=old.get('delivery_base',state['base'])
+        after=old|{'sha256':render['after_inputs'][render['path']], 'delivery_commit':head,
+                   'delivery_base':base,'delivery_baseline':old.get('delivery_baseline',state['base']),
+                   'delivery_no_code':not bool(git(root,'diff','--name-only',base,head))}
+        intent={'task':render['task'],'before':old,'after':after}
+        journal.append('delivery.approval.intent',intent)
     path=plans.approvals_file(root);records=read_json(path)
-    doc=state['delivery']['doc'];old=records[doc]
-    render=state['delivery_render'];expected=render['after_inputs'][render['path']]
-    # Only the runner's reviewed structural edit carries the original approval forward.
-    if old['sha256'] not in (render['before_inputs'][render['path']],expected):
-        raise Refused('Private approval changed during delivery')
+    if records.get(doc) not in (intent['before'],intent['after']):raise Refused('Private approval changed during delivery')
+    expected=render['after_inputs'][render['path']]
     if plans.digest_of(Path(render['path']))!=expected:plans.write(Path(render['path']),render['text'])
-    atomic_json(path,records|{doc:old|{'sha256':expected,'delivery_commit':git(root,'rev-parse','HEAD'),
-                                    'delivery_base':old.get('delivery_base',state['base'])}})
+    atomic_json(path,records|{doc:intent['after']})

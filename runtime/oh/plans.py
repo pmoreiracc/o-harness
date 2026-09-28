@@ -19,7 +19,7 @@ MILESTONE = re.compile(r'###' + WS + r'+(M[0-9]+)(' + WS + '|$)')
 DEFAULTS = {'roadmap': 'docs/roadmap.md', 'designs': 'docs/design', 'decisions': 'docs/decisions'}
 
 
-def layout(root, location=None):
+def layout(root, location=None, *, claim=True):
     """Where this project's plans live. The consumer-v1 document profile keeps them in the repository."""
     from .config import load
     from .storage import project, state_home
@@ -62,7 +62,7 @@ def layout(root, location=None):
             raise Refused(f'plans.roadmap is inside plans.{key}; keep the roadmap outside the numbered folders')
     if location == 'private':
         from .private_storage import reserve
-        reserve(base, owner)
+        reserve(base, owner, claim=claim)
     return where
 
 
@@ -1007,7 +1007,18 @@ def approve(root, where, number, run, flip):
         write_rows(path, rows, ending)
         verify_design(root, where, number)
     records = read_json(approvals_file(root)) if approvals_file(root).is_file() else {}
-    records[number] = {'path': str(path), 'sha256': digest_of(path), 'run': run, 'at': datetime.now(timezone.utc).isoformat()}
+    old=records.get(number,{})
+    lineage={key:value for key,value in old.items() if key.startswith('delivery_')} if old.get('path')==str(path) else {}
+    progressed=any(row.split(US)[1]=='done' for row in plan(root,number,where).splitlines())
+    if lineage:
+        from .delivery import delivered_base
+        delivered_base(root,lineage,progressed=True)
+    elif progressed:
+        # Explicit human reapproval of legacy progress binds it to this checkout's code.
+        from .storage import git
+        head=git(root,'rev-parse','HEAD')
+        lineage={'delivery_commit':head,'delivery_base':head,'delivery_baseline':head,'delivery_no_code':True}
+    records[number] = lineage|{'path': str(path), 'sha256': digest_of(path), 'run': run, 'at': datetime.now(timezone.utc).isoformat()}
     atomic_json(approvals_file(root), records)
     return records[number]
 

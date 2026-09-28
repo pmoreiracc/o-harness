@@ -100,6 +100,7 @@ def reduce(records):
         elif kind=='subject.existing':state['rendered']=d['plan']
         elif kind=='private.approval.intent':state['private_approval']=d
         elif kind=='delivery.render':state['delivery_render']=d
+        elif kind=='delivery.approval.intent':state['delivery_approval']=d
         elif kind=='branch.creating':state['branch_creation']=d
         elif kind=='branch.moving':
             state['branch_move']=d;state.pop('branch_creation',None)

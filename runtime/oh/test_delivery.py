@@ -197,3 +197,107 @@ class DeliveryTest(unittest.TestCase):
         self.git('merge','--squash',branch);self.git('commit','-qm','Squash reviewed code')
         self.start_delivery(turn='squashed')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+
+    def test_listing_does_not_claim_private_storage(self):
+        from .storage import state_home
+        change(self.root,'plans.private_folder',str(Path(self.temp.name)/'empty-plans'))
+        change(self.root,'plans.location','private')
+        registry=state_home()/'registry/private-plans.json'
+        registry.unlink(missing_ok=True)
+        self.assertEqual(delivery.listing(self.root)['ready'],[])
+        self.assertFalse(registry.exists())
+        self.documents('private');before=registry.read_bytes()
+        self.assertEqual(len(delivery.listing(self.root)['ready']),1)
+        self.assertEqual(registry.read_bytes(),before)
+
+    def test_missing_remote_base_is_an_actionable_listing_result(self):
+        self.documents();self.git('update-ref','-d','refs/remotes/origin/main')
+        result=delivery.listing(self.root)
+        self.assertEqual(result['ready'],[])
+        self.assertIn('Fetch origin/main',result['unavailable'][0]['reason'])
+
+    def test_reapproving_added_task_preserves_delivered_code_lineage(self):
+        where,path=self.documents('private');self.start_delivery();run(self.root,self.fake)
+        old=read_json(plans.approvals_file(self.root))['0001']
+        choose(self.root,'stop',self.event('stop','stop'))
+        plans.add_task(self.root,where,'0001','core','Add session expiry.',[])
+        plans.approve(self.root,where,'0001','reapproved',False)
+        new=read_json(plans.approvals_file(self.root))['0001']
+        self.assertEqual(new['delivery_commit'],old['delivery_commit'])
+        self.git('switch','main')
+        with self.assertRaisesRegex(Refused,'checkout does not contain'):delivery.selection(self.root,'0001')
+        with self.assertRaisesRegex(Refused,'checkout does not contain'):plans.approve(self.root,where,'0001','wrong-checkout',False)
+
+    def test_legacy_completed_progress_requires_reapproval_bound_to_code(self):
+        where,path=self.documents('private')
+        (self.root/'legacy.txt').write_text('completed task code')
+        self.git('add','.');self.git('commit','-qm','legacy completed work')
+        path.write_text(path.read_text().replace('- [ ] **1.**','- [x] **1.**'))
+        records=read_json(plans.approvals_file(self.root));records['0001']['sha256']=plans.digest_of(path)
+        plans.approvals_file(self.root).write_text(json.dumps(records))
+        with self.assertRaisesRegex(Refused,'reapprove'):delivery.selection(self.root,'0001')
+        plans.approve(self.root,where,'0001','human-reapproval',False)
+        self.assertEqual([t['id'] for t in delivery.selection(self.root,'0001')[0]['tasks']],['2'])
+        self.git('checkout','HEAD^')
+        with self.assertRaisesRegex(Refused,'checkout does not contain'):delivery.selection(self.root,'0001')
+
+    def test_recovery_rejects_same_hash_approval_lineage_replacement(self):
+        where,path=self.documents('private');self.start_delivery()
+        original=delivery.atomic_json
+        def interrupted(*args,**kwargs):raise OSError('before approval publication')
+        with patch('oh.delivery.atomic_json',side_effect=interrupted):
+            with self.assertRaises(OSError):run(self.root,self.fake)
+        approval=plans.approvals_file(self.root);bound=read_json(approval);calls=len(self.calls)
+        altered=json.loads(json.dumps(bound));altered['0001']['delivery_base']=self.git('rev-parse','HEAD')
+        original(approval,altered)
+        with self.assertRaisesRegex(Refused,'approval changed'):run(self.root,self.fake)
+        self.assertEqual(len(self.calls),calls)
+        original(approval,bound)
+        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        self.assertEqual(len(self.calls),calls)
+
+    def test_no_code_completion_is_explicit_and_empty_unrecorded_ranges_are_refused(self):
+        self.documents('private');self.start_delivery()
+        def no_code(*args,**kwargs):
+            return {'failed':False,'returncode':0,'duration_ms':10,'text':'already implemented',
+                    'structured':{'verdict':'clean','summary':'Checked existing code','findings':[],'evidence':fixtures.EVIDENCE},'usage_observed':False}
+        self.assertEqual(run(self.root,no_code)['status'],'checkpoint')
+        record=read_json(plans.approvals_file(self.root))['0001']
+        self.assertTrue(record['delivery_no_code'])
+        delivery.delivered_base(self.root,record,progressed=True)
+        with self.assertRaisesRegex(Refused,'empty delivery range'):
+            delivery.delivered_base(self.root,record|{'delivery_no_code':False},progressed=True)
+        with self.assertRaisesRegex(Refused,'checkout does not contain'):
+            delivery.delivered_base(self.root,record|{'delivery_base':'0'*40},progressed=True)
+
+    def test_milestone_dependencies_require_every_design_and_support_collapsed_milestones(self):
+        from .design_parse import freeze_render
+        for location in ('repo','private'):
+            with self.subTest(location=location):
+                # Independent fixture so roadmap and code lineage cannot leak between locations.
+                if location=='private':self.setUp()
+                where,auth=self.documents(location)
+                plans.add_initiative(self.root,where,'M1','ledger','Ledger',[])
+                n,ledger=plans.write_design(self.root,where,'ledger','Ledger',BODY,'approved');plans.claim(self.root,where,'ledger',n)
+                plans.add_milestone(self.root,where,'M2','Next','Reports work')
+                plans.add_initiative(self.root,where,'M2','reports','Reports',['M1'])
+                target,report=plans.write_design(self.root,where,'reports','Reports',BODY,'approved');plans.claim(self.root,where,'reports',target)
+                def approve_and_sync():
+                    if location=='private':
+                        for number in ('0001',n,target):plans.approve(self.root,where,number,'human',False)
+                    else:self.git('add','.');self.git('commit','--allow-empty','-qm','plan progress')
+                    self.git('update-ref','refs/remotes/origin/main','HEAD')
+                def freeze(path,number):
+                    path=Path(path);path.write_text(path.read_text().replace('- [ ]','- [x]'))
+                    path.write_text(freeze_render(self.root,number,layout=where))
+                freeze(auth,'0001');approve_and_sync()
+                with self.assertRaisesRegex(Refused,'unfinished M1'):delivery.selection(self.root,target)
+                freeze(ledger,n);approve_and_sync()
+                self.assertEqual(len(delivery.selection(self.root,target)[0]['tasks']),2)
+                roadmap=Path(where['roadmap']);text=roadmap.read_text();start=text.index('### M1');end=text.index('### M2')
+                prefix=auth.parent.relative_to(roadmap.parent).as_posix()
+                roadmap.write_text(text[:start]+f'### M1 First ✅\n\nDelivered as [0001](./{prefix}/{auth.name}), [{n}](./{prefix}/{Path(ledger).name}).\n\n'+text[end:])
+                approve_and_sync();self.assertEqual(len(delivery.selection(self.root,target)[0]['tasks']),2)
+                if location=='private':
+                    auth.write_text(auth.read_text()+'\nChanged completed design\n')
+                    with self.assertRaisesRegex(Refused,'changed since'):delivery.selection(self.root,target)

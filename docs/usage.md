@@ -54,6 +54,9 @@ Ready tasks are selected in dependency order; blocked work stays pending. OH own
 checkboxes and freezes a design when its last task completes. For private plans, the reviewer
 sees the proposed document update alongside the code; OH publishes the update only after the
 reviewed code commit, with recovery if saving is interrupted. Private documents stay out of Git.
+Private progress also records its code revision: use the delivery branch or merge its code before
+continuing elsewhere. An older private plan with completed tasks but no recorded revision needs
+review and reapproval through `/oh-design <slug>` from the checkout containing that completed code.
 
 OH then runs the tasks on a branch (it creates one if you are on `main`). For each task a
 fresh worker implements it, your project checks run, an independent reviewer checks the
