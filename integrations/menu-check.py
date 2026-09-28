@@ -5,6 +5,7 @@ conversation that asked for it.
 
   python3 integrations/menu-check.py install   build this checkout's plugins and install them in Claude Code and Codex
   python3 ~/oh-menu-check/menu-check.py menu <claude|codex> <session>   the agent runs this in the test conversation
+  python3 ~/oh-menu-check/menu-check.py run   the agent runs this after the person chooses (OH `run`)
   python3 ~/oh-menu-check/menu-check.py restore   put the published OH plugins back
 """
 import json
@@ -54,9 +55,14 @@ def install():
     print('\nInstalled. Restart Claude and Codex, then follow the test steps.')
 
 
-def menu(host, session):
+def installed():
+    """Import the OH runtime that setup installed, not this checkout's."""
     active = json.loads((DATA / 'runtime/active.json').read_text())
     sys.path.insert(0, str(DATA / 'versions' / active['revision'] / 'runtime'))
+
+
+def menu(host, session):
+    installed()
     from oh.hosts import LENSES
     from oh.runner import run
     from oh.storage import identifier
@@ -73,6 +79,12 @@ def menu(host, session):
     print(json.dumps(run(PROJECT, worker), indent=2))
 
 
+def apply():
+    installed()
+    from oh.cli import main
+    main(['--root', str(PROJECT), 'run'])
+
+
 def restore():
     for host, add, source in (('claude', 'install', 'pmoreiracc/o-harness@dist'), ('codex', 'add', 'pmoreiracc/o-harness@dist')):
         subprocess.run([host, 'plugin', 'marketplace', 'remove', 'o-harness'], capture_output=True)
@@ -86,5 +98,6 @@ if __name__ == '__main__':
     action = sys.argv[1] if len(sys.argv) > 1 else ''
     if action == 'install':install()
     elif action == 'restore':restore()
+    elif action == 'run':apply()
     elif action == 'menu' and len(sys.argv) == 4 and sys.argv[2] in ('claude', 'codex') and sys.argv[3]:menu(sys.argv[2], sys.argv[3])
     else:raise SystemExit(__doc__)

@@ -24,7 +24,8 @@ The runner owns automatic models, fresh workers, checks, review, final rendering
 and batch boundaries. Do not reproduce that loop in the parent conversation. At a batch
 checkpoint show continue / PR / stop with the returned `limits` sentence; at completion show PR / stop. Exact choices from the
 owning human session are verified by `run`; they never silently renew another allowance.
-When OH's output has a `gate`, offer its choices as a menu by following `gate.how` (Claude: the question tool
-with exactly `gate.ask`, never an `answers` field; Codex: the o-harness `choose` tool). OH records the click itself;
-never pick for the person. Typed choices stay valid everywhere, and are the fallback when no menu can be shown.
+When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
+with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool with the checkout's
+absolute path as `root`. Then run OH `run`, which applies the person's answer. Never answer for the person. Typed
+choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 Keep results concise and link saved evidence. Human merging remains separate.

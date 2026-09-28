@@ -33,9 +33,10 @@ When the returned status is `approval_checkpoint`, present `proposal` in this or
    change>** (in their own words; OH asks the worker again), or **reconsider** (undo it and
    write nothing). Never choose for them, and never treat silence as approval.
 
-When OH's output has a `gate`, offer its choices as a menu by following `gate.how` (Claude: the question tool
-with exactly `gate.ask`, never an `answers` field; Codex: the o-harness `choose` tool). OH records the click itself;
-never pick for the person. Typed choices stay valid everywhere, and are the fallback when no menu can be shown.
+When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
+with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool with the checkout's
+absolute path as `root`. Then run OH `run`, which applies the person's answer. Never answer for the person. Typed
+choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 
 After **approve**, run `run` again. Then show **pr** / **stop** when something was committed;
 after **pr**, push the branch and open one pull request whose body ends with the output of
