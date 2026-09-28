@@ -1,10 +1,16 @@
 """Pick the tests a pull request must pass on Windows: OH's platform layer, tests that exercise
-platform-specific behavior, and every test the change adds or edits. The full suite runs on Windows
-nightly, on demand and before a release (.github/workflows/full.yml).
+platform-specific behavior, and every test the change adds or edits or whose shared code it changes. The full
+suite runs on Windows nightly, on demand and before a release (.github/workflows/full.yml).
+
+The change is read by comparing each test module's code before and after it, part by part (each module-level
+statement, each test class's header and members), not by diff line numbers: a commented-out, blanked or deleted
+line changes the code wherever it sits, while blank lines and comments change nothing. Changed parts reach
+every part that uses them, in the same module or through imports from another test module.
 
   python3 integrations/select_tests.py [base]   print the chosen test ids, one per line
 """
 import ast
+import copy
 from pathlib import Path
 import re
 import subprocess
@@ -16,36 +22,26 @@ TESTS = ROOT / 'runtime/oh'
 CORE = {'test_system', 'test_integration', 'test_installation', 'test_controls'}
 # Test bodies that touch what differs on Windows: line endings, permissions, deletion, paths, processes.
 PLATFORM = re.compile(r"os\.name|sys\.platform|[Ww]indows|\\r\\n|CRLF|newline=|chmod|st_mode|rmtree|symlink|os\.sep|\.cmd\b|\.exe\b|signal\.|kill\(")
+FIXTURES = {'setUp', 'setUpClass', 'tearDown', 'tearDownClass'}
 
 
-def changed_lines(base):
-    """What each test file changed since `base`, per module name: the lines a change wrote (`lines`), and for each
-    pure deletion the line it followed (`anchors`)."""
-    merge = subprocess.run(['git', '-C', str(ROOT), 'merge-base', base, 'HEAD'], capture_output=True, text=True).stdout.strip()
-    if not merge:return {}, {}
-    diff = subprocess.run(['git', '-C', str(ROOT), 'diff', '-U0', merge, '--', 'runtime/oh/test_*.py'],
-                          capture_output=True, text=True, check=True).stdout
-    lines, anchors, name = {}, {}, None
-    for row in diff.splitlines():
-        if row.startswith('+++ '):
-            name = Path(row[6:]).stem if row != '+++ /dev/null' else None
-        elif row.startswith('@@') and name:
-            start, count = re.match(r'@@ -\S+ \+(\d+)(?:,(\d+))? @@', row).groups()
-            start, count = int(start), int(count if count is not None else 1)
-            if count:lines.setdefault(name, set()).update(range(start, start + count))
-            else:anchors.setdefault(name, set()).add(start)
-    return lines, anchors
+def before(base):
+    """Each test module's source at the merge base with `base` ('' for a module the change adds)."""
+    git = lambda *a:subprocess.run(['git', '-C', str(ROOT), *a], capture_output=True, text=True)
+    merge = git('merge-base', base, 'HEAD').stdout.strip()
+    if not merge:sys.exit(f'select_tests: cannot find {base}; fetch it or pass another base')
+    listed = git('ls-tree', '--name-only', merge, 'runtime/oh/').stdout.split()
+    return {Path(p).stem: git('show', f'{merge}:{p}').stdout for p in listed if re.fullmatch(r'runtime/oh/test_\w+\.py', p)}
 
 
-def names(node):
-    """What code uses: `self.x`/`cls.x` members and bare names (decorators included)."""
-    return ({n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in ('self', 'cls')}
-            | {n.id for n in ast.walk(node) if isinstance(n, ast.Name)})
+def is_test_class(node):
+    """A class holding tests, whatever its name."""
+    return isinstance(node, ast.ClassDef) and any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and m.name.startswith('test_') for m in node.body)
 
 
 def bound(node):
     """The names a statement defines, or None when it defines none (such as a bare call)."""
-    if isinstance(node, (ast.FunctionDef, ast.ClassDef)):return {node.name}
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):return {node.name}
     if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         return {n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)}
@@ -53,88 +49,103 @@ def bound(node):
     return None
 
 
-def touches(node, span, lines, deletions):
-    """Whether the change touched a statement: an edited line inside it, a deletion inside it, or a deletion right
-    above a function or class (a decorator, such as a skip, removed)."""
-    first = min(span)
-    return bool(span & lines) or any(
-        (p in span and p + 1 in span) or (p + 1 == first and isinstance(node, (ast.FunctionDef, ast.ClassDef))) for p in deletions)
+def parts(source):
+    """A module's parts, each with a fingerprint of its code (ast.dump leaves out positions, blank lines and
+    comments): ('name',) per module-level name, ('!',) for statements that bind none, (Class, '') for a test
+    class's header and (Class, member) for each of its members."""
+    found = {}
+    for node in ast.parse(source).body if source else []:
+        if is_test_class(node):
+            header = copy.copy(node);header.body = []  # the class line and its decorators
+            found[(node.name, '')] = ast.dump(header)
+            for member in node.body:
+                for name in bound(member) or {'!'}:found[(node.name, name)] = found.get((node.name, name), '') + ast.dump(member)
+        else:
+            for name in bound(node) or {'!'}:found[(name,)] = found.get((name,), '') + ast.dump(node)
+    return found
 
 
-def extent(node, rows):
-    """The lines a statement covers: from its first decorator, and any comment lines right above it (such as a
-    decorator someone commented out), to its last line."""
-    start = min([node.lineno] + [d.lineno for d in getattr(node, 'decorator_list', [])])
-    while start > 1 and rows[start - 2].strip().startswith('#'):start -= 1
-    return set(range(start, node.end_lineno + 1))
+def uses(node, module, cls, aliases, imported):
+    """The parts a piece of code uses: its module's names, its class's members (`self.x`, `cls.x`), and another
+    test module's parts reached through `from . import test_x as alias` or `from .test_x import name`."""
+    used = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name):
+            used.add((module, n.id))
+            if n.id in imported:used.add(imported[n.id])
+        elif isinstance(n, ast.Attribute):
+            chain, value = [n.attr], n.value
+            while isinstance(value, ast.Attribute):chain.insert(0, value.attr);value = value.value
+            if isinstance(value, ast.Name):
+                if value.id in ('self', 'cls') and cls:used.add((module, cls, chain[0]))
+                elif value.id in aliases:
+                    used.add((aliases[value.id], chain[0]))
+                    if len(chain) > 1:used.add((aliases[value.id], chain[0], chain[1]))
+    return used
 
 
-FIXTURES = {'setUp', 'setUpClass', 'tearDown', 'tearDownClass'}
+def links(tree, known):
+    """This module's aliases for other test modules, and the names it imports from them."""
+    aliases, imported = {}, {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            source = (n.module or '').lstrip('.').split('.')[-1]
+            for a in n.names:
+                if not n.module and a.name in known:aliases[a.asname or a.name] = a.name
+                elif source in known:imported[a.asname or a.name] = (source, a.name)
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name.split('.')[-1] in known and a.asname:aliases[a.asname] = a.name.split('.')[-1]
+    return aliases, imported
+
+
+def pick(old, new):
+    """The test ids to run, from each test module's source before (`old`) and after (`new`) the change."""
+    trees = {module: ast.parse(source) for module, source in new.items()}
+    changed = set()
+    for module, source in new.items():
+        a, b = parts(old.get(module, '')), parts(source)
+        changed |= {(module, *key) for key in a.keys() | b.keys() if a.get(key) != b.get(key)}
+    # Grow to every part that uses a changed part, in any module, until nothing more changes.
+    pieces = []
+    for module, tree in trees.items():
+        aliases, imported = links(tree, trees.keys())
+        for node in tree.body:
+            if is_test_class(node):
+                for member in node.body:
+                    for name in bound(member) or {'!'}:
+                        pieces.append(((module, node.name, name), uses(member, module, node.name, aliases, imported)))
+            else:
+                for name in bound(node) or {'!'}:pieces.append(((module, name), uses(node, module, None, aliases, imported)))
+    while True:
+        more = {key for key, used in pieces if key not in changed and used & changed}
+        if not more:break
+        changed |= more
+    chosen = []
+    for module, tree in trees.items():
+        everything = (module, '!') in changed
+        for node in tree.body:
+            if not is_test_class(node):continue
+            members = {(module, node.name, name) for member in node.body for name in bound(member) or {'!'}}
+            # The class's header, a fixture, or anything in its body other than a method runs for every test.
+            whole = everything or (module, node.name, '') in changed or any(
+                key in changed and (key[2] in FIXTURES or not key[2].startswith('test_') and not callable_member(node, key[2])) for key in members)
+            for member in node.body:
+                if not (isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name.startswith('test_')):continue
+                source = ast.get_source_segment(new[module], member) or ''
+                if module in CORE or whole or PLATFORM.search(source) or (module, node.name, member.name) in changed:
+                    chosen.append(f'oh.{module}.{node.name}.{member.name}')
+    return chosen
+
+
+def callable_member(cls, name):
+    """Whether a class member is a method (which affects only the tests that use it)."""
+    return any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and m.name == name for m in cls.body)
 
 
 def select(base=None):
-    changed, anchors = changed_lines(base) if base else ({}, {})
-    return pick({path.stem: path.read_text(encoding='utf-8') for path in sorted(TESTS.glob('test_*.py'))}, changed, anchors)
-
-
-def pick(sources, changed, anchors):
-    """The test ids to run, from each module's source and the lines the change touched in it (edited lines, and
-    both sides of each deletion). Any such line inside a statement counts: a test's own lines select it; a
-    helper's, a fixture's or a class attribute's select the tests that depend on it; a module-level statement's
-    select the tests that use the names it defines, directly, through helpers and derived values, or from a
-    module that imports them. Lines outside every statement (blank lines, and comments not right above one)
-    never change what runs."""
-    trees = {module: (source, ast.parse(source), source.splitlines()) for module, source in sources.items()}
-    edits = {module: changed.get(module, set()) for module in trees}
-    deleted = {module: anchors.get(module, set()) for module in trees}
-    tests = lambda node:isinstance(node, ast.ClassDef) and node.name.endswith('Test')
-    changed_names, everything = {module: set() for module in trees}, set()
-    for module, (_, tree, rows) in trees.items():
-        for node in tree.body:
-            if not tests(node) and touches(node, extent(node, rows), edits[module], deleted[module]):
-                defined = bound(node)
-                if defined is None:everything.add(module)
-                else:changed_names[module] |= defined
-    def visible(module):
-        """The changed names a module sees: its own, and those it imports from another test module."""
-        seen = set(changed_names[module])
-        for n in ast.walk(trees[module][1]):
-            if isinstance(n, ast.ImportFrom) and n.module:
-                source = n.module.lstrip('.').split('.')[-1]
-                seen |= {a.asname or a.name for a in n.names if a.name in changed_names.get(source, set())}
-        return seen
-    while True:  # a helper or a value built from a changed name is changed too
-        grown = False
-        for module, (_, tree, _) in trees.items():
-            seen = visible(module)
-            for node in tree.body:
-                defined = None if tests(node) else bound(node)
-                if defined and defined - changed_names[module] and names(node) & seen:
-                    changed_names[module] |= defined;grown = True
-        if not grown:break
-    chosen = []
-    for module, (source, tree, rows) in trees.items():
-        shared, lines, gone = visible(module), edits[module], deleted[module]
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef):continue
-            members = [(member, extent(member, rows)) for member in node.body]
-            helpers = {m.name: (m, span) for m, span in members if isinstance(m, ast.FunctionDef) and not m.name.startswith('test_')}
-            # A helper the change touched, or one using a changed name, affects the tests that use it, directly or
-            # through another helper. A fixture runs for every test, and so does anything else in the class body.
-            touched = {name for name, (m, span) in helpers.items() if touches(m, span, lines, gone) or names(m) & shared}
-            while True:
-                more = {name for name, (m, _) in helpers.items() if name not in touched and names(m) & touched}
-                if not more:break
-                touched |= more
-            header = extent(node, rows) - set().union(*(span for _, span in members)) - {n for n in range(1, len(rows) + 1) if not rows[n - 1].strip()}
-            body = any((touches(m, span, lines, gone) or names(m) & shared) for m, span in members if not isinstance(m, ast.FunctionDef))
-            whole = module in everything or bool(FIXTURES & touched) or body or bool(header & lines) or bool(header & gone)
-            for m, span in members:
-                if not (isinstance(m, ast.FunctionDef) and m.name.startswith('test_')):continue
-                if (module in CORE or whole or PLATFORM.search(ast.get_source_segment(source, m))
-                        or touches(m, span, lines, gone) or names(m) & (touched | shared)):
-                    chosen.append(f'oh.{module}.{node.name}.{m.name}')
-    return chosen
+    new = {path.stem: path.read_text(encoding='utf-8') for path in sorted(TESTS.glob('test_*.py'))}
+    return pick(before(base) if base else new, new)
 
 
 if __name__ == '__main__':
