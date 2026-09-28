@@ -137,12 +137,29 @@ class CodexToolsTest(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'Windows reads no login shell')
     def test_the_server_keeps_answering_while_it_reads_the_shell(self):
-        with patch.dict(os.environ, {'FAKE_SHELL_WAIT': '1'}):
-            sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
-                         {'id': 2, 'method': 'tools/call', 'params': {'name': 'status', 'arguments': {'root': str(self.root)}} | calling('t1')},
-                         {'id': 3, 'method': 'ping'}], launcher=self.launcher)
-        order = [m.get('id') for m in sent if 'result' in m]
-        self.assertLess(order.index(3), order.index(2))
+        import threading
+        from .mcp_server import Server
+        server = Server(io.StringIO(), io.StringIO(), self.launcher)
+        with patch.dict(os.environ, {'FAKE_SHELL_WAIT': '2'}):
+            reading = threading.Thread(target=server.environment, args=('t1',));reading.start()
+            time.sleep(0.3)  # the shell is being read
+            began = time.monotonic();server.send({'id': 9, 'result': {}})
+            self.assertLess(time.monotonic() - began, 1)  # a reply never waits for the shell
+            reading.join()
+
+    def test_oh_goes_on_when_nobody_reads_its_output(self):
+        from .cli import main
+        from .runner import run
+        from .workflow import start
+        class Gone:
+            def write(self, text):raise BrokenPipeError(32, 'Broken pipe')
+            def flush(self):raise BrokenPipeError(32, 'Broken pipe')
+        fixtures.configure(self.root, tasks_per_batch=1)
+        start(self.root, {'tasks': [{'id': '1', 'title': 'One', 'instructions': 'Do it'}]}, fixtures.WorkflowTest.event(self))
+        with patch('sys.stdout', Gone()), patch('sys.stderr', Gone()):
+            main(['--root', str(self.root), 'config'])  # OH's command entry: its output may be read by nobody
+            result = run(self.root, lambda *a, **k: fixtures.WorkflowTest.fake(self, *a, **k))  # progress goes nowhere
+        self.assertEqual(result['status'], 'completed')
 
     def test_the_runner_reports_progress_where_the_server_forwards_it(self):
         import contextlib
