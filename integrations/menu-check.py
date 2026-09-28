@@ -45,7 +45,7 @@ def install():
         PROJECT.mkdir()
         for args in (('init', '-q', '-b', 'main'), ('config', 'user.name', 'OH menu check'), ('config', 'user.email', 'menu-check@example.invalid')):
             sh('git', '-C', PROJECT, *args)
-        (PROJECT / 'README.md').write_text('# OH menu check\n')
+        (PROJECT / 'README.md').write_text('# OH menu check\n', newline='\n')
         sh('git', '-C', PROJECT, 'add', '.');sh('git', '-C', PROJECT, 'commit', '-qm', 'start')
         sh('git', '-C', PROJECT, 'switch', '-qc', 'work')
         oh = dist / 'claude/o-harness/scripts/oh'
@@ -64,7 +64,7 @@ def menu(host, session):
     evidence = {'anchors': ['Menu check'], 'attacks': ['None: stand-in worker'], 'limits': ['Stand-in reviewer'],
                 'lenses': {lens: 'Stand-in check' for lens in LENSES}}
     def worker(host, root, profile, prompt, role, directory, context, **options):
-        if role != 'review':(Path(root) / 'menu-check.txt').write_text(identifier() + '\n')
+        if role != 'review':(Path(root) / 'menu-check.txt').write_text(identifier() + '\n', newline='\n')
         return {'failed': False, 'returncode': 0, 'duration_ms': 1, 'text': 'done', 'usage_observed': False,
                 'structured': {'verdict': 'clean', 'summary': 'Stand-in review', 'findings': [], 'evidence': evidence}}
     prompt = 'menu check'

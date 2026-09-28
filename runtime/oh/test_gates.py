@@ -29,6 +29,8 @@ class GateTest(unittest.TestCase):
         patcher = patch('pathlib.Path.home', return_value=self.home);patcher.start();self.addCleanup(patcher.stop)
         self.transcript = self.home / '.claude/projects/p/s.jsonl';self.transcript.parent.mkdir(parents=True)
         self.records = []
+        # A menu needs only one finished task and one left: every task a batch runs costs seconds of Git work.
+        fixtures.configure(self.root, tasks_per_batch=1);self.tasks = self.tasks[:2]
 
     def begin(self, host):
         prompt = 'oh start .oh/tasks.json'
@@ -47,7 +49,7 @@ class GateTest(unittest.TestCase):
             {'type': 'user', 'sessionId': session, 'cwd': where, 'timestamp': now(),
              'toolUseResult': {'questions': request['questions'], 'answers': {question['question']: answer}},
              'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': use, 'content': 'answered'}]}}]
-        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
         return materialize(self.root) if apply else None
 
     def test_checkpoint_offers_its_choices_as_a_menu_that_expires_when_the_run_moves(self):
@@ -67,7 +69,7 @@ class GateTest(unittest.TestCase):
         question = self.begin('claude')['gate']['ask']['questions'][0]
         self.assertEqual(self.click(question, 'Continue')['status'], 'running')
         _, state = load_run(self.root)
-        self.assertEqual(state['granted'][-1], '6')
+        self.assertEqual(state['granted'][-1], '2')
 
     def test_model_written_or_altered_or_foreign_answers_choose_nothing(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
@@ -128,13 +130,13 @@ class GateTest(unittest.TestCase):
         if save:
             self.records.append({'type': 'user', 'sessionId': 's', 'promptId': turn, 'cwd': str(cwd or self.root), 'timestamp': now(),
                                  'message': {'role': 'user', 'content': prompt}} | (extra or {}))
-            self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
+            self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
 
     def activity(self):
         """Claude saves something later in the conversation, such as the agent's next tool call."""
         from .storage import now
         self.records.append({'type': 'assistant', 'sessionId': 's', 'cwd': str(self.root), 'timestamp': now(), 'message': {'role': 'assistant', 'content': []}})
-        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
 
     def test_the_latest_answer_wins_typed_or_clicked(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
@@ -266,7 +268,7 @@ class GateTest(unittest.TestCase):
         self.assertIn(f'Project Fixture · {self.root.resolve()} · run ', asked['params']['message'])  # the person sees the target
         self.assertIn('Continue runs 1 of the 1 remaining task', asked['params']['message'])
         _, state = load_run(self.root)
-        self.assertEqual((state['status'], state['granted'][-1]), ('running', '6'))
+        self.assertEqual((state['status'], state['granted'][-1]), ('running', '2'))
 
     def test_codex_latest_answer_wins_between_typing_and_the_menu(self):
         from .authority import pending_file, stage
@@ -310,7 +312,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         from .hosts import command
         config = self.home / 'codex-home/config.toml';config.parent.mkdir(parents=True)
-        config.write_text('[plugins."o-harness@o-harness"]\nenabled = true\n[plugins."other@x"]\nenabled = true\n')
+        config.write_text('[plugins."o-harness@o-harness"]\nenabled = true\n[plugins."other@x"]\nenabled = true\n', newline='\n')
         with patch('oh.hosts.executable', return_value='codex'), patch.dict(os.environ, {'CODEX_HOME': str(config.parent)}):
             args = command('codex', {'model': 'm', 'effort': 'low'}, self.root, 'implementation', None, 1000)
         self.assertIn('plugins."o-harness@o-harness".enabled=false', args)
