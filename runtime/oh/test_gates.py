@@ -97,6 +97,9 @@ class GateTest(unittest.TestCase):
         gate = {'options': [{'choice': 'approve', 'label': 'Approve'}, {'choice': 'reconsider', 'label': 'Reconsider'}], 'words': True}
         self.assertEqual(pick(gate, 'approve'), 'approve')
         self.assertEqual(pick(gate, 'Make the title shorter'), 'refine: Make the title shorter')
+        self.assertEqual(pick(gate, 'refine: shorter title'), 'refine: shorter title')
+        for command in ('stop', 'Stop', 'pause', 'continue', '/oh-stop', '$oh-deliver 0001'):
+            with self.subTest(command), self.assertRaises(Refused):pick(gate, command)  # a command, never a change request
         with self.assertRaises(Refused):pick(gate | {'words': False}, 'Make the title shorter')
 
     def test_the_hook_refuses_prefilled_answers_on_oh_menus_only(self):
@@ -167,12 +170,28 @@ class GateTest(unittest.TestCase):
         self.assertFalse(any(m.get('method') == 'elicitation/create' for m in sent))
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         from .hosts import command
-        config = self.home / '.codex/config.toml';config.parent.mkdir(parents=True)
+        config = self.home / 'codex-home/config.toml';config.parent.mkdir(parents=True)
         config.write_text('[plugins."o-harness@o-harness"]\nenabled = true\n[plugins."other@x"]\nenabled = true\n')
-        with patch('oh.hosts.executable', return_value='codex'):
+        with patch('oh.hosts.executable', return_value='codex'), patch.dict(os.environ, {'CODEX_HOME': str(config.parent)}):
             args = command('codex', {'model': 'm', 'effort': 'low'}, self.root, 'implementation', None, 1000)
         self.assertIn('plugins."o-harness@o-harness".enabled=false', args)
         self.assertFalse(any('other@x' in a for a in args))
+
+    def test_a_click_whose_record_never_arrives_never_blocks_the_next_choice(self):
+        from .authority import pending_file, stage
+        self.begin('claude')
+        bogus = {'hook_event_name': 'PostToolUse', 'tool_name': 'AskUserQuestion', 'session_id': 's', 'tool_use_id': 'toolu_never', 'transcript_path': str(self.transcript)}
+        self.transcript.write_text('')
+        stage_click(self.root, 'claude', bogus)
+        with self.assertRaises(Refused):materialize(self.root)  # not saved yet: kept for a retry
+        self.assertTrue(pending_file(self.root).exists())
+        question = current(self.root) and ask(current(self.root))['questions'][0]
+        self.assertEqual(self.click(question, 'Continue', use='toolu_real')['status'], 'running')  # a newer click replaces it
+        stage_click(self.root, 'claude', bogus | {'transcript_path': '/etc/hosts'})
+        with self.assertRaises(Refused):materialize(self.root)
+        self.assertFalse(pending_file(self.root).exists())  # outside Claude's transcripts: set aside at once
+        stage_click(self.root, 'claude', bogus)
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 't9', 'prompt': 'stop'})  # typing replaces it too
 
     def test_a_click_that_can_never_verify_is_set_aside_and_typing_still_works(self):
         from .authority import stage
@@ -200,3 +219,6 @@ class GateTest(unittest.TestCase):
                 self.assertEqual('PreToolUse' in hooks and 'PostToolUse' in hooks, host == 'claude')
                 manifest = json.loads((plugin / '.codex-plugin/plugin.json').read_text())
                 self.assertEqual(manifest.get('mcpServers'), './.mcp.json' if host == 'codex' else None)
+                if host == 'codex':  # Codex clears a server's environment: OH's worker marker and data home are passed on
+                    server = json.loads((plugin / '.mcp.json').read_text())['mcpServers']['o-harness']
+                    self.assertEqual(server['env_vars'], ['OH_CHILD_ATTEMPT', 'OH_DATA_HOME'])

@@ -158,7 +158,9 @@ def oh_plugins():
     """OH's plugin as installed in Codex, under each marketplace that provides it."""
     import re
     import tomllib
-    try:plugins=tomllib.loads((Path.home()/'.codex/config.toml').read_text()).get('plugins',{})
+    import os
+    home=Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
+    try:plugins=tomllib.loads((home/'config.toml').read_text()).get('plugins',{})
     except (OSError,ValueError):return []
     return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
 

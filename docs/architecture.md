@@ -32,8 +32,8 @@ older menu never applies. In Codex, OH's MCP server shows the menu itself and re
 click, which travels from the Codex menu to OH without passing through the model. Codex doesn't
 tell the server which conversation called it, so there the click is bound to the run, its host
 and the exact menu, and the menu names the project, checkout and run it is for. The menu server
-is started only by Codex from the plugin, never by an `oh` command, and OH's own workers run
-with OH's plugin turned off.
+is started only by Codex from the plugin, never by an `oh` command. OH's worker commands turn
+OH's Codex plugin off, and the menu server refuses to ask when an OH worker started it.
 
 The runner keeps a hash-chained journal per run. For each task it picks a model profile,
 starts a fresh worker, runs the checks, starts an independent reviewer on the exact tree

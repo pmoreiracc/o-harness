@@ -35,10 +35,16 @@ def stage(root,host,payload):
     locator={'host':host,'payload':payload,'event':event}
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        if path.exists() and read_json(path)!=locator:
+        if path.exists() and read_json(path)!=locator and not unverified_click(path):
             raise Refused('A prior human choice is pending verification; resolve it before another choice')
         atomic_json(path,locator)
     return {'pending':True,'message':'Run OH to verify and apply this native human choice'}
+
+
+def unverified_click(path):
+    """A pending click has not verified yet, so a newer human answer replaces it: a click whose record never
+    arrives can't hold up the next choice."""
+    return read_json(path).get('kind')=='click'
 
 
 def stage_click(root,host,payload):
@@ -55,7 +61,7 @@ def stage_click(root,host,payload):
     locator={'host':host,'kind':'click','payload':{k:payload.get(k) for k in ('session_id','tool_use_id','transcript_path')}}
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        if path.exists() and read_json(path)!=locator:
+        if path.exists() and read_json(path)!=locator and not unverified_click(path):
             raise Refused('A prior human choice is pending verification; run OH `run` first, then ask again')
         atomic_json(path,locator)
     return {'pending':True,'message':'Run OH `run` to verify and apply this click'}
@@ -67,7 +73,8 @@ def attest_click(payload,root=None):
     session=payload['session_id'];use=payload['tool_use_id']
     allowed=(Path.home()/'.claude/projects').resolve()
     path=Path(payload.get('transcript_path') or '').expanduser().resolve()
-    if not path.is_relative_to(allowed) or not path.is_file():
+    if not path.is_relative_to(allowed):raise Refused('That click does not point at a Claude transcript')
+    if not path.is_file():
         raise NotYet('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
     asked=answered=None;hashes=[];at=None
     with path.open('rb') as stream:

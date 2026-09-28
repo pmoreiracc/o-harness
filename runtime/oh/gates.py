@@ -92,6 +92,10 @@ def pick(gate, answer):
     answer = answer.strip()
     for option in gate['options']:
         if answer.casefold() in (option['label'].casefold(), option['choice'].casefold()):return option['choice']
+    from .entry import CHOICES, command
+    parsed = command(answer)
+    if answer.casefold() in CHOICES | {'pause'} or parsed and parsed[0] != 'choice':
+        raise Refused(f'"{answer}" is an OH command, not a change to make, and it is not on this menu. Type it in the chat instead.')
     if gate['words']:
         words = re.sub(r'^refine:\s*', '', answer, flags=re.I).strip()
         if words:return 'refine: ' + words
