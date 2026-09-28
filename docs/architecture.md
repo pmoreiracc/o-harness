@@ -31,9 +31,11 @@ saved transcript of the conversation that owns the run. Nothing is handed over i
 only the latest click on exactly the menu OH is waiting on counts, so a click on an older menu,
 in another conversation or on an altered menu never applies. A menu word typed in Claude
 is read from the transcript the same way, so only the person's single latest answer to the
-current menu counts, typed or clicked; if OH refuses it, no earlier answer applies instead. In
-Codex, a click spends any menu word typed before it. In Codex, OH's MCP server shows the menu itself and records the
-click, which travels from the Codex menu to OH without passing through the model. Codex doesn't
+current menu counts, typed or clicked; if OH refuses it, no earlier answer applies instead. Only
+messages Claude saved as the person's count, never another agent's or a notification; if OH can't
+read a typed menu word as the latest answer, it applies nothing and asks the person to choose again.
+In Codex, OH's MCP server shows the menu itself and records the click, which travels from the
+Codex menu to OH without passing through the model; a click spends any menu word typed before it. Codex doesn't
 tell the server which conversation called it, so there the click is bound to the run, its host
 and the exact menu, and the menu names the project, checkout and run it is for. The menu server
 is started only by Codex from the plugin, never by an `oh` command. OH's worker commands turn

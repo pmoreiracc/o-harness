@@ -54,24 +54,29 @@ def within(cwd,root):
 
 
 def human(x):
-    """A record the person produced, not another agent, a notification or an SDK caller."""
+    """A record the person produced, not another agent, a notification or an automated SDK caller. Claude marks
+    what a person typed with origin kind "human" (the desktop app also marks it promptSource "sdk"); records
+    without an origin, such as tool results, count unless they carry an automation marker."""
+    if x.get('isSidechain') or x.get('isMeta'):return False
     origin=x.get('origin') if isinstance(x.get('origin'),dict) else {}
-    return (not x.get('isSidechain') and not x.get('isMeta') and origin.get('kind') in (None,'human')
-            and x.get('turnOrigin') in (None,'human') and x.get('promptSource') not in ('sdk','system') and x.get('entrypoint')!='sdk-cli')
+    if origin.get('kind') is not None:return origin['kind']=='human' and x.get('turnOrigin') in (None,'human')
+    return x.get('turnOrigin') is None and x.get('promptSource') not in ('sdk','system') and x.get('entrypoint')!='sdk-cli'
 
 
-def latest_answer(path,session,root,question,since):
+def latest_answer(path,session,root,question,since,hint=None):
     """The person's single latest answer to the current menu in the owner's transcript: a click on exactly this
     menu (the model's question-tool call without answers of its own, and the answer the host returned), or a
     choice they typed after the menu appeared. None when there is none."""
     from .entry import command
-    asked={};latest=None
+    asked={};latest=None;hinted=None
     with path.open('rb') as stream:
         stream.seek(max(0,path.stat().st_size-8*1024*1024))
         for line in stream:
             try:x=json.loads(line)
             except ValueError:continue
-            if not isinstance(x,dict) or x.get('sessionId')!=session or not human(x):continue
+            if not isinstance(x,dict) or x.get('sessionId')!=session:continue
+            if hint and x.get('promptId')==hint and x.get('type')=='user' and x.get('timestamp'):hinted=hinted or x['timestamp']
+            if not human(x):continue
             if not within(x.get('cwd'),root):continue  # the agent may cd into the checkout's folders
             content=(x.get('message') or {}).get('content')
             if x.get('type')=='user' and (isinstance(content,str) or isinstance(content,list) and content and all(isinstance(c,dict) and c.get('type')=='text' for c in content)):
@@ -94,7 +99,7 @@ def latest_answer(path,session,root,question,since):
                         use=c['tool_use_id']
                         latest={'host':'claude','session':session,'turn':use,'prompt':answer,'via':'question',
                             'at':x.get('timestamp'),'record_hashes':sorted({asked[use],digest(x)}),'transcript_path':str(path)}
-    return latest
+    return latest,hinted
 
 
 def newer(at,than):
@@ -119,16 +124,22 @@ def menu_waiting(root):
     return (gate,state,journal.records()[-1]['at']) if gate else None
 
 
-def answer(root):
+def answer(root,hint=None):
     """Apply the person's latest answer to the menu the run waits on, read from the owner's own transcript.
     Only that single latest answer counts: once it is applied or refused, no earlier answer can take its place,
-    and applying it moves the menu on so every earlier answer is out of date."""
+    and applying it moves the menu on so every earlier answer is out of date. `hint` is a typed menu word the
+    prompt hook saw: if it can't be read as that latest answer, nothing is applied."""
     from .gates import apply,ask,pick
     waiting=menu_waiting(root)
     if not waiting:return None
     gate,state,since=waiting
     path=owner_transcript(state['human'])
-    found=latest_answer(path,state['human']['session'],root,ask(gate)['questions'][0],since) if path else None
+    found,hinted=latest_answer(path,state['human']['session'],root,ask(gate)['questions'][0],since,hint) if path else (None,None)
+    if hint and (not found or found['turn']!=hint and (not hinted or not newer(found.get('at'),hinted))):
+        # The person typed a menu word OH can't read as their latest answer: apply nothing rather than an older one.
+        if found and not used_file(root,found).exists():
+            atomic_json(used_file(root,found),{'source':found,'refused':'Set aside: a later typed choice could not be read.'},immutable=True)
+        raise Refused('OH could not read your typed choice from the conversation, so nothing was applied. Choose again from the menu, or type it again.')
     if not found:return None
     used=used_file(root,found)
     if used.exists():return None
@@ -140,7 +151,19 @@ def answer(root):
         atomic_json(used,{'source':found,'refused':str(exc)},immutable=True)
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
+    answered(root,'claude',found['session'],str(path))
     return result
+
+
+def answered(root,host,session,transcript):
+    """What the typed path does after a human choice applies: forget an older refusal, and count the owner
+    conversation's usage toward this run when it is running again."""
+    from .transcripts import register
+    from .workflow import load_run
+    refusal_file(root).unlink(missing_ok=True)
+    _,run=load_run(root)
+    if run['status']=='running' and transcript:
+        register(root,host,{'session_id':session,'transcript_path':transcript},run['id'],run['project'])
 
 
 def attest(host,payload,root=None):
@@ -175,7 +198,7 @@ def attest(host,payload,root=None):
                     text='\n'.join(c.get('text','') for c in p.get('content',[]) if c.get('type') in ('input_text','text'))
                 else:continue
             else:
-                if x.get('type')!='user' or x.get('isSidechain') or x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk' or x.get('entrypoint')=='sdk-cli':continue
+                if x.get('type')!='user' or not human(x):continue
                 if x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
                 if root is not None and not within(x.get('cwd'),root):raise Refused('Human turn belongs to another project checkout')
                 message=x.get('message',{})
@@ -201,9 +224,10 @@ def materialize(root):
             # A menu answer typed in Claude is read from the transcript like a click, so the person's latest
             # answer wins whichever way they gave it; the hook's locator only said that one was typed. Wait
             # while Claude may still be saving that turn, so an older click never wins over it.
-            if not settled(root,read_json(path),path):
+            locator=read_json(path)
+            if not settled(root,locator,path):
                 raise Refused('Your typed choice is not saved in the conversation yet; run OH again in a moment')
-            path.unlink()
+            path.unlink();return answer(root,hint=locator['event']['turn'])
         if not path.exists():return answer(root)
         locator=read_json(path);event=attest(locator['host'],locator['payload'],root)
         used=used_file(root,event)

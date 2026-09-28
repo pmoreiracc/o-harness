@@ -23,6 +23,14 @@ class AuthorityTest(unittest.TestCase):
                     records=[{'type':'user','sessionId':'session','promptId':'turn','cwd':str(root),'message':{'role':'user','content':'continue'}}]
                 def save():path.write_text(''.join(json.dumps(r)+'\n' for r in records))
                 save();self.assertEqual(attest(host,payload,root)['turn'],'turn')
+                if host=='claude':  # the desktop app saves a typed turn as from a person, with its SDK marker
+                    records[0]|={'origin':{'kind':'human'},'turnOrigin':'human','promptSource':'sdk','entrypoint':'claude-desktop'}
+                    save();self.assertEqual(attest(host,payload,root)['turn'],'turn')
+                    records[0]['origin']={'kind':'peer'}  # another agent's message is never the person's
+                    save()
+                    with self.assertRaises(Refused):attest(host,payload,root)
+                    for key in ('origin','turnOrigin','promptSource','entrypoint'):del records[0][key]
+                    save()
                 with self.assertRaises(Refused):attest(host,payload|{'prompt':'grant review'},root)
                 with self.assertRaises(Refused):attest(host,payload|{'turn_id':'other'},root)
                 with self.assertRaises(Refused):attest(host,payload,home/'other-project')

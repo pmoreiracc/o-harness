@@ -118,7 +118,7 @@ class GateTest(unittest.TestCase):
         self.assertTrue(pending_file(self.root).exists())
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
 
-    def typed(self, prompt, turn, cwd=None, save=True):
+    def typed(self, prompt, turn, cwd=None, save=True, extra=None):
         """The person types a choice: the prompt hook stages it, and Claude saves the turn."""
         from .authority import stage
         from .storage import now
@@ -127,7 +127,7 @@ class GateTest(unittest.TestCase):
                                     'transcript_path': str(self.transcript)})
         if save:
             self.records.append({'type': 'user', 'sessionId': 's', 'promptId': turn, 'cwd': str(cwd or self.root), 'timestamp': now(),
-                                 'message': {'role': 'user', 'content': prompt}})
+                                 'message': {'role': 'user', 'content': prompt}} | (extra or {}))
             self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
 
     def activity(self):
@@ -148,15 +148,30 @@ class GateTest(unittest.TestCase):
         self.typed('continue', 'typed-2')
         self.assertEqual(materialize(self.root)['status'], 'running')
 
-    def test_a_typed_choice_that_can_no_longer_verify_never_holds_up_a_click(self):
+    def test_a_typed_choice_that_cannot_be_read_applies_nothing_older(self):
         from .authority import pending_file
         question = self.begin('claude')['gate']['ask']['questions'][0]
         self.click(question, 'Stop', apply=False)
-        self.typed('continue', 'forged', save=False)  # staged after the click, never saved
+        self.typed('continue', 'unread', save=False)  # typed after the click, but not saved where OH reads
         with self.assertRaises(Refused):materialize(self.root)  # Claude might still be saving it
-        self.activity()  # the conversation moved on without it: it can't verify any more
-        self.assertEqual(materialize(self.root)['status'], 'stopped')
+        self.activity()  # the conversation moved on without it
+        with self.assertRaisesRegex(Refused, 'could not read your typed choice'):materialize(self.root)
         self.assertFalse(pending_file(self.root).exists())
+        self.assertIsNone(materialize(self.root))  # the older Stop click is set aside, never applied
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        self.assertEqual(self.click(question, 'Stop', use='toolu_again')['status'], 'stopped')  # choosing again works
+
+    def test_typed_choices_count_as_saved_by_the_desktop_app_but_not_from_other_senders(self):
+        desktop = {'origin': {'kind': 'human'}, 'turnOrigin': 'human', 'promptSource': 'sdk', 'entrypoint': 'claude-desktop'}
+        self.begin('claude')
+        for name, extra in (('another agent', {'origin': {'kind': 'peer'}}), ('a notification', {'promptSource': 'system'}),
+                            ('an automated caller', {'entrypoint': 'sdk-cli'})):
+            with self.subTest(name):
+                self.typed('continue', 'from-' + name.split()[-1], extra=extra)
+                with self.assertRaisesRegex(Refused, 'could not read'):materialize(self.root)
+                self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        self.typed('continue', 'desktop', extra=desktop)
+        self.assertEqual(materialize(self.root)['status'], 'running')
 
     def test_a_refused_latest_answer_never_lets_an_older_one_apply(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
@@ -172,7 +187,7 @@ class GateTest(unittest.TestCase):
         nested = self.root / '.claude/worktrees/other';nested.mkdir(parents=True);(nested / '.git').write_text('gitdir: elsewhere')
         self.assertFalse(within(nested, self.root));self.assertTrue(within(self.root / 'docs', self.root))
         self.typed('continue', 'typed-5', cwd=nested)
-        self.assertIsNone(materialize(self.root))
+        with self.assertRaisesRegex(Refused, 'could not read'):materialize(self.root)  # said, never applied
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
 
     def test_a_typed_choice_from_a_subfolder_verifies(self):
@@ -181,11 +196,23 @@ class GateTest(unittest.TestCase):
         self.typed('continue', 'typed-3', cwd=self.root / 'docs')
         self.assertEqual(materialize(self.root)['status'], 'running')
 
-    def test_a_forged_typed_choice_cannot_displace_a_click(self):
+    def test_a_forged_typed_choice_grants_nothing(self):
         from .authority import stage
         question = self.begin('claude')['gate']['ask']['questions'][0]
         stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'forged', 'prompt': 'continue'})
-        self.assertEqual(self.click(question, 'Stop')['status'], 'stopped')  # the forged turn never verifies; the click wins
+        with self.assertRaises(Refused):self.click(question, 'Stop')  # the forged turn never verifies, so nothing applies
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        self.assertEqual(self.click(question, 'Stop', use='toolu_again')['status'], 'stopped')
+
+    def test_an_applied_answer_clears_an_old_refusal_and_counts_the_owner_conversation(self):
+        from .authority import refusal_file
+        from .storage import atomic_json, digest, read_json, state_home
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        atomic_json(refusal_file(self.root), {'refused': 'an older command'})
+        self.assertEqual(self.click(question, 'Continue')['status'], 'running')
+        self.assertFalse(refusal_file(self.root).exists())
+        source = read_json(state_home() / 'sources' / (digest({'host': 'claude', 'session': 's'}) + '.json'))
+        self.assertEqual((source['run'], source['path']), (load_run(self.root)[1]['id'], str(self.transcript)))
 
     def test_free_text_is_a_change_request_only_where_one_is_allowed(self):
         gate = {'options': [{'choice': 'approve', 'label': 'Approve'}, {'choice': 'reconsider', 'label': 'Reconsider'}], 'words': True}
@@ -227,11 +254,15 @@ class GateTest(unittest.TestCase):
         return sent, next(m for m in sent if m.get('id') == 2)['result']['content'][0]['text']
 
     def test_codex_menu_records_the_click_itself(self):
+        from .authority import refusal_file
+        from .storage import atomic_json
         self.begin('codex')
+        atomic_json(refusal_file(self.root), {'refused': 'an older command'})
         sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
         self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
         self.assertIn('Recorded', text)
+        self.assertFalse(refusal_file(self.root).exists())
         self.assertIn(f'Project Fixture · {self.root.resolve()} · run ', asked['params']['message'])  # the person sees the target
         self.assertIn('Continue runs 1 of the 1 remaining task', asked['params']['message'])
         _, state = load_run(self.root)

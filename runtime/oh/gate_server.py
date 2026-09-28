@@ -95,6 +95,8 @@ class Server:
                  'prompt': choice, 'via': 'elicitation', 'at': now()}
         supersede(root, 'codex')  # anything typed while the menu was open is older than this click
         after = apply(root, event, gate['id'])
+        from .authority import answered
+        answered(root, 'codex', state['human']['session'], state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
         return f'Recorded the person\'s choice: {label}. Run OH `run` to carry it out. Status now: {after["status"]}.'
 
