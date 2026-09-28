@@ -56,4 +56,5 @@ def select(base=None):
 
 
 if __name__ == '__main__':
-    print('\n'.join(select(sys.argv[1] if len(sys.argv) > 1 else None)))
+    # Bytes, so Windows never adds \r to the test names the shell passes on.
+    sys.stdout.buffer.write(''.join(t + '\n' for t in select(sys.argv[1] if len(sys.argv) > 1 else None)).encode())
