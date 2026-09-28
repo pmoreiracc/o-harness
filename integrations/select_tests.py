@@ -19,20 +19,22 @@ PLATFORM = re.compile(r"os\.name|sys\.platform|[Ww]indows|\\r\\n|CRLF|newline=|c
 
 
 def changed_lines(base):
-    """Line numbers each test file changed at since `base`, as a set per module name."""
+    """Line numbers each test file changed at since `base`, per module name: added or edited lines, and the
+    lines on both sides of a pure deletion (which touch code whatever those lines hold)."""
     merge = subprocess.run(['git', '-C', str(ROOT), 'merge-base', base, 'HEAD'], capture_output=True, text=True).stdout.strip()
-    if not merge:return {}
+    if not merge:return {}, {}
     diff = subprocess.run(['git', '-C', str(ROOT), 'diff', '-U0', merge, '--', 'runtime/oh/test_*.py'],
                           capture_output=True, text=True, check=True).stdout
-    lines, name = {}, None
+    lines, anchors, name = {}, {}, None
     for row in diff.splitlines():
         if row.startswith('+++ '):
             name = Path(row[6:]).stem if row != '+++ /dev/null' else None
         elif row.startswith('@@') and name:
             start, _, count = re.search(r'\+(\d+)(,(\d+))?', row).groups()
             start, count = int(start), int(count if count is not None else 1)
-            lines.setdefault(name, set()).update(range(start, start + max(count, 1)))
-    return lines
+            if count:lines.setdefault(name, set()).update(range(start, start + count))
+            else:anchors.setdefault(name, set()).update((start, start + 1))
+    return lines, anchors
 
 
 def names(node):
@@ -49,16 +51,23 @@ FIXTURES = {'setUp', 'setUpClass', 'tearDown', 'tearDownClass'}
 
 
 def select(base=None):
-    changed = changed_lines(base) if base else {}
-    trees = {path.stem: (path.read_text(encoding='utf-8'), ast.parse(path.read_text(encoding='utf-8'))) for path in sorted(TESTS.glob('test_*.py'))}
+    changed, anchors = changed_lines(base) if base else ({}, {})
+    return pick({path.stem: path.read_text(encoding='utf-8') for path in sorted(TESTS.glob('test_*.py'))}, changed, anchors)
+
+
+def pick(sources, changed, anchors):
+    """The test ids to run, from each module's source and the lines the change touched in it."""
+    trees = {module: (source, ast.parse(source)) for module, source in sources.items()}
     # Changed module-level helpers, by name: any test that uses one, in any module, is affected.
     shared = {n.name for module, (_, tree) in trees.items() for n in tree.body
-              if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and not n.name.endswith('Test') and spans(n, changed.get(module, set()))}
+              if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and not n.name.endswith('Test')
+              and spans(n, changed.get(module, set()) | anchors.get(module, set()))}
     chosen = []
     for module, (source, tree) in trees.items():
         rows = source.splitlines()
         # Blank and comment-only lines change nothing a test runs.
         edits = {n for n in changed.get(module, set()) if 0 < n <= len(rows) and rows[n - 1].strip() and not rows[n - 1].strip().startswith('#')}
+        edits |= anchors.get(module, set())
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):continue
             methods = [n for n in node.body if isinstance(n, ast.FunctionDef)]
@@ -66,12 +75,14 @@ def select(base=None):
             # A changed fixture or class attribute can break every test of the class; a changed helper only the
             # tests that use it, directly or through another helper.
             inside = set().union(*(set(range(n.lineno, n.end_lineno + 1)) for n in methods)) if methods else set()
-            whole = bool(FIXTURES & {n for n, h in helpers.items() if spans(h, edits)}) or bool(edits & (set(range(node.lineno, node.end_lineno + 1)) - inside))
             touched = {n for n, h in helpers.items() if spans(h, edits) or names(h) & shared}
             while True:
                 more = {n for n, h in helpers.items() if n not in touched and names(h) & touched}
                 if not more:break
                 touched |= more
+            # A fixture runs for every test, so one affected by the change (directly or through a helper it calls)
+            # selects them all.
+            whole = bool(FIXTURES & touched) or bool(edits & (set(range(node.lineno, node.end_lineno + 1)) - inside))
             for test in methods:
                 if not test.name.startswith('test_'):continue
                 if (module in CORE or whole or PLATFORM.search(ast.get_source_segment(source, test))

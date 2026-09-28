@@ -187,7 +187,7 @@ def command(host,profile,root,role,schema_path,compact_tokens):
     from .storage import git
     git_paths=[git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
     from .config import protected_paths
-    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
+    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
     if role in ('review','analysis'):protected.append(str(root))
     private=private_plans(root)
     if private:protected.append(str(private))  # workers read private plans; only OH writes them

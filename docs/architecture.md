@@ -43,7 +43,9 @@ model can't write it; Codex runs a plugin's MCP server outside that sandbox. Eac
 command (status, init, deliver, prepare, start, run, pause, resume, stop and a few read-only ones)
 is a tool that runs the command through the plugin's `oh` launcher, as the shell would: with the
 person's own shell setup (read once from their login shell, since Codex gives the server almost
-none of it) and Codex's values for OH on top. OH's progress lines become progress notifications.
+none of it), while OH's and the hosts' own settings come only from Codex, so a command and the
+server always use the same OH state. A command runs in its own session and keeps working if
+Codex ends the server. OH's progress lines become progress notifications.
 The server runs from the core the plugin carries, so its tools exist before setup and right after
 an update; the launcher still picks and activates the installed core. Stopping a tool call does
 not stop OH, which keeps working within its grant; `status` and `stop` still apply.

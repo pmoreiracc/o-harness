@@ -90,7 +90,8 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     guard(root,state)
     if state.get('plans',{}).get('location')=='private' and blocked_layout(root,current):raise Refused(blocked_layout(root,current))
     # Progress goes to stderr: stdout carries only the result, which tools and scripts read.
-    print(f"OH task {task['id']}: {role} · {profile['model']} / {profile['effort']}",file=sys.stderr,flush=True)
+    try:print(f"OH task {task['id']}: {role} · {profile['model']} / {profile['effort']}",file=sys.stderr,flush=True)
+    except (OSError,ValueError):pass  # nobody is reading any more (the host ended the tool call); the run goes on
     attempt_id=identifier();before=tree(root)
     git_tree=candidate_tree(root) if role=='review' else None
     directory=journal.path/'attempts'/attempt_id

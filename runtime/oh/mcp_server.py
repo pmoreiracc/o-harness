@@ -109,8 +109,8 @@ def conversation(meta):
 
 def folder(thread):
     """The folder the conversation works in, from Codex's own saved session."""
-    home = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex').expanduser()
-    files = list((home / 'sessions').rglob('*' + thread + '.jsonl'))
+    from .hosts import codex_home
+    files = list((codex_home() / 'sessions').rglob('*' + thread + '.jsonl'))
     if len(files) != 1:raise Refused('OH could not find this Codex conversation\'s saved session.')
     cwd = None
     with files[0].open('rb') as stream:
@@ -144,7 +144,7 @@ def checkout(arguments, thread):
     return root
 
 
-# Values Codex passes this server that describe OH and the hosts, not the person's shell: these win.
+# OH's and the hosts' own settings: taken from what Codex passes this server, never from the person's shell.
 FORWARDED = {'OH_CHILD_ATTEMPT', 'OH_DATA_HOME', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
 MARK = '__OH_SHELL_ENVIRONMENT__'
 
@@ -168,7 +168,7 @@ def shell_environment():
 class Server:
     def __init__(self, stdin, stdout, launcher=None):
         self.stdin, self.stdout, self.launcher, self.client = stdin, stdout, launcher, {}
-        self.lock, self.replies, self.cancelled, self.shell = threading.Lock(), {}, {}, None
+        self.lock, self.reading, self.replies, self.cancelled, self.shell = threading.Lock(), threading.Lock(), {}, {}, None
 
     def send(self, message):
         with self.lock:
@@ -219,10 +219,11 @@ class Server:
     def environment(self, thread):
         """What an OH command gets in Codex's shell: the person's own shell setup (PATH additions, JAVA_HOME, proxies...),
         which Codex does not give this server, with Codex's forwarded values on top."""
-        with self.lock:
+        with self.reading:  # its own lock: replies to the host never wait for the shell
             if self.shell is None:self.shell = shell_environment()
-        forwarded = {k: v for k, v in os.environ.items() if k not in self.shell or k in FORWARDED}
-        return {k: v for k, v in self.shell.items() if k != 'OH_CHILD_ATTEMPT'} | forwarded | {'CODEX_THREAD_ID': thread}
+        # OH's and the hosts' own settings come only from Codex, exactly as this server sees them, so a command
+        # and the server always use the same OH state and Codex folder.
+        return dict(os.environ) | {k: v for k, v in self.shell.items() if k not in FORWARDED} | {'CODEX_THREAD_ID': thread}
 
     def oh(self, root, argv, thread, token):
         """Run one OH command through the plugin's launcher, as the shell would, in the calling conversation.
@@ -230,7 +231,8 @@ class Server:
         environment = self.environment(thread)
         output, lines = [], []
         with subprocess.Popen([sys.executable, '-I', str(self.launcher), '--root', str(root), *argv], stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, text=True, encoding='utf-8', errors='replace') as process:
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, text=True, encoding='utf-8', errors='replace',
+                              start_new_session=True) as process:  # OH keeps working if Codex ends this server
             reader = threading.Thread(target=lambda: output.append(process.stdout.read()), daemon=True);reader.start()
             for count, line in enumerate(process.stderr, 1):
                 lines.append(line.rstrip())

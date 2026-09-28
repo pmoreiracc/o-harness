@@ -12,7 +12,7 @@ from .config import HOME
 from .mcp_server import TOOLS, serve
 
 
-def play(messages, respond=None, launcher=None):
+def play(messages, respond=None, launcher=None, settle=0):
     """Play the Codex host: send `messages`, answer each menu the server opens with `respond`, and hang up once
     every request it did not cancel has its response. Returns everything the server sent, in order."""
     output, pending, answered = io.StringIO(), list(messages), set()
@@ -34,6 +34,7 @@ def play(messages, respond=None, launcher=None):
                 time.sleep(0.01)
             return ''
     serve(Host(), output, launcher)
+    time.sleep(settle)  # anything the server still sends after the host hung up
     return sent()
 
 
@@ -58,7 +59,9 @@ class CodexToolsTest(unittest.TestCase):
         patcher = patch('pathlib.Path.home', return_value=self.home);patcher.start();self.addCleanup(patcher.stop)
         # The person's shell, as the server reads it once: it adds a value Codex does not pass.
         shell = Path(self.temp.name) / 'shell'
-        shell.write_text('#!/bin/sh\nprintf __OH_SHELL_ENVIRONMENT__\nFROM_SHELL=yes OH_DATA_HOME=/wrong env -0\n', newline='\n');shell.chmod(0o755)
+        script = ('#!/bin/sh\nsleep "${FAKE_SHELL_WAIT:-0}"\nprintf __OH_SHELL_ENVIRONMENT__\n'
+                  'FROM_SHELL=yes OH_DATA_HOME=/wrong CLAUDE_CONFIG_DIR=/wrong env -0\n')
+        shell.write_text(script, newline='\n');shell.chmod(0o755)
         environment = patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex'), 'SHELL': str(shell)});environment.start();self.addCleanup(environment.stop)
         codex_session(self.home, 't1', self.root)
         # A stand-in launcher that reports what it was asked to run, from which conversation.
@@ -69,7 +72,8 @@ class CodexToolsTest(unittest.TestCase):
             'time.sleep(float(os.environ.get("FAKE_WAIT", "0")))\n'
             'if "fail" in sys.argv:print("OH: nothing to run", file=sys.stderr);sys.exit(2)\n'
             'print(json.dumps({"argv": sys.argv[1:], "thread": os.environ.get("CODEX_THREAD_ID")}))\n'
-            'print(json.dumps({"shell": os.environ.get("FROM_SHELL"), "data": os.environ.get("OH_DATA_HOME")}), file=sys.stderr)\n', newline='\n')
+            'print(json.dumps({"shell": os.environ.get("FROM_SHELL"), "data": os.environ.get("OH_DATA_HOME"), '
+            '"claude": os.environ.get("CLAUDE_CONFIG_DIR")}), file=sys.stderr)\n', newline='\n')
 
     def call(self, name, arguments, meta=None, launcher=None, ident=2):
         sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
@@ -122,13 +126,23 @@ class CodexToolsTest(unittest.TestCase):
         self.assertTrue(path.is_relative_to(state_home() / 'projects' / project(self.root)['id']))
         self.assertEqual(read_json(path), {'tasks': tasks})
 
-    def test_commands_get_the_person_s_shell_setup_with_codex_s_values_on_top(self):
+    def test_commands_get_the_person_s_shell_setup_but_oh_settings_only_from_codex(self):
+        os.environ.pop('CLAUDE_CONFIG_DIR', None)  # Codex passes none; the shell's must not stand in for it
         sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
                      {'id': 2, 'method': 'tools/call', 'params': {'name': 'run', 'arguments': {'root': str(self.root)}} | calling('t1', progressToken='p')}],
                     launcher=self.launcher)
         seen = json.loads([m for m in sent if m.get('method') == 'notifications/progress'][-1]['params']['message'])
         # Windows passes Codex's environment through, so there is no login shell to read.
-        self.assertEqual(seen, {'shell': None if os.name == 'nt' else 'yes', 'data': os.environ['OH_DATA_HOME']})
+        self.assertEqual(seen, {'shell': None if os.name == 'nt' else 'yes', 'data': os.environ['OH_DATA_HOME'], 'claude': None})
+
+    @unittest.skipIf(os.name == 'nt', 'Windows reads no login shell')
+    def test_the_server_keeps_answering_while_it_reads_the_shell(self):
+        with patch.dict(os.environ, {'FAKE_SHELL_WAIT': '1'}):
+            sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
+                         {'id': 2, 'method': 'tools/call', 'params': {'name': 'status', 'arguments': {'root': str(self.root)}} | calling('t1')},
+                         {'id': 3, 'method': 'ping'}], launcher=self.launcher)
+        order = [m.get('id') for m in sent if 'result' in m]
+        self.assertLess(order.index(3), order.index(2))
 
     def test_the_runner_reports_progress_where_the_server_forwards_it(self):
         import contextlib
@@ -144,9 +158,11 @@ class CodexToolsTest(unittest.TestCase):
     def test_a_cancelled_call_gets_no_reply_and_an_unexpected_error_gets_one(self):
         with patch.dict(os.environ, {'FAKE_WAIT': '0.5'}):
             sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
-                         {'id': 2, 'method': 'tools/call', 'params': {'name': 'run', 'arguments': {'root': str(self.root)}} | calling('t1')},
-                         {'method': 'notifications/cancelled', 'params': {'requestId': 2}}, {'id': 3, 'method': 'ping'}], launcher=self.launcher)
-            time.sleep(1.5)  # the stand-in run finishes; its reply must not follow
+                         {'id': 2, 'method': 'tools/call', 'params': {'name': 'run', 'arguments': {'root': str(self.root)}} | calling('t1', progressToken='p')},
+                         {'method': 'notifications/cancelled', 'params': {'requestId': 2}}, {'id': 3, 'method': 'ping'}],
+                        launcher=self.launcher, settle=2)  # the stand-in run finishes meanwhile; its reply must not follow
+        # The stand-in's last line (its environment) was forwarded, so the run had finished before this check.
+        self.assertTrue(any('"shell"' in m['params']['message'] for m in sent if m.get('method') == 'notifications/progress'))
         self.assertFalse(any(m.get('id') == 2 for m in sent))
         with patch('oh.mcp_server.command', side_effect=TypeError('broken')):
             text, error = self.call('status', {'root': str(self.root)})
