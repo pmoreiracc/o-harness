@@ -289,7 +289,7 @@ class DeliveryTest(unittest.TestCase):
                     self.git('update-ref','refs/remotes/origin/main','HEAD')
                 def freeze(path,number):
                     path=Path(path);path.write_text(path.read_text().replace('- [ ]','- [x]'))
-                    path.write_text(freeze_render(self.root,number,layout=where))
+                    plans.write(path,freeze_render(self.root,number,layout=where))
                 freeze(auth,'0001');approve_and_sync()
                 with self.assertRaisesRegex(Refused,'unfinished M1'):delivery.selection(self.root,target)
                 freeze(ledger,n);approve_and_sync()
@@ -301,3 +301,21 @@ class DeliveryTest(unittest.TestCase):
                 if location=='private':
                     auth.write_text(auth.read_text()+'\nChanged completed design\n')
                     with self.assertRaisesRegex(Refused,'changed since'):delivery.selection(self.root,target)
+
+    def test_crlf_plans_deliver_and_freeze_without_changing_line_endings(self):
+        for location in ('repo','private'):
+            with self.subTest(location=location):
+                if location=='private':self.setUp()
+                where,path=self.documents(location)
+                for target in (path,Path(where['roadmap'])):
+                    target.write_bytes(target.read_bytes().replace(b'\n',b'\r\n'))
+                if location=='private':plans.approve(self.root,where,'0001','human-crlf',False)
+                else:self.git('add','.');self.git('commit','-qm','CRLF plans')
+                self.git('update-ref','refs/remotes/origin/main','HEAD')
+                self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+                self.assertIn(b'- [x] **1.**',path.read_bytes())
+                self.assertNotIn(b'\n',path.read_bytes().replace(b'\r\n',b''))
+                choose(self.root,'continue',self.event('next','continue'))
+                self.assertEqual(run(self.root,self.fake)['status'],'completed')
+                self.assertIn(b'status: frozen\r\ndelivered: M1\r\n',path.read_bytes())
+                self.assertNotIn(b'\n',path.read_bytes().replace(b'\r\n',b''))
