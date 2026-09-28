@@ -24,6 +24,7 @@ Tests must stay fast: the Linux suite under 3 minutes, the Windows PR run under 
   Windows (line endings, POSIX modes, read-only Git files, paths in regexes, symlinks).
 - A PR runs the Windows tests `integrations/select_tests.py` picks: OH's platform layer,
   platform-sensitive tests and every test the PR adds or edits. The full Windows suite
-  runs only before a release, so a Windows break can surface late: keep the rules above.
+  runs nightly on main, before a release and on demand (Actions > full suite, with a
+  choice of suite and an optional test-name pattern).
 Do not commit local state, receipts, tokens or raw host transcripts. Documentation must
 reflect completed, verified behavior. If blocked, explain a concrete recovery step.

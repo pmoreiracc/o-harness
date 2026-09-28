@@ -1,6 +1,6 @@
 """Pick the tests a pull request must pass on Windows: OH's platform layer, tests that exercise
 platform-specific behavior, and every test the change adds or edits. The full suite runs on Windows
-before a release.
+nightly, on demand and before a release (.github/workflows/full.yml).
 
   python3 integrations/select_tests.py [base]   print the chosen test ids, one per line
 """

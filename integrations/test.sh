@@ -6,10 +6,13 @@ cd "$(dirname "$0")/.."
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX OH_HOME OH_PROJECT_ROOT OH_POLICY_FILE OH_STATE_ROOT XDG_CONFIG_HOME
 case "${1:-native}" in
   # Every run lists its slowest tests, so a slow new one is seen in the PR that adds it.
-  native) PYTHONPATH=runtime python3 -m unittest discover -s runtime -p 'test_*.py' --durations 15 ;;
-  # The tests a PR must pass on Windows (see integrations/select_tests.py); the full suite runs before a release.
+  native) PYTHONPATH=runtime python3 -m unittest discover -s runtime -p 'test_*.py' --durations 15 "${@:2}" ;;
+  # The tests a PR must pass on Windows (see integrations/select_tests.py); the full suite runs nightly and before a release.
   windows)
     tests=$(python3 integrations/select_tests.py "${2:-origin/main}")
+    # unittest ignores -k for tests named one by one, so filter the names here.
+    [ "${3:-}" != -k ] || tests=$(grep -F -- "${4:-}" <<<"$tests" || true)
+    [ -n "$tests" ] || { echo 'No selected test matches' >&2;exit 1; }
     echo "Running $(wc -l <<<"$tests" | tr -d ' ') selected tests"
     # shellcheck disable=SC2086
     PYTHONPATH=runtime python3 -m unittest --durations 15 $tests
