@@ -29,9 +29,13 @@ When the returned status is `approval_checkpoint`, present `proposal` in this or
 3. exactly what was written (`lines`, and the returned `private_diff` for private plans or
    `git diff` of the files in `intent` for repository plans if the user wants the full change);
    for an improvement or an unclear idea, the `text` instead;
-4. the choices, for the user to type: **approve** (commit repository plans or approve the exact private files), **refine: <what to
+4. the choices, as the menu in `gate` (see below) or typed: **approve** (commit repository plans or approve the exact private files), **refine: <what to
    change>** (in their own words; OH asks the worker again), or **reconsider** (undo it and
    write nothing). Never choose for them, and never treat silence as approval.
+
+When OH's output has a `gate`, offer its choices as a menu by following `gate.how` (Claude: the question tool
+with exactly `gate.ask`, never an `answers` field; Codex: the o-harness `choose` tool). OH records the click itself;
+never pick for the person. Typed choices stay valid everywhere, and are the fallback when no menu can be shown.
 
 After **approve**, run `run` again. Then show **pr** / **stop** when something was committed;
 after **pr**, push the branch and open one pull request whose body ends with the output of

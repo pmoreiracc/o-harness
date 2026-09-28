@@ -31,6 +31,9 @@ file contents; editing an approved design invalidates that approval. Run `run` a
 human choice. An edited existing private design goes directly to review, preserving the
 person's text. A proposed decision remains undecided after approval of the document.
 Only drafts and designs edited since approval can be reapproved; frozen and abandoned designs stay closed.
+When OH's output has a `gate`, offer its choices as a menu by following `gate.how` (Claude: the question tool
+with exactly `gate.ask`, never an `answers` field; Codex: the o-harness `choose` tool). OH records the click itself;
+never pick for the person. Typed choices stay valid everywhere, and are the fallback when no menu can be shown.
 Handle the returned status before offering publication:
 - `review_checkpoint`: explain the retained findings and offer **grant review** / **stop**.
 - `needs_attention`: show the failure and its concrete recovery step, then **retry** / **stop**.

@@ -13,6 +13,8 @@ parser=argparse.ArgumentParser(add_help=False)
 parser.add_argument('--root',default=os.getcwd())
 options,remaining=parser.parse_known_args()
 command=remaining[0] if remaining else ''
+if command=='gate-server' and not globals().get('OH_GATE_SERVER'):
+    raise SystemExit('OH: the menu server is started by Codex from this plugin, not as an oh command.')
 if command=='setup':
     entry=plugin/'core/oh'
 else:
@@ -44,7 +46,7 @@ else:
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')
     revision=json.loads(active.read_bytes())['revision']
     if Path(revision).name!=revision:raise SystemExit('Invalid installed OH revision')
-    if command in ('run','start','deliver','resume','pause','stop','plugin-hook'):
+    if command in ('run','start','deliver','resume','pause','stop','plugin-hook','plugin-click'):
         import hashlib
         key=hashlib.sha256(json.dumps(str(Path(options.root).resolve()),ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
         locator=home/'registry/checkouts'/(key+'.json')

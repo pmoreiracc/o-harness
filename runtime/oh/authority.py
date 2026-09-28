@@ -37,6 +37,69 @@ def stage(root,host,payload):
     return {'pending':True,'message':'Run OH to verify and apply this native human choice'}
 
 
+def stage_click(root,host,payload):
+    """A Claude question-tool answer on an OH menu. The hook payload only locates it; `run` reads the click
+    from Claude's own transcript before anything happens."""
+    if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Delegated agent prompts cannot grant authority')
+    if host!='claude' or payload.get('hook_event_name')!='PostToolUse' or payload.get('tool_name')!='AskUserQuestion':
+        raise Refused('Only Claude\'s question tool carries OH menu clicks')
+    session=payload.get('session_id');use=payload.get('tool_use_id')
+    if not isinstance(session,str) or not re.fullmatch(r'[a-zA-Z0-9_-]+',session) or not isinstance(use,str) or not re.fullmatch(r'[a-zA-Z0-9_-]+',use):
+        raise Refused('A host session and tool call ID are required')
+    from .workflow import active_file
+    if not active_file(root).exists():return None
+    locator={'host':host,'kind':'click','payload':{k:payload.get(k) for k in ('session_id','tool_use_id','transcript_path')}}
+    path=pending_file(root)
+    with lock(path.with_suffix('.lock')):
+        if path.exists() and read_json(path)!=locator:
+            raise Refused('A prior human choice is pending verification; run OH `run` first, then ask again')
+        atomic_json(path,locator)
+    return {'pending':True,'message':'Run OH `run` to verify and apply this click'}
+
+
+def attest_click(payload,root=None):
+    """The click as Claude saved it: the model's question-tool call, without prefilled answers, and the
+    answer the host returned for that call. Both records belong to this session and checkout."""
+    session=payload['session_id'];use=payload['tool_use_id']
+    allowed=(Path.home()/'.claude/projects').resolve()
+    path=Path(payload.get('transcript_path') or '').expanduser().resolve()
+    if not path.is_relative_to(allowed) or not path.is_file():
+        raise Refused('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
+    asked=answered=None;hashes=[];at=None
+    with path.open('rb') as stream:
+        stream.seek(max(0,path.stat().st_size-8*1024*1024))
+        for line in stream:
+            try:x=json.loads(line)
+            except ValueError:continue
+            if not isinstance(x,dict) or x.get('isSidechain') or x.get('sessionId')!=session:continue
+            if x.get('promptSource')=='sdk' or x.get('turnOrigin')=='sdk' or x.get('entrypoint')=='sdk-cli':continue
+            content=(x.get('message') or {}).get('content')
+            if not isinstance(content,list):continue
+            if x.get('type')=='assistant':
+                found=[c for c in content if isinstance(c,dict) and c.get('type')=='tool_use' and c.get('id')==use]
+            elif x.get('type')=='user':
+                found=[c for c in content if isinstance(c,dict) and c.get('type')=='tool_result' and c.get('tool_use_id')==use]
+            else:continue
+            if not found:continue
+            if root is not None and Path(x.get('cwd','')).resolve()!=Path(root).resolve():raise Refused('Human turn belongs to another project checkout')
+            if x['type']=='assistant':asked=found[0]
+            else:
+                if found[0].get('is_error'):raise Refused('The question was refused before it was shown; ask again')
+                answered=x.get('toolUseResult');at=x.get('timestamp')
+            hashes.append(digest(x))
+    if asked is None or answered is None:raise Refused('No saved answer to that menu yet; no choice was made. Retry OH after the host saves it.')
+    request=asked.get('input') if asked.get('name')=='AskUserQuestion' else None
+    if not isinstance(request,dict) or 'answers' in request:
+        raise Refused('That answer was written by the model, not clicked by the person; nothing was chosen. Ask again.')
+    questions=request.get('questions')
+    if not isinstance(questions,list) or len(questions)!=1 or not isinstance(questions[0],dict):raise Refused('An OH menu asks exactly one question')
+    answers=answered.get('answers') if isinstance(answered,dict) else None
+    answer=answers.get(questions[0].get('question')) if isinstance(answers,dict) else None
+    if not isinstance(answer,str):raise Refused('The menu came back without an answer; ask again.')
+    return {'host':'claude','session':session,'turn':use,'prompt':answer,'question':questions[0],'via':'question',
+            'at':at,'record_hashes':sorted(set(hashes)),'transcript_path':str(path)}
+
+
 def attest(host,payload,root=None):
     from .workflow import human_event
     event=human_event(payload,host)
@@ -92,7 +155,8 @@ def materialize(root):
         desktop_pending(root)
         if not path.exists():return None
     with lock(path.with_suffix('.lock')):
-        locator=read_json(path);event=attest(locator['host'],locator['payload'],root)
+        locator=read_json(path);click=locator.get('kind')=='click'
+        event=attest_click(locator['payload'],root) if click else attest(locator['host'],locator['payload'],root)
         source=digest({k:event[k] for k in ('host','session','turn','prompt')})
         from .storage import project
         used=state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')
@@ -102,7 +166,7 @@ def materialize(root):
             return record['result']
         from .cli import host_hook
         try:
-            result=host_hook(root,locator['host'],locator['payload'],verified=event)
+            result=clicked(root,event) if click else host_hook(root,locator['host'],locator['payload'],verified=event)
             if result is None:raise Refused('This input is not a supported native OH transition')
         except Exception as exc:
             # The human's turn was verified and answered with this refusal: it is spent, so the next typed command
@@ -157,3 +221,12 @@ def desktop_pending(root):
     if (state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')).exists():return
     from .entry import receive
     receive(root,'codex',payload)
+
+
+def clicked(root,event):
+    """Apply a verified click: the question must be exactly the menu OH is showing now."""
+    from .gates import apply,ask,current,pick
+    gate=current(root)
+    if not gate or ask(gate)['questions'][0]!=event['question']:
+        raise Refused('That menu is not the one OH is waiting on (it changed, or the question was altered). Run OH `status` and ask again.')
+    return apply(root,event|{'prompt':pick(gate,event['prompt'])},gate['id'])

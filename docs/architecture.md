@@ -25,6 +25,14 @@ Only your own typed message approves work. The prompt hook records where to find
 OH confirms it in the host's saved transcript before starting. Model output, elapsed time
 and restarts never approve anything. Approved scope is fixed when prepared.
 
+A choice can also be a click. In Claude, the agent shows OH's menu with Claude's own question
+tool; a hook refuses a menu whose answer the model filled in, and OH reads the click from the
+saved transcript. The question must be exactly the menu OH is waiting on, so a click on an
+older menu never applies. In Codex, OH's MCP server shows the menu itself and records the
+click, which travels from the Codex menu to OH without passing through the model. Codex doesn't
+tell the server which conversation called it, so there the click is bound to the run, its host
+and the exact menu, not to the conversation.
+
 The runner keeps a hash-chained journal per run. For each task it picks a model profile,
 starts a fresh worker, runs the checks, starts an independent reviewer on the exact tree
 and commits only the reviewed tree, with an `OH-Evidence` trailer. `oh pr-summary` checks

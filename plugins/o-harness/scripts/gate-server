@@ -1,0 +1,9 @@
+#!/usr/bin/env -S python3 -I
+"""Codex starts this from the plugin's .mcp.json to show OH's choices as menus. It is not an `oh` command,
+so a host rule that allows `oh` commands never lets a model start it outside its sandbox."""
+from pathlib import Path
+import runpy
+import sys
+launcher=Path(__file__).resolve().with_name('oh')
+sys.argv=[str(launcher),'gate-server']
+runpy.run_path(str(launcher),init_globals={'OH_GATE_SERVER':True},run_name='__main__')

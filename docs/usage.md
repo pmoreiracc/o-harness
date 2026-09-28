@@ -65,8 +65,12 @@ OH's state, your settings or Git internals.
 
 A batch has 5 tasks and each task gets up to 3 review rounds by default; change that with
 `/oh-config` ([configuration](configuration.md)). If a task still has findings after its review rounds,
-OH pauses and lists the choices you can type. At the end of a batch, type **continue**,
-**pr** or **stop**. **pr** lets the agent push the branch and open a pull request with the
+OH pauses and shows the choices. At the end of a batch, choose **continue**, **pr** or
+**stop**. Choices appear as a menu you click (or pick with the arrow keys in a terminal) in
+the Claude app, terminal and phone, and in the Codex app, terminal and phone. Typing the
+word always works too, and is the only way where no menu can be shown (`codex exec`,
+Codex's bypass mode). At an approval, pick **Other** in Claude, or **Refine** in Codex, to
+say what to change. **pr** lets the agent push the branch and open a pull request with the
 review summary; you merge it.
 
 You can still code, commit and open PRs without OH at any time.
