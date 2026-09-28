@@ -1,6 +1,6 @@
 ---
 name: oh-deliver
-description: Execute an agreed OH task batch only when explicitly invoked.
+description: Deliver an approved design, propose a quick-fix task list for approval, or list ready work when explicitly invoked.
 disable-model-invocation: true
 ---
 Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory. Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly. Never install or start anything merely because this skill was discovered.

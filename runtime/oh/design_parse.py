@@ -46,9 +46,9 @@ def design_file(root,doc,layout=None):
     return str(designs/found[0].name) if found and found[0].is_file() else None
 
 
-def frontmatter(path):
+def frontmatter(path,rows=None):
     result=[]
-    for index,line in enumerate(lines(path)):
+    for index,line in enumerate(lines(path) if rows is None else rows):
         if index==0:
             if line!='---':break
             continue
@@ -57,9 +57,9 @@ def frontmatter(path):
     return result
 
 
-def fm_value(path,key):
+def fm_value(path,key,rows=None):
     if not Path(path).is_file():return ''
-    for line in frontmatter(path):
+    for line in frontmatter(path,rows):
         if line.startswith(key+':'):return re.sub(SPACE+'*$','',re.sub('^'+key+':'+SPACE+'*','',line,count=1),count=1)
     return ''
 
@@ -205,7 +205,10 @@ def freeze_render(root,doc,task='',layout=None):
     try:state=plan(root,doc,layout).rstrip('\n')
     except Refused as exc:raise Refused(f'freeze.sh: {name} does not have a valid task list.\n'+captured(str(exc))) from None
     rows=[row.split(US) for row in state.split('\n')]
-    kind=fm_value(path,'type');status=fm_value(path,'status');delivered=fm_value(path,'delivered')
+    # Native plans support CRLF and preserve their line endings; the legacy adapter keeps its byte contract.
+    from .plans import rows_of
+    source,ending=rows_of(path) if layout is not None else (lines(path),'\n')
+    kind=fm_value(path,'type',source);status=fm_value(path,'status',source);delivered=fm_value(path,'delivered',source)
     if kind!='design':fail(f"{name} has type '{kind or 'missing'}', not 'design'.")
     pending=[row[0] for row in rows if len(row)>1 and row[1]=='pending']
     tick=False
@@ -241,16 +244,16 @@ def freeze_render(root,doc,task='',layout=None):
             if delivered!=milestone:
                 fail(f"design doc {doc} says delivered: '{delivered or 'missing'}', but its roadmap record is in {milestone}.")
     if freeze:
-        fields=frontmatter(path)
+        fields=frontmatter(path,source)
         if [sum(line.startswith(k) for line in fields) for k in ('status:','last-verified:','delivered:')]!=[1,1,0]:
             fail(f'{name} has ambiguous lifecycle frontmatter.','Expected one status, one last-verified, and no delivered field before freezing.')
     pending_marker=f'- [ ] **{task}.**';done_marker=f'- [x] **{task}.**'
     output=[];inside=False
-    for index,line in enumerate(lines(path)):
+    for index,line in enumerate(source):
         if index==0 and line=='---':inside=True;output.append(line);continue
         if inside and line=='---':inside=False;output.append(line);continue
         if freeze and inside and line.startswith('status:'):output+=['status: frozen','delivered: '+milestone];continue
         if freeze and inside and line.startswith('last-verified:'):output.append('last-verified: '+date.today().isoformat());continue
         if tick and line.startswith(pending_marker):output.append(done_marker+line[len(pending_marker):]);continue
         output.append(line)
-    return ''.join(line+'\n' for line in output)
+    return ''.join(line+ending for line in output)

@@ -38,15 +38,25 @@ Approving a private design records its exact content hash; later edits invalidat
 Run `/oh-design <slug>` on an edited private design to review the existing text and approve it
 again. `oh plans list` distinguishes approved, draft, and edited-since-approval designs.
 A proposed decision document still needs a human decision; approving its saved text does not
-choose an option. Delivery from private design documents is a separate upcoming workflow step.
+choose an option.
 
 ## Build: oh-deliver
 
-1. Run `/oh-deliver` and agree on the tasks with the agent.
-2. The agent prepares that exact scope and shows you a trigger such as
-   `$o-harness:oh-deliver request:<id>`.
-3. Type the trigger yourself. That is your approval; the agent cannot approve for you,
-   and the approved scope can't grow afterwards.
+- `/oh-deliver` lists ready designs and explains why others are unavailable.
+- `/oh-deliver 0005` starts the next ready tasks from approved design 0005 immediately.
+  Add a track name to select only that track. Repository designs must match their approved
+  revision on `origin/main`; private designs must match their saved human approval.
+- `/oh-deliver fix the sign-in timeout` proposes a bounded task list. The agent prepares
+  it and shows the tasks, limits and a trigger such as `$o-harness:oh-deliver request:<id>`.
+  Type that trigger yourself to approve execution. The approved scope cannot grow afterwards.
+
+Ready tasks are selected in dependency order; blocked work stays pending. OH owns task
+checkboxes and freezes a design when its last task completes. For private plans, the reviewer
+sees the proposed document update alongside the code; OH publishes the update only after the
+reviewed code commit, with recovery if saving is interrupted. Private documents stay out of Git.
+Private progress also records its code revision: use the delivery branch or merge its code before
+continuing elsewhere. An older private plan with completed tasks but no recorded revision needs
+review and reapproval through `/oh-design <slug>` from the checkout containing that completed code.
 
 OH then runs the tasks on a branch (it creates one if you are on `main`). For each task a
 fresh worker implements it, your project checks run, an independent reviewer checks the

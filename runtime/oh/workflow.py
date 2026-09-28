@@ -99,6 +99,8 @@ def reduce(records):
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
         elif kind=='subject.existing':state['rendered']=d['plan']
         elif kind=='private.approval.intent':state['private_approval']=d
+        elif kind=='delivery.render':state['delivery_render']=d
+        elif kind=='delivery.approval.intent':state['delivery_approval']=d
         elif kind=='branch.creating':state['branch_creation']=d
         elif kind=='branch.moving':
             state['branch_move']=d;state.pop('branch_creation',None)
@@ -133,7 +135,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
     if workflow not in ('propose','design','deliver'):raise Refused('Unknown workflow')
     # Plan settings and plan transitions come only from OH's own parsing of a typed /oh-design, never from a
     # manifest file: a prepared file is delivery work, whoever wrote it.
-    if {'plans','slug'}&set(manifest) or (plan is None and any((t.get('transition') or {}).get('profile') in ('plans','intake') for t in tasks)):
+    if {'plans','slug','delivery'}&set(manifest) or (plan is None and any((t.get('transition') or {}).get('profile') in ('plans','intake','delivery') for t in tasks)):
         raise Refused('A manifest cannot choose plan settings or plan transitions')
     if prepared is not None and (workflow!='deliver' or plan is not None):raise Refused('Prepared scope is delivery work only')
     if workflow!='deliver' and len(tasks)!=1:raise Refused('Planning workflows have one bounded artifact task')
@@ -364,6 +366,7 @@ def review_limit(state,task):
 
 def checkpoint(root):
     journal,state=load_run(root)
+    from .prepared import limits
     left=len([t for t in state['tasks'] if t['id'] not in state['done']])
     private_diff={}
     if state['status']=='approval_checkpoint' and state.get('plans',{}).get('location')=='private' and state.get('rendered',{}).get('files'):
@@ -380,7 +383,8 @@ def checkpoint(root):
             {'proposal':{k:v for k,v in state['rendered'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent')}
                         |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
              if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(
-            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else {}) | private_diff
+            {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else
+            {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | private_diff
 
 
 def continue_limits(left,config):

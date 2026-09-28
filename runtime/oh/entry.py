@@ -40,6 +40,12 @@ def receive(root,host,payload):
             return {'authorized':False,'onboarding':str(exc),'next':'Complete explicit setup/registration, prepare the scope if needed, then submit a fresh workflow invocation.'}
         exact_request=re.fullmatch(r'request:[0-9a-f]{64}',args)
         design_request=re.fullmatch(r'[0-9]{4}(?:\s+[a-zA-Z0-9_-]+)?\s+request:[0-9a-f]{64}',args)
+        if name=='deliver':
+            from .delivery import parse,listing
+            selected=parse(args)
+            if selected['kind']=='list':return listing(root)
+            if selected['kind']=='quick_fix':return selected
+            design_request=selected['kind']=='design'
         from .plans import SLUG
         design=args.strip() if name=='design' else (re.fullmatch(r'design\s+(.*)',args,re.S) or [None,None])[1] if name=='oh-start' else None
         if design is not None and not re.fullmatch(SLUG,design.strip()):
