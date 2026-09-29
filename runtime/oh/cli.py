@@ -23,6 +23,10 @@ def host_hook(root,host,payload,*,verified):
         kind,intent=planning.groups()
         from .workflow import unfinished
         if unfinished(root,verified):raise Refused('An unfinished run exists in this checkout; resume it, or stop it with /oh-stop, first')
+        from .plans import layout
+        if not started(root,verified) and layout(root)['location']=='repo':
+            from .branches import from_main
+            from_main(root)
         if kind=='design':
             from .plans import design_manifest
             manifest,plan=design_manifest(root,intent.strip())
@@ -68,6 +72,12 @@ def host_hook(root,host,payload,*,verified):
         choose(root,prompt,verified)
         return checkpoint(root)
     return None
+
+
+def started(root,event):
+    """Whether this very command already started the checkout's run, so carrying it out again only continues it."""
+    from .workflow import active_file,load_run
+    return active_file(root).exists() and load_run(root)[1]['source']==digest({k:event[k] for k in ('host','session','turn','prompt')})
 
 
 def git_branch(root):
