@@ -166,6 +166,26 @@ def answered(root,host,session,transcript):
         register(root,host,{'session_id':session,'transcript_path':transcript},run['id'],run['project'])
 
 
+COMMAND_TAG=r'<(command-message|command-name|command-args)>(.*?)</\1>'
+
+
+def saved_command(text):
+    """Claude saves a typed slash command as its tags (<command-name>/oh-propose</command-name>, its
+    <command-args> and a <command-message>, in either order), not as the text typed. (name, args), or None
+    when the record holds anything else."""
+    tags=re.findall(COMMAND_TAG,text,re.S);names=[tag for tag,_ in tags]
+    if 'command-name' not in names or len(set(names))!=len(names) or re.sub(COMMAND_TAG,'',text,flags=re.S).strip():return None
+    found=dict(tags)
+    return found['command-name'].strip(),found.get('command-args','').strip()
+
+
+def typed_command(prompt):
+    """The (name, args) of a slash command as the prompt hook passes it, or None for other text."""
+    if not prompt.startswith('/'):return None
+    name,_,args=prompt.partition(' ')
+    return name,args.strip()
+
+
 def attest(host,payload,root=None):
     from .workflow import human_event
     event=human_event(payload,host)
@@ -206,7 +226,8 @@ def attest(host,payload,root=None):
                 if message.get('role')!='user':continue
                 text=message.get('content')
                 if isinstance(text,list):text='\n'.join(c.get('text','') for c in text if c.get('type')=='text')
-            if isinstance(text,str) and text.strip()==event['prompt']:
+            if isinstance(text,str) and (text.strip()==event['prompt']
+                    or host=='claude' and typed_command(event['prompt']) is not None and saved_command(text)==typed_command(event['prompt'])):
                 matches.append(digest(x))
                 if x.get('timestamp'):times.append(x['timestamp'])
     if not matches:raise Refused('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
