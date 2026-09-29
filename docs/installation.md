@@ -127,10 +127,11 @@ delete `~/.local/share/o-harness` after uninstalling from both hosts.
 1. On GitHub, open **Actions → prepare release → Run workflow**, type the new version (such as
    `0.4.0`, higher than the current one) and run it. It opens a pull request that sets the
    version, listing the pull requests merged since the last release.
-2. Merge that pull request.
+2. On that pull request, click **Approve and run** (GitHub asks before running checks on a pull
+   request a workflow opened), then merge it once the checks pass.
 
-Merging it starts the release workflow. It runs every test on Linux and Windows, then
-installs the package in the real Claude Code and Codex on Windows, macOS and Linux and checks
+Merging it starts the release workflow. It runs the full Windows suite (pull requests run only
+part of it), then installs the package in the real Claude Code and Codex on Windows, macOS and Linux and checks
 that OH sets up and its tools start (`integrations/install-check.py`, no AI login needed).
 Only when all of that passes does it create the `vX.Y.Z` tag, publish that package to the
 `dist` branch and create the GitHub release, whose notes list the merged pull requests. If a

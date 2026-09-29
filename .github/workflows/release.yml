@@ -1,6 +1,7 @@
 name: release
 # A new version reaching main releases it: "prepare release" opens the pull request that sets it (see
-# docs/installation.md, "Releasing"). Nothing is published unless every test and the install check pass.
+# docs/installation.md, "Releasing"). Nothing is published unless the full Windows suite and the install check
+# pass; main's protection already requires the pull request checks (Linux tests and syntax) for every change.
 # The tag is created first and pins the release's commit: running this again by hand, after a failure, finishes
 # that same version from that same commit, so users never get two different builds under one version.
 on:
@@ -92,10 +93,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.18.0'
-      # The package published is built here, by this repository's code, before the tests touch the checkout; the
+      # The package published is built here, by this repository's code; the
       # artifact from the install check (whose jobs ran third-party npm code) only proves it is the one tested.
       # It goes outside the runner's temp folder, where the downloaded artifact can't write.
       - name: Build the package to publish
@@ -112,8 +110,6 @@ jobs:
           [ "$(ls -A "$RUNNER_TEMP/tested")" = package.tgz ] || { echo "::error::The tested artifact holds more than package.tgz"; exit 1; }
           mkdir "$RUNNER_TEMP/checked" && tar -xzf "$RUNNER_TEMP/tested/package.tgz" -C "$RUNNER_TEMP/checked"
           diff -r "$BUILT" "$RUNNER_TEMP/checked"
-      - run: bash integrations/test.sh native
-      - run: bash integrations/test.sh syntax
       - name: Create the tag, which pins this release to its commit
         run: |
           git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { git tag "$TAG" "$COMMIT" && git push origin "$TAG"; }
