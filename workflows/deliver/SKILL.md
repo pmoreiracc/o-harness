@@ -23,8 +23,9 @@ itself. After opening a pull request, give its link; don't wait for or watch its
 
 Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
 ambiguous, ask the user which name to use and run `init --name <name>`. If OH says the project has no checks,
-save appropriate ordinary project checks with `config set checks '<JSON list>'`, tell the user which, and run
-the command again; never replace existing checks here. No OH files, hooks or settings belong in the product.
+save the checks the product's own instructions and CI run, never invented ones, with
+`config set checks '<JSON list>'`; give a check `when` paths when the product runs it only for changes there,
+so OH runs what is affected. Tell the user which, and run the command again; never replace existing checks here. No OH files, hooks or settings belong in the product.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
 Pass the user's arguments to `deliver [arguments]`; quote prose as one
