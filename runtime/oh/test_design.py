@@ -590,7 +590,7 @@ class DesignRunTest(unittest.TestCase):
 
     def test_typing_the_design_again_during_its_run_points_to_the_run(self):
         self.interrupt_review()
-        with self.assertRaisesRegex(Refused, 'An unfinished run exists'):self.design_run(turn='5')
+        with self.assertRaisesRegex(Refused, 'OH is still working on'):self.design_run(turn='5')
 
     def test_a_new_design_never_lands_on_another_plan_s_branch(self):
         self.design_run();run(self.root, self.worker([design()]))

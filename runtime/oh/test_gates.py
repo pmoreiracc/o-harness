@@ -236,9 +236,46 @@ class GateTest(unittest.TestCase):
         self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'message': {'role': 'user', 'content': '/oh-deliver 0006'}})
         self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
         stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': '/oh-deliver 0006'})
-        with self.assertRaisesRegex(Refused, 'unfinished run'):materialize(self.root)
+        with self.assertRaisesRegex(Refused, 'still working on'):materialize(self.root)
         self.assertEqual(self.click(question, 'Continue')['status'], 'running')  # the click still counts
         self.assertFalse(pending_file(self.root).exists())  # and it is the person's latest act
+
+    def waiting_command(self, prompt='/oh-deliver 0006'):
+        """The person types another command while the run waits at its menu: OH refuses it and keeps it."""
+        from .authority import stage
+        self.begin('claude')
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'message': {'role': 'user', 'content': prompt}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': prompt})
+        with self.assertRaisesRegex(Refused, 'stop it and start this command .*or keep it and cancel'):materialize(self.root)
+
+    def test_cancelling_the_waiting_command_keeps_the_open_run(self):
+        from .authority import cancel, pending_file
+        self.waiting_command()
+        with patch.dict(os.environ, {'OH_CHILD_ATTEMPT': 'a'}), self.assertRaises(Refused):cancel(self.root)  # never a worker's call
+        self.assertEqual(cancel(self.root)['cancelled'], '/oh-deliver 0006')
+        self.assertFalse(pending_file(self.root).exists())
+        self.assertIsNone(materialize(self.root))  # nothing waits: `run` carries on with the open run
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+
+    def test_stopping_the_open_run_starts_the_waiting_command(self):
+        from .authority import pending_file
+        from .controls import request
+        self.waiting_command()
+        self.assertEqual(request(self.root, 'stop')['status'], 'stopped')
+        # Past the open run, the same typed command is carried out: here it needs a setting first, and still waits.
+        with self.assertRaisesRegex(Refused, 'Choose where plans live'):materialize(self.root)
+        self.assertTrue(pending_file(self.root).exists())
+
+    def test_typing_something_else_sets_the_waiting_command_aside_once(self):
+        from .authority import pending_file
+        self.waiting_command()
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p3', 'cwd': str(self.root), 'message': {'role': 'user', 'content': 'what is left?'}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
+        with self.assertRaisesRegex(Refused, 'You typed something after /oh-deliver 0006, so OH set it aside'):materialize(self.root)
+        self.assertFalse(pending_file(self.root).exists())
+        self.assertIsNone(materialize(self.root))  # said once
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
 
     def test_a_forged_typed_choice_grants_nothing(self):
         from .authority import stage

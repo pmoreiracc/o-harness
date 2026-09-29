@@ -253,6 +253,14 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(Refused):render(self.root)
         with self.assertRaises(Refused):validate_event(self.root,event,'origin/main')
 
+    def test_a_pr_choice_works_where_the_main_branch_is_master(self):
+        from .publication import render
+        self.git('branch','-m','main','master');self.git('update-ref','refs/remotes/origin/master','master')
+        start(self.root,{'tasks':self.tasks[:1]},self.event());run(self.root,self.fake)
+        choose(self.root,'pr',self.event('2','pr'))
+        self.assertEqual(load_run(self.root)[1]['status'],'pr')
+        self.assertIn('"choice": "pr"',render(self.root,'origin/master'))
+
 
     def test_publication_stopped_and_mixed_cli_paths_refuse(self):
         from .publication import render

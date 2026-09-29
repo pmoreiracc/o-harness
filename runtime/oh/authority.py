@@ -144,7 +144,7 @@ def answer(root,hint=None):
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
     answered(root,'claude',found['session'],str(path))
-    supersede(root,'claude')
+    supersede(root,'claude',locked=True)
     return result
 
 
@@ -228,7 +228,8 @@ def attest(host,payload,root=None):
                 if p.get('type')=='task_started':turn=p.get('turn_id')
                 # exec/subagent input is model-delegated work, not a new human grant.
                 if isinstance(source,dict) or source in ('exec','subagent'):continue
-                if session==event['session'] and (x.get('type')=='event_msg' and p.get('type')=='user_message' or x.get('type')=='response_item' and p.get('role')=='user'):latest=turn
+                # Only what the person typed moves Codex on: it may add user-role items of its own within a turn.
+                if session==event['session'] and x.get('type')=='event_msg' and p.get('type')=='user_message':latest=turn
                 if session!=event['session'] or turn!=event['turn']:continue
                 if x.get('type')=='event_msg' and p.get('type')=='user_message':
                     text=p.get('message')
@@ -289,7 +290,11 @@ def materialize(root):
         locator=read_json(path)
         if menu_waiting(root) and (result:=answer(root)) is not None:return result  # the person answered the open menu
         try:event=attest(locator['host'],locator['payload'],root)
-        except Expired:path.unlink();return answer(root)
+        except Expired:
+            # Said once: the person moved on, so this command is spent and never carried out behind their back.
+            message=f"You typed something after {locator['event']['prompt']}, so OH set it aside; type it again to run it."
+            spent(root,locator['event'],message);path.unlink()
+            raise Refused(message)
         used=used_file(root,event)
         if used.exists():
             path.unlink();record=read_json(used)
@@ -351,19 +356,39 @@ def typed_choice(root,host):
     return locator if bare_choice(locator,host) else None
 
 
-def supersede(root,host):
+def supersede(root,host,locked=False):
     """A menu answer applied after something was typed wins over it: the person's latest act counts. A typed
-    menu word is spent; a typed command waits only when the answer ended the run, which makes room for it."""
+    menu word is spent; a typed command waits only when the answer ended the run, which makes room for it.
+    `locked` when the caller already holds the pending lock (the lock is per open file, so never take it twice)."""
     path=pending_file(root)
+    if not locked:
+        with lock(path.with_suffix('.lock')):return supersede(root,host,locked=True)
     try:locator=read_json(path)
     except FileNotFoundError:return
     if locator.get('host')!=host:return
     if not bare_choice(locator,host):
         from .workflow import active_file,load_run
         if not active_file(root).exists() or load_run(root)[1]['status'] in ('stopped','pr','completed'):return
-    used=used_file(root,locator['event'])
-    if not used.exists():atomic_json(used,{'source':locator['event'],'refused':'Superseded by a later answer on the menu.'},immutable=True)
+    spent(root,locator['event'],'Superseded by a later answer on the menu.')
     path.unlink(missing_ok=True)
+
+
+def spent(root,event,refused):
+    """Record a waiting command or choice as used without carrying it out, so a replay of it is refused."""
+    used=used_file(root,event)
+    if not used.exists():atomic_json(used,{'source':event,'refused':refused},immutable=True)
+
+
+def cancel(root):
+    """The person chose not to run the command waiting in this checkout. Like stop, it only takes authority away,
+    but a worker never decides for the person."""
+    if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Delegated agents cannot cancel the person\'s command')
+    path=pending_file(root)
+    with lock(path.with_suffix('.lock')):
+        try:locator=read_json(path)
+        except FileNotFoundError:return {'cancelled':None,'message':'No typed command is waiting in this checkout.'}
+        spent(root,locator['event'],'Cancelled by the person.');path.unlink()
+    return {'cancelled':locator['event']['prompt'],'message':'The waiting command was cancelled; nothing of it ran.'}
 
 
 def desktop_pending(root):

@@ -56,6 +56,7 @@ TOOLS = [
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
     tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
     tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
+    tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
     tool('pr_summary', 'PR summary', 'The review summary for this branch\'s pull request.', {'base': TEXT}, read_only=True),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
          'as a menu and records their click in OH. Call it when OH output has a `gate`, in the conversation that '
@@ -78,7 +79,7 @@ def command(name, arguments, root):
         if value is None and not required:return None
         if not isinstance(value, str) or not value.strip():raise Refused(f'`{key}` must be text')
         return value
-    if name in ('status', 'config', 'run', 'pause', 'resume', 'stop'):return [name]
+    if name in ('status', 'config', 'run', 'pause', 'resume', 'stop', 'cancel'):return [name]
     if name == 'init':return ['init'] + ([f'--name={text("name")}'] if text('name') else [])
     if name == 'plans':
         if arguments.get('action') not in ('path', 'check', 'list'):raise Refused('`action` is path, check or list')

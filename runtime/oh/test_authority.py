@@ -29,8 +29,11 @@ class AuthorityTest(unittest.TestCase):
                     note={'type':'user','sessionId':'session','promptId':'later','cwd':str(root),'origin':{'kind':'task-notification'},'message':{'role':'user','content':'done'}}
                     save(note);self.assertEqual(attest(host,payload,root)['turn'],'turn')
                     save(note,{'type':'user','sessionId':'session','promptId':'later','cwd':str(root),'message':{'role':'user','content':'never mind'}})
-                else:
-                    save({'type':'event_msg','payload':{'type':'task_started','turn_id':'later'}},{'type':'event_msg','payload':{'type':'user_message','message':'never mind'}})
+                else:  # Codex may add user-role items of its own; only what the person typed moves it on
+                    later={'type':'event_msg','payload':{'type':'task_started','turn_id':'later'}}
+                    save(later,{'type':'response_item','payload':{'role':'user','content':[{'type':'input_text','text':'<environment_context>'}]}})
+                    self.assertEqual(attest(host,payload,root)['turn'],'turn')
+                    save(later,{'type':'event_msg','payload':{'type':'user_message','message':'never mind'}})
                 with self.assertRaises(Expired):attest(host,payload,root)
                 save()
                 if host=='claude':  # the desktop app saves a typed turn as from a person, with its SDK marker

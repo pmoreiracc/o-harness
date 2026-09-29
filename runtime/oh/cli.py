@@ -21,8 +21,8 @@ def host_hook(root,host,payload,*,verified):
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
     if planning:
         kind,intent=planning.groups()
-        from .workflow import unfinished
-        if unfinished(root,verified):raise Refused('An unfinished run exists in this checkout; resume it, or stop it with /oh-stop, first')
+        from .workflow import load_run,occupied,unfinished
+        if unfinished(root,verified):raise occupied(load_run(root)[1])
         from .plans import layout
         if not started(root,verified) and layout(root)['location']=='repo':
             from .branches import from_main
@@ -45,12 +45,12 @@ def host_hook(root,host,payload,*,verified):
         return listing(root)
     if delivery and delivery['kind']=='quick_fix':return delivery
     if delivery and delivery['kind']=='design':
-        from .workflow import unfinished,load_run
+        from .workflow import load_run,occupied,unfinished
         if unfinished(root,verified):
             _,state=load_run(root)
             # The same design typed again carries on with its run.
             if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return checkpoint(root)
-            raise Refused('An unfinished run exists; resume it or stop it first')
+            raise occupied(state)
         if started(root,verified):return checkpoint(root)
         from .prepared import resolve
         if delivery['request']:  # prepared on a branch it is bound to, which OH leaves where it is
@@ -124,7 +124,7 @@ def main(argv=None):
     init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
-    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
+    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('cancel');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
     settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
     settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
     planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check','list'])
@@ -208,6 +208,9 @@ def main(argv=None):
         elif args.command in ('pause','stop'):
             from .controls import request
             result=request(root,args.command)
+        elif args.command=='cancel':
+            from .authority import cancel
+            result=cancel(root)
         elif args.command=='resume':
             from .authority import materialize
             materialize(root)

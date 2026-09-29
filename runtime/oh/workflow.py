@@ -57,6 +57,15 @@ def unfinished(root,event):
     return state['source']!=digest({k:event[k] for k in ('host','session','turn','prompt')}) and state['status'] not in ('stopped','pr','completed')
 
 
+def occupied(state):
+    """Why a new command can't start while this checkout's run is open, and the person's choice the agent asks."""
+    what=f"its {state['workflow']} run {state['id'][:8]}"
+    if state['status']=='stopping':
+        return Refused(f'OH is stopping {what} in this checkout; run `run` again once `status` says it stopped.')
+    return Refused(f'OH is still working on {what} in this checkout. Ask the person with a menu: stop it and start '
+        'this command (run `stop`, then `run`), or keep it and cancel this command (run `cancel`).')
+
+
 def active_file(root):
     return checkout_file(root, 'oh-active-run.json')
 
@@ -143,8 +152,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
     if active_file(root).exists():
         journal,state=load_run(root)
         if state['source']==source:return journal,state
-        if state['status'] not in ('stopped','pr','completed'):
-            raise Refused('An unfinished run exists; resume it or explicitly stop first')
+        if state['status'] not in ('stopped','pr','completed'):raise occupied(state)
     config=prepared['snapshot'] if prepared else snapshot(root)
     from .config import project_checks
     required=prepared['project_checks'] if prepared else project_checks(root)
@@ -158,8 +166,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
         raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
     try:
         if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
-            from .branches import delivery_branch
-            created=delivery_branch(manifest['design'],manifest.get('track') or '') if manifest.get('design') else 'codex/oh-'+run[:8]
+            created='codex/oh-'+run[:8]  # design deliveries are already on their deliver/ branch
             git(root,'switch','-c',created)
         import re
         current=git(root,'branch','--show-current')
@@ -371,11 +378,16 @@ def review_limit(state,task):
 def adopted(root,state,own):
     """The reviewed commits a stopped run, or a completed one nobody chose to publish, left on this branch before
     this run resumed it. They were never published, so this run's PR choice publishes them with its own."""
-    from .branches import run_git
+    import subprocess
+    from .branches import run_git,trunk
     from .publication import commits,trailer
-    base='origin/main' if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/main').returncode==0 else 'main'
+    name=trunk(root)
+    if not name:raise Refused('This repository has no main or master branch to publish against')
+    base='origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
+    try:mine=commits(root,base)
+    except subprocess.CalledProcessError as exc:raise Refused(f'OH could not list this branch\'s commits since {base}') from exc
     found=[]
-    for commit in commits(root,base):
+    for commit in mine:
         if commit in own:break
         other=reduce(Journal(state['project'],trailer(root,commit,'OH-Run')).records())
         if other['status']=='pr' and commit in (other.get('publication') or {}).get('commits',[]):found=[];continue
