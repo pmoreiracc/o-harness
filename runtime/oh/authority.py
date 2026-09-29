@@ -144,6 +144,7 @@ def answer(root,hint=None):
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
     answered(root,'claude',found['session'],str(path))
+    supersede(root,'claude')
     return result
 
 
@@ -196,8 +197,8 @@ def prompted(x,session):
     """Whether a Claude record is something the person typed in this conversation: a prompt or a command, not a
     tool result, a menu answer or a summary Claude wrote."""
     content=(x.get('message') or {}).get('content')
-    text=isinstance(content,str) or isinstance(content,list) and bool(content) and all(isinstance(c,dict) and c.get('type')=='text' for c in content)
-    return (x.get('type')=='user' and x.get('sessionId')==session and bool(x.get('promptId')) and text
+    typed=isinstance(content,str) or isinstance(content,list) and any(isinstance(c,dict) and c.get('type')!='tool_result' for c in content)
+    return (x.get('type')=='user' and x.get('sessionId')==session and bool(x.get('promptId')) and typed
             and not x.get('isCompactSummary') and human(x))
 
 
@@ -286,6 +287,7 @@ def materialize(root):
             path.unlink();return answer(root,hint=locator['event']['turn'])
         if not path.exists():return answer(root)
         locator=read_json(path)
+        if menu_waiting(root) and (result:=answer(root)) is not None:return result  # the person answered the open menu
         try:event=attest(locator['host'],locator['payload'],root)
         except Expired:path.unlink();return answer(root)
         used=used_file(root,event)
@@ -297,11 +299,15 @@ def materialize(root):
         try:
             result=host_hook(root,locator['host'],locator['payload'],verified=event)
             if result is None:raise Refused('This input is not a supported native OH transition')
-        except Refused:raise
         except Exception as exc:
-            raise Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})') from exc
-        # A refused command stays pending and is spent only once carried out, so `oh run` carries it out when the
-        # reason is fixed, without the person typing it again. A newer command replaces it; a newer prompt retires it.
+            # A refused command stays pending and is spent only once carried out, so `oh run` carries it out when
+            # the reason is fixed, without the person typing it again. A newer command or a menu answer replaces
+            # it; a newer prompt retires it. A menu word answers the menu it was typed at, and a failure OH did not
+            # foresee would only repeat: those are said once and spent.
+            refused=exc if isinstance(exc,Refused) else Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})')
+            if bare_choice(locator,locator['host']) or not isinstance(exc,Refused):
+                atomic_json(used,{'source':event,'refused':str(refused)},immutable=True);path.unlink()
+            raise refused from exc
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
         from .workflow import load_run
@@ -346,14 +352,18 @@ def typed_choice(root,host):
 
 
 def supersede(root,host):
-    """A click made after a typed menu word spends that word: the person's latest answer wins."""
+    """A menu answer applied after something was typed wins over it: the person's latest act counts. A typed
+    menu word is spent; a typed command waits only when the answer ended the run, which makes room for it."""
     path=pending_file(root)
-    with lock(path.with_suffix('.lock')):
-        locator=typed_choice(root,host)
-        if not locator:return
-        used=used_file(root,locator['event'])
-        if not used.exists():atomic_json(used,{'source':locator['event'],'refused':'Superseded by a later click on the same menu.'},immutable=True)
-        path.unlink()
+    try:locator=read_json(path)
+    except FileNotFoundError:return
+    if locator.get('host')!=host:return
+    if not bare_choice(locator,host):
+        from .workflow import active_file,load_run
+        if not active_file(root).exists() or load_run(root)[1]['status'] in ('stopped','pr','completed'):return
+    used=used_file(root,locator['event'])
+    if not used.exists():atomic_json(used,{'source':locator['event'],'refused':'Superseded by a later answer on the menu.'},immutable=True)
+    path.unlink(missing_ok=True)
 
 
 def desktop_pending(root):

@@ -49,7 +49,7 @@ def delivered_base(root,record,*,progressed=False):
             paths=[path for path in changed.split('\0') if path]
             if paths:git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
     except CalledProcessError:
-        raise Refused('Private plan progress belongs to code this checkout does not contain; use its delivery branch or merge it first') from None
+        raise Refused('Private plan progress belongs to code this checkout does not contain; merge the branch that holds it, through its pull request, first') from None
 
 
 def dependencies(root,where,rows,name):
@@ -65,16 +65,26 @@ def dependencies(root,where,rows,name):
 
 
 def progress_only(root,fork,paths):
-    """Whether every commit since `fork` that changed the plans is one of OH's reviewed commits, and nothing
-    uncommitted changes them."""
-    changed=git(root,'rev-list','--no-merges',fork+'..HEAD','--',*paths).splitlines()
-    return not git(root,'diff','--name-only','HEAD','--',*paths) and all(
-        re.search(r'^OH-Run: ',git(root,'show','-s','--format=%B',commit),re.M) for commit in changed)
+    """Whether the plans changed since `fork` only through OH's own reviewed commits, which its journal records, and
+    clean merges of main, with nothing uncommitted. A message that merely claims to be OH's changes nothing."""
+    from subprocess import CalledProcessError
+    from .publication import merged,trailer
+    from .storage import Journal,project
+    from .workflow import reduce
+    if git(root,'diff','--name-only','HEAD','--',*paths):return False
+    try:
+        for commit in git(root,'rev-list','--merges',fork+'..HEAD').splitlines():
+            merged(root,commit,git(root,'show','-s','--format=%P',commit).split(),'origin/main')
+        for commit in git(root,'rev-list','--no-merges',fork+'..HEAD','--',*paths).splitlines():
+            state=reduce(Journal(project(root)['id'],trailer(root,commit,'OH-Run')).records())
+            if commit not in [done.get('commit') for done in state['summaries']]:return False
+    except (Refused,CalledProcessError,KeyError,IndexError):return False
+    return True
 
 
 def difficulty(block):
     """The difficulty the design gives a task on its `Difficulty: <level> — <why>` line, or nothing."""
-    found=re.search(r'^\s*Difficulty:\s*(simple|standard|complex)\b[\s—–:-]*(.*)$',block,re.M|re.I)
+    found=re.search(r'^[ \t]*Difficulty:[ \t]*(simple|standard|complex)\b[ \t—–:-]*(.*)$',block,re.M|re.I)
     return {'difficulty':found[1].lower(),'difficulty_reason':'Set by the design'+(': '+found[2].strip() if found[2].strip() else '')} if found else {}
 
 

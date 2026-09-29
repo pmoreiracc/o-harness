@@ -103,6 +103,9 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(run(self.root,review_failure)['completed'],1)
         self.assertEqual([c[0] for c in self.calls],['implementation','review','review'])
         self.assertEqual(self.git('show','--name-only','--format=','HEAD'),'output.txt')
+        subprocess.run(['git','init','-q',str(self.root/'vendor')],check=True)  # any other repository is a change
+        from .storage import changes
+        self.assertEqual(changes(self.root),['vendor/'])
 
     def test_changed_tree_cannot_borrow_review_and_tool_output_cannot_grant(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())

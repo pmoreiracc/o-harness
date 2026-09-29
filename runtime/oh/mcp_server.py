@@ -334,8 +334,8 @@ class Server:
                 return 'Refine needs what to change; nothing was recorded. Ask the person to type: refine: <what to change>.'
             choice = 'refine: ' + ' '.join(words.split())
         event = {'host': 'codex', 'session': thread, 'turn': 'menu-' + identifier(), 'prompt': choice, 'via': 'elicitation', 'at': now()}
-        supersede(root, 'codex')  # anything typed while the menu was open is older than this click
         after = apply(root, event, gate['id'])
+        supersede(root, 'codex')  # anything typed while the menu was open is older than this click
         answered(root, 'codex', thread, state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
         if after['status'] in ('stopped', 'completed') and not after.get('gate'):

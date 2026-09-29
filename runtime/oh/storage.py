@@ -136,10 +136,20 @@ def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], env=env).decode().strip()
 
 
+def worktrees(root):
+    """This repository's other worktrees that sit inside the checkout, such as those Claude keeps in
+    .claude/worktrees, as paths relative to it. Each is its own checkout, never part of this one's changes."""
+    here = Path(root).resolve();found = set()
+    for line in git(root, 'worktree', 'list', '--porcelain').splitlines():
+        if line.startswith('worktree ') and (path := Path(line[9:]).resolve()) != here and path.is_relative_to(here):
+            found.add(path.relative_to(here).as_posix())
+    return found
+
+
 def status(root):
-    """Git's changed and untracked paths, as (changes, nested). `nested` are the Git repositories inside the
-    checkout that it doesn't track, such as the worktrees Claude keeps in .claude/worktrees: they belong to
-    their own repository, so they are never this checkout's changes and OH never commits them."""
+    """Git's changed and untracked paths, as (changes, nested). `nested` are this repository's worktrees inside the
+    checkout: they are never its changes and OH never commits them. Any other repository inside it, such as one a
+    worker cloned, is a change like any new folder."""
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     output = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
                             capture_output=True, check=True, env=env).stdout.decode().split('\0')
@@ -147,8 +157,9 @@ def status(root):
     for entry in output:
         if skip or not entry:skip = False;continue
         paths.append(entry[3:]);skip = entry[0] in 'RC'  # a rename or copy is followed by its old path
-    # Git lists an untracked nested repository as its folder, with a trailing slash; every other entry is a file.
-    return [p for p in paths if not p.endswith('/')], [p.rstrip('/') for p in paths if p.endswith('/')]
+    # Git lists an untracked nested repository as its folder, with a trailing slash.
+    inside = worktrees(root) if any(p.endswith('/') for p in paths) else set()
+    return [p for p in paths if p.rstrip('/') not in inside], [p.rstrip('/') for p in paths if p.rstrip('/') in inside]
 
 
 def changes(root):

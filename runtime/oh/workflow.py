@@ -369,8 +369,8 @@ def review_limit(state,task):
 
 
 def adopted(root,state,own):
-    """The reviewed commits a stopped run left on this branch before this run resumed it. They were never
-    published, so this run's PR choice publishes them with its own."""
+    """The reviewed commits a stopped run, or a completed one nobody chose to publish, left on this branch before
+    this run resumed it. They were never published, so this run's PR choice publishes them with its own."""
     from .branches import run_git
     from .publication import commits,trailer
     base='origin/main' if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/main').returncode==0 else 'main'
@@ -379,7 +379,7 @@ def adopted(root,state,own):
         if commit in own:break
         other=reduce(Journal(state['project'],trailer(root,commit,'OH-Run')).records())
         if other['status']=='pr' and commit in (other.get('publication') or {}).get('commits',[]):found=[];continue
-        if other['status']!='stopped' or other['branch']!=state['branch']:raise Refused('This branch holds commits of another unfinished run')
+        if other['status'] not in ('stopped','completed') or other['branch']!=state['branch']:raise Refused('This branch holds commits of another unfinished run')
         found.append(commit)
     return found
 

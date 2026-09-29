@@ -56,9 +56,10 @@ def merged(root,commit,parents,base):
     """Refuse a merge unless it brought `base` into the branch exactly as Git merges it without conflicts, so it
     carries no change of its own for review to miss."""
     from subprocess import CalledProcessError
+    from .branches import merged_tree
     try:
         git(root,'merge-base','--is-ancestor',parents[-1],base)
-        clean=len(parents)==2 and git(root,'merge-tree','--write-tree',*parents).splitlines()[0]==git(root,'rev-parse',commit+'^{tree}')
+        clean=len(parents)==2 and merged_tree(root,*parents)==git(root,'rev-parse',commit+'^{tree}')
     except CalledProcessError:clean=False
     if not clean:raise Refused(f'Merge {commit[:12]} is not a clean merge of {base} into the branch, so OH cannot publish it as reviewed')
 
@@ -81,8 +82,9 @@ def render(root,base='origin/main'):
     records=[];grants={};p=project(root);branch=git(root,'branch','--show-current')
     for commit in commits(root,base):
         run=trailer(root,commit,'OH-Run');state=reduce(Journal(p['id'],run).records())
-        # A stopped run's commits are published by the PR choice of the run that resumed its branch.
-        if state['status'] not in ('pr','stopped'):raise Refused('A recorded human PR choice is required before exporting native evidence')
+        # A stopped run's commits, or those of a completed run nobody chose to publish, are published by the PR
+        # choice of the run that resumed its branch.
+        if state['status'] not in ('pr','stopped','completed'):raise Refused('A recorded human PR choice is required before exporting native evidence')
         if state['status']=='pr':grants[run]=state.get('publication')
         done=[t for t in state['summaries'] if t['commit']==commit]
         if len(done)!=1:raise Refused('Commit has no unique authoritative task completion')

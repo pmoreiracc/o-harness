@@ -52,14 +52,14 @@ def host_hook(root,host,payload,*,verified):
             if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return checkpoint(root)
             raise Refused('An unfinished run exists; resume it or stop it first')
         if started(root,verified):return checkpoint(root)
-        from .branches import delivery_branch,from_main,resume
-        from_main(root);resume(root,delivery_branch(delivery['doc'],delivery['track']))
         from .prepared import resolve
-        if delivery['request']:
+        if delivery['request']:  # prepared on a branch it is bound to, which OH leaves where it is
             prepared=resolve(root,delivery['request'],verified,'design')
             if prepared['doc']!=delivery['doc'] or prepared['track']!=delivery['track']:raise Refused('Prepared design and requested track differ')
             start(root,prepared['manifest'],verified,prepared=prepared)
         else:
+            from .branches import delivery_branch,to_delivery
+            to_delivery(root,delivery_branch(delivery['doc'],delivery['track']))
             from .delivery import selection
             from .plans import editing
             with editing(root):

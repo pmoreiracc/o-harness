@@ -7,7 +7,7 @@ from pathlib import Path
 import stat
 import subprocess
 import time
-from .storage import Refused, atomic_json, digest, git, read_json, state_home, whole
+from .storage import Refused, atomic_json, digest, git, read_json, state_home, whole, worktrees
 from .system import uname
 
 
@@ -18,8 +18,11 @@ def tree(root, paths=None):
     if any(line and (line[0].islower() or line[0] == 'S') for line in flags):
         raise Refused('Clear assume-unchanged/skip-worktree flags before verification')
     inventory = subprocess.check_output(['git','-C',str(root),'ls-files','-z','--cached','--others','--exclude-standard'],env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')})
-    # An untracked nested repository is listed as its folder with a trailing slash; it isn't this checkout's.
-    names=sorted(n for n in set(inventory.decode().split('\0')) if n and not n.endswith('/'))
+    # Git lists an untracked nested repository as its folder with a trailing slash; this repository's own
+    # worktrees are other checkouts, not part of this one.
+    names=set(inventory.decode().split('\0'))-{''}
+    inside=worktrees(root) if any(n.endswith('/') for n in names) else set()
+    names=sorted(n for n in names if n.rstrip('/') not in inside)
     if paths:
         for dependency in paths:
             if not any(name==dependency or name.startswith(dependency.rstrip('/')+'/') for name in names):

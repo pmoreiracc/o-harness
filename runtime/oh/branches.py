@@ -40,26 +40,55 @@ def run_git(root,*args,timeout=None):
     except subprocess.TimeoutExpired:return subprocess.CompletedProcess(args,1,'','timed out')
 
 
-def from_main(root):
-    """Put the checkout on its main branch, up to date with origin, as the pre-separation harness did
-    (`git checkout main && git pull`) before new work. Offline, the local main serves. Only what needs the
-    person stops it: their own uncommitted edits, and a main that can't be brought up to date."""
+def untouched(root):
+    """Refuse while the checkout holds the person's own uncommitted edits: they decide what happens to them."""
     from .storage import changes
     if edited:=changes(root):
         shown=', '.join(edited[:5])+(f' and {len(edited)-5} more' if len(edited)>5 else '')
         raise Refused(f'This checkout has uncommitted changes that OH did not make ({shown}). They are yours, so '
                       'OH leaves them alone: commit, stash or discard them, then OH carries on with your command.')
+
+
+def fetched(root,name):
+    """Fetch the main branch `name` and return the ref new work starts from: origin/<name>, or the local branch
+    when the repository has no origin. Offline, the last fetched origin/<name> serves."""
+    if run_git(root,'remote','get-url','origin').returncode==0:run_git(root,'fetch','--quiet','origin',name,timeout=60)
+    return 'origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
+
+
+def holder(root,branch):
+    """The other worktree that has `branch` checked out, or None."""
+    here=Path(root).resolve();path=None
+    for line in git(root,'worktree','list','--porcelain').splitlines():
+        if line.startswith('worktree '):path=Path(line[9:]).resolve()
+        elif line=='branch refs/heads/'+branch and path!=here:return path
+    return None
+
+
+def merged_tree(root,ours,theirs):
+    """The tree Git makes merging `theirs` into `ours`, or None when they conflict."""
+    done=run_git(root,'merge-tree','--write-tree',ours,theirs)
+    if done.returncode in (0,1):return done.stdout.split()[0] if done.returncode==0 else None
+    raise Refused('OH needs Git 2.38 or newer to resume or publish a delivery branch; update Git, then OH carries on with your command.')
+
+
+def from_main(root):
+    """Put the checkout on its main branch, up to date with origin, as the pre-separation harness did
+    (`git checkout main && git pull`) before new plans. Only what needs the person stops it: their own uncommitted
+    edits, and a main that differs from origin's."""
+    untouched(root)
     name=trunk(root)
     if name is None:return
-    if run_git(root,'remote','get-url','origin').returncode==0:run_git(root,'fetch','--quiet','origin',name,timeout=60)
+    base=fetched(root,name)
     if git(root,'branch','--show-current')!=name:
+        if elsewhere:=holder(root,name):
+            raise Refused(f'OH starts new plans from {name}, which is checked out in {elsewhere}; type the command there.')
         switched=run_git(root,'switch','--quiet',name)
         if switched.returncode:
-            raise Refused(f'OH starts new work from {name}, but Git could not switch this checkout to it: {switched.stderr.strip()}')
-    if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 and \
-            run_git(root,'merge','--ff-only','--quiet','origin/'+name).returncode:
-        raise Refused(f'Your local {name} has commits that are not on origin/{name}, so OH cannot bring it up to date. '
-                      f'Push them, or reset {name} to origin/{name}, then OH carries on with your command.')
+            raise Refused(f'OH starts new plans from {name}, but Git could not switch this checkout to it: {switched.stderr.strip()}')
+    if base!=name and (run_git(root,'merge','--ff-only','--quiet',base).returncode or git(root,'rev-parse','HEAD')!=git(root,'rev-parse',base)):
+        raise Refused(f'Your local {name} has commits that are not on {base}, so new work would carry them. '
+                      f'Push them, or reset {name} to {base}, then OH carries on with your command.')
 
 
 def delivery_branch(doc,track=''):
@@ -67,22 +96,29 @@ def delivery_branch(doc,track=''):
     return f'deliver/{doc}-{track}' if track else f'deliver/{doc}'
 
 
-def resume(root,name):
-    """Pick up the work left on the delivery branch `name`, as the pre-separation harness did. OH runs this on main
-    just brought up to date: a branch whose work main already holds is retired, so a fresh one starts from main; a
-    branch with unmerged work is checked out and main is merged into it."""
-    if run_git(root,'rev-parse','--verify','--quiet','refs/heads/'+name).returncode:return
-    main=git(root,'branch','--show-current')
-    merged=run_git(root,'merge-tree','--write-tree','HEAD',name)
-    if run_git(root,'merge-base','--is-ancestor',name,'HEAD').returncode==0 or \
-            merged.returncode==0 and merged.stdout.split()[0]==git(root,'rev-parse','HEAD^{tree}'):
-        # main already holds all of it, merged, squashed or rebased: nothing is left to resume.
-        git(root,'branch','-D',name);return
-    git(root,'switch','--quiet',name)
-    merging=run_git(root,'merge','--quiet','--no-edit',main)
+def to_delivery(root,name):
+    """Put the checkout on the delivery branch `name`, as the pre-separation harness did. A branch whose work main
+    already holds (merged, squashed or rebased) is retired and a fresh one starts from origin's main; a branch with
+    unmerged work is resumed, with origin's main merged into it. Only the person's own edits, a conflict, or the
+    branch being checked out in another worktree need them."""
+    untouched(root)
+    main=trunk(root)
+    if main is None:return
+    base=fetched(root,main);current=git(root,'branch','--show-current')
+    exists=run_git(root,'rev-parse','--verify','--quiet','refs/heads/'+name).returncode==0
+    if exists and current!=name and (elsewhere:=holder(root,name)):
+        raise Refused(f'{name} is checked out in {elsewhere}; type the command there to carry on with it.')
+    if exists and (run_git(root,'merge-base','--is-ancestor',name,base).returncode==0
+                   or merged_tree(root,base,name)==git(root,'rev-parse',base+'^{tree}')):
+        if current==name:git(root,'switch','--quiet','--detach',base)  # only while the spent branch is replaced
+        git(root,'branch','-D',name);exists=False
+    if not exists:
+        git(root,'switch','--quiet','--no-track','-c',name,base);return
+    if current!=name:git(root,'switch','--quiet',name)
+    merging=run_git(root,'merge','--quiet','--no-edit',base)
     if merging.returncode:
         conflicted=git(root,'diff','--name-only','--diff-filter=U').splitlines()
         run_git(root,'merge','--abort')
-        if not conflicted:raise Refused(f'Git could not merge {main} into {name}: {merging.stderr.strip()}')
-        raise Refused(f'{name} holds unfinished work that conflicts with {main} in {", ".join(conflicted[:5])}. '
-                      f'Merge {main} into it and resolve the conflicts, then OH carries on with your command.')
+        if not conflicted:raise Refused(f'Git could not merge {base} into {name}: {merging.stderr.strip()}')
+        raise Refused(f'{name} holds unfinished work that conflicts with {base} in {", ".join(conflicted[:5])}. '
+                      f'Merge {base} into it and resolve the conflicts, then OH carries on with your command.')

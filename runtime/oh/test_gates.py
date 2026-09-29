@@ -229,6 +229,17 @@ class GateTest(unittest.TestCase):
         self.typed('continue', 'typed-3', cwd=self.root / 'docs')
         self.assertEqual(materialize(self.root)['status'], 'running')
 
+    def test_a_refused_command_never_holds_up_the_open_menu(self):
+        from .authority import pending_file, stage
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        # While the run waits at its menu, the person types another delivery: refused, and kept for later.
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'message': {'role': 'user', 'content': '/oh-deliver 0006'}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': '/oh-deliver 0006'})
+        with self.assertRaisesRegex(Refused, 'unfinished run'):materialize(self.root)
+        self.assertEqual(self.click(question, 'Continue')['status'], 'running')  # the click still counts
+        self.assertFalse(pending_file(self.root).exists())  # and it is the person's latest act
+
     def test_a_forged_typed_choice_grants_nothing(self):
         from .authority import stage
         question = self.begin('claude')['gate']['ask']['questions'][0]
