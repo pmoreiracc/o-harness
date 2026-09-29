@@ -1,7 +1,7 @@
 name: release
 # A new version reaching main releases it: "prepare release" opens the pull request that sets it (see
 # docs/installation.md, "Releasing"). Nothing is published unless the full Windows suite and the install check
-# pass; main's protection already requires the pull request checks (Linux tests and syntax) for every change.
+# pass. Linux tests and syntax aren't repeated: each merged pull request passed them against the main of its time.
 # The tag is created first and pins the release's commit: running this again by hand, after a failure, finishes
 # that same version from that same commit, so users never get two different builds under one version.
 on:
