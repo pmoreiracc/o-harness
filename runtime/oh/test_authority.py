@@ -71,7 +71,9 @@ class AuthorityTest(unittest.TestCase):
             self.assertEqual(attest('claude',payload|{'prompt':'/o-harness:oh-stop'},root)['turn'],'turn')
             self.assertEqual(attest('claude',payload|{'prompt':'/oh-stop'},root)['turn'],'turn')  # typed without the plugin name
             save('<command-name>/oh-stop</command-name>\n<command-args>now</command-args>','oh-stop')
-            self.assertEqual(attest('claude',payload|{'prompt':'/o-harness:oh-stop\tnow'},root)['turn'],'turn')
+            # Every spelling of one turn is the same prompt, so a respelled replay finds the turn already spent.
+            self.assertEqual({attest('claude',payload|{'prompt':p},root)['prompt'] for p in ('/o-harness:oh-stop\tnow','/oh-stop now','/oh-stop  now')},
+                             {'/o-harness:oh-stop now'})
             save('<command-name>/other:oh-stop</command-name>','oh-stop')  # another plugin's command of the same name
             with self.assertRaises(Refused):attest('claude',payload|{'prompt':'/oh-stop'},root)
             with self.assertRaises(Refused):attest('claude',payload|{'prompt':'approve'},root)  # only slash commands are tagged

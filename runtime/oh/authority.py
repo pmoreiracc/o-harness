@@ -257,6 +257,10 @@ def attest(host,payload,root=None):
         if typed_command(event['prompt'])[0] in expanded.get(x.get('uuid'),()):
             matches.append(digest(x))
             if x.get('timestamp'):times.append(x['timestamp'])
+            # One turn, one grant: every spelling of the command (with or without o-harness:, any spacing) is
+            # recorded as the same prompt, so a respelled replay finds the turn already spent.
+            name,args=typed_command(event['prompt'])
+            event=event|{'prompt':'/o-harness:'+name+(' '+args if args else '')}
     if not matches:raise Refused('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
     # Codex can retain the same turn as both event_msg and response_item; the native turn ID
     # and exact text collapse them into one source, with both evidence hashes retained.
