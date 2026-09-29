@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from . import plans
 from .design_parse import freeze_render, plan
-from .storage import Refused, atomic_json, git, read_json
+from .storage import Final, Refused, atomic_json, git, read_json
 
 
 def parse(arguments):
@@ -45,11 +45,13 @@ def delivered_base(root,record,*,progressed=False):
             raise Refused('Private progress has an unrecorded empty delivery range; restore its original approval record')
         try:git(root,'merge-base','--is-ancestor',commit,'HEAD')
         except CalledProcessError:
-            # Squash merges must contain every delivered path, with an inherited baseline.
+            # Squash merges must contain every delivered path, with an inherited baseline, or carry the delivery's
+            # exact change in one commit, still found after main changed those paths again.
+            from .branches import contained,delivered
             paths=[path for path in changed.split('\0') if path]
-            if paths:git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
+            if paths and not contained(root,'HEAD',commit) and not delivered(root,'HEAD',commit):git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
     except CalledProcessError:
-        raise Refused('Private plan progress belongs to code this checkout does not contain; use its delivery branch or merge it first') from None
+        raise Refused('Private plan progress belongs to code this checkout does not contain; merge the branch that holds it, through its pull request, first') from None
 
 
 def dependencies(root,where,rows,name):
@@ -64,6 +66,143 @@ def dependencies(root,where,rows,name):
     return [row[3] for row in rows if row[1]==name]
 
 
+def progress_only(root,fork,paths,doc):
+    """Whether the committed plans are origin/main's exactly, apart from ticks for the tasks of design `doc` that
+    OH's runs on this branch completed, with nothing uncommitted. However the branch got there (OH's commits, a
+    merge of main resolved by hand, the person rebasing or amending OH's commits), the plans can't say more: a
+    message that merely claims to be OH's changes nothing."""
+    from subprocess import CalledProcessError
+    from .publication import trailer
+    from .storage import Journal,project
+    from .workflow import reduce
+    if git(root,'diff','--name-only','HEAD','--',*paths):return False
+    branch=git(root,'branch','--show-current');completed=set()
+    try:
+        for commit in git(root,'rev-list','--no-merges',fork+'..HEAD').splitlines():
+            try:state=reduce(Journal(project(root)['id'],trailer(root,commit,'OH-Run')).records())
+            except Refused:continue
+            if state.get('design')==doc and state['branch']==branch:completed|={done['task'] for done in state['summaries']}
+        for path in git(root,'diff','--name-only','origin/main','HEAD','--',*paths).splitlines():
+            if unticked(git(root,'show','HEAD:'+path),completed)!=git(root,'show','origin/main:'+path):return False
+    except (CalledProcessError,KeyError,IndexError):return False
+    return True
+
+
+def unticked(text,tasks):
+    """The design text with these tasks' checkboxes back to pending."""
+    for task in tasks:
+        text=re.sub(r'^- \[x\] \*\*'+re.escape(task)+r'\.\*\*',f'- [ ] **{task}.**',text,flags=re.M)
+    return text
+
+
+def finished(root,doc,track,branch,event):
+    """A resumed delivery branch that already holds all its work goes to its pull request, as the pre-separation
+    harness did: OH offers that run's PR choice again, even after the person stopped it, and never merges main
+    into it or adds tasks. New tasks for the design are delivered after that pull request merges."""
+    from .publication import made
+    from .storage import checkout_id,project
+    from .workflow import reopen
+    where=plans.layout(root)
+    rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
+    if any(row[1]=='pending' and (not track or row[2]==track) for row in rows):return None
+    if not track and plans.approval(root,where,doc)!='frozen':return None  # its finalize step is still to run
+    refused=Final(f'{branch} already holds all of design {doc}, but OH did not make its last commit here, so OH '
+                    'cannot offer its pull request; open one yourself')
+    # Only the run that made this exact commit can offer its PR: an amended or rebased head is the person's.
+    if not (state:=made(root,project(root)['id'],git(root,'rev-parse','HEAD'))):raise refused
+    if ((state.get('design'),state.get('track') or '')!=(doc,track) or state['branch']!=branch
+            or state['checkout']!=checkout_id(root) or state['status'] not in ('completed','stopped','pr')):raise refused
+    return reopen(root,state,event)
+
+
+def without_main(root):
+    """Whether the person chose to finish the checkout's delivery branch without main's changes."""
+    from .storage import checkout_file
+    try:return read_json(checkout_file(root,'oh-without-main.json'))['branch']==git(root,'branch','--show-current')
+    except FileNotFoundError:return False
+
+
+def conflict(root,choice,doc,track=''):
+    """Carry out the person's pick when their delivery branch conflicts with main. `keep` finishes the delivery
+    without main's changes; `fresh` discards the branch, and any private progress it recorded, so the delivery
+    starts over from main."""
+    import os
+    from .branches import delivery_branch,fetched,holder,run_git,trunk,untouched
+    from .storage import checkout_file
+    if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Only the person decides what happens to their delivery')
+    if choice not in ('fresh','keep'):raise Refused('The choice is fresh or keep')
+    name=delivery_branch(doc,track)
+    if run_git(root,'rev-parse','--verify','--quiet','refs/heads/'+name).returncode:raise Refused(f'There is no {name} branch')
+    if elsewhere:=holder(root,name):raise Refused(f'{name} is checked out in {elsewhere}; choose there')
+    untouched(root)
+    base=fetched(root,trunk(root))
+    marker=checkout_file(root,'oh-without-main.json')
+    if choice=='keep':
+        atomic_json(marker,{'branch':name,'base':git(root,'rev-parse',base)})
+        return {'kept':name,'message':f'OH finishes {name} without {base}\'s changes; the conflicts are resolved when its pull request merges.'}
+    from .workflow import active_file,load_run
+    if active_file(root).exists() and (state:=load_run(root)[1])['branch']==name and state['status'] not in ('stopped','completed','pr'):
+        raise Refused(f'OH is still working on {name}; stop that run first')
+    where=plans.layout(root)
+    if where['location']=='private':forget_progress(root,where,doc,name,base)
+    if git(root,'branch','--show-current')==name:git(root,'switch','--quiet','--detach',base)
+    git(root,'branch','-D',name)
+    marker.unlink(missing_ok=True)
+    return {'discarded':name,'message':f'{name} was discarded; the delivery starts over from {base}.'}
+
+
+def forget_progress(root,where,doc,name,base):
+    """Undo the private progress the discarded branch's runs recorded: untick their tasks and restore the approval
+    from before them, which must match the untouched design exactly."""
+    from .publication import trailer
+    from .storage import Journal,project
+    path=document(root,where,doc);records=read_json(plans.approvals_file(root))
+    intents=[]
+    from .branches import contained
+    for commit in git(root,'rev-list','--reverse','--no-merges',git(root,'merge-base',name,base)+'..'+name).splitlines():
+        try:run=trailer(root,commit,'OH-Run')
+        except Refused:continue  # the person's own commit records no progress
+        intents+=[r['data'] for r in Journal(project(root)['id'],run).records() if r['kind']=='delivery.approval.intent' and r['data'] not in intents]
+    if not intents:return
+    if records.get(doc)!=intents[-1]['after']:raise Refused(f'The private approval of design {doc} changed outside OH; restore it before starting over')
+    # Progress whose code main already holds (a pull request merged or squashed) stays; the rest is undone.
+    kept=max((index+1 for index,intent in enumerate(intents) if contained(root,base,intent['after']['delivery_commit'])),default=0)
+    undo=intents[kept:]
+    if not undo:return
+    text=unticked(path.read_bytes().decode(),{i['task'] for i in undo})  # bytes as saved: CRLF plans keep their hash
+    if hashlib.sha256(text.encode()).hexdigest()!=undo[0]['before'].get('sha256'):
+        raise Refused(f'Design {doc} changed beyond this delivery\'s progress; OH cannot start it over safely')
+    plans.write(path,text)
+    atomic_json(plans.approvals_file(root),records|{doc:undo[0]['before']})
+
+
+def unreviewed(root,fork,base):
+    """Commits on this branch since `fork` that OH didn't make and no review has covered yet: the person's own
+    commits, and merges of `base` (main) that aren't Git's clean merge because a conflict was resolved by hand. The
+    next task's review covers them, so the pull request carries only reviewed code. An OH commit the person amended
+    or rebased is theirs now, like a message that merely claims to be OH's."""
+    from .publication import made,merged
+    from .storage import project
+    covered=set();found=[]
+    for line in git(root,'rev-list','--reverse','--parents',fork+'..HEAD').splitlines():
+        commit,*parents=line.split()
+        if len(parents)>1:
+            try:merged(root,commit,parents,base)
+            except Refused:found.append(commit)
+            continue
+        state=made(root,project(root)['id'],commit)
+        if not state:found.append(commit);continue
+        for intent in state['commit_intents'].values():
+            covered|=set((intent.get('publication') or {}).get('covers',[]))
+    return [commit for commit in found if commit not in covered]
+
+
+def difficulty(block):
+    """The difficulty the design gives a task on its `Difficulty: <level> — <why>` line, or nothing."""
+    found=re.search(r'^[ \t]*Difficulty:[ \t]*(simple|standard|complex)\b[ \t—–:-]*(.*)$',block,re.M|re.I)
+    return {'difficulty':found[1].lower(),'difficulty_reason':'Set by the design'+(': '+found[2].strip() if found[2].strip() else '')} if found else {}
+
+
 def selection(root,doc,track='',*,claim=True):
     where=plans.layout(root,claim=claim);path=document(root,where,doc)
     status=plans.approval(root,where,doc)
@@ -74,11 +213,23 @@ def selection(root,doc,track='',*,claim=True):
         paths=[Path(where[key]).relative_to(root).as_posix() for key in ('roadmap','designs','decisions')]
         try:git(root,'rev-parse','--verify','origin/main^{commit}')
         except CalledProcessError:raise Refused('Fetch origin/main before delivering repository plans') from None
-        if git(root,'diff','--name-only','origin/main','--',*paths):
+        # The plans are origin/main's, apart from the progress OH's own reviewed commits recorded on a delivery
+        # branch that is being resumed.
+        fork=git(root,'merge-base','HEAD','origin/main')
+        if git(root,'diff','--name-only',fork,'origin/main','--',*paths) or not progress_only(root,fork,paths,doc):
+            if without_main(root):
+                branch=git(root,'branch','--show-current')
+                raise Final(f'Delivery {doc} stops here: main changed the plans since {branch} started, and main\'s code '
+                            f'conflicts with it, so OH can\'t bring main in. The tasks done so far are saved on {branch}. '
+                            'From here it\'s yours: merge main into it, resolve the conflicts and open the pull request '
+                            'when you\'re ready.')
+            if not git(root,'diff','--name-only',fork,'origin/main','--',*paths):
+                raise Refused('The plans on this branch must be main\'s exactly, apart from ticks for the tasks OH '
+                              'completed; restore their files to main\'s version with only those ticks, commit, and run again')
             raise Refused('The design and planning context must match origin/main; merge the plans first')
         for filename in inputs(where):
             relative=Path(filename).relative_to(root).as_posix()
-            try:matches=git(root,'hash-object','--no-filters','--',relative)==git(root,'rev-parse','origin/main:'+relative)
+            try:matches=git(root,'hash-object','--no-filters','--',relative)==git(root,'rev-parse','HEAD:'+relative)
             except CalledProcessError:matches=False
             if not matches:raise Refused('The design and planning context must match origin/main; merge the plans first')
     rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
@@ -117,7 +268,7 @@ def selection(root,doc,track='',*,claim=True):
             if not match:raise Refused('Cannot extract the approved design task')
             tasks.append({'id':task_id,'title':title,'instructions':match[0].strip(),
                           'needs':sorted(set(filter(None,needs.split(',')))-completed),
-                          'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':task_id}})
+                          'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':task_id}}|difficulty(match[0]))
             available.add(task_id);pending.remove(row)
     if not tasks:
         if any(row[1]=='pending' for row in rows):raise Refused('No ready tasks in this design or track; resolve its dependencies or open questions')
@@ -125,8 +276,12 @@ def selection(root,doc,track='',*,claim=True):
         tasks=[{'id':'finalize','title':'Finalize the completed design','instructions':'Verify the completed design and affected documentation.',
                 'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':'finalize'}}]
     freeze_render(root,doc,'' if tasks[0]['id']=='finalize' else tasks[0]['id'],where)
+    from .branches import main_ref
+    base=main_ref(root)
+    covers=unreviewed(root,git(root,'merge-base','HEAD',base),base) if base else []
     return ({'workflow':'deliver','design':doc,'track':track,'tasks':tasks},
-            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'approvals':approvals}})
+            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'approvals':approvals}
+                        |({'covers':covers} if covers else {})})
 
 
 def listing(root):

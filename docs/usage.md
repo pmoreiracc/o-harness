@@ -1,7 +1,14 @@
 # Using OH
 
 OH does nothing until you invoke one of its commands. An ordinary prompt such as "design a
-login page" never starts OH. Claude uses `/`, Codex uses `$`.
+login page" never starts OH. Claude uses `/`, Codex uses `$`. The first command in a checkout
+registers it.
+
+You type a command once. If something is in the way, the agent fixes it and OH carries the
+command out, without asking you to type it again. Only choices that are yours reach you, as a
+menu: for example, what to do with your own uncommitted changes, or whether to stop a run that
+is still open. Answer in the menu: if you type something else instead, OH sets the command
+aside and tells you so. A new command replaces one that hasn't run yet.
 
 ## Plan: oh-propose and oh-design
 
@@ -16,16 +23,19 @@ and code and picks one route:
 - or **unclear**, with the two readings and the question to answer.
 
 OH writes the row, milestone, decision record or task itself (on a new `propose/<topic>`
-branch; start from `main` or `master`), runs your checks and has it reviewed independently. Then
+branch from `main`, which OH brings up to date and switches to first), runs your checks and has it reviewed independently. Then
 it shows what it understood, the route and why, and exactly what it wrote, and waits for you
 to type **approve** (commit it), **refine: <what to change>** (ask again with your words), or
 **reconsider** (undo it and write nothing). After approve, **pr** opens the pull request;
 merging it approves the plan change.
 
+With repository plans, `/oh-propose` and `/oh-design` work in the checkout that has `main`; in
+another worktree of the project, OH asks you to type the command there.
+
 `/oh-design <slug>` writes the design doc for one row of your roadmap, such as
 `/oh-design auth`. A fresh worker writes the design; OH numbers the doc, links it from the
 row and checks its task list. An independent reviewer checks the design, and OH commits it
-(on a new `design/<slug>` branch; start from `main` or `master`). Type **pr** to open the pull request; merging it approves the
+(on a new `design/<slug>` branch from an up-to-date `main`). Type **pr** to open the pull request; merging it approves the
 design. When a question has to be answered before the design can be written, OH writes a
 proposed decision record instead, with the question, the options and a recommendation, and
 leaves the decision to you.
@@ -54,11 +64,19 @@ Ready tasks are selected in dependency order; blocked work stays pending. OH own
 checkboxes and freezes a design when its last task completes. For private plans, the reviewer
 sees the proposed document update alongside the code; OH publishes the update only after the
 reviewed code commit, with recovery if saving is interrupted. Private documents stay out of Git.
-Private progress also records its code revision: use the delivery branch or merge its code before
-continuing elsewhere. An older private plan with completed tasks but no recorded revision needs
+Private progress also records its code revision: OH continues on the design's delivery branch,
+and progress made on any other branch needs that branch merged first. An older private plan with completed tasks but no recorded revision needs
 review and reapproval through `/oh-design <slug>` from the checkout containing that completed code.
 
-OH then runs the tasks on a branch (it creates one if you are on `main`). For each task a
+OH then runs the tasks on `deliver/0005` (`deliver/0005-<track>` for one track), made from
+an up-to-date `main`. If that branch still holds unfinished work, from a delivery you stopped,
+OH resumes it and merges `main` into it; one pull request then publishes all of it. If `main`
+conflicts with that work, you choose: start over from `main` (the branch is discarded), finish
+without `main`'s changes (you resolve the conflict when the pull request merges), or let the agent
+plan a resolution for you to approve; the next task's review then covers it, as it covers commits of
+your own on that branch. A branch that already holds the whole design goes to its pull request: typing the command
+again offers **pr** again, even after **stop**, and new tasks for that design come after it merges. Typing the
+same command while its run is open continues that run. For each task a
 fresh worker implements it, your project checks run, an independent reviewer checks the
 exact result, blockers get fixed, and the reviewed tree is committed. Workers can't write
 OH's state, your settings or Git internals.

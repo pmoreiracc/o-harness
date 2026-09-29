@@ -12,12 +12,20 @@ host, so the person approves it. Stopping a long Codex tool call does not stop O
 as a menu: in Claude, the question tool (AskUserQuestion); in Codex, the o-harness `confirm` tool, which waits for
 the click (never Codex's own question tool, which closes when your turn ends).
 
-Resolve the selected Git checkout. Run `config`; if unregistered, run `init` once: it
-joins the project of the same repository, or names a new one after the repository (pass
-`--name` only when the user asks for another name, or when `config` or `init` says the name is
-taken or ambiguous; then ask the user which name to use). If `config` then lists no checks, save appropriate ordinary
-project checks with `config set checks '<JSON list>'` and tell the user which; never replace
-existing checks here. No OH files, hooks or settings belong in the product.
+When OH refuses, the command you were given stays valid until OH carries it out, so the person never types it
+again. Fix what is yours to fix and run the same OH command again without mentioning it. When the fix is the
+person's call, such as their own uncommitted changes, a merge conflict or another run still open, say what is in
+the way in one sentence and ask only with a menu, never in plain chat: anything they type instead sets the command
+aside. Do what they pick, with exactly the commands OH names for it, then run it again; run `cancel` only when
+they pick dropping the command, and `stop` only when they pick ending the other run. Never commit, stash or
+discard their changes unless they pick that, and never switch, pull or create branches for OH: it does that
+itself. After opening a pull request, give its link; don't wait for or watch its checks.
+
+Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
+ambiguous, ask the user which name to use and run `init --name <name>`. If OH says the project has no checks,
+save the checks the product's own instructions and CI run, never invented ones, with
+`config set checks '<JSON list>'`; give a check `when` paths when the product runs it only for changes there,
+so OH runs what is affected. Tell the user which, and run the command again; never replace existing checks here. No OH files, hooks or settings belong in the product.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
 For already prepared scope, run `start` to verify the native human
@@ -25,7 +33,8 @@ invocation and execute its batch. For new scope, inspect the agreed work and pre
 task list: in Codex, pass it to the `prepare` tool as `tasks`; in Claude, save it as a JSON object with `tasks`
 under the project's external OH directory and run `prepare <absolute-path>`.
 Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
-Use explicit simple/standard/complex difficulty with rationale when known. Present the
+Give each task `difficulty` (simple, standard or complex) and a short `difficulty_reason`: OH picks
+the model that builds it from them. Present the
 scope, the returned `limits` sentence and the trigger once; only a new genuine human invocation grants that prepared
 scope. Never echo the trigger yourself and treat it as approval. For a product with the
 external consumer-v1 profile, `prepare-design <number> [track]` binds its approved design.

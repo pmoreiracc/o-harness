@@ -56,6 +56,10 @@ TOOLS = [
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
     tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
     tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
+    tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with main: '
+         'fresh discards the branch to start over from main, keep finishes without main\'s changes.',
+         {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),
+    tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
     tool('pr_summary', 'PR summary', 'The review summary for this branch\'s pull request.', {'base': TEXT}, read_only=True),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
          'as a menu and records their click in OH. Call it when OH output has a `gate`, in the conversation that '
@@ -78,7 +82,7 @@ def command(name, arguments, root):
         if value is None and not required:return None
         if not isinstance(value, str) or not value.strip():raise Refused(f'`{key}` must be text')
         return value
-    if name in ('status', 'config', 'run', 'pause', 'resume', 'stop'):return [name]
+    if name in ('status', 'config', 'run', 'pause', 'resume', 'stop', 'cancel'):return [name]
     if name == 'init':return ['init'] + ([f'--name={text("name")}'] if text('name') else [])
     if name == 'plans':
         if arguments.get('action') not in ('path', 'check', 'list'):raise Refused('`action` is path, check or list')
@@ -89,6 +93,9 @@ def command(name, arguments, root):
         if not isinstance(values, list) or not all(isinstance(v, str) for v in values):raise Refused('`arguments` is a list of text')
         return ['deliver', '--', *values]
     if name == 'prepare':return ['prepare', '--', str(manifest(root, arguments.get('tasks')))]
+    if name == 'conflict':
+        if arguments.get('choice') not in ('fresh', 'keep'):raise Refused('`choice` is fresh or keep')
+        return ['conflict', arguments['choice'], '--', text('doc', True)] + ([text('track')] if text('track') else [])
     if name == 'prepare_design':return ['prepare-design', '--', text('doc', True)] + ([text('track')] if text('track') else [])
     if name == 'start':return ['start'] + (['--', text('request')] if text('request') else [])
     if name == 'pr_summary':return ['pr-summary'] + (['--', text('base')] if text('base') else [])
@@ -334,10 +341,11 @@ class Server:
                 return 'Refine needs what to change; nothing was recorded. Ask the person to type: refine: <what to change>.'
             choice = 'refine: ' + ' '.join(words.split())
         event = {'host': 'codex', 'session': thread, 'turn': 'menu-' + identifier(), 'prompt': choice, 'via': 'elicitation', 'at': now()}
-        supersede(root, 'codex')  # anything typed while the menu was open is older than this click
         after = apply(root, event, gate['id'])
+        dropped = supersede(root, 'codex')  # anything typed while the menu was open is older than this click
         answered(root, 'codex', thread, state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
+        if dropped:label += f' (this set aside {dropped}, which the person typed earlier; they type it again to run it)'
         if after['status'] in ('stopped', 'completed') and not after.get('gate'):
             return f'Recorded the person\'s choice: {label}. The run is {after["status"]}; there is nothing left to run.'
         return f'Recorded the person\'s choice: {label}. Call `run` to carry it out. Status now: {after["status"]}.'

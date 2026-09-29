@@ -229,6 +229,100 @@ class GateTest(unittest.TestCase):
         self.typed('continue', 'typed-3', cwd=self.root / 'docs')
         self.assertEqual(materialize(self.root)['status'], 'running')
 
+    def test_a_refused_command_never_holds_up_the_open_menu(self):
+        from .authority import pending_file, stage
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        # While the run waits at its menu, the person types another delivery: refused, and kept for later.
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'message': {'role': 'user', 'content': '/oh-deliver 0006'}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': '/oh-deliver 0006'})
+        with self.assertRaisesRegex(Refused, 'still working on'):materialize(self.root)
+        self.assertEqual(self.click(question, 'Continue')['status'], 'running')  # the click still counts
+        self.assertFalse(pending_file(self.root).exists())  # and it is the person's latest act
+
+    def waiting_command(self, prompt='/oh-deliver 0006', first=None, tagged=False):
+        """The person types another command while the run waits at its menu: OH refuses it and keeps it. `first`
+        is what they did before typing it. `tagged` saves it as Claude saves a typed slash command."""
+        from .authority import stage
+        from .storage import now
+        question = self.begin('claude')['gate']['ask']['questions'][0]
+        if first:first(question)
+        time.sleep(0.01)
+        name, _, args = prompt.partition(' ')
+        content = f'<command-message>{name[1:]}</command-message>\n<command-name>{name}</command-name>\n<command-args>{args}</command-args>' if tagged else prompt
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'uuid': 'u2', 'cwd': str(self.root), 'timestamp': now(), 'message': {'role': 'user', 'content': content}})
+        if tagged:  # the skill Claude expanded from that very record
+            self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'isMeta': True, 'parentUuid': 'u2',
+                                 'message': {'role': 'user', 'content': [{'type': 'text', 'text': f'Base directory for this skill: /x/o-harness/skills/{name[1:]}'}]}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': prompt})
+        with self.assertRaisesRegex(Refused, 'stop it and start this command .*or keep it and cancel'):materialize(self.root)
+        return question
+
+    def test_cancelling_the_waiting_command_keeps_the_open_run(self):
+        from .authority import cancel, pending_file, stage
+        from .controls import request
+        self.waiting_command(tagged=True)
+        with patch.dict(os.environ, {'OH_CHILD_ATTEMPT': 'a'}), self.assertRaises(Refused):cancel(self.root)  # never a worker's call
+        self.assertEqual(cancel(self.root)['cancelled'], '/oh-deliver 0006')
+        self.assertFalse(pending_file(self.root).exists())
+        self.assertIsNone(materialize(self.root))  # nothing waits: `run` carries on with the open run
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        # The cancelled turn never comes back, however it is spelled: here Claude saved it as command tags.
+        request(self.root, 'stop')
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': '/oh-deliver 0006'})
+        with self.assertRaisesRegex(Refused, 'Cancelled by the person'):materialize(self.root)
+
+    def test_stopping_the_open_run_starts_the_waiting_command(self):
+        from .authority import pending_file
+        from .controls import request
+        self.waiting_command()
+        self.assertEqual(request(self.root, 'stop')['status'], 'stopped')
+        # Past the open run, the same typed command is carried out: here it needs a setting first, and still waits.
+        with self.assertRaisesRegex(Refused, 'Choose where plans live'):materialize(self.root)
+        self.assertTrue(pending_file(self.root).exists())
+
+    def test_a_menu_answer_counts_over_a_waiting_command_only_when_given_after_it(self):
+        from .authority import pending_file
+        # Clicked before typing the command (the agent never ran OH after the click): the command is the latest act.
+        self.waiting_command(first=lambda question: self.click(question, 'Continue', apply=False))
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        self.assertTrue(pending_file(self.root).exists())
+        # Answered after typing it: the answer counts, and OH says it set the command aside, also where the agent
+        # runs the typed delivery itself.
+        from contextlib import redirect_stdout
+        from .cli import main
+        question = self.waiting_command()
+        self.click(question, 'Continue', use='toolu_2', apply=False)
+        out = io.StringIO()
+        with redirect_stdout(out):main(['--root', str(self.root), 'deliver', '0006'])
+        self.assertIn('so OH set that command aside', out.getvalue())
+        self.assertEqual(load_run(self.root)[1]['status'], 'running')
+        self.assertFalse(pending_file(self.root).exists())
+
+    def test_a_refused_choice_is_said_once_and_never_holds_up_the_run(self):
+        from .authority import pending_file
+        from .runner import apply_pending
+        self.begin('claude')
+        self.typed('/oh-resume', 'p2')  # nothing is paused: refused, and not kept
+        with self.assertRaises(Refused):materialize(self.root)
+        self.assertFalse(pending_file(self.root).exists())
+        self.assertIsNone(materialize(self.root))
+        # A command that starts other work waits for the agent's next `run`, never stopping the run's own steps.
+        self.waiting_command()
+        apply_pending(self.root)
+        self.assertTrue(pending_file(self.root).exists())
+
+    def test_typing_something_else_sets_the_waiting_command_aside_once(self):
+        from .authority import pending_file
+        self.waiting_command()
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p3', 'cwd': str(self.root), 'message': {'role': 'user', 'content': 'what is left?'}})
+        self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
+        with self.assertRaisesRegex(Refused, 'You typed something after /oh-deliver 0006, so OH set it aside'):materialize(self.root)
+        self.assertFalse(pending_file(self.root).exists())
+        self.assertIsNone(materialize(self.root))  # said once
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+
     def test_a_forged_typed_choice_grants_nothing(self):
         from .authority import stage
         question = self.begin('claude')['gate']['ask']['questions'][0]
@@ -237,13 +331,10 @@ class GateTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.assertEqual(self.click(question, 'Stop', use='toolu_again')['status'], 'stopped')
 
-    def test_an_applied_answer_clears_an_old_refusal_and_counts_the_owner_conversation(self):
-        from .authority import refusal_file
-        from .storage import atomic_json, digest, read_json, state_home
+    def test_an_applied_answer_counts_the_owner_conversation(self):
+        from .storage import digest, read_json, state_home
         question = self.begin('claude')['gate']['ask']['questions'][0]
-        atomic_json(refusal_file(self.root), {'refused': 'an older command'})
         self.assertEqual(self.click(question, 'Continue')['status'], 'running')
-        self.assertFalse(refusal_file(self.root).exists())
         source = read_json(state_home() / 'sources' / (digest({'host': 'claude', 'session': 's'}) + '.json'))
         self.assertEqual((source['run'], source['path']), (load_run(self.root)[1]['id'], str(self.transcript)))
 
@@ -281,15 +372,11 @@ class GateTest(unittest.TestCase):
         return sent, next(m for m in sent if m.get('id') == 2)['result']['content'][0]['text']
 
     def test_codex_menu_records_the_click_itself(self):
-        from .authority import refusal_file
-        from .storage import atomic_json
         self.begin('codex')
-        atomic_json(refusal_file(self.root), {'refused': 'an older command'})
         sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
         self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
         self.assertIn('Recorded', text)
-        self.assertFalse(refusal_file(self.root).exists())
         self.assertIn(f'Project Fixture · {self.root.resolve()} · run ', asked['params']['message'])  # the person sees the target
         self.assertIn('Continue runs 1 of the 1 remaining task', asked['params']['message'])
         _, state = load_run(self.root)

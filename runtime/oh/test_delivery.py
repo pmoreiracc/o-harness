@@ -54,9 +54,10 @@ class DeliveryTest(unittest.TestCase):
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
         where,path=self.documents();listed=delivery.listing(self.root)
         self.assertEqual(len(listed['ready']),1);self.assertEqual(len(self.calls),0)
+        self.git('branch','deliver/0001')  # an earlier delivery main already absorbed: retired for a fresh one
         self.start_delivery();first=load_run(self.root)[1]['id']
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
-        self.assertTrue(self.git('branch','--show-current').startswith('codex/oh-'))
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertIn('- [x] **1.**',path.read_text())
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
@@ -65,6 +66,170 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertIn('status: frozen',path.read_text())
         self.assertEqual(self.git('status','--porcelain'),'')
+
+    def test_a_delivery_resumes_on_its_branch_and_one_pr_publishes_both_runs(self):
+        from .publication import render
+        blocked='- [ ] **2.** Add the sign-in endpoint. Depends on task 1.\n  *Blocked on §3.*'
+        _,path=self.documents(body=BODY.replace('- [ ] **2.** Add the sign-in endpoint. Depends on task 1.',blocked)+'\n## 3. Open questions\n\nChoose the storage.\n')
+        self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'completed')  # task 2 waits on §3
+        first=load_run(self.root)[1]['id'];done=self.git('rev-parse','HEAD')
+        # A commit that only claims to be OH's cannot change the approved design.
+        path.write_text(path.read_text().replace('credential store','credential store and send it out'),newline='\n')
+        self.git('commit','-qam','tweak\n\nOH-Run: '+first)
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery(turn='forged')
+        self.git('reset','-q','--hard',done)
+        # The person commits an edit of their own on the stopped branch, as OH suggests for uncommitted changes.
+        (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-qm','My edit')
+        mine=self.git('rev-parse','HEAD')
+        # Meanwhile main answers the open question.
+        self.git('switch','-q','main');path.write_text(path.read_text().replace('\n  *Blocked on §3.*',''),newline='\n')
+        self.git('commit','-qam','Answer the storage question');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        self.start_delivery(turn='again')
+        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD^1')),('deliver/0001',mine))  # main merged in
+        self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+        self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        choose(self.root,'pr',self.event('pr','pr'))
+        body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
+        self.assertEqual([r['commit'] for r in body['records']],[c for c in self.git('rev-list','--reverse','--no-merges','origin/main..HEAD').splitlines() if c!=mine])
+        self.assertEqual([r['evidence'].get('covers') for r in body['records']],[None,[mine]])  # reviewed with task 2
+        self.assertEqual(len(body['records']),2);self.assertEqual(list(body['grants']),[load_run(self.root)[1]['id']])
+
+    def test_an_oh_commit_the_person_amended_is_reviewed_again_before_it_is_published(self):
+        from .publication import render
+        self.documents();self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        choose(self.root,'stop',self.event('stop','stop'))
+        (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-q','--amend','--no-edit')
+        amended=self.git('rev-parse','HEAD')  # still says OH-Run, but OH didn't make this commit
+        self.start_delivery(turn='again');self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        choose(self.root,'pr',self.event('pr','pr'))
+        body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
+        self.assertEqual([(r['commit'],r['evidence'].get('covers')) for r in body['records']],[(self.git('rev-parse','HEAD'),[amended])])
+
+    def finish(self):
+        """Deliver the whole design and stop at its pull request choice."""
+        self.start_delivery();run(self.root,self.fake);choose(self.root,'continue',self.event('next','continue'))
+        self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        return load_run(self.root)[1]['id'],self.git('rev-parse','HEAD')
+
+    def test_a_finished_delivery_goes_to_its_pull_request_and_takes_no_more_tasks(self):
+        from .workflow import _choose
+        self.documents();first,head=self.finish()
+        # Meanwhile the person merges a proposal that adds a task to the same design.
+        self.git('switch','-q','main');where=plans.layout(self.root)
+        plans.add_task(self.root,where,'0001','Core','Add sign-out.',[]);self.git('commit','-qam','Add task 3')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        again=self.start_delivery(turn='again')  # no merge of main, no new task: the finished delivery's PR choice
+        self.assertEqual((again['run'],again['gate']['choices']),(first,['pr','stop']))
+        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
+        choose(self.root,'stop',self.event('declined','stop'))  # typed at completion, like the menu's Stop
+        self.assertEqual(load_run(self.root)[1]['status'],'stopped')
+        # Days later, from a new conversation: the PR choice is back, and answered there.
+        from .workflow import human_event
+        def typed(session,host='codex'):
+            event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':'later','prompt':'/oh-deliver 0001'},host)
+            return host_hook(self.root,host,{'prompt':'/oh-deliver 0001'},verified=event)
+        from .storage import Final
+        with self.assertRaisesRegex(Final,'belongs to Codex'):typed('elsewhere','claude')  # said once, then spent
+        self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
+        self.assertEqual(load_run(self.root)[1]['human']['session'],'new')
+        _choose(self.root,'pr',self.event('pr','pr'))
+        self.assertEqual(load_run(self.root)[1]['status'],'pr')
+        # The person amends OH's last commit: OH can't offer that head's PR any more, and says so once.
+        (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-q','--amend','--no-edit')
+        with self.assertRaisesRegex(Final,'open one yourself'):typed('new')
+
+    def stopped_in_conflict(self,location='repo'):
+        """A delivery stopped after task 1 while someone else's change on main touches the file it wrote."""
+        where,path=self.documents(location)
+        self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        choose(self.root,'stop',self.event('stop','stop'));head=self.git('rev-parse','HEAD')
+        self.git('switch','-q','main');(self.root/'output.txt').write_text('main\n',newline='\n')
+        self.git('add','output.txt');self.git('commit','-qm','main work');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        with self.assertRaisesRegex(Refused,'conflicts with origin/main in output.txt. Ask the person with a menu: start over'):
+            self.start_delivery(turn='again')
+        self.assertEqual((self.git('rev-parse','deliver/0001'),self.git('status','--porcelain')),(head,''))
+        return where,path,head
+
+    def test_finishing_a_conflicting_delivery_without_main_hands_it_over_when_the_plans_moved(self):
+        from .delivery import conflict
+        _,_,head=self.stopped_in_conflict()
+        conflict(self.root,'keep','0001')
+        self.start_delivery(turn='kept')  # carries on without main's changes
+        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
+        self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+        choose(self.root,'stop',self.event('stop again','stop'))
+        # Main also changes the plans: OH can't carry on without them, so it hands the branch over, once.
+        self.git('switch','-q','main');where=plans.layout(self.root)
+        plans.add_initiative(self.root,where,'M1','search','Search notes',[]);self.git('add','.');self.git('commit','-qm','row')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        conflict(self.root,'keep','0001')
+        from .storage import Final
+        with self.assertRaisesRegex(Final,"From here it's yours"):self.start_delivery(turn='handed over')
+
+    def test_starting_a_conflicting_delivery_over_discards_its_branch_and_private_progress(self):
+        from .delivery import conflict
+        where,path,_=self.stopped_in_conflict('private')
+        before=read_json(plans.approvals_file(self.root))['0001']
+        self.assertIn('- [x] **1.**',path.read_text())
+        with patch.dict('os.environ',{'OH_CHILD_ATTEMPT':'a'}),self.assertRaises(Refused):conflict(self.root,'fresh','0001')
+        conflict(self.root,'fresh','0001')
+        self.assertIn('- [ ] **1.**',path.read_text());self.assertNotIn('delivery_commit',read_json(plans.approvals_file(self.root))['0001'])
+        self.assertNotEqual(read_json(plans.approvals_file(self.root))['0001'],before)
+        self.start_delivery(turn='fresh')
+        self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','origin/main'))
+        self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['1','2'])  # all of it again
+
+    def test_a_delivery_merged_with_the_persons_resolution_is_retired_and_keeps_its_progress(self):
+        from .delivery import conflict,without_main
+        _,path,head=self.stopped_in_conflict('private');conflict(self.root,'keep','0001')
+        # The person resolves the conflict on the pull request on GitHub, squash-merges it, and GitHub deletes the
+        # branch: only the pull request's head holds the resolution.
+        import subprocess
+        self.git('switch','-q','--detach',head)
+        subprocess.run(['git','-C',str(self.root),'merge','-q','origin/main'],capture_output=True)
+        (self.root/'output.txt').write_text('resolved\n',newline='\n');self.git('commit','-qam','Merge main')
+        self.git('update-ref','refs/pull/1/head','HEAD');self.git('update-ref','refs/remotes/origin/deliver/0001',head)
+        self.git('switch','-q','main');self.git('merge','-q','--squash','refs/pull/1/head');self.git('commit','-qm','Squash (#1)')
+        self.git('update-ref','refs/remotes/origin/main','HEAD');self.git('remote','add','origin',str(self.root))
+        from .delivery import delivered_base
+        with patch('oh.branches.merged_pulls',return_value=['1']):
+            delivered_base(self.root,read_json(plans.approvals_file(self.root))['0001'],progressed=True)  # before it is retired, too
+            self.start_delivery(turn='next')  # the merged branch is retired and its task stays done
+        self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','origin/main'))
+        self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+        self.assertFalse(without_main(self.root))
+
+    def test_a_conflict_resolved_by_hand_is_reviewed_with_the_next_task_before_it_is_published(self):
+        from .publication import render
+        _,path,_=self.stopped_in_conflict()
+        # Main also rewords the task this delivery hasn't done yet.
+        self.git('switch','-q','main');path.write_text(path.read_text().replace('sign-in endpoint.','sign-in endpoint, rate limited.'),newline='\n')
+        self.git('commit','-qam','Reword task 2');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        # The person approved the agent's plan: it merges main, resolves the conflict and commits the merge.
+        self.git('switch','-q','deliver/0001')
+        import subprocess
+        subprocess.run(['git','-C',str(self.root),'merge','-q','origin/main'],capture_output=True)
+        (self.root/'output.txt').write_text('both\n',newline='\n')
+        self.git('checkout','--ours','--',str(path));self.git('commit','-qam','Merge main, keeping ours')
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery(turn='stale plan')  # old task 2
+        path.write_text(self.git('show','origin/main:'+path.relative_to(self.root).as_posix()).replace('- [ ] **1.**','- [x] **1.**')+'\n',newline='\n')
+        self.git('commit','-qa','--amend','--no-edit')
+        merge=self.git('rev-parse','HEAD')
+        from .publication import commits
+        with self.assertRaisesRegex(Refused,'not a clean merge'):commits(self.root,'origin/main')  # unreviewed yet
+        self.start_delivery(turn='resolved');self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        request=read_json(next(Path(load_run(self.root)[0].path/'attempts').glob('*/covered.diff')).parent/'request.json')
+        self.assertEqual(request['covers']['commits'],[merge])
+        choose(self.root,'pr',self.event('pr','pr'))
+        body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
+        self.assertEqual([r['evidence'].get('covers') for r in body['records']],[None,[merge]])
+
+    def test_a_worktree_delivers_while_main_is_checked_out_elsewhere(self):
+        from .registry import register
+        self.documents();side=Path(self.temp.name)/'side'
+        self.git('worktree','add','-q','-b','side',str(side));register(side)
+        host_hook(side,'codex',{'prompt':'/oh-deliver 0001'},verified=self.event('side','/oh-deliver 0001'))
+        self.assertEqual(self.git('-C',str(side),'branch','--show-current'),'deliver/0001')
 
     def test_private_progress_is_reviewed_then_published_after_code_commit(self):
         where,path=self.documents('private');original=path.read_bytes();observed=[]
@@ -83,9 +248,9 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.git('status','--porcelain'),'')
 
     def test_unmerged_or_edited_private_design_does_not_grant_work(self):
-        where,path=self.documents()
+        where,path=self.documents();self.git('switch','-qc','deliver/0001')  # scope added on the branch, not by OH
         path.write_text(path.read_text()+'\nUnmerged scope\n');self.git('add','.');self.git('commit','-qm','unmerged')
-        with self.assertRaisesRegex(Refused,'origin/main'):self.start_delivery()
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery()
 
     def test_private_edits_invalidate_start_and_inflight_work(self):
         where,path=self.documents('private');original=path.read_bytes()
@@ -98,10 +263,13 @@ class DeliveryTest(unittest.TestCase):
 
     def test_ready_selection_skips_blocked_tasks_and_orders_dependencies(self):
         body=BODY.replace('- [ ] **1.** Add the credential store.','- [ ] **1.** Add the credential store. Blocked on §3.')
-        body+='\n### UI track\n\n- [ ] **3.** Add a sign-in placeholder.\n\n## 3. Open questions\n\nChoose the storage.\n'
+        body+='\n### UI track\n\n- [ ] **3.** Add a sign-in placeholder.\n  Difficulty: simple — one static page.\n\n## 3. Open questions\n\nChoose the storage.\n'
         self.documents(body=body)
         manifest,_=delivery.selection(self.root,'0001')
         self.assertEqual([t['id'] for t in manifest['tasks']],['3'])
+        self.start_delivery()  # the run builds each task with the difficulty the design gave it
+        self.assertEqual({k:load_run(self.root)[1]['tasks'][0][k] for k in ('difficulty','difficulty_reason')},
+                         {'difficulty':'simple','difficulty_reason':'Set by the design: one static page.'})
         with self.assertRaisesRegex(Refused,'No ready'):delivery.selection(self.root,'0001','core')
         with self.assertRaisesRegex(Refused,'Unknown'):delivery.selection(self.root,'0001','missing')
 
@@ -137,11 +305,11 @@ class DeliveryTest(unittest.TestCase):
         self.assertTrue(receive(self.root,'codex',event|{'prompt':'/oh-deliver 0001'})['pending'])
 
     def test_unmerged_context_and_unfinished_initiative_dependency_block_delivery(self):
-        where,path=self.documents()
+        where,path=self.documents();self.git('switch','-qc','deliver/0001')
         plans.add_initiative(self.root,where,'M1','ledger','Ledger',['auth'])
         n,ledger=plans.write_design(self.root,where,'ledger','Ledger',BODY,'approved');plans.claim(self.root,where,'ledger',n)
         self.git('add','.');self.git('commit','-qm','unmerged context')
-        with self.assertRaisesRegex(Refused,'origin/main'):self.start_delivery()
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery()
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         with self.assertRaisesRegex(Refused,'unfinished auth'):self.start_delivery(n)
 
@@ -180,14 +348,12 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,mutate)['status'],'needs_attention')
         self.assertEqual(path.read_bytes(),original);self.assertEqual(self.git('rev-parse','HEAD'),head)
 
-    def test_private_progress_cannot_skip_code_missing_from_another_branch(self):
+    def test_private_progress_resumes_the_branch_holding_its_code(self):
         self.documents('private');self.start_delivery()
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
-        branch=self.git('branch','--show-current')
         choose(self.root,'stop',self.event('stop','stop'));self.git('switch','main')
-        with self.assertRaisesRegex(Refused,'checkout does not contain'):self.start_delivery(turn='other')
-        self.git('merge','--ff-only',branch)
-        self.start_delivery(turn='merged')
+        self.start_delivery(turn='other')
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
 
     def test_private_progress_accepts_exact_code_after_squash_merge(self):
@@ -195,8 +361,13 @@ class DeliveryTest(unittest.TestCase):
         branch=self.git('branch','--show-current')
         choose(self.root,'stop',self.event('stop','stop'));self.git('switch','main')
         self.git('merge','--squash',branch);self.git('commit','-qm','Squash reviewed code')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')  # the pull request was squash-merged
+        # Non-ASCII text, which Windows would decode with its own codepage unless OH asks for UTF-8.
+        (self.root/'output.txt').write_text('changed again on main 📝 Łódź\n',encoding='utf-8',newline='\n');self.git('commit','-qam','Later work 🔍')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')  # and main changed those lines again since
         self.start_delivery(turn='squashed')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+        self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','main'))  # the squashed branch was retired
 
     def test_listing_does_not_claim_private_storage(self):
         from .storage import state_home

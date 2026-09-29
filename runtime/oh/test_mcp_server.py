@@ -85,7 +85,7 @@ class CodexToolsTest(unittest.TestCase):
     def test_tools_cover_everyday_commands_and_nothing_that_changes_what_oh_runs(self):
         names = {t['name'] for t in TOOLS}
         self.assertEqual(names, {'status', 'config', 'init', 'plans', 'resource', 'deliver', 'prepare', 'prepare_design',
-                                 'start', 'run', 'pause', 'resume', 'stop', 'pr_summary', 'choose', 'confirm'})
+                                 'start', 'run', 'pause', 'resume', 'stop', 'cancel', 'conflict', 'pr_summary', 'choose', 'confirm'})
         self.assertTrue(next(t for t in TOOLS if t['name'] == 'stop')['annotations']['destructiveHint'])  # a stop is final
         config = next(t for t in TOOLS if t['name'] == 'config')
         self.assertEqual(set(config['inputSchema']['properties']), {'root'})  # reading only: `config set` stays in the shell

@@ -245,17 +245,11 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
         self.assertNotIn('propose/search', self.git('branch', '--list'))
 
-    def test_proposals_refuse_feature_and_detached_starts_before_recording_a_run(self):
-        for branch in ('feature/work',None):
-            with self.subTest(branch=branch):
-                if branch:self.git('switch','-qc',branch)
-                else:self.git('switch','--detach','-q','main')
-                with self.assertRaisesRegex(Refused,'Committed proposals must start from main'):
-                    self.propose()
-                self.assertEqual(self.calls,[])
-                self.assertEqual(self.git('status','--porcelain'),'')
-                from .workflow import active_file
-                self.assertFalse(active_file(self.root).exists())
+    def test_proposals_start_from_main_wherever_the_checkout_was(self):
+        self.git('switch','-qc','feature/work')
+        self.propose()
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertEqual(load_run(self.root)[1]['branch'],'main')
 
     def test_branch_transition_recovers_after_switch_without_another_worker(self):
         from .storage import Journal

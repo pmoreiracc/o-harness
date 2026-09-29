@@ -8,7 +8,7 @@ from .cli import host_hook
 from .config import change
 from .hosts import DESIGN_SCHEMA
 from .runner import run
-from .storage import Refused
+from .storage import Refused, read_json
 from .workflow import choose, load_run
 
 BODY = '''## 1. Why this, and why now
@@ -135,25 +135,23 @@ class DesignRunTest(unittest.TestCase):
         choose(self.root, 'pr', self.event('2', 'pr'))
         self.assertEqual(load_run(self.root)[1]['status'], 'pr')
 
-    def test_feature_and_detached_starts_leave_no_run_or_branch(self):
-        from .storage import state_home
-        from .workflow import active_file
-        for detached in (False, True):
-            with self.subTest(detached=detached):
-                if detached:self.git('switch', '--detach', 'main')
-                else:self.git('switch', '-c', 'feature/payments')
-                before = sorted(str(p) for p in state_home().rglob('*') if p.is_file() and p.suffix != '.lock')
-                with unittest.mock.patch('oh.workflow.Journal') as journal:
-                    with self.assertRaisesRegex(Refused, 'must start from main or master'):
-                        self.design_run(turn=str(detached))
-                    journal.assert_not_called()
-                self.assertFalse(active_file(self.root).exists())
-                self.assertEqual(self.git('branch', '--list', 'design/*'), '')
-                self.assertEqual(sorted(str(p) for p in state_home().rglob('*') if p.is_file() and p.suffix != '.lock'), before)
-                self.assertEqual(self.calls, [])
-        self.git('switch', 'main')
-        self.design_run(turn='fresh')
+    def test_new_plans_start_from_main_brought_up_to_date(self):
+        import subprocess
+        origin, other = Path(self.temp.name) / 'origin.git', Path(self.temp.name) / 'other'
+        subprocess.run(['git', 'clone', '-q', '--bare', str(self.root), str(origin)], check=True)
+        self.git('remote', 'add', 'origin', str(origin));self.git('fetch', '-q', 'origin')
+        subprocess.run(['git', 'clone', '-q', str(origin), str(other)], check=True)
+        subprocess.run(['git', '-C', str(other), '-c', 'user.name=O', '-c', 'user.email=o@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'merged elsewhere'], check=True)
+        subprocess.run(['git', '-C', str(other), 'push', '-q', 'origin', 'main'], check=True)
+        self.git('switch', '-q', '--detach', 'main')  # the person was somewhere else
+        (self.root / 'notes.txt').write_text('mine')
+        with self.assertRaisesRegex(Refused, r'uncommitted changes that OH did not make \(notes.txt\)'):self.design_run()
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.git('rev-parse', 'main'))  # their edits stay where they are
+        (self.root / 'notes.txt').unlink()
+        self.design_run()
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.git('rev-parse', 'origin/main'))
+        self.assertEqual(self.git('log', '-1', '--format=%s', 'main'), 'merged elsewhere')
 
     def test_an_answer_oh_cannot_use_goes_back_to_the_worker(self):
         broken = design(body=BODY.replace('- [ ] **2.**', '- [ ] 2.'))
@@ -302,8 +300,7 @@ class DesignRunTest(unittest.TestCase):
                 unittest.mock.patch('oh.transcripts.register'):
             stage(self.root, 'codex', payload('1', '/oh-design login'))
             with self.assertRaisesRegex(Refused, "no initiative 'login'"):materialize(self.root)
-            self.assertFalse(pending_file(self.root).exists())
-            stage(self.root, 'codex', payload('1', '/oh-design login'))  # the same turn again gives the same answer
+            self.assertTrue(pending_file(self.root).exists())  # kept until carried out, so it is never typed again
             with self.assertRaisesRegex(Refused, "no initiative 'login'"):materialize(self.root)
             stage(self.root, 'codex', payload('2', '/oh-design auth'))
             self.assertEqual(materialize(self.root)['status'], 'running')
@@ -361,20 +358,17 @@ class DesignRunTest(unittest.TestCase):
         self.design_run()
         self.assertEqual(run(self.root, self.worker([design()]))['status'], 'completed')
 
-    def test_a_refused_start_says_to_type_the_command_again(self):
-        from .authority import materialize, stage
-        from .cli import main
+    def test_a_refused_start_is_carried_out_once_its_reason_is_fixed(self):
+        from .authority import materialize, pending_file, stage
         payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
         with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
                 unittest.mock.patch('oh.transcripts.register'):
             (self.root / 'notes.txt').write_text('dirty')
             stage(self.root, 'codex', payload('1', '/oh-design auth'))
-            with self.assertRaisesRegex(Refused, 'clean execution checkout.*type it again'):materialize(self.root)
+            with self.assertRaisesRegex(Refused, 'uncommitted changes'):materialize(self.root)
             (self.root / 'notes.txt').unlink()
-            with self.assertRaisesRegex(Refused, 'Your last OH command was refused'), unittest.mock.patch('sys.stderr'):
-                try:main(['--root', str(self.root), 'run'])
-                except SystemExit:raise Refused('Your last OH command was refused')
-            self.assertFalse(self.root.joinpath('docs/design').exists())
+            self.assertEqual(materialize(self.root)['status'], 'running')  # not typed again
+        self.assertFalse(pending_file(self.root).exists())
 
     def test_an_unexpected_failure_never_blocks_the_next_command(self):
         from .authority import materialize, pending_file, stage
@@ -389,7 +383,8 @@ class DesignRunTest(unittest.TestCase):
                 unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}):
             stage(self.root, 'codex', payload('2', 'stop'))
             with self.assertRaisesRegex(Refused, 'RuntimeError: boom'):materialize(self.root)
-        self.assertFalse(pending_file(self.root).exists())
+            stage(self.root, 'codex', payload('3', 'continue'))  # the newest typed choice replaces it
+        self.assertEqual(read_json(pending_file(self.root))['event']['turn'], '3')
 
     def test_a_check_that_rewrites_a_plan_file_stops_the_run(self):
         import sys
@@ -595,12 +590,13 @@ class DesignRunTest(unittest.TestCase):
 
     def test_typing_the_design_again_during_its_run_points_to_the_run(self):
         self.interrupt_review()
-        with self.assertRaisesRegex(Refused, 'An unfinished run exists'):self.design_run(turn='5')
+        with self.assertRaisesRegex(Refused, 'OH is still working on'):self.design_run(turn='5')
 
     def test_a_new_design_never_lands_on_another_plan_s_branch(self):
         self.design_run();run(self.root, self.worker([design()]))
         choose(self.root, 'pr', self.event('2', 'pr'))
-        with self.assertRaisesRegex(Refused, 'must start from main or master'):self.design_run('ledger', turn='3')
+        self.design_run('ledger', turn='3')  # from main, not from the other plan's branch
+        self.assertEqual((self.git('branch', '--show-current'), self.git('rev-parse', 'HEAD')), ('design/ledger', self.git('rev-parse', 'main')))
 
 
 if __name__ == '__main__':

@@ -43,8 +43,11 @@ the title, in numbered `## N. <Section>` headings, no `#` heading:
 ### Core track
 
 - [ ] **1.** Add the entries table and its migration. Read §3.
+  Difficulty: complex — a migration of stored data.
 - [ ] **2.** Post entries through one function. Depends on task 1.
+  Difficulty: standard — one module and its tests.
 - [ ] **3.** Apply the rounding rule. Depends on tasks 1, 2. *Blocked on §6.*
+  Difficulty: simple — one function with a known rule.
 ```
 
   - Tasks sit under `### <Name> track` headings; the name is one word.
@@ -53,6 +56,9 @@ the title, in numbered `## N. <Section>` headings, no `#` heading:
   - Dependencies are written as `Depends on task N.` or `Depends on tasks N, M.`
   - A task waiting on an Open question says `*Blocked on §N.*`, N being that section.
   - Indent a task's extra lines; a blank line followed by unindented text ends the task.
+  - Each task has an indented `Difficulty: simple|standard|complex — <why>` line. OH picks the
+    model that builds the task from it: simple for a small bounded edit, complex for
+    cross-cutting or safety-sensitive work or a design decision, standard otherwise.
   - One task is one reviewed commit and says what to read to build it. Aim for six to
     twelve tasks; thirty means the roadmap row is really two initiatives.
 

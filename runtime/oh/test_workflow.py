@@ -91,6 +91,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(run(self.root,self.fake)['completed'],1)
 
     def test_failed_review_does_not_repeat_successful_implementation(self):
+        # A host keeps its own worktrees inside the checkout: they are never its changes, reviewed or committed.
+        self.git('worktree','add','-q','-b','side','.claude/worktrees/side')
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         failed=[]
         def review_failure(*args,**kwargs):
@@ -100,6 +102,10 @@ class WorkflowTest(unittest.TestCase):
             return value
         self.assertEqual(run(self.root,review_failure)['completed'],1)
         self.assertEqual([c[0] for c in self.calls],['implementation','review','review'])
+        self.assertEqual(self.git('show','--name-only','--format=','HEAD'),'output.txt')
+        subprocess.run(['git','init','-q',str(self.root/'vendor')],check=True)  # any other repository is a change
+        from .storage import changes
+        self.assertEqual(changes(self.root),['vendor/'])
 
     def test_changed_tree_cannot_borrow_review_and_tool_output_cannot_grant(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
@@ -246,6 +252,14 @@ class WorkflowTest(unittest.TestCase):
         self.git('commit','--allow-empty','-qm','unreviewed extra')
         with self.assertRaises(Refused):render(self.root)
         with self.assertRaises(Refused):validate_event(self.root,event,'origin/main')
+
+    def test_a_pr_choice_works_where_the_main_branch_is_master(self):
+        from .publication import render
+        self.git('branch','-m','main','master');self.git('update-ref','refs/remotes/origin/master','master')
+        start(self.root,{'tasks':self.tasks[:1]},self.event());run(self.root,self.fake)
+        choose(self.root,'pr',self.event('2','pr'))
+        self.assertEqual(load_run(self.root)[1]['status'],'pr')
+        self.assertIn('"choice": "pr"',render(self.root,'origin/master'))
 
 
     def test_publication_stopped_and_mixed_cli_paths_refuse(self):
