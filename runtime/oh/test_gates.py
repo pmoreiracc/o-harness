@@ -240,28 +240,38 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.click(question, 'Continue')['status'], 'running')  # the click still counts
         self.assertFalse(pending_file(self.root).exists())  # and it is the person's latest act
 
-    def waiting_command(self, prompt='/oh-deliver 0006', first=None):
+    def waiting_command(self, prompt='/oh-deliver 0006', first=None, tagged=False):
         """The person types another command while the run waits at its menu: OH refuses it and keeps it. `first`
-        is what they did before typing it."""
+        is what they did before typing it. `tagged` saves it as Claude saves a typed slash command."""
         from .authority import stage
         from .storage import now
         question = self.begin('claude')['gate']['ask']['questions'][0]
         if first:first(question)
         time.sleep(0.01)
-        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'timestamp': now(), 'message': {'role': 'user', 'content': prompt}})
+        name, _, args = prompt.partition(' ')
+        content = f'<command-message>{name[1:]}</command-message>\n<command-name>{name}</command-name>\n<command-args>{args}</command-args>' if tagged else prompt
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'uuid': 'u2', 'cwd': str(self.root), 'timestamp': now(), 'message': {'role': 'user', 'content': content}})
+        if tagged:  # the skill Claude expanded from that very record
+            self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'isMeta': True, 'parentUuid': 'u2',
+                                 'message': {'role': 'user', 'content': [{'type': 'text', 'text': f'Base directory for this skill: /x/o-harness/skills/{name[1:]}'}]}})
         self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
         stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': prompt})
         with self.assertRaisesRegex(Refused, 'stop it and start this command .*or keep it and cancel'):materialize(self.root)
         return question
 
     def test_cancelling_the_waiting_command_keeps_the_open_run(self):
-        from .authority import cancel, pending_file
-        self.waiting_command()
+        from .authority import cancel, pending_file, stage
+        from .controls import request
+        self.waiting_command(tagged=True)
         with patch.dict(os.environ, {'OH_CHILD_ATTEMPT': 'a'}), self.assertRaises(Refused):cancel(self.root)  # never a worker's call
         self.assertEqual(cancel(self.root)['cancelled'], '/oh-deliver 0006')
         self.assertFalse(pending_file(self.root).exists())
         self.assertIsNone(materialize(self.root))  # nothing waits: `run` carries on with the open run
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+        # The cancelled turn never comes back, however it is spelled: here Claude saved it as command tags.
+        request(self.root, 'stop')
+        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': '/oh-deliver 0006'})
+        with self.assertRaisesRegex(Refused, 'Cancelled by the person'):materialize(self.root)
 
     def test_stopping_the_open_run_starts_the_waiting_command(self):
         from .authority import pending_file

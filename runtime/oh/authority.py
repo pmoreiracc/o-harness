@@ -402,9 +402,14 @@ def supersede(root,host,locked=False):
 
 
 def spent(root,event,refused):
-    """Record a waiting command or choice as used without carrying it out, so a replay of it is refused."""
-    used=used_file(root,event)
-    if not used.exists():atomic_json(used,{'source':event,'refused':refused},immutable=True)
+    """Record a waiting command or choice as used without carrying it out, so a replay of it is refused. A Claude
+    command is recorded under its typed spelling and under the one `attest` verifies from its command tags."""
+    events=[event]
+    if event.get('host')=='claude' and (typed:=typed_command(event.get('prompt'))) is not None:
+        name,args=typed;events.append(event|{'prompt':'/o-harness:'+name+(' '+args if args else '')})
+    for each in events:
+        used=used_file(root,each)
+        if not used.exists():atomic_json(used,{'source':each,'refused':refused},immutable=True)
 
 
 def cancel(root):

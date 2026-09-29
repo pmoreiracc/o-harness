@@ -33,6 +33,13 @@ def trunk(root):
     return None
 
 
+def main_ref(root):
+    """The ref of the main branch work is measured against: origin's copy when there is one. None without one."""
+    name=trunk(root)
+    if not name:return None
+    return 'origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
+
+
 def run_git(root,*args,timeout=None):
     import subprocess
     env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}|{'GIT_TERMINAL_PROMPT':'0'}

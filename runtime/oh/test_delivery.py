@@ -108,7 +108,14 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
         choose(self.root,'stop',self.event('declined','stop'))  # typed at completion, like the menu's Stop
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
-        self.assertEqual(self.start_delivery(turn='later')['gate']['choices'],['pr','stop'])  # the PR choice is back
+        # Days later, from a new conversation: the PR choice is back, and answered there.
+        from .workflow import human_event
+        def typed(session,host='codex'):
+            event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':'later','prompt':'/oh-deliver 0001'},host)
+            return host_hook(self.root,host,{'prompt':'/oh-deliver 0001'},verified=event)
+        with self.assertRaisesRegex(Refused,'belongs to Codex'):typed('elsewhere','claude')
+        self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
+        self.assertEqual(load_run(self.root)[1]['human']['session'],'new')
         _choose(self.root,'pr',self.event('pr','pr'))
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
 

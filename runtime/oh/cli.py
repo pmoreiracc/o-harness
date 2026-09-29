@@ -45,11 +45,11 @@ def host_hook(root,host,payload,*,verified):
         return listing(root)
     if delivery and delivery['kind']=='quick_fix':return delivery
     if delivery and delivery['kind']=='design':
-        from .workflow import load_run,occupied,unfinished
+        from .workflow import carry_on,load_run,occupied,unfinished
         if unfinished(root,verified):
             _,state=load_run(root)
             # The same design typed again carries on with its run.
-            if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return checkpoint(root)
+            if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return carry_on(root,verified)
             raise occupied(state)
         if started(root,verified):return checkpoint(root)
         from .prepared import resolve

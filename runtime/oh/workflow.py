@@ -103,6 +103,7 @@ def reduce(records):
             if d['status']=='paused':state['pause_snapshot']={'tree':d['tree'],'head':d['head']}
         elif kind=='task.intervention':state['interventions'][d['task']]=state['interventions'].get(d['task'],0)+1
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
+        elif kind=='run.owner':state['human']=d['human']
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
@@ -379,11 +380,10 @@ def adopted(root,state,own):
     """The reviewed commits a stopped run, or a completed one nobody chose to publish, left on this branch before
     this run resumed it. They were never published, so this run's PR choice publishes them with its own."""
     import subprocess
-    from .branches import run_git,trunk
+    from .branches import main_ref
     from .publication import commits,trailer
-    name=trunk(root)
-    if not name:raise Refused('This repository has no main or master branch to publish against')
-    base='origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
+    base=main_ref(root)
+    if not base:raise Refused('This repository has no main or master branch to publish against')
     try:mine=commits(root,base,reviewed=None)  # render checks the merges
     except subprocess.CalledProcessError as exc:raise Refused(f'OH could not list this branch\'s commits since {base}') from exc
     found=[]
@@ -401,11 +401,28 @@ def reopen(root,state,event):
     delivery again after stopping it at completion wants that choice back. It grants no new work."""
     journal=Journal(state['project'],state['id'])
     with lock(checkout_file(root,'oh-control.lock')):
+        owned(journal,state,event)
         if state['status']=='stopped':
             journal.append('decision',{'source':digest({k:event[k] for k in ('host','session','turn','prompt')}),'choice':'reopen'})
             journal.append('run.status',{'status':'completed'})
         atomic_json(active_file(root),{'project':state['project'],'run':state['id'],'checkout':checkout_id(root)})
     return checkpoint(root)
+
+
+def carry_on(root,event):
+    """The person typed the checkout's open run's command again: carry on with it, from this conversation."""
+    with lock(checkout_file(root,'oh-control.lock')):
+        journal,state=load_run(root)
+        owned(journal,state,event)
+    return checkpoint(root)
+
+
+def owned(journal,state,event):
+    """A verified command typed in another conversation of the run's host makes that conversation the run's owner,
+    so its menus are answered there. The host stays: its workers and transcripts are that host's."""
+    if state['human'].get('session')==event['session']:return
+    if state['host']!=event['host']:raise Refused(f"This run belongs to {state['host'].title()}; carry on with it there")
+    journal.append('run.owner',{'human':event})
 
 
 def checkpoint(root):

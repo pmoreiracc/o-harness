@@ -158,9 +158,9 @@ def forget_progress(root,where,doc,name,base):
     atomic_json(plans.approvals_file(root),records|{doc:intents[0]['before']})
 
 
-def unreviewed_merges(root,fork):
-    """Merges on this branch since `fork` that aren't Git's clean merge of main and no review has covered yet: the
-    agent or the person resolved a conflict with main, so the next review must cover that resolution too."""
+def unreviewed_merges(root,fork,base):
+    """Merges on this branch since `fork` that aren't Git's clean merge of `base` (main) and no review has covered
+    yet: the agent or the person resolved a conflict with main, so the next review must cover that resolution."""
     from .publication import merged,trailer
     from .storage import Journal,project
     from .workflow import reduce
@@ -168,7 +168,7 @@ def unreviewed_merges(root,fork):
     for line in git(root,'rev-list','--reverse','--parents',fork+'..HEAD').splitlines():
         commit,*parents=line.split()
         if len(parents)>1:
-            try:merged(root,commit,parents,'origin/main')
+            try:merged(root,commit,parents,base)
             except Refused:found.append(commit)
             continue
         try:run=trailer(root,commit,'OH-Run')
@@ -254,9 +254,9 @@ def selection(root,doc,track='',*,claim=True):
         tasks=[{'id':'finalize','title':'Finalize the completed design','instructions':'Verify the completed design and affected documentation.',
                 'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':'finalize'}}]
     freeze_render(root,doc,'' if tasks[0]['id']=='finalize' else tasks[0]['id'],where)
-    from subprocess import CalledProcessError
-    try:merges=unreviewed_merges(root,git(root,'merge-base','HEAD','origin/main'))
-    except CalledProcessError:merges=[]
+    from .branches import main_ref
+    base=main_ref(root)
+    merges=unreviewed_merges(root,git(root,'merge-base','HEAD',base),base) if base else []
     return ({'workflow':'deliver','design':doc,'track':track,'tasks':tasks},
             {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'approvals':approvals}
                         |({'merges':merges} if merges else {})})
