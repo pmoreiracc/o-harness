@@ -12,12 +12,17 @@ host, so the person approves it. Stopping a long Codex tool call does not stop O
 as a menu: in Claude, the question tool (AskUserQuestion); in Codex, the o-harness `confirm` tool, which waits for
 the click (never Codex's own question tool, which closes when your turn ends).
 
-Resolve the selected Git checkout. Run `config`; if unregistered, run `init` once: it
-joins the project of the same repository, or names a new one after the repository (pass
-`--name` only when the user asks for another name, or when `config` or `init` says the name is
-taken or ambiguous; then ask the user which name to use). If `config` then lists no checks, save appropriate ordinary
-project checks with `config set checks '<JSON list>'` and tell the user which; never replace
-existing checks here. No OH files, hooks or settings belong in the product.
+When OH refuses, the command you were given stays valid until OH carries it out, so the person never types it
+again. Fix what is yours to fix and run the same OH command again without mentioning it. When the fix is the
+person's call, such as their own uncommitted changes or a merge conflict, say what is in the way in one sentence
+and ask with a menu; do what they pick, then run it again. Never commit, stash or discard their changes unless
+they pick that, and never switch, pull or create branches for OH: it does that itself. After opening a pull
+request, give its link; don't wait for or watch its checks.
+
+Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
+ambiguous, ask the user which name to use and run `init --name <name>`. If OH says the project has no checks,
+save appropriate ordinary project checks with `config set checks '<JSON list>'`, tell the user which, and run
+the command again; never replace existing checks here. No OH files, hooks or settings belong in the product.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
 For already prepared scope, run `start` to verify the native human

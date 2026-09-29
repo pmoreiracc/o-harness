@@ -12,10 +12,15 @@ host, so the person approves it. Stopping a long Codex tool call does not stop O
 as a menu: in Claude, the question tool (AskUserQuestion); in Codex, the o-harness `confirm` tool, which waits for
 the click (never Codex's own question tool, which closes when your turn ends).
 
-Resolve the selected Git checkout. Run `config`; if unregistered, run `init` once: it
-joins the project of the same repository, or names a new one after the repository (pass
-`--name` only when the user asks for another name, or when `config` or `init` says the name is
-taken or ambiguous; then ask the user which name to use). Existing project checks run when
+When OH refuses, the command you were given stays valid until OH carries it out, so the person never types it
+again. Fix what is yours to fix and run the same OH command again without mentioning it. When the fix is the
+person's call, such as their own uncommitted changes or a merge conflict, say what is in the way in one sentence
+and ask with a menu; do what they pick, then run it again. Never commit, stash or discard their changes unless
+they pick that, and never switch, pull or create branches for OH: it does that itself. After opening a pull
+request, give its link; don't wait for or watch its checks.
+
+Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
+ambiguous, ask the user which name to use and run `init --name <name>`. Existing project checks run when
 configured; design can proceed without checks. No OH files, hooks or settings belong in the product.
 
 The argument is one roadmap slug, such as `/oh-design auth`. Without one, read the roadmap
@@ -29,10 +34,11 @@ or private (OH's folder, nothing in the repository). Save the answer with
 Show the exact folder from `plans path`; `plans.private_folder` changes its parent.
 
 Run `run`. It verifies the native human invocation and starts the design
-(repository plans use a new `design/<slug>` branch from `main` or `master`; private plans need no branch). OH reads the roadmap row, a fresh worker writes the prose, and
-OH numbers the doc, links it from the row, checks its task list, has it reviewed
-independently. Repository plans are committed; private plans wait for your approval. Never write or edit plan files yourself, and
-never run your own worker or review loop. If `run` refuses, relay its reason; it names the fix.
+(repository plans use a new `design/<slug>` branch from `main`, which OH brings up to date and switches to
+itself; private plans need no branch). OH reads the roadmap row, a fresh worker writes the prose, and OH numbers
+the doc, links it from the row, checks its task list, has it reviewed independently. Repository plans are
+committed; private plans wait for your approval. Never write or edit plan files yourself, and never run your own
+worker or review loop.
 
 If the status is `approval_checkpoint`, show the private plan path, task count and summary,
 then **approve** / **refine: <what to change>** / **reconsider**. Approval binds the reviewed
