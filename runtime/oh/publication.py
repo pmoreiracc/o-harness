@@ -1,7 +1,7 @@
 """Portable PR evidence for native runs; local journals remain the authority."""
 import json
 import re
-from .storage import Refused,Journal,digest,git,project
+from .storage import Refused,Journal,changes,digest,git,project
 from .workflow import reduce
 
 START='<!-- oh-review:start -->'
@@ -62,7 +62,7 @@ def has_native_history(root,base):
 
 
 def render(root,base='origin/main'):
-    if git(root,'status','--porcelain'):raise Refused('Publish only from a clean reviewed checkout')
+    if changes(root):raise Refused('Publish only from a clean reviewed checkout')
     records=[];grants={};p=project(root);branch=git(root,'branch','--show-current')
     for commit in commits(root,base):
         run=trailer(root,commit,'OH-Run');state=reduce(Journal(p['id'],run).records())

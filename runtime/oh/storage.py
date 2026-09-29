@@ -136,6 +136,31 @@ def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], env=env).decode().strip()
 
 
+def status(root):
+    """Git's changed and untracked paths, as (changes, nested). `nested` are the Git repositories inside the
+    checkout that it doesn't track, such as the worktrees Claude keeps in .claude/worktrees: they belong to
+    their own repository, so they are never this checkout's changes and OH never commits them."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    output = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+                            capture_output=True, check=True, env=env).stdout.decode().split('\0')
+    paths, skip = [], False
+    for entry in output:
+        if skip or not entry:skip = False;continue
+        paths.append(entry[3:]);skip = entry[0] in 'RC'  # a rename or copy is followed by its old path
+    # Git lists an untracked nested repository as its folder, with a trailing slash; every other entry is a file.
+    return [p for p in paths if not p.endswith('/')], [p.rstrip('/') for p in paths if p.endswith('/')]
+
+
+def changes(root):
+    """Paths Git sees as changed or untracked in the checkout, without the repositories nested in it."""
+    return status(root)[0]
+
+
+def whole(root):
+    """The pathspec for the whole checkout except the repositories nested in it."""
+    return ['--', '.', *(':(exclude,top)' + p for p in status(root)[1])]
+
+
 def checkout_id(root):
     from .registry import lookup
     return lookup(root)['checkout']

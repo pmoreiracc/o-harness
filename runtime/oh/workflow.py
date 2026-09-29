@@ -8,7 +8,7 @@ from .storage import state_writer
 
 from pathlib import Path
 from .config import classify, snapshot
-from .storage import Journal, Refused, atomic_json, checkout_id, digest, git, identifier, project, read_json, state_home, lock
+from .storage import Journal, Refused, atomic_json, changes, checkout_id, digest, git, identifier, project, read_json, state_home, lock
 from .telemetry import best_effort
 
 
@@ -149,7 +149,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
     from .config import project_checks
     required=prepared['project_checks'] if prepared else project_checks(root)
     if workflow=='deliver' and not required and not manifest.get('checks'):raise Refused("Add this project's checks before starting paid work: oh config set checks '<JSON list>'")
-    if git(root,'status','--porcelain'):
+    if changes(root):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
     original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
@@ -189,7 +189,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
         active=read_json(active_file(root)) if active_file(root).exists() else {}
         if created and active.get('run')!=run:
             if (git(root,'branch','--show-current')!=created or git(root,'rev-parse','HEAD')!=base
-                    or git(root,'status','--porcelain')):
+                    or changes(root)):
                 raise Refused('Run start failed and the checkout changed; inspect it, then switch back to '+original+' before typing the command again')
             git(root,'switch',original)
             from subprocess import CalledProcessError
@@ -336,11 +336,11 @@ def discard_proposal(root,journal,state):
         raise Refused('The proposal branch changed; preserve it and restore its recorded identity before cleanup')
     if current==branch:
         undo(root,state.get('rendered'))
-        if git(root,'status','--porcelain'):raise Refused('Preserve unrelated edits before retrying proposal cleanup')
+        if changes(root):raise Refused('Preserve unrelated edits before retrying proposal cleanup')
         if target:
             if git(root,'rev-parse',target)!=pending['base']:raise Refused('The original branch moved; restore its base before retrying proposal cleanup')
             git(root,'switch',target)
-    elif git(root,'status','--porcelain'):
+    elif changes(root):
         raise Refused('Preserve new edits before retrying proposal cleanup')
     if target and exists:
         from subprocess import CalledProcessError

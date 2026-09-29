@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from . import hosts
 from .config import HOME
-from .storage import Refused, atomic_json, digest, git, identifier, lock
+from .storage import Refused, atomic_json, changes, digest, git, identifier, lock, whole
 from .telemetry import best_effort
 from .verification import tree, verify, candidate_tree
 from .workflow import checkpoint, committed, load_run, next_task, reduce, review_limit
@@ -325,7 +325,7 @@ def _run(root,invoke):
                 if designing(task) or intake(task):
                     # Refuse before paying for a worker whose plan OH could not write: a human edit to the last render,
                     # or changes in the checkout that OH didn't make.
-                    from .plans import Blocked,changes,layout,undo
+                    from .plans import Blocked,layout,undo
                     rendered=reduce(journal.records()).get('rendered') or {}
                     if blocked_layout(root,state):raise Blocked(blocked_layout(root,state))
                     undo(root,rendered,check_only=True)
@@ -361,7 +361,7 @@ def _run(root,invoke):
                         duration_ms=sum(r['duration_ms'] for r in check_results if not r['reused']),
                         reused=sum(r['reused'] for r in check_results),checks=len(check_results))
             if designing(task) or intake(task):
-                from .plans import Blocked,changes,digest_of
+                from .plans import Blocked,digest_of
                 rendered=reduce(journal.records())['rendered']
                 from .plans import validate_outputs,layout
                 validate_outputs(root,rendered,layout(root)['base'])
@@ -462,7 +462,7 @@ def create_proposal_branch(root,journal,state):
     """Recover ref creation from durable intent before binding its incarnation and switching."""
     from .branches import incarnation
     pending=state['branch_creation'];name=pending['branch'];ref='refs/heads/'+name
-    if (git(root,'branch','--show-current')!=pending['from'] or git(root,'status','--porcelain')
+    if (git(root,'branch','--show-current')!=pending['from'] or changes(root)
             or git(root,'rev-parse','HEAD')!=pending['base'] or incarnation(root,pending['from'])!=pending['from_incarnation']):
         raise Refused('Restore the unchanged original proposal branch before retrying its creation')
     if not git(root,'branch','--list',name):
@@ -485,7 +485,7 @@ def create_proposal_branch(root,journal,state):
 def finish_move(root,journal,state):
     from .branches import incarnation
     pending=state['branch_move'];current=git(root,'branch','--show-current')
-    if (current not in (pending['from'],pending['branch']) or git(root,'status','--porcelain')
+    if (current not in (pending['from'],pending['branch']) or changes(root)
             or git(root,'rev-parse','HEAD')!=pending['base']
             or git(root,'rev-parse',pending['branch'])!=pending['base']
             or incarnation(root,pending['branch'])!=pending['incarnation']
@@ -565,11 +565,11 @@ def complete_reviewed(root,journal,state,task,review):
                 f"OH-Run: {state['id']}" in message and f"OH-Review: {review['id']}" in message and
                 intent.get('publication') is not None and f"OH-Evidence: {digest(intent['publication'])}" in message)
             if not already:raise Refused('HEAD changed after review; cannot recover this commit intent')
-            if git(root,'status','--porcelain'):raise Refused('Preserve new edits before recovering the reviewed commit')
+            if changes(root):raise Refused('Preserve new edits before recovering the reviewed commit')
         if not already:
             if head!=review.get('head'):raise Refused('HEAD differs from the reviewed parent')
             if review['tree']!=tree(root) or candidate_tree(root)!=expected:raise Refused('The retained review does not cover the current tree')
-            git(root,'add','--all')
+            git(root,'add','--all',*whole(root))
             if git(root,'write-tree')!=expected:raise Refused('The staged tree differs from the reviewed Git tree')
             if not intent:
                 from .publication import task_evidence
