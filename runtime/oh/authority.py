@@ -176,14 +176,20 @@ def saved_command(text):
     tags=re.findall(COMMAND_TAG,text,re.S);names=[tag for tag,_ in tags]
     if 'command-name' not in names or len(set(names))!=len(names) or re.sub(COMMAND_TAG,'',text,flags=re.S).strip():return None
     found=dict(tags)
-    return found['command-name'].strip(),found.get('command-args','').strip()
+    return skill_name(found['command-name'].strip()),found.get('command-args','').strip()
 
 
 def typed_command(prompt):
     """The (name, args) of a slash command as the prompt hook passes it, or None for other text."""
     if not prompt.startswith('/'):return None
-    name,_,args=prompt.partition(' ')
-    return name,args.strip()
+    name,*args=prompt.split(maxsplit=1)
+    return skill_name(name),(args or [''])[0].strip()
+
+
+def skill_name(command):
+    """/oh-propose and /o-harness:oh-propose are the same command, whichever form the person typed or Claude
+    saved; another plugin's /other:oh-propose stays its own."""
+    return command.removeprefix('/').removeprefix('o-harness:')
 
 
 def expanded_skill(x):
@@ -248,7 +254,7 @@ def attest(host,payload,root=None):
     # Command tags alone could be text the person pasted: Claude ran the command only if it also saved the
     # skill it expanded from that very record.
     for x in tagged:
-        if typed_command(event['prompt'])[0].rpartition(':')[2].lstrip('/') in expanded.get(x.get('uuid'),()):
+        if typed_command(event['prompt'])[0] in expanded.get(x.get('uuid'),()):
             matches.append(digest(x))
             if x.get('timestamp'):times.append(x['timestamp'])
     if not matches:raise Refused('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')

@@ -69,6 +69,11 @@ class AuthorityTest(unittest.TestCase):
                 with self.assertRaises(Refused):attest('claude',payload,root)
             save('<command-name>/o-harness:oh-stop</command-name>','oh-stop')
             self.assertEqual(attest('claude',payload|{'prompt':'/o-harness:oh-stop'},root)['turn'],'turn')
+            self.assertEqual(attest('claude',payload|{'prompt':'/oh-stop'},root)['turn'],'turn')  # typed without the plugin name
+            save('<command-name>/oh-stop</command-name>\n<command-args>now</command-args>','oh-stop')
+            self.assertEqual(attest('claude',payload|{'prompt':'/o-harness:oh-stop\tnow'},root)['turn'],'turn')
+            save('<command-name>/other:oh-stop</command-name>','oh-stop')  # another plugin's command of the same name
+            with self.assertRaises(Refused):attest('claude',payload|{'prompt':'/oh-stop'},root)
             with self.assertRaises(Refused):attest('claude',payload|{'prompt':'approve'},root)  # only slash commands are tagged
 
     def test_desktop_fallback_uses_only_current_native_human_turn(self):
