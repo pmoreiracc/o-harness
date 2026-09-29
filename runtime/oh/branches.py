@@ -47,6 +47,26 @@ def run_git(root,*args,timeout=None):
     except subprocess.TimeoutExpired:return subprocess.CompletedProcess(args,1,'','timed out')
 
 
+def squashed(root,into,start,end):
+    """Whether one commit on `into` since `start` carries exactly the change start..end, as a squash merge does: found
+    by Git's patch id, so still found after main changed the same lines again."""
+    import subprocess
+    def ids(text):
+        found=subprocess.run(['git','-C',str(root),'patch-id','--stable'],input=text,capture_output=True,text=True,
+                             env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')})
+        return {line.split()[0] for line in found.stdout.splitlines() if line.strip()}
+    change=run_git(root,'diff','--no-color','--no-ext-diff',start,end).stdout
+    if not change.strip():return False
+    return bool(ids(change)&ids(run_git(root,'log','-p','--no-merges','--no-color','--no-ext-diff',start+'..'+into).stdout))
+
+
+def contained(root,into,commit):
+    """Whether `into` holds `commit`'s work: merged, or squashed in one commit."""
+    if run_git(root,'merge-base','--is-ancestor',commit,into).returncode==0:return True
+    fork=run_git(root,'merge-base',into,commit).stdout.strip()
+    return bool(fork) and squashed(root,into,fork,commit)
+
+
 def untouched(root):
     """Refuse while the checkout holds the person's own uncommitted edits: they decide what happens to them."""
     from .storage import changes
@@ -115,8 +135,7 @@ def to_delivery(root,name):
     exists=run_git(root,'rev-parse','--verify','--quiet','refs/heads/'+name).returncode==0
     if exists and current!=name and (elsewhere:=holder(root,name)):
         raise Refused(f'{name} is checked out in {elsewhere}; type the command there to carry on with it.')
-    if exists and (run_git(root,'merge-base','--is-ancestor',name,base).returncode==0
-                   or merged_tree(root,base,name)==git(root,'rev-parse',base+'^{tree}')):
+    if exists and (contained(root,base,name) or merged_tree(root,base,name)==git(root,'rev-parse',base+'^{tree}')):
         if current==name:git(root,'switch','--quiet','--detach',base)  # only while the spent branch is replaced
         git(root,'branch','-D',name);exists=False
     if not exists:

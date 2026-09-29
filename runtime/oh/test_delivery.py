@@ -78,16 +78,20 @@ class DeliveryTest(unittest.TestCase):
         self.git('commit','-qam','tweak\n\nOH-Run: '+first)
         with self.assertRaisesRegex(Refused,'origin/main'):self.start_delivery(turn='forged')
         self.git('reset','-q','--hard',done)
+        # The person commits an edit of their own on the stopped branch, as OH suggests for uncommitted changes.
+        (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-qm','My edit')
+        mine=self.git('rev-parse','HEAD')
         # Meanwhile main answers the open question.
         self.git('switch','-q','main');path.write_text(path.read_text().replace('\n  *Blocked on §3.*',''),newline='\n')
         self.git('commit','-qam','Answer the storage question');self.git('update-ref','refs/remotes/origin/main','HEAD')
         self.start_delivery(turn='again')
-        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD^1')),('deliver/0001',done))  # main merged in
+        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD^1')),('deliver/0001',mine))  # main merged in
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
         self.assertEqual(run(self.root,self.fake)['status'],'completed')
         choose(self.root,'pr',self.event('pr','pr'))
         body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
-        self.assertEqual([r['commit'] for r in body['records']],self.git('rev-list','--reverse','--no-merges','origin/main..HEAD').splitlines())
+        self.assertEqual([r['commit'] for r in body['records']],[c for c in self.git('rev-list','--reverse','--no-merges','origin/main..HEAD').splitlines() if c!=mine])
+        self.assertEqual([r['evidence'].get('covers') for r in body['records']],[None,[mine]])  # reviewed with task 2
         self.assertEqual(len(body['records']),2);self.assertEqual(list(body['grants']),[load_run(self.root)[1]['id']])
 
     def finish(self):
@@ -180,11 +184,11 @@ class DeliveryTest(unittest.TestCase):
         from .publication import commits
         with self.assertRaisesRegex(Refused,'not a clean merge'):commits(self.root,'origin/main')  # unreviewed yet
         self.start_delivery(turn='resolved');self.assertEqual(run(self.root,self.fake)['status'],'completed')
-        request=read_json(next(Path(load_run(self.root)[0].path/'attempts').glob('*/merges.diff')).parent/'request.json')
-        self.assertEqual(request['merges']['commits'],[merge])
+        request=read_json(next(Path(load_run(self.root)[0].path/'attempts').glob('*/covered.diff')).parent/'request.json')
+        self.assertEqual(request['covers']['commits'],[merge])
         choose(self.root,'pr',self.event('pr','pr'))
         body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
-        self.assertEqual([r['evidence'].get('merges') for r in body['records']],[None,[merge]])
+        self.assertEqual([r['evidence'].get('covers') for r in body['records']],[None,[merge]])
 
     def test_a_worktree_delivers_while_main_is_checked_out_elsewhere(self):
         from .registry import register
@@ -324,6 +328,8 @@ class DeliveryTest(unittest.TestCase):
         choose(self.root,'stop',self.event('stop','stop'));self.git('switch','main')
         self.git('merge','--squash',branch);self.git('commit','-qm','Squash reviewed code')
         self.git('update-ref','refs/remotes/origin/main','HEAD')  # the pull request was squash-merged
+        (self.root/'output.txt').write_text('changed again on main\n',newline='\n');self.git('commit','-qam','Later work')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')  # and main changed those lines again since
         self.start_delivery(turn='squashed')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
         self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','main'))  # the squashed branch was retired

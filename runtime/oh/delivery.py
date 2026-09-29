@@ -45,9 +45,11 @@ def delivered_base(root,record,*,progressed=False):
             raise Refused('Private progress has an unrecorded empty delivery range; restore its original approval record')
         try:git(root,'merge-base','--is-ancestor',commit,'HEAD')
         except CalledProcessError:
-            # Squash merges must contain every delivered path, with an inherited baseline.
+            # Squash merges must contain every delivered path, with an inherited baseline, or carry the delivery's
+            # exact change in one commit, still found after main changed those paths again.
+            from .branches import contained
             paths=[path for path in changed.split('\0') if path]
-            if paths:git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
+            if paths and not contained(root,'HEAD',commit):git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
     except CalledProcessError:
         raise Refused('Private plan progress belongs to code this checkout does not contain; merge the branch that holds it, through its pull request, first') from None
 
@@ -67,7 +69,7 @@ def dependencies(root,where,rows,name):
 def progress_only(root,fork,paths):
     """Whether the plans changed since `fork` only through OH's own reviewed commits, which its journal records, and
     merges of main, with nothing uncommitted. A message that merely claims to be OH's changes nothing. A merge
-    resolved by hand is reviewed with the run's first task (`unreviewed_merges`), but the plans are bound here: after
+    resolved by hand is reviewed with the run's first task (`unreviewed`), but the plans are bound here: after
     a merge of main they must be main's exactly, apart from the tasks this branch's runs completed."""
     from subprocess import CalledProcessError
     from .publication import trailer
@@ -160,21 +162,28 @@ def forget_progress(root,where,doc,name,base):
     from .storage import Journal,project
     path=document(root,where,doc);records=read_json(plans.approvals_file(root))
     intents=[]
+    from .branches import contained
     for commit in git(root,'rev-list','--reverse','--no-merges',git(root,'merge-base',name,base)+'..'+name).splitlines():
-        run=trailer(root,commit,'OH-Run')
+        try:run=trailer(root,commit,'OH-Run')
+        except Refused:continue  # the person's own commit records no progress
         intents+=[r['data'] for r in Journal(project(root)['id'],run).records() if r['kind']=='delivery.approval.intent' and r['data'] not in intents]
     if not intents:return
     if records.get(doc)!=intents[-1]['after']:raise Refused(f'The private approval of design {doc} changed outside OH; restore it before starting over')
-    text=unticked(path.read_bytes().decode(),{i['task'] for i in intents})  # bytes as saved: CRLF plans keep their hash
-    if hashlib.sha256(text.encode()).hexdigest()!=intents[0]['before'].get('sha256'):
+    # Progress whose code main already holds (a pull request merged or squashed) stays; the rest is undone.
+    kept=max((index+1 for index,intent in enumerate(intents) if contained(root,base,intent['after']['delivery_commit'])),default=0)
+    undo=intents[kept:]
+    if not undo:return
+    text=unticked(path.read_bytes().decode(),{i['task'] for i in undo})  # bytes as saved: CRLF plans keep their hash
+    if hashlib.sha256(text.encode()).hexdigest()!=undo[0]['before'].get('sha256'):
         raise Refused(f'Design {doc} changed beyond this delivery\'s progress; OH cannot start it over safely')
     plans.write(path,text)
-    atomic_json(plans.approvals_file(root),records|{doc:intents[0]['before']})
+    atomic_json(plans.approvals_file(root),records|{doc:undo[0]['before']})
 
 
-def unreviewed_merges(root,fork,base):
-    """Merges on this branch since `fork` that aren't Git's clean merge of `base` (main) and no review has covered
-    yet: the agent or the person resolved a conflict with main, so the next review must cover that resolution."""
+def unreviewed(root,fork,base):
+    """Commits on this branch since `fork` that OH didn't make and no review has covered yet: the person's own
+    commits, and merges of `base` (main) that aren't Git's clean merge because a conflict was resolved by hand. The
+    next task's review covers them, so the pull request carries only reviewed code."""
     from .publication import merged,trailer
     from .storage import Journal,project
     from .workflow import reduce
@@ -186,9 +195,9 @@ def unreviewed_merges(root,fork,base):
             except Refused:found.append(commit)
             continue
         try:run=trailer(root,commit,'OH-Run')
-        except Refused:continue
+        except Refused:found.append(commit);continue
         for intent in reduce(Journal(project(root)['id'],run).records())['commit_intents'].values():
-            covered|=set((intent.get('publication') or {}).get('merges',[]))
+            covered|=set((intent.get('publication') or {}).get('covers',[]))
     return [commit for commit in found if commit not in covered]
 
 
@@ -273,10 +282,10 @@ def selection(root,doc,track='',*,claim=True):
     freeze_render(root,doc,'' if tasks[0]['id']=='finalize' else tasks[0]['id'],where)
     from .branches import main_ref
     base=main_ref(root)
-    merges=unreviewed_merges(root,git(root,'merge-base','HEAD',base),base) if base else []
+    covers=unreviewed(root,git(root,'merge-base','HEAD',base),base) if base else []
     return ({'workflow':'deliver','design':doc,'track':track,'tasks':tasks},
             {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'approvals':approvals}
-                        |({'merges':merges} if merges else {})})
+                        |({'covers':covers} if covers else {})})
 
 
 def listing(root):

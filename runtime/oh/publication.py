@@ -15,8 +15,9 @@ def task_evidence(state,task,review,parent):
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
         'host':state['host'],'version':state['harness_version'],'config_hash':state['config_hash'],'branch':state['branch'],
         'parent':parent,'git_tree':review['git_tree'],'review':review['id'],'attempts':history,'resolutions':resolutions}
-    # The first task a run commits was also reviewed with the merges of main resolved by hand before it.
-    if (merges:=(state.get('delivery') or {}).get('merges')) and not state['summaries']:value['merges']=merges
+    # The first task a run commits was also reviewed with the commits OH didn't make before it: the person's own,
+    # and merges of main resolved by hand.
+    if (covers:=(state.get('delivery') or {}).get('covers')) and not state['summaries']:value['covers']=covers
     validate_evidence(value)
     return value
 
@@ -44,13 +45,15 @@ def trailer(root,commit,name):
 
 
 def commits(root,base,reviewed=()):
-    """The branch's commits since `base`, oldest first, without the merges that brought `base` into it. Every merge
-    must be Git's clean merge of `base` or one of `reviewed`, whose resolution a review covered; None only lists."""
+    """The branch's commits since `base`, oldest first, without the merges that brought `base` into it and without
+    `reviewed`, the commits OH didn't make that a review covered. Every other merge must be Git's clean merge of
+    `base`. None only lists every commit that isn't a merge."""
     anchor=git(root,'merge-base',base,'HEAD');values=[]
     for line in git(root,'rev-list','--reverse','--parents',anchor+'..HEAD').splitlines():
         commit,*parents=line.split()
+        if reviewed is not None and commit in reviewed:continue
         if len(parents)>1:
-            if reviewed is not None and commit not in reviewed:merged(root,commit,parents,base)
+            if reviewed is not None:merged(root,commit,parents,base)
         else:values.append(commit)
     if not values:raise Refused('No reviewed commits to publish')
     return values
@@ -72,11 +75,9 @@ def verify_record(root,commit,evidence):
     validate_evidence(evidence)
     if git(root,'show','-s','--format=%P',commit)!=evidence['parent'] or git(root,'rev-parse',commit+'^{tree}')!=evidence['git_tree']:raise Refused('Native evidence does not describe the actual commit')
     from subprocess import CalledProcessError
-    for merge in evidence.get('merges',[]):
-        try:
-            if len(git(root,'show','-s','--format=%P',merge).split())!=2:raise Refused('Reviewed merge is not a merge')
-            git(root,'merge-base','--is-ancestor',merge,evidence['parent'])
-        except CalledProcessError:raise Refused('A reviewed merge is not part of this commit\'s history') from None
+    for covered in evidence.get('covers',[]):
+        try:git(root,'merge-base','--is-ancestor',covered,evidence['parent'])
+        except CalledProcessError:raise Refused('A commit this review covered is not part of its history') from None
     for name,value in [('OH-Run',evidence['run']),('OH-Review',evidence['review']),('OH-Reviewed-Tree',evidence['git_tree']),('OH-Evidence',digest(evidence))]:
         if trailer(root,commit,name)!=value:raise Refused('Native review evidence differs from committed '+name)
 
@@ -91,7 +92,9 @@ def render(root,base='origin/main'):
     if changes(root):raise Refused('Publish only from a clean reviewed checkout')
     records=[];grants={};p=project(root);branch=git(root,'branch','--show-current')
     for commit in commits(root,base,reviewed=None):
-        run=trailer(root,commit,'OH-Run');state=reduce(Journal(p['id'],run).records())
+        try:run=trailer(root,commit,'OH-Run')
+        except Refused:continue  # not OH's: it must be one a review covered, checked below
+        state=reduce(Journal(p['id'],run).records())
         # A stopped run's commits, or those of a completed run nobody chose to publish, are published by the PR
         # choice of the run that resumed its branch.
         if state['status'] not in ('pr','stopped','completed'):raise Refused('A recorded human PR choice is required before exporting native evidence')
@@ -103,7 +106,8 @@ def render(root,base='origin/main'):
         if evidence['branch']!=branch:raise Refused('Review evidence belongs to another branch')
         verify_record(root,commit,evidence)
         records.append({'commit':commit,'evidence':evidence})
-    commits(root,base,reviewed=covered(records))  # every merge is main's clean one or one a review covered
+    if commits(root,base,reviewed=covered(records))!=[record['commit'] for record in records]:
+        raise Refused('This branch holds commits that OH neither made nor reviewed, so OH cannot publish it as reviewed')
     value={'schema':1,'branch':branch,'head':git(root,'rev-parse','HEAD'),'records':records,'grants':grants}
     validate_grants(value)
     body=START+'\n```json\n'+json.dumps(value,indent=2)+'\n```\n'+END
@@ -112,8 +116,8 @@ def render(root,base='origin/main'):
 
 
 def covered(records):
-    """The merges of main the records' reviews covered, each bound to its commit by the evidence trailer."""
-    return {merge for record in records for merge in record['evidence'].get('merges',[])}
+    """The commits OH didn't make that the records' reviews covered, each bound to its commit by the evidence trailer."""
+    return {commit for record in records for commit in record['evidence'].get('covers',[])}
 
 
 def validate_grants(value):

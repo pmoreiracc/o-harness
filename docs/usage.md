@@ -73,7 +73,8 @@ an up-to-date `main`. If that branch still holds unfinished work, from a deliver
 OH resumes it and merges `main` into it; one pull request then publishes all of it. If `main`
 conflicts with that work, you choose: start over from `main` (the branch is discarded), finish
 without `main`'s changes (you resolve the conflict when the pull request merges), or let the agent
-plan a resolution for you to approve; the next task's review then covers it. A branch that already holds the whole design goes to its pull request: typing the command
+plan a resolution for you to approve; the next task's review then covers it, as it covers commits of
+your own on that branch. A branch that already holds the whole design goes to its pull request: typing the command
 again offers **pr** again, even after **stop**, and new tasks for that design come after it merges. Typing the
 same command while its run is open continues that run. For each task a
 fresh worker implements it, your project checks run, an independent reviewer checks the
