@@ -67,7 +67,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: bash integrations/test.sh native
-  # Builds the package and checks it installs and starts in the real apps; the release publishes that package.
+  # Builds the package and checks it installs and starts in the real apps; the release publishes an identical build.
   install:
     needs: version
     if: needs.version.outputs.tag
@@ -97,16 +97,21 @@ jobs:
           node-version: '22.18.0'
       # The package published is built here, by this repository's code, before the tests touch the checkout; the
       # artifact from the install check (whose jobs ran third-party npm code) only proves it is the one tested.
+      # It goes outside the runner's temp folder, where the downloaded artifact can't write.
       - name: Build the package to publish
-        run: bash integrations/package.sh "$RUNNER_TEMP/package"
+        run: |
+          built="$(mktemp -d)/package"
+          bash integrations/package.sh "$built"
+          echo "BUILT=$built" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: package
-          path: ${{ runner.temp }}
+          path: ${{ runner.temp }}/tested
       - name: Check it is byte for byte the package the install check tested
         run: |
-          mkdir "$RUNNER_TEMP/checked" && tar -xzf "$RUNNER_TEMP/package.tgz" -C "$RUNNER_TEMP/checked"
-          diff -r "$RUNNER_TEMP/package" "$RUNNER_TEMP/checked"
+          [ "$(ls -A "$RUNNER_TEMP/tested")" = package.tgz ] || { echo "::error::The tested artifact holds more than package.tgz"; exit 1; }
+          mkdir "$RUNNER_TEMP/checked" && tar -xzf "$RUNNER_TEMP/tested/package.tgz" -C "$RUNNER_TEMP/checked"
+          diff -r "$BUILT" "$RUNNER_TEMP/checked"
       - run: bash integrations/test.sh native
       - run: bash integrations/test.sh syntax
       - name: Create the tag, which pins this release to its commit
@@ -127,7 +132,7 @@ jobs:
           else
             git worktree add --orphan -b dist "$out"
           fi
-          cp -R "$RUNNER_TEMP/package/." "$out/"
+          cp -R "$BUILT/." "$out/"
           git -C "$out" add -A
           git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $TAG ($(git rev-parse --short "$COMMIT"))"
           git -C "$out" push origin dist
