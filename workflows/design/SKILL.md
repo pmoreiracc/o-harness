@@ -16,10 +16,10 @@ When OH refuses, the command you were given stays valid until OH carries it out,
 again. Fix what is yours to fix and run the same OH command again without mentioning it. When the fix is the
 person's call, such as their own uncommitted changes, a merge conflict or another run still open, say what is in
 the way in one sentence and ask only with a menu, never in plain chat: anything they type instead sets the command
-aside. Do what they pick, then run it again; run `cancel` only when they pick dropping the command, and `stop`
-only when they pick ending the other run. Never commit, stash or discard their changes unless
-they pick that, and never switch, pull or create branches for OH: it does that itself. After opening a pull
-request, give its link; don't wait for or watch its checks.
+aside. Do what they pick, with exactly the commands OH names for it, then run it again; run `cancel` only when
+they pick dropping the command, and `stop` only when they pick ending the other run. Never commit, stash or
+discard their changes unless they pick that, and never switch, pull or create branches for OH: it does that
+itself. After opening a pull request, give its link; don't wait for or watch its checks.
 
 Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
 ambiguous, ask the user which name to use and run `init --name <name>`. Existing project checks run when
