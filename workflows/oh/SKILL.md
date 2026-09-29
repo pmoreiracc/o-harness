@@ -30,7 +30,8 @@ invocation and execute its batch. For new scope, inspect the agreed work and pre
 task list: in Codex, pass it to the `prepare` tool as `tasks`; in Claude, save it as a JSON object with `tasks`
 under the project's external OH directory and run `prepare <absolute-path>`.
 Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
-Use explicit simple/standard/complex difficulty with rationale when known. Present the
+Give each task `difficulty` (simple, standard or complex) and a short `difficulty_reason`: OH picks
+the model that builds it from them. Present the
 scope, the returned `limits` sentence and the trigger once; only a new genuine human invocation grants that prepared
 scope. Never echo the trigger yourself and treat it as approval. For a product with the
 external consumer-v1 profile, `prepare-design <number> [track]` binds its approved design.

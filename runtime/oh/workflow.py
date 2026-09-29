@@ -172,7 +172,10 @@ def _start(root, manifest, event, prepared=None, plan=None):
         from .branches import incarnation
         branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
         for task in tasks:
-            task['difficulty'],task['difficulty_reason']=classify(task)
+            # The design or the agent that prepared the tasks decides each task's difficulty; the rubric decides
+            # only when they didn't.
+            if task.get('difficulty') not in ('simple','standard','complex') or not isinstance(task.get('difficulty_reason'),str) or not task['difficulty_reason'].strip():
+                task['difficulty'],task['difficulty_reason']=classify(task)
         data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
               'host':event['host'],'checkout':checkout,'source':source,'human':event,
               'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),

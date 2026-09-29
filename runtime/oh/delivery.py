@@ -72,6 +72,12 @@ def progress_only(root,fork,paths):
         re.search(r'^OH-Run: ',git(root,'show','-s','--format=%B',commit),re.M) for commit in changed)
 
 
+def difficulty(block):
+    """The difficulty the design gives a task on its `Difficulty: <level> — <why>` line, or nothing."""
+    found=re.search(r'^\s*Difficulty:\s*(simple|standard|complex)\b[\s—–:-]*(.*)$',block,re.M|re.I)
+    return {'difficulty':found[1].lower(),'difficulty_reason':'Set by the design'+(': '+found[2].strip() if found[2].strip() else '')} if found else {}
+
+
 def selection(root,doc,track='',*,claim=True):
     where=plans.layout(root,claim=claim);path=document(root,where,doc)
     status=plans.approval(root,where,doc)
@@ -128,7 +134,7 @@ def selection(root,doc,track='',*,claim=True):
             if not match:raise Refused('Cannot extract the approved design task')
             tasks.append({'id':task_id,'title':title,'instructions':match[0].strip(),
                           'needs':sorted(set(filter(None,needs.split(',')))-completed),
-                          'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':task_id}})
+                          'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':task_id}}|difficulty(match[0]))
             available.add(task_id);pending.remove(row)
     if not tasks:
         if any(row[1]=='pending' for row in rows):raise Refused('No ready tasks in this design or track; resolve its dependencies or open questions')

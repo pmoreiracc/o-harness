@@ -39,7 +39,8 @@ argument. OH's parser selects the mode; do not infer a different workflow:
   list: in Codex, pass it to the `prepare` tool as `tasks`; in Claude, save it as a JSON object with `tasks`
   under the project's external OH directory and run `prepare <absolute-path>`.
   Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
-  Use simple/standard/complex difficulty with rationale when known. Present the proposed
+  Give each task `difficulty` (simple, standard or complex) and a short `difficulty_reason`: OH picks
+  the model that builds it from them. Present the proposed
   tasks, returned `limits` sentence and exact trigger once. Only a new genuine human
   invocation approves that prepared scope; never echo the trigger as approval.
 - `request:<id>` verifies and runs the already prepared quick-fix scope. The older

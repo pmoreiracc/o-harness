@@ -114,10 +114,13 @@ class DeliveryTest(unittest.TestCase):
 
     def test_ready_selection_skips_blocked_tasks_and_orders_dependencies(self):
         body=BODY.replace('- [ ] **1.** Add the credential store.','- [ ] **1.** Add the credential store. Blocked on §3.')
-        body+='\n### UI track\n\n- [ ] **3.** Add a sign-in placeholder.\n\n## 3. Open questions\n\nChoose the storage.\n'
+        body+='\n### UI track\n\n- [ ] **3.** Add a sign-in placeholder.\n  Difficulty: simple — one static page.\n\n## 3. Open questions\n\nChoose the storage.\n'
         self.documents(body=body)
         manifest,_=delivery.selection(self.root,'0001')
         self.assertEqual([t['id'] for t in manifest['tasks']],['3'])
+        self.start_delivery()  # the run builds each task with the difficulty the design gave it
+        self.assertEqual({k:load_run(self.root)[1]['tasks'][0][k] for k in ('difficulty','difficulty_reason')},
+                         {'difficulty':'simple','difficulty_reason':'Set by the design: one static page.'})
         with self.assertRaisesRegex(Refused,'No ready'):delivery.selection(self.root,'0001','core')
         with self.assertRaisesRegex(Refused,'Unknown'):delivery.selection(self.root,'0001','missing')
 
