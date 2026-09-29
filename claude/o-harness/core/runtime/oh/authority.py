@@ -166,6 +166,41 @@ def answered(root,host,session,transcript):
         register(root,host,{'session_id':session,'transcript_path':transcript},run['id'],run['project'])
 
 
+COMMAND_TAG=r'<(command-message|command-name|command-args)>(.*?)</\1>'
+
+
+def saved_command(text):
+    """Claude saves a typed slash command as its tags (<command-name>/oh-propose</command-name>, its
+    <command-args> and a <command-message>, in either order), not as the text typed. (name, args), or None
+    when the record holds anything else."""
+    tags=re.findall(COMMAND_TAG,text,re.S);names=[tag for tag,_ in tags]
+    if 'command-name' not in names or len(set(names))!=len(names) or re.sub(COMMAND_TAG,'',text,flags=re.S).strip():return None
+    found=dict(tags)
+    return skill_name(found['command-name'].strip()),found.get('command-args','').strip()
+
+
+def typed_command(prompt):
+    """The (name, args) of a slash command as the prompt hook passes it, or None for other text."""
+    if not prompt.startswith('/'):return None
+    name,*args=prompt.split(maxsplit=1)
+    return skill_name(name),(args or [''])[0].strip()
+
+
+def skill_name(command):
+    """/oh-propose and /o-harness:oh-propose are the same command, whichever form the person typed or Claude
+    saved; another plugin's /other:oh-propose stays its own."""
+    return command.removeprefix('/').removeprefix('o-harness:')
+
+
+def expanded_skill(x):
+    """The skill Claude expanded for a slash command, from the record it saves with the command's turn
+    ("Base directory for this skill: <plugin>/skills/<name>"), or None."""
+    content=(x.get('message') or {}).get('content')
+    text=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text') if isinstance(content,list) else ''
+    found=re.match(r'Base directory for this skill: (.+)',text)  # the rest of the line: a folder may hold spaces
+    return Path(found[1].strip()).name if found else None
+
+
 def attest(host,payload,root=None):
     from .workflow import human_event
     event=human_event(payload,host)
@@ -176,7 +211,7 @@ def attest(host,payload,root=None):
     else:paths=list(allowed.rglob('*'+event['session']+'*.jsonl'))
     if len(paths)!=1 or not paths[0].is_relative_to(allowed) or not paths[0].is_file():
         raise Refused('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
-    path=paths[0];matches=[];times=[];turn=None;session=None;source=None
+    path=paths[0];matches=[];times=[];turn=None;session=None;source=None;tagged=[];expanded={}
     with path.open('rb') as stream:
         first=stream.readline()
         stream.seek(max(len(first),path.stat().st_size-8*1024*1024))
@@ -199,8 +234,13 @@ def attest(host,payload,root=None):
                     text='\n'.join(c.get('text','') for c in p.get('content',[]) if c.get('type') in ('input_text','text'))
                 else:continue
             else:
-                if x.get('type')!='user' or not human(x):continue
-                if x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
+                if x.get('type')!='user' or x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
+                if x.get('isMeta') and not x.get('isSidechain'):
+                    # The model's own Skill tool call saves the same text; only a typed command's expansion
+                    # follows the command's record directly and names no tool call.
+                    if not x.get('sourceToolUseID') and x.get('parentUuid'):expanded.setdefault(x['parentUuid'],set()).add(expanded_skill(x))
+                    continue
+                if not human(x):continue
                 if root is not None and not within(x.get('cwd'),root):raise Refused('Human turn belongs to another project checkout')
                 message=x.get('message',{})
                 if message.get('role')!='user':continue
@@ -209,6 +249,18 @@ def attest(host,payload,root=None):
             if isinstance(text,str) and text.strip()==event['prompt']:
                 matches.append(digest(x))
                 if x.get('timestamp'):times.append(x['timestamp'])
+            elif host=='claude' and isinstance(text,str) and typed_command(event['prompt']) is not None and saved_command(text)==typed_command(event['prompt']):
+                tagged.append(x)
+    # Command tags alone could be text the person pasted: Claude ran the command only if it also saved the
+    # skill it expanded from that very record.
+    for x in tagged:
+        if typed_command(event['prompt'])[0] in expanded.get(x.get('uuid'),()):
+            matches.append(digest(x))
+            if x.get('timestamp'):times.append(x['timestamp'])
+            # One turn, one grant: every spelling of the command (with or without o-harness:, any spacing) is
+            # recorded as the same prompt, so a respelled replay finds the turn already spent.
+            name,args=typed_command(event['prompt'])
+            event=event|{'prompt':'/o-harness:'+name+(' '+args if args else '')}
     if not matches:raise Refused('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
     # Codex can retain the same turn as both event_msg and response_item; the native turn ID
     # and exact text collapse them into one source, with both evidence hashes retained.

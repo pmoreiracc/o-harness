@@ -2,7 +2,8 @@
 keeps its runs, approvals and locks in its own folder, which the model must not be able to write. Codex runs
 a plugin's MCP server outside that sandbox, so OH's everyday commands are tools of this server: each runs one
 OH command through the plugin's own `oh` launcher, exactly as the shell would. `choose` shows the choice OH is
-waiting for as a native menu (MCP elicitation) and records the click itself.
+waiting for as a native menu (MCP elicitation) and records the click itself; `confirm` asks any other question
+OH's instructions need answered the same way.
 
 Commands that change what OH runs on the machine (settings and checks, setup, host trust, backups, services)
 are not tools: they run in the shell, where Codex asks the person first. Codex names the conversation and
@@ -59,6 +60,13 @@ TOOLS = [
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
          'as a menu and records their click in OH. Call it when OH output has a `gate`, in the conversation that '
          'started the run. The result says what was recorded and whether to call `run`.'),
+    tool('confirm', 'Ask the person', 'Shows the person a question and its options as a menu and waits for their click. '
+         'Use it whenever OH\'s instructions say to ask the person to choose or confirm something that is not an OH '
+         '`gate` (that is `choose`), instead of Codex\'s own question tool, which closes when your turn ends. The result '
+         'is their answer, or says none was given: never answer for them.',
+         {'question': TEXT, 'options': {'type': 'array', 'items': TEXT, 'minItems': 1, 'maxItems': 10},
+          'typed': {'type': 'boolean', 'description': 'Also let the person type their own answer'}},
+         ['question', 'options'], read_only=True),
 ]
 NAMES = {t['name'] for t in TOOLS}
 
@@ -214,6 +222,7 @@ class Server:
         thread = conversation(meta)
         root = checkout(arguments, thread)
         if name == 'choose':return self.choose(root, thread, ident)
+        if name == 'confirm':return self.confirm(arguments, ident)
         return self.oh(root, command(name, arguments, root), thread, meta.get('progressToken'))
 
     def environment(self, thread):
@@ -257,6 +266,34 @@ class Server:
                 except queue.Empty:
                     if call not in self.cancelled or self.cancelled[call].is_set():return {'result': {'action': 'cancel'}}
         finally:self.replies.pop(ident, None)
+
+    def confirm(self, arguments, call):
+        """Asks the person a question OH's instructions need answered and waits for the click: the call stays open
+        until they answer or close the menu, so the conversation can't move on without them."""
+        question, options, typed = arguments.get('question'), arguments.get('options'), arguments.get('typed', False)
+        if not isinstance(question, str) or not question.strip() or len(question) > 2000:raise Refused('question must be text of up to 2000 characters')
+        if not isinstance(options, list) or not 1 <= len(options) <= 10 or len(set(options)) != len(options) \
+                or not all(isinstance(o, str) and o.strip() and len(o) <= 200 for o in options):
+            raise Refused('options must be 1 to 10 different texts of up to 200 characters')
+        if not isinstance(typed, bool):raise Refused('typed must be true or false')
+        if typed and 'Other' in options:raise Refused('With typed, Other is added for the typed answer; leave it out of options')
+        fallback = 'No answer was given. Ask the person in plain text and end your turn; never answer for them.'
+        if 'elicitation' not in (self.client.get('capabilities') or {}):return 'This Codex surface cannot show menus. ' + fallback
+        properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': options}}
+        if typed:
+            properties['choice']['enum'] = options + ['Other']
+            properties['answer'] = {'type': 'string', 'title': 'Your answer (only for Other)'}
+        reply = self.elicit(question, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
+        result = reply.get('result') or {}
+        if result.get('action') != 'accept':return 'The menu was closed. ' + fallback
+        content = result.get('content') or {}
+        choice = content.get('choice')
+        if choice not in properties['choice']['enum']:return 'The menu came back without a valid choice. ' + fallback
+        if choice == 'Other' and typed:
+            answer = content.get('answer')
+            if not isinstance(answer, str) or not answer.strip():return 'Other needs an answer, and none was typed. ' + fallback
+            return 'The person answered: ' + ' '.join(answer.split())
+        return 'The person chose: ' + choice
 
     def choose(self, root, thread, call):
         from .config import project_name, version
