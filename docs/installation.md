@@ -132,9 +132,11 @@ delete `~/.local/share/o-harness` after uninstalling from both hosts.
 Merging it starts the release workflow. It runs every test on Linux and Windows, then
 installs the package in the real Claude Code and Codex on Windows, macOS and Linux and checks
 that OH sets up and its tools start (`integrations/install-check.py`, no AI login needed).
-Only when all of that passes does it publish the package to the `dist` branch and create the
-`vX.Y.Z` tag and GitHub release, whose notes list the merged pull requests. If a step fails,
-nothing is published: fix it on `main` and run **Actions → release → Run workflow** again.
+Only when all of that passes does it create the `vX.Y.Z` tag, publish that package to the
+`dist` branch and create the GitHub release, whose notes list the merged pull requests. If a
+test or the install check fails, nothing is published: fix it on `main` and run **Actions →
+release → Run workflow**. If a later step fails, running it again finishes the same version
+from the same tagged commit, so users never get two different builds of one version.
 
 Once, in the repository's **Settings → Actions → General**, allow GitHub Actions to create pull
 requests, so the prepare step can open one.

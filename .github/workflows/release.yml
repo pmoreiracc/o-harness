@@ -1,7 +1,8 @@
 name: release
 # A new version reaching main releases it: "prepare release" opens the pull request that sets it (see
-# docs/installation.md, "Releasing"). Nothing is published unless every job below passes. Run this workflow by
-# hand only to retry a release that failed.
+# docs/installation.md, "Releasing"). Nothing is published unless every test and the install check pass.
+# The tag is created first and pins the release's commit: running this again by hand, after a failure, finishes
+# that same version from that same commit, so users never get two different builds under one version.
 on:
   push:
     branches: [main]
@@ -17,21 +18,32 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - id: version
-        name: Find the version to release
+        name: Find the version to release, and its commit
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Releases come from main"; exit 1; }
           version=$(jq -r .version plugins/o-harness/.claude-plugin/plugin.json)
           [ "$version" = "$(jq -r .version plugins/o-harness/.codex-plugin/plugin.json)" ] || {
             echo "::error::The Claude and Codex plugin versions differ"; exit 1; }
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "v$version is already released; nothing to do."
+          tag="v$version"
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Releasing $tag from $GITHUB_SHA."
+            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT";exit 0
+          fi
+          published=$(git fetch -q origin dist && git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version || true)
+          if [ "$published" = "$version" ] && gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released; nothing to do."
           else
-            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            # A release that stopped after its tag: finish it from the tagged commit.
+            echo "Finishing $tag from its tagged commit."
+            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$(git rev-list -n1 "$tag")" >> "$GITHUB_OUTPUT"
           fi
   # Pull requests run only part of the Windows suite; a release waits for all of it.
   windows:
@@ -39,6 +51,8 @@ jobs:
     if: needs.version.outputs.tag
     runs-on: windows-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
     defaults:
       run:
         shell: bash
@@ -46,7 +60,9 @@ jobs:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -55,14 +71,23 @@ jobs:
   install:
     needs: version
     if: needs.version.outputs.tag
+    permissions:
+      contents: read
     uses: ./.github/workflows/install-check.yml
+    with:
+      ref: ${{ needs.version.outputs.commit }}
   release:
     needs: [version, windows, install]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.commit }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -72,19 +97,23 @@ jobs:
           node-version: '22.18.0'
       - run: bash integrations/test.sh native
       - run: bash integrations/test.sh syntax
+      - name: Create the tag, which pins this release to its commit
+        run: |
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { git tag "$TAG" "$COMMIT" && git push origin "$TAG"; }
       - uses: actions/download-artifact@v4
         with:
           name: package
           path: ${{ runner.temp }}
       - name: Publish the checked package to the dist branch
-        env:
-          TAG: ${{ needs.version.outputs.tag }}
         run: |
           out="$RUNNER_TEMP/dist"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if git ls-remote --exit-code --heads origin dist >/dev/null; then
             git fetch origin dist
+            # A retry after the package was published leaves it exactly as users received it.
+            [ "$(git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version)" != "${TAG#v}" ] || {
+              echo "dist already carries $TAG"; exit 0; }
             git worktree add -B dist "$out" FETCH_HEAD
             git -C "$out" rm -rq .
           else
@@ -92,10 +121,7 @@ jobs:
           fi
           tar -xzf "$RUNNER_TEMP/package.tgz" -C "$out"
           git -C "$out" add -A
-          git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $TAG ($(git rev-parse --short HEAD))"
+          git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $TAG ($(git rev-parse --short "$COMMIT"))"
           git -C "$out" push origin dist
-      - name: Create the tag and the GitHub release, with notes listing the merged pull requests
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.version.outputs.tag }}
-        run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --title "$TAG"
+      - name: Create the GitHub release, with notes listing the merged pull requests
+        run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
