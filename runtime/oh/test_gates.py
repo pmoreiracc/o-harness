@@ -369,5 +369,5 @@ class GateTest(unittest.TestCase):
                 if host == 'codex':  # Codex clears a server's environment: OH's worker marker and data home are passed on
                     server = json.loads((plugin / '.mcp.json').read_text())['mcpServers']['o-harness']
                     self.assertEqual(server['env_vars'][:2], ['OH_CHILD_ATTEMPT', 'OH_DATA_HOME'])
-                    self.assertEqual(server['args'], ['-I', './scripts/mcp-server'])
+                    self.assertEqual((server['command'], server['args']), ('./scripts/mcp-server', []))  # mcp-server.cmd on Windows
                     self.assertEqual(server['cwd'], '.')  # Codex resolves it from the plugin folder and expands no variables

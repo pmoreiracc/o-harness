@@ -34,20 +34,20 @@ class WindowsTest(unittest.TestCase):
     def test_launcher_and_hook_probes_never_import_project_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder=Path(tmp);bin=folder/'bin';bin.mkdir();project=folder/'project';project.mkdir()
-            (bin/'dirname').symlink_to(shutil.which('dirname'))
-            (project/'sitecustomize.py').write_text('from pathlib import Path\nPath("planted").touch()\n')
-            script=folder/'safe.py';script.write_text('print("isolated")\n')
+            (bin/'dirname').symlink_to(shutil.which('dirname'))  # windows-ok: skipped on Windows
+            (project/'sitecustomize.py').write_text('from pathlib import Path\nPath("planted").touch()\n')  # windows-ok: skipped on Windows
+            script=folder/'safe.py';script.write_text('print("isolated")\n')  # windows-ok: skipped on Windows
             env=dict(os.environ,PATH=str(bin),HOME=tmp,PYTHONPATH=str(project),OH_DATA_HOME=str(folder/'data'))
             for name in ('python3','python','py','private'):
                 if name=='private':
                     own=folder/'data/python/test';own.mkdir(parents=True)
-                    (own/'python.exe').symlink_to(sys.executable)
-                    (own.parent/'current').write_text('test');(bin/'cat').symlink_to(shutil.which('cat'))
+                    (own/'python.exe').symlink_to(sys.executable)  # windows-ok: skipped on Windows
+                    (own.parent/'current').write_text('test');(bin/'cat').symlink_to(shutil.which('cat'))  # windows-ok: skipped on Windows
                     env['OS']='Windows_NT';env.pop('USERPROFILE',None)
                 elif name=='py':
                     import shlex
-                    (bin/name).write_text('#!/bin/sh\nshift\nexec '+shlex.quote(sys.executable)+' "$@"\n');(bin/name).chmod(0o755)
-                else:(bin/name).symlink_to(sys.executable)
+                    (bin/name).write_text('#!/bin/sh\nshift\nexec '+shlex.quote(sys.executable)+' "$@"\n');(bin/name).chmod(0o755)  # windows-ok: skipped on Windows
+                else:(bin/name).symlink_to(sys.executable)  # windows-ok: skipped on Windows
                 for mode in ('--launcher','--hook'):
                     with self.subTest(name=name,mode=mode):
                         result=subprocess.run(['/bin/sh',str(SCRIPTS/'python.sh'),mode,str(script)],cwd=project,env=env,capture_output=True,text=True)
@@ -80,15 +80,15 @@ class WindowsTest(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'Uses POSIX sh and symlinks')
     def test_the_launcher_finds_python_or_says_how_to_get_it(self):
         bin = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, bin)
-        (bin / 'dirname').symlink_to(shutil.which('dirname'))
+        (bin / 'dirname').symlink_to(shutil.which('dirname'))  # windows-ok: skipped on Windows
         env = {'PATH': str(bin), 'HOME': str(bin), 'OH_DATA_HOME': str(bin / 'data')}
         def launch(*args, stdin=''):
             return subprocess.run(['/bin/sh', str(SCRIPTS / 'python.sh'), *args], input=stdin, env=env, capture_output=True, text=True)
         missing = launch('--launcher', str(SCRIPTS / 'oh'), '--root', str(bin), 'setup')
-        self.assertEqual((missing.returncode, missing.stderr.strip()), (2, 'OH needs Python 3.11 or newer as python3.'))
+        self.assertEqual((missing.returncode, missing.stderr.strip()), (2, 'OH needs Python 3.12 or newer as python3.'))
         quiet = launch('--hook', str(SCRIPTS / 'human-event.py'), 'claude', stdin='{"prompt":"/oh-propose x"}')
         self.assertEqual((quiet.returncode, quiet.stdout, quiet.stderr), (0, '', ''))
-        (bin / 'python3').symlink_to(sys.executable)
+        (bin / 'python3').symlink_to(sys.executable)  # windows-ok: skipped on Windows
         found = launch('--launcher', str(SCRIPTS / 'oh'), '--root', str(bin), 'status')
         self.assertEqual(found.returncode, 1);self.assertIn('OH is not set up', found.stderr)
 
@@ -106,7 +106,7 @@ class WindowsTest(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'POSIX symlinks')
     def test_a_symlinked_launcher_still_finds_its_helpers(self):
         links = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, links)
-        (links / 'oh').symlink_to(SCRIPTS / 'oh')
+        (links / 'oh').symlink_to(SCRIPTS / 'oh')  # windows-ok: skipped on Windows
         result = subprocess.run([str(links / 'oh'), 'status'], env=os.environ | {'OH_DATA_HOME': str(links / 'data')}, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1, result.stderr);self.assertIn('OH is not set up', result.stderr)
 
@@ -127,7 +127,7 @@ class WindowsTest(unittest.TestCase):
             package=Path(tmp)/'o-harness';build(package,'codex')
             # Keep the packaged hook.cmd, python.cmd and human-event.py. Replace only the
             # OH subprocess boundary: host attestation is tested separately, never forged here.
-            (package/'scripts/oh').write_text('import json,sys\nassert sys.argv[-2:]==["--host","codex"]\nprint(json.dumps({"received":json.load(sys.stdin),"authorized":False}))\n')
+            (package/'scripts/oh').write_text('import json,sys\nassert sys.argv[-2:]==["--host","codex"]\nprint(json.dumps({"received":json.load(sys.stdin),"authorized":False}))\n')  # windows-ok: Python reads either line ending
             hook=json.loads((package/'hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]['commandWindows']
             shell=os.environ['ComSpec']
             # Mirrors command_runner.rs: cmd.exe /C plus raw_arg("\"{command_line}\"").
@@ -180,7 +180,7 @@ class WindowsTest(unittest.TestCase):
         from .verification import candidate_tree
         origin = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
         subprocess.run(['git', 'init', '-q', str(origin)], check=True)
-        (origin / 'a.txt').write_text('one\ntwo\n')
+        (origin / 'a.txt').write_text('one\ntwo\n')  # windows-ok: this test is about line-ending conversion
         subprocess.run(['git', '-C', str(origin), 'add', '.'], check=True)
         subprocess.run(['git', '-C', str(origin), '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'a'], check=True)
         clone = origin.parent / (origin.name + '-clone');self.addCleanup(shutil.rmtree, clone, ignore_errors=True)
@@ -260,7 +260,7 @@ class WindowsTest(unittest.TestCase):
             return test.fake(host, root, profile, prompt, role, directory, context, **kw)
         start(test.root, {'tasks': test.tasks[:1]}, test.event())
         def hiding(host, root, profile, prompt, role, directory, context, **kw):
-            if role != 'review':(Path(root) / '.gitattributes').write_text('* -diff\n')  # a worker hiding its change
+            if role != 'review':(Path(root) / '.gitattributes').write_text('* -diff\n')  # a worker hiding its change  # windows-ok: Git reads either line ending
             return fake(host, root, profile, prompt, role, directory, context, **kw)
         run(test.root, hiding)
         diff, prompt = seen[0]
@@ -306,7 +306,7 @@ class NativeWindowsTest(unittest.TestCase):
             action=Path(task.find('.//{*}Command').text)
             self.assertEqual(action,old/'pythonw.exe')
             quote=lambda value:"'"+str(value).replace("'","''")+"'"
-            wrapper.write_text("\n".join([
+            wrapper.write_text("\n".join([  # windows-ok: PowerShell reads either line ending
                 'param([string]$Name)', "$ErrorActionPreference = 'Stop'",
                 '$env:OH_DATA_HOME = '+quote(data),
                 '$env:OH_PYTHON_DOWNLOAD = $null',
@@ -370,7 +370,7 @@ class NativeWindowsTest(unittest.TestCase):
             downloader=folder/'download.ps1';downloader.write_text('$global:downloadCalled = $true')
             quote=lambda value: "'"+str(value).replace("'", "''")+"'"
             script=folder/'check.ps1'
-            script.write_text("\n".join([
+            script.write_text("\n".join([  # windows-ok: PowerShell reads either line ending
                 "$ErrorActionPreference = 'Stop'",
                 '. '+quote(HOME/'integrations/windows-python.ps1'),
                 '$expected = '+quote(sys.executable),
@@ -416,7 +416,7 @@ class NativeWindowsTest(unittest.TestCase):
     def test_oh_cmd_never_runs_a_python_planted_in_the_current_folder(self):
         folder = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         marker = folder / 'ran'
-        for name in ('python3.cmd', 'python.cmd', 'py.cmd', 'powershell.cmd'):(folder / name).write_text(f'@echo x> "{marker}"\r\n')
+        for name in ('python3.cmd', 'python.cmd', 'py.cmd', 'powershell.cmd'):(folder / name).write_text(f'@echo x> "{marker}"\r\n', newline='')
         subprocess.run(['cmd', '/c', str(SCRIPTS / 'oh.cmd'), 'status'], cwd=folder, env=os.environ | {'OH_DATA_HOME': str(folder / 'state')},
                        capture_output=True, text=True)
         self.assertFalse(marker.exists())
@@ -424,7 +424,7 @@ class NativeWindowsTest(unittest.TestCase):
     def test_a_check_may_run_a_script_in_the_project(self):
         from .verification import verify
         root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        (root / 'ok.cmd').write_text('@exit /b 0\r\n')
+        (root / 'ok.cmd').write_text('@exit /b 0\r\n', newline='')
         self.addCleanup(os.chdir, os.getcwd());os.chdir(HOME)
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
         subprocess.run(['git', '-C', str(root), 'add', 'ok.cmd'], check=True)

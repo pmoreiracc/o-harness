@@ -5,7 +5,7 @@ setlocal
 call "%~dp0python.cmd"
 if not defined OH_PY (
     for %%A in (%1 %2 %3) do if /i "%%~A"=="setup" goto fetch
-    >&2 echo OH needs Python 3.11 or newer. Run "%~f0" setup: it downloads the official Python from python.org into OH's folder, without admin rights or PATH changes.
+    >&2 echo OH needs Python 3.12 or newer. Run "%~f0" setup: it downloads the official Python from python.org into OH's folder, without admin rights or PATH changes.
     exit /b 2
 )
 goto run

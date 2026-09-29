@@ -90,7 +90,7 @@ Open a new session in your project. Bring an idea:
 In Codex, use `$oh-propose`. First use sets up your project and checks; run the proposal again after setup.
 Planning leaves your code untouched. Build when you're ready with `oh-deliver`.
 
-<sub>macOS, Linux or 64-bit Windows 11 (preview) · Python 3.11+ · Git</sub>
+<sub>macOS, Linux or 64-bit Windows 11 (preview) · Python 3.12+ · Git</sub>
 
 [Getting started →](docs/usage.md) · [Installation help →](docs/installation.md)
 

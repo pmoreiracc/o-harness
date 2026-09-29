@@ -171,7 +171,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_clean_filter_transformation_rejected_before_review(self):
         from .verification import candidate_tree
-        (self.root/'.gitattributes').write_text('*.txt text eol=lf\n*.dat filter=upper\n')
+        (self.root/'.gitattributes').write_text('*.txt text eol=lf\n*.dat filter=upper\n')  # windows-ok: Git reads either line ending
         (self.root/'data.txt').write_bytes(b'line\r\n')
         candidate_tree(self.root)  # line endings alone: the reviewed text is the committed text
         self.git('config','filter.upper.clean','tr a-z A-Z')

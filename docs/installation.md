@@ -4,7 +4,7 @@
 
 - macOS, Linux, or 64-bit Windows 11 (x64 or ARM64) as a preview ([Windows notes](#windows)). The dashboard auto-start
   service covers macOS and Windows; on Linux run `oh serve` yourself.
-- Python 3.11+ (on Windows, OH can fetch it for you) and Git.
+- Python 3.12+ (on Windows, OH can fetch it for you) and Git.
 - Claude Code signed in with a Claude subscription, or Codex signed in with ChatGPT.
   OH refuses API-key logins.
 
@@ -55,11 +55,13 @@ Windows has been recorded yet, so treat Windows support as a preview.
 - **Git for Windows**, which includes Git Bash: Claude Code runs OH's prompt hook through it.
 - Codex uses its default Windows `cmd` hook runner. A custom PowerShell hook shell is not
   covered by this preview; keep the default for OH's packaged Windows hook.
-- **Python:** OH uses Python 3.11 or newer if it finds one (`python3`, `python` or `py -3`).
-  If there is none, `setup` downloads the official Python 3.14.7 Windows package from
-  python.org into `%USERPROFILE%\.local\share\o-harness\python`: about 12 MB, checked
-  against its published SHA-256, with no admin rights and no `PATH` change. It says so before
-  it downloads. Set `OH_PYTHON_DOWNLOAD=0` to stop it and install Python yourself.
+- **Python:** nothing to install. OH uses Python 3.12 or newer if it finds one (`python3`,
+  `python` or `py -3`). If there is none, it downloads the official Python 3.14.7 Windows
+  package from python.org into `%USERPROFILE%\.local\share\o-harness\python` once: about
+  12 MB, checked against its published SHA-256, with no admin rights and no `PATH` change. In
+  Claude Code that happens at the first OH command, which says so first; in Codex, when the
+  first session starts OH's tools. OH then uses that Python first. Set `OH_PYTHON_DOWNLOAD=0`
+  to stop the download and install Python yourself.
 - From PowerShell or cmd, run OH through `scripts\oh.cmd` (the plugin's, or
   `%USERPROFILE%\.local\share\o-harness\bin\oh.cmd` after setup). cmd re-reads `& | < > ^`
   in arguments, so pass JSON from a file: `oh.cmd config set checks @checks.json`.

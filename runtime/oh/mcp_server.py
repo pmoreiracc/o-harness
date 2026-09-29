@@ -230,9 +230,12 @@ class Server:
         OH's progress lines become progress notifications when the host asked for them."""
         environment = self.environment(thread)
         output, lines = [], []
-        with subprocess.Popen([sys.executable, '-I', str(self.launcher), '--root', str(root), *argv], stdin=subprocess.DEVNULL,
+        # OH keeps working if Codex ends this server: its own session on POSIX, its own process group on Windows.
+        detached = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
+        utf8 = ['-X', 'utf8'] if os.name == 'nt' else []
+        with subprocess.Popen([sys.executable, '-I', *utf8, str(self.launcher), '--root', str(root), *argv], stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, text=True, encoding='utf-8', errors='replace',
-                              start_new_session=True) as process:  # OH keeps working if Codex ends this server
+                              **detached) as process:
             reader = threading.Thread(target=lambda: output.append(process.stdout.read()), daemon=True);reader.start()
             for count, line in enumerate(process.stderr, 1):
                 lines.append(line.rstrip())

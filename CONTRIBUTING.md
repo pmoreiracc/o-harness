@@ -11,7 +11,7 @@
 
 ## Development
 
-You need Python 3.11+, Git, Node.js and Bash. Tests need no AI subscription or API key.
+You need Python 3.12+, Git, Node.js and Bash. Tests need no AI subscription or API key.
 
 ```sh
 bash integrations/test.sh native   # behavior tests

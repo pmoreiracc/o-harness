@@ -7,6 +7,8 @@ Resolve the `scripts/oh` command at the plugin root, two levels above this skill
 
 Read the settings: in Codex, call the o-harness `config` tool with the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> config`. It returns every setting that exists, with its value, default, source, allowed values and meaning, this project's `checks`, and the settings `file`. That list is the only source of truth: never mention, suggest or write a setting that isn't in it.
 
+If Codex lists no o-harness tools, OH's tool server did not start: tell the person to type `/mcp` to see why, then start a new Codex session; don't run these OH commands from Codex's shell instead.
+
 **No request:** show a short list of the settings (key, value, meaning) and the checks, give the `file` path, say that `oh config open` opens it and that editors explain each key through its `$schema`, and report any `note`.
 
 **A request in words** (for example "let OH run 15 tasks per batch"):

@@ -1,4 +1,4 @@
-# Fetches the official Python for OH on Windows, when no Python 3.11+ is installed. The version and each
+# Fetches the official Python for OH on Windows, when no Python 3.12+ is installed. The version and each
 # file's SHA-256 are pinned here; nothing is installed system-wide. Each version gets its own folder under
 # <OH data>\python and the file "current" names the one to use, so a newer pin replaces it on the next setup.
 # -Refresh (used by setup) updates only a Python OH fetched before.
@@ -33,7 +33,7 @@ if ($named -eq $version -and (Test-Path (Join-Path $target 'python.exe'))) { ret
 if ($Refresh -and -not $named) { return }
 # The download happens at the first setup, before OH has any settings, so an environment variable turns it off.
 if ($env:OH_PYTHON_DOWNLOAD -eq '0') {
-    throw 'OH_PYTHON_DOWNLOAD is 0, so OH does not download Python. Install Python 3.11 or newer yourself (python.org, or: winget install Python.Python.3.14), then run setup again.'
+    throw 'OH_PYTHON_DOWNLOAD is 0, so OH does not download Python. Install Python 3.12 or newer yourself (python.org, or: winget install Python.Python.3.14), then run setup again.'
 }
 $url = "https://www.python.org/ftp/python/$version/python-$version-embed-$arch.zip"
 [Console]::Error.WriteLine("OH is downloading Python $version from python.org (the official Windows embeddable package, about 12 MB, SHA-256 checked) into $target. No admin rights or PATH changes; delete $root to remove it.")

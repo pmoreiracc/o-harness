@@ -9,11 +9,11 @@ function Resolve-CheckPython($Data, $Downloader) {
         $command = Get-Command $candidate.Command -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($command) {
             $arguments = $candidate.Arguments
-            $resolved = & $command.Source @arguments -I -c 'import sys; sys.version_info >= (3, 11) and print(sys.executable)' 2>$null
+            $resolved = & $command.Source @arguments -I -c 'import sys; sys.version_info >= (3, 12) and print(sys.executable)' 2>$null
             if ($LASTEXITCODE -eq 0 -and $resolved -and (Test-Path -LiteralPath $resolved -PathType Leaf)) { return $resolved }
         }
     }
-    Write-Host 'No Python 3.11+: testing the download OH does during setup.'
+    Write-Host 'No Python 3.12+: testing the download OH does during setup.'
     & $Downloader
     $root = Join-Path $Data 'python'
     $version = (Get-Content -Raw -LiteralPath (Join-Path $root 'current')).Trim()
