@@ -119,11 +119,22 @@ def to_delivery(root,name):
 
 
 def refresh(root,name,base):
-    """Merge origin's main into a resumed delivery branch. When it conflicts, the delivery carries on without it:
-    OH delivers one design at a time, so the conflict is someone else's change, settled when the pull request
-    merges, as for any branch."""
+    """Merge origin's main into a resumed delivery branch. A conflict is the person's call: start over from main,
+    finish without main's changes, or let the agent plan a resolution for them to approve."""
+    from .storage import checkout_file,read_json
+    try:
+        if read_json(checkout_file(root,'oh-without-main.json'))=={'branch':name,'base':git(root,'rev-parse',base)}:return
+    except FileNotFoundError:pass
     merging=run_git(root,'merge','--quiet','--no-edit',base)
     if merging.returncode:
         conflicted=git(root,'diff','--name-only','--diff-filter=U').splitlines()
         run_git(root,'merge','--abort')
         if not conflicted:raise Refused(f'Git could not merge {base} into {name}: {merging.stderr.strip()}')
+        args=' '.join(name[len('deliver/'):].split('-',1))
+        raise Refused(f'{name} holds unfinished work that conflicts with {base} in {", ".join(conflicted[:5])}. Ask the '
+            f'person with a menu: start over from {base} and discard this branch (run `conflict fresh {args}`, then '
+            f'`run`); finish from here without {base}\'s changes, resolving the conflicts when the pull request merges '
+            f'(run `conflict keep {args}`, then `run`); or let you resolve it. For that, study both sides and why each '
+            f'changed, show the person your plan with a menu to approve it or handle it themselves, and on approval '
+            f'merge {base} into {name}, resolve it as planned, commit the merge and run `run`: the next task\'s review '
+            'covers your resolution.')

@@ -121,6 +121,7 @@ def main(argv=None):
     imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
     renamed=sub.add_parser('rename');renamed.add_argument('name')
     prep=sub.add_parser('prepare');prep.add_argument('manifest')
+    clash=sub.add_parser('conflict');clash.add_argument('choice',choices=['fresh','keep']);clash.add_argument('doc');clash.add_argument('track',nargs='?',default='')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?',default='origin/main');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
     publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?',default='origin/main');publication.add_argument('--validate-event',type=Path)
@@ -212,6 +213,9 @@ def main(argv=None):
         elif args.command in ('pause','stop'):
             from .controls import request
             result=request(root,args.command)
+        elif args.command=='conflict':
+            from .delivery import conflict
+            result=conflict(root,args.choice,args.doc,args.track)
         elif args.command=='cancel':
             from .authority import cancel
             result=cancel(root)

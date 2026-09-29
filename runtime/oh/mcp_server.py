@@ -56,6 +56,9 @@ TOOLS = [
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
     tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
     tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
+    tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with main: '
+         'fresh discards the branch to start over from main, keep finishes without main\'s changes.',
+         {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),
     tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
     tool('pr_summary', 'PR summary', 'The review summary for this branch\'s pull request.', {'base': TEXT}, read_only=True),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
@@ -90,6 +93,9 @@ def command(name, arguments, root):
         if not isinstance(values, list) or not all(isinstance(v, str) for v in values):raise Refused('`arguments` is a list of text')
         return ['deliver', '--', *values]
     if name == 'prepare':return ['prepare', '--', str(manifest(root, arguments.get('tasks')))]
+    if name == 'conflict':
+        if arguments.get('choice') not in ('fresh', 'keep'):raise Refused('`choice` is fresh or keep')
+        return ['conflict', arguments['choice'], '--', text('doc', True)] + ([text('track')] if text('track') else [])
     if name == 'prepare_design':return ['prepare-design', '--', text('doc', True)] + ([text('track')] if text('track') else [])
     if name == 'start':return ['start'] + (['--', text('request')] if text('request') else [])
     if name == 'pr_summary':return ['pr-summary'] + (['--', text('base')] if text('base') else [])

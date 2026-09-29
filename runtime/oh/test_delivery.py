@@ -112,17 +112,64 @@ class DeliveryTest(unittest.TestCase):
         _choose(self.root,'pr',self.event('pr','pr'))
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
 
-    def test_a_stopped_delivery_resumes_without_main_when_they_conflict(self):
-        self.documents()
+    def stopped_in_conflict(self,location='repo'):
+        """A delivery stopped after task 1 while someone else's change on main touches the file it wrote."""
+        where,path=self.documents(location)
         self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         choose(self.root,'stop',self.event('stop','stop'));head=self.git('rev-parse','HEAD')
-        # Someone else's change on main touches the file this delivery wrote.
         self.git('switch','-q','main');(self.root/'output.txt').write_text('main\n',newline='\n')
         self.git('add','output.txt');self.git('commit','-qm','main work');self.git('update-ref','refs/remotes/origin/main','HEAD')
-        self.start_delivery(turn='again')
+        with self.assertRaisesRegex(Refused,'conflicts with origin/main in output.txt. Ask the person with a menu: start over'):
+            self.start_delivery(turn='again')
+        self.assertEqual((self.git('rev-parse','deliver/0001'),self.git('status','--porcelain')),(head,''))
+        return where,path,head
+
+    def test_finishing_a_conflicting_delivery_without_main_hands_it_over_when_the_plans_moved(self):
+        from .delivery import conflict
+        _,_,head=self.stopped_in_conflict()
+        conflict(self.root,'keep','0001')
+        self.start_delivery(turn='kept')  # carries on without main's changes
         self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
-        self.assertEqual(self.git('status','--porcelain'),'')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+        choose(self.root,'stop',self.event('stop again','stop'))
+        # Main also changes the plans: OH can't carry on without them, so it hands the branch over, once.
+        self.git('switch','-q','main');where=plans.layout(self.root)
+        plans.add_initiative(self.root,where,'M1','search','Search notes',[]);self.git('add','.');self.git('commit','-qm','row')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        conflict(self.root,'keep','0001')
+        from .storage import Final
+        with self.assertRaisesRegex(Final,"From here it's yours"):self.start_delivery(turn='handed over')
+
+    def test_starting_a_conflicting_delivery_over_discards_its_branch_and_private_progress(self):
+        from .delivery import conflict
+        where,path,_=self.stopped_in_conflict('private')
+        before=read_json(plans.approvals_file(self.root))['0001']
+        self.assertIn('- [x] **1.**',path.read_text())
+        with patch.dict('os.environ',{'OH_CHILD_ATTEMPT':'a'}),self.assertRaises(Refused):conflict(self.root,'fresh','0001')
+        conflict(self.root,'fresh','0001')
+        self.assertIn('- [ ] **1.**',path.read_text());self.assertNotIn('delivery_commit',read_json(plans.approvals_file(self.root))['0001'])
+        self.assertNotEqual(read_json(plans.approvals_file(self.root))['0001'],before)
+        self.start_delivery(turn='fresh')
+        self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','origin/main'))
+        self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['1','2'])  # all of it again
+
+    def test_a_conflict_resolved_by_hand_is_reviewed_with_the_next_task_before_it_is_published(self):
+        from .publication import render
+        self.stopped_in_conflict()
+        # The person approved the agent's plan: it merges main, resolves the conflict and commits the merge.
+        self.git('switch','-q','deliver/0001')
+        import subprocess
+        subprocess.run(['git','-C',str(self.root),'merge','-q','origin/main'],capture_output=True)
+        (self.root/'output.txt').write_text('both\n',newline='\n');self.git('commit','-qam','Merge main, keeping both')
+        merge=self.git('rev-parse','HEAD')
+        from .publication import commits
+        with self.assertRaisesRegex(Refused,'not a clean merge'):commits(self.root,'origin/main')  # unreviewed yet
+        self.start_delivery(turn='resolved');self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        request=read_json(next(Path(load_run(self.root)[0].path/'attempts').glob('*/merges.diff')).parent/'request.json')
+        self.assertEqual(request['merges']['commits'],[merge])
+        choose(self.root,'pr',self.event('pr','pr'))
+        body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
+        self.assertEqual([r['evidence'].get('merges') for r in body['records']],[None,[merge]])
 
     def test_a_worktree_delivers_while_main_is_checked_out_elsewhere(self):
         from .registry import register

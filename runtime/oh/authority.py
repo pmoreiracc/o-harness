@@ -320,9 +320,10 @@ def materialize(root):
             # carries it out when the reason is fixed, without the person typing it again. A newer command or a
             # later menu answer replaces it; a newer prompt sets it aside. A choice (a menu word, /oh-resume)
             # answers the moment it was typed at, and a failure OH did not foresee would only repeat: those are
-            # said once and spent.
+            # said once and spent, as is a refusal that is the command's last word.
             refused=exc if isinstance(exc,Refused) else Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})')
-            if not starts_work(locator) or not isinstance(exc,Refused):
+            from .storage import Final
+            if not starts_work(locator) or not isinstance(exc,Refused) or isinstance(exc,Final):
                 atomic_json(used,{'source':event,'refused':str(refused)},immutable=True);path.unlink()
             raise refused from exc
         atomic_json(used,{'source':event,'result':result},immutable=True)

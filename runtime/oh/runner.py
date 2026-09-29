@@ -120,6 +120,16 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         (directory/'change.diff').write_bytes(diff)
         data['diff']={'path':str(directory/'change.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
         prompt+='\nThe exact code change under review, from HEAD to the reviewed tree, is in '+str(directory/'change.diff')+'.'
+    if role=='review' and (merges:=state.get('delivery',{}).get('merges')) and not state['summaries']:
+        # Conflicts with main resolved by the agent or the person: what they changed beyond Git's own merge.
+        text=b''.join(subprocess.run(['git','-C',str(root),'show','--remerge-diff','--no-color','--no-ext-diff',merge],capture_output=True,check=True,
+                                     env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout for merge in merges)
+        (directory/'merges.diff').write_bytes(text)
+        data['merges']={'commits':merges,'path':str(directory/'merges.diff'),'sha256':hashlib.sha256(text).hexdigest()}
+        prompt+=('\nThis branch also merges main with conflicts resolved by hand: '+', '.join(merges)+'. What each resolution '
+                 'changed beyond Git\'s own merge is in '+str(directory/'merges.diff')+'. Review it as part of this subject: a '
+                 'resolution that loses either side\'s intent, changes more than the conflict needs, or edits the plans beyond '
+                 'main\'s version and this branch\'s recorded progress is a blocker.')
     if role=='review' and state.get('delivery',{}).get('layout',{}).get('location')=='private':
         from .plans import file_identity,digest_of
         render=state['delivery_render'];candidate=Path(render['candidate'])

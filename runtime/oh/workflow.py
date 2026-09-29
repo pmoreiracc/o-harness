@@ -384,7 +384,7 @@ def adopted(root,state,own):
     name=trunk(root)
     if not name:raise Refused('This repository has no main or master branch to publish against')
     base='origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
-    try:mine=commits(root,base)
+    try:mine=commits(root,base,reviewed=None)  # render checks the merges
     except subprocess.CalledProcessError as exc:raise Refused(f'OH could not list this branch\'s commits since {base}') from exc
     found=[]
     for commit in mine:

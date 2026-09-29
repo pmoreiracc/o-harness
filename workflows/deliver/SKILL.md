@@ -37,7 +37,7 @@ argument. OH's parser selects the mode; do not infer a different workflow:
   tasks from that approved design. Plans can live in the repository or privately. There is
   no prepare step or second trigger. Show the resulting checkpoint and limits. OH works on
   `deliver/0005` (`deliver/0005-<track>` for one track) from an up-to-date `main`; when that branch holds
-  unfinished work, OH resumes it and merges `main` into it, or carries on without `main` when they conflict. A
+  unfinished work, OH resumes it and merges `main` into it; when they conflict, OH names the person's three choices. A
   branch that already holds the whole design shows its PR choice again and takes no tasks. The same command while
   its run is open continues it.
 - Prose returns `quick_fix` with the original intent. Inspect that fix and prepare a bounded task

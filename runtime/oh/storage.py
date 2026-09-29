@@ -19,6 +19,10 @@ class Refused(RuntimeError):
     pass
 
 
+class Final(Refused):
+    """A refusal that is the command's last word: said once, and the waiting command is spent."""
+
+
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
