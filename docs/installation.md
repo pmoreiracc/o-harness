@@ -124,18 +124,23 @@ delete `~/.local/share/o-harness` after uninstalling from both hosts.
 
 ## Releasing (maintainers)
 
-1. Set the same plain `X.Y.Z` version in both `plugins/o-harness/.claude-plugin/plugin.json`
-   and `plugins/o-harness/.codex-plugin/plugin.json`, and merge that change to `main`.
-2. Tag the merge commit and push the tag:
+1. On GitHub, open **Actions → prepare release → Run workflow**, type the new version (such as
+   `0.4.0`, higher than the current one) and run it. It opens a pull request that sets the
+   version, listing the pull requests merged since the last release.
+2. Merge that pull request.
 
-   ```sh
-   git tag v0.3.0
-   git push origin v0.3.0
-   ```
+Merging it starts the release workflow. It runs every test on Linux and Windows, then
+installs the package in the real Claude Code and Codex on Windows, macOS and Linux and checks
+that OH sets up and its tools start (`integrations/install-check.py`, no AI login needed).
+Only when all of that passes does it create the `vX.Y.Z` tag, publish that package to the
+`dist` branch and create the GitHub release, whose notes list the merged pull requests. If a
+test or the install check fails, nothing is published: fix it on `main` and run **Actions →
+release → Run workflow**. If a later step fails, running it again finishes the same version
+from the same tagged commit, so users never get two different builds of one version; if it
+keeps failing there, release the fix as a new version.
 
-The release workflow checks that the tag matches both versions, runs the tests, publishes
-the built packages to the `dist` branch and creates the GitHub release. Users then receive
-the update as described above. Always bump the version: hosts only update when it changes.
+Once, in the repository's **Settings → Actions → General**, allow GitHub Actions to create pull
+requests, so the prepare step can open one.
 
 To try a build locally without releasing, run `integrations/package.sh <empty-folder>`
 and add that folder as a local marketplace. OH only switches automatically to a higher

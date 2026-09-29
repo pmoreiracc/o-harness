@@ -187,7 +187,9 @@ def main(argv=None):
             from .plans import check,layout,listing
             where=layout(root)
             result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
-        elif args.command=='status':result=checkpoint(root)
+        elif args.command=='status':
+            result=checkpoint(root) if active_file(root).exists() else {
+                'status':'none','next':'No OH run in this checkout yet: start one with oh-propose, oh-design or oh-deliver.'}
         elif args.command in ('pause','stop'):
             from .controls import request
             result=request(root,args.command)

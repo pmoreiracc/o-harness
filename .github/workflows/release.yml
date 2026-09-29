@@ -1,15 +1,58 @@
 name: release
+# A new version reaching main releases it: "prepare release" opens the pull request that sets it (see
+# docs/installation.md, "Releasing"). Nothing is published unless every test and the install check pass.
+# The tag is created first and pins the release's commit: running this again by hand, after a failure, finishes
+# that same version from that same commit, so users never get two different builds under one version.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths:
+      - plugins/o-harness/.claude-plugin/plugin.json
+      - plugins/o-harness/.codex-plugin/plugin.json
+  workflow_dispatch:
 permissions:
   contents: write
 concurrency: release
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        name: Find the version to release, and its commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Releases come from main"; exit 1; }
+          version=$(jq -r .version plugins/o-harness/.claude-plugin/plugin.json)
+          [ "$version" = "$(jq -r .version plugins/o-harness/.codex-plugin/plugin.json)" ] || {
+            echo "::error::The Claude and Codex plugin versions differ"; exit 1; }
+          tag="v$version"
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Releasing $tag from $GITHUB_SHA."
+            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT";exit 0
+          fi
+          published=$(git fetch -q origin dist && git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version || true)
+          if [ "$published" = "$version" ] && gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released; nothing to do."
+          else
+            # A release that stopped after its tag: finish it from the tagged commit.
+            echo "Finishing $tag from its tagged commit."
+            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$(git rev-list -n1 "$tag")" >> "$GITHUB_OUTPUT"
+          fi
   # Pull requests run only part of the Windows suite; a release waits for all of it.
   windows:
+    needs: version
+    if: needs.version.outputs.tag
     runs-on: windows-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
     defaults:
       run:
         shell: bash
@@ -17,18 +60,34 @@ jobs:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: bash integrations/test.sh native
+  # Builds the package and checks it installs and starts in the real apps; the release publishes an identical build.
+  install:
+    needs: version
+    if: needs.version.outputs.tag
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install-check.yml
+    with:
+      ref: ${{ needs.version.outputs.commit }}
   release:
-    needs: windows
+    needs: [version, windows, install]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.commit }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -36,35 +95,46 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18.0'
-      - name: Check the tag matches both plugin versions
+      # The package published is built here, by this repository's code, before the tests touch the checkout; the
+      # artifact from the install check (whose jobs ran third-party npm code) only proves it is the one tested.
+      # It goes outside the runner's temp folder, where the downloaded artifact can't write.
+      - name: Build the package to publish
         run: |
-          for host in claude codex; do
-            version=$(jq -r .version "plugins/o-harness/.$host-plugin/plugin.json")
-            [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::$host plugin version is $version, tag is $GITHUB_REF_NAME"; exit 1; }
-          done
-      - name: Check the tag is on main
+          built="$(mktemp -d)/package"
+          bash integrations/package.sh "$built"
+          echo "BUILT=$built" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: ${{ runner.temp }}/tested
+      - name: Check it is byte for byte the package the install check tested
         run: |
-          git fetch origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+          [ "$(ls -A "$RUNNER_TEMP/tested")" = package.tgz ] || { echo "::error::The tested artifact holds more than package.tgz"; exit 1; }
+          mkdir "$RUNNER_TEMP/checked" && tar -xzf "$RUNNER_TEMP/tested/package.tgz" -C "$RUNNER_TEMP/checked"
+          diff -r "$BUILT" "$RUNNER_TEMP/checked"
       - run: bash integrations/test.sh native
       - run: bash integrations/test.sh syntax
-      - name: Publish the packages to the dist branch
+      - name: Create the tag, which pins this release to its commit
+        run: |
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { git tag "$TAG" "$COMMIT" && git push origin "$TAG"; }
+      - name: Publish the package to the dist branch
         run: |
           out="$RUNNER_TEMP/dist"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if git ls-remote --exit-code --heads origin dist >/dev/null; then
             git fetch origin dist
+            # A retry after the package was published leaves it exactly as users received it.
+            [ "$(git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version)" != "${TAG#v}" ] || {
+              echo "dist already carries $TAG"; exit 0; }
             git worktree add -B dist "$out" FETCH_HEAD
             git -C "$out" rm -rq .
           else
             git worktree add --orphan -b dist "$out"
           fi
-          bash integrations/package.sh "$out"
+          cp -R "$BUILT/." "$out/"
           git -C "$out" add -A
-          git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $GITHUB_REF_NAME ($(git rev-parse --short HEAD))"
+          git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $TAG ($(git rev-parse --short "$COMMIT"))"
           git -C "$out" push origin dist
-      - name: Create the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+      - name: Create the GitHub release, with notes listing the merged pull requests
+        run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"

@@ -1,0 +1,70 @@
+name: install check
+# Builds the package users will install and checks, on Windows, macOS and Linux, that it installs in the real
+# Claude Code and Codex and that OH sets up and its tools start (integrations/install-check.py). The release runs
+# it before publishing; run it by hand (Actions > install check) to try a branch. It needs no AI login.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to build and check (the release's)
+        type: string
+        required: false
+  workflow_dispatch:
+# Read only, and no token saved in the checkouts: this installs third-party npm packages.
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the package users will install
+        run: |
+          bash integrations/package.sh "$RUNNER_TEMP/package"
+          tar -czf "$RUNNER_TEMP/package.tgz" -C "$RUNNER_TEMP/package" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: ${{ runner.temp }}/package.tgz
+  install:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - name: Install Claude Code and Codex
+        run: npm install -g @anthropic-ai/claude-code @openai/codex
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: ${{ runner.temp }}
+      - name: Install OH in both apps and check it starts
+        run: |
+          # Claude Code runs hooks with Git Bash on Windows.
+          OH_CHECK_BASH=$(command -v bash)
+          [ "$RUNNER_OS" != Windows ] || OH_CHECK_BASH=$(cygpath -w "$OH_CHECK_BASH")
+          OH_CHECK_BASH="$OH_CHECK_BASH" python integrations/install-check.py "$RUNNER_TEMP/package.tgz"
