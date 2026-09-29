@@ -421,7 +421,8 @@ def owned(journal,state,event):
     """A verified command typed in another conversation of the run's host makes that conversation the run's owner,
     so its menus are answered there. The host stays: its workers and transcripts are that host's."""
     if state['human'].get('session')==event['session']:return
-    if state['host']!=event['host']:raise Refused(f"This run belongs to {state['host'].title()}; carry on with it there")
+    from .storage import Final
+    if state['host']!=event['host']:raise Final(f"This run belongs to {state['host'].title()}; carry on with it there")
     journal.append('run.owner',{'human':event})
 
 

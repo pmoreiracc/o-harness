@@ -288,11 +288,16 @@ class GateTest(unittest.TestCase):
         self.waiting_command(first=lambda question: self.click(question, 'Continue', apply=False))
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.assertTrue(pending_file(self.root).exists())
-        # Answered after typing it: the answer counts, and OH says it set the command aside.
+        # Answered after typing it: the answer counts, and OH says it set the command aside, also where the agent
+        # runs the typed delivery itself.
+        from contextlib import redirect_stdout
+        from .cli import main
         question = self.waiting_command()
-        result = self.click(question, 'Continue', use='toolu_2')
-        self.assertEqual(result['status'], 'running')
-        self.assertIn('set that command aside', result['note'])
+        self.click(question, 'Continue', use='toolu_2', apply=False)
+        out = io.StringIO()
+        with redirect_stdout(out):main(['--root', str(self.root), 'deliver', '0006'])
+        self.assertIn('so OH set that command aside', out.getvalue())
+        self.assertEqual(load_run(self.root)[1]['status'], 'running')
         self.assertFalse(pending_file(self.root).exists())
 
     def test_a_refused_choice_is_said_once_and_never_holds_up_the_run(self):

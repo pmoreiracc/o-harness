@@ -113,7 +113,8 @@ class DeliveryTest(unittest.TestCase):
         def typed(session,host='codex'):
             event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':'later','prompt':'/oh-deliver 0001'},host)
             return host_hook(self.root,host,{'prompt':'/oh-deliver 0001'},verified=event)
-        with self.assertRaisesRegex(Refused,'belongs to Codex'):typed('elsewhere','claude')
+        from .storage import Final
+        with self.assertRaisesRegex(Final,'belongs to Codex'):typed('elsewhere','claude')  # said once, then spent
         self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
         self.assertEqual(load_run(self.root)[1]['human']['session'],'new')
         _choose(self.root,'pr',self.event('pr','pr'))
@@ -162,12 +163,19 @@ class DeliveryTest(unittest.TestCase):
 
     def test_a_conflict_resolved_by_hand_is_reviewed_with_the_next_task_before_it_is_published(self):
         from .publication import render
-        self.stopped_in_conflict()
+        _,path,_=self.stopped_in_conflict()
+        # Main also rewords the task this delivery hasn't done yet.
+        self.git('switch','-q','main');path.write_text(path.read_text().replace('sign-in endpoint.','sign-in endpoint, rate limited.'),newline='\n')
+        self.git('commit','-qam','Reword task 2');self.git('update-ref','refs/remotes/origin/main','HEAD')
         # The person approved the agent's plan: it merges main, resolves the conflict and commits the merge.
         self.git('switch','-q','deliver/0001')
         import subprocess
         subprocess.run(['git','-C',str(self.root),'merge','-q','origin/main'],capture_output=True)
-        (self.root/'output.txt').write_text('both\n',newline='\n');self.git('commit','-qam','Merge main, keeping both')
+        (self.root/'output.txt').write_text('both\n',newline='\n')
+        self.git('checkout','--ours','--',str(path));self.git('commit','-qam','Merge main, keeping ours')
+        with self.assertRaisesRegex(Refused,"plans must be exactly main's"):self.start_delivery(turn='stale plan')  # old task 2
+        path.write_text(self.git('show','origin/main:'+path.relative_to(self.root).as_posix()).replace('- [ ] **1.**','- [x] **1.**')+'\n',newline='\n')
+        self.git('commit','-qa','--amend','--no-edit')
         merge=self.git('rev-parse','HEAD')
         from .publication import commits
         with self.assertRaisesRegex(Refused,'not a clean merge'):commits(self.root,'origin/main')  # unreviewed yet

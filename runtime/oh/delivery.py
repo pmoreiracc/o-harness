@@ -67,7 +67,8 @@ def dependencies(root,where,rows,name):
 def progress_only(root,fork,paths):
     """Whether the plans changed since `fork` only through OH's own reviewed commits, which its journal records, and
     merges of main, with nothing uncommitted. A message that merely claims to be OH's changes nothing. A merge
-    resolved by hand is reviewed with the run's first task (`unreviewed_merges`)."""
+    resolved by hand is reviewed with the run's first task (`unreviewed_merges`), but the plans are bound here: after
+    a merge of main they must be main's exactly, apart from the tasks this branch's runs completed."""
     from subprocess import CalledProcessError
     from .publication import trailer
     from .storage import Journal,project
@@ -77,8 +78,23 @@ def progress_only(root,fork,paths):
         for commit in git(root,'rev-list','--no-merges',fork+'..HEAD','--',*paths).splitlines():
             state=reduce(Journal(project(root)['id'],trailer(root,commit,'OH-Run')).records())
             if commit not in [done.get('commit') for done in state['summaries']]:return False
+        if git(root,'rev-list','--merges',fork+'..HEAD'):
+            completed=set()
+            for commit in git(root,'rev-list','--no-merges',fork+'..HEAD').splitlines():
+                try:run=trailer(root,commit,'OH-Run')
+                except Refused:continue
+                completed|={done['task'] for done in reduce(Journal(project(root)['id'],run).records())['summaries'] if done.get('commit')==commit}
+            for path in git(root,'diff','--name-only','origin/main','HEAD','--',*paths).splitlines():
+                if unticked(git(root,'show','HEAD:'+path),completed)!=git(root,'show','origin/main:'+path):return False
     except (Refused,CalledProcessError,KeyError,IndexError):return False
     return True
+
+
+def unticked(text,tasks):
+    """The design text with these tasks' checkboxes back to pending."""
+    for task in tasks:
+        text=re.sub(r'^- \[x\] \*\*'+re.escape(task)+r'\.\*\*',f'- [ ] **{task}.**',text,flags=re.M)
+    return text
 
 
 def finished(root,doc,track,branch,event):
@@ -92,7 +108,7 @@ def finished(root,doc,track,branch,event):
     rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
     if any(row[1]=='pending' and (not track or row[2]==track) for row in rows):return None
     if not track and plans.approval(root,where,doc)!='frozen':return None  # its finalize step is still to run
-    refused=Refused(f'{branch} already holds all of design {doc}, but OH did not make its last commit here, so OH '
+    refused=Final(f'{branch} already holds all of design {doc}, but OH did not make its last commit here, so OH '
                     'cannot offer its pull request; open one yourself')
     try:state=reduce(Journal(project(root)['id'],trailer(root,'HEAD','OH-Run')).records())
     except Refused:raise refused from None
@@ -149,9 +165,7 @@ def forget_progress(root,where,doc,name,base):
         intents+=[r['data'] for r in Journal(project(root)['id'],run).records() if r['kind']=='delivery.approval.intent' and r['data'] not in intents]
     if not intents:return
     if records.get(doc)!=intents[-1]['after']:raise Refused(f'The private approval of design {doc} changed outside OH; restore it before starting over')
-    text=path.read_bytes().decode()  # bytes as saved, so CRLF plans keep their hash
-    for task in {i['task'] for i in intents}:
-        text=re.sub(r'^- \[x\] \*\*'+re.escape(task)+r'\.\*\*',f'- [ ] **{task}.**',text,flags=re.M)
+    text=unticked(path.read_bytes().decode(),{i['task'] for i in intents})  # bytes as saved: CRLF plans keep their hash
     if hashlib.sha256(text.encode()).hexdigest()!=intents[0]['before'].get('sha256'):
         raise Refused(f'Design {doc} changed beyond this delivery\'s progress; OH cannot start it over safely')
     plans.write(path,text)
@@ -204,6 +218,9 @@ def selection(root,doc,track='',*,claim=True):
                             f'conflicts with it, so OH can\'t bring main in. The tasks done so far are saved on {branch}. '
                             'From here it\'s yours: merge main into it, resolve the conflicts and open the pull request '
                             'when you\'re ready.')
+            if git(root,'rev-list','--merges',fork+'..HEAD'):
+                raise Refused('After merging main, the plans must be exactly main\'s apart from the tasks this branch '
+                              'completed; resolve the merge\'s plan files that way, amend the merge and run again')
             raise Refused('The design and planning context must match origin/main; merge the plans first')
         for filename in inputs(where):
             relative=Path(filename).relative_to(root).as_posix()

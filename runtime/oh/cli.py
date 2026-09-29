@@ -268,7 +268,10 @@ def main(argv=None):
                 from .authority import materialize
                 admitted=materialize(root)
                 if admitted and admitted.get('limits'):print(admitted['limits'],flush=True)
-                if selected['kind']=='design':
+                if admitted and admitted.get('note'):
+                    # A menu answer set the typed command aside: say so, and carry on with nothing else.
+                    print(admitted['note'],flush=True);result=admitted
+                elif selected['kind']=='design':
                     from .design_runner import run
                     result=run(root,selected['doc'],selected['track'])
                 else:
