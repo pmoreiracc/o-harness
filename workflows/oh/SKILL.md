@@ -8,7 +8,9 @@ that name (use `prepare_design` and `pr_summary` for the hyphenated ones) with t
 `<plugin>/scripts/oh` entry supplied by the invoking skill as `<plugin>/scripts/oh --root <checkout> <command>`.
 Changing settings (`config set`, `config unset`) is never a tool: run it with `<plugin>/scripts/oh` on either
 host, so the person approves it. Stopping a long Codex tool call does not stop OH: call `status` to follow it and
-`stop` to end it.
+`stop` to end it. When these instructions say to ask the person something that is not a `gate`, offer the choices
+as a menu: in Claude, the question tool (AskUserQuestion); in Codex, the o-harness `confirm` tool, which waits for
+the click (never Codex's own question tool, which closes when your turn ends).
 
 Resolve the selected Git checkout. Run `config`; if unregistered, run `init` once: it
 joins the project of the same repository, or names a new one after the repository (pass
