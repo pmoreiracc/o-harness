@@ -30,7 +30,8 @@ jobs:
   windows:
     if: github.event_name == 'pull_request'
     runs-on: windows-latest
-    timeout-minutes: 10
+    # Most PRs take about 5 minutes; one that edits a test module most others import runs nearly all of them.
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
