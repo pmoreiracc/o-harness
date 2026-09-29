@@ -216,10 +216,6 @@ def projects_named(name, excluding_root=None):
     return {p for p in present_projects(excluding_root) if name_of(p) == name}
 
 
-def registered_names():
-    return {name for name in map(name_of, present_projects()) if name is not None}
-
-
 def strict_json(text):
     """JSON where a repeated key is an error, not a silent last-one-wins."""
     def pairs(items):
@@ -799,9 +795,6 @@ def describe(root):
     if name:
         result['checks'] = project_checks(root, data)
         if not result['checks']:notes.append(f'{name} has no checks yet: add them with oh config set checks \'<JSON list>\'')
-    unknown = sorted(set(sections(data)) - registered_names())
-    if unknown:notes.append(f'No OH project on this machine is named {", ".join(unknown)}; those sections do nothing. '
-                            f'Projects: {", ".join(sorted(registered_names())) or "none yet"}')
     if notes:result['note'] = ' '.join(notes)
     return result
 
