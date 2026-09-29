@@ -47,9 +47,9 @@ def delivered_base(root,record,*,progressed=False):
         except CalledProcessError:
             # Squash merges must contain every delivered path, with an inherited baseline, or carry the delivery's
             # exact change in one commit, still found after main changed those paths again.
-            from .branches import contained
+            from .branches import contained,delivered
             paths=[path for path in changed.split('\0') if path]
-            if paths and not contained(root,'HEAD',commit):git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
+            if paths and not contained(root,'HEAD',commit) and not delivered(root,'HEAD',commit):git(root,'--literal-pathspecs','diff','--exit-code',commit,'HEAD','--',*paths)
     except CalledProcessError:
         raise Refused('Private plan progress belongs to code this checkout does not contain; merge the branch that holds it, through its pull request, first') from None
 

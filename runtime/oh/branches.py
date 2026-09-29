@@ -136,13 +136,38 @@ def to_delivery(root,name):
     exists=run_git(root,'rev-parse','--verify','--quiet','refs/heads/'+name).returncode==0
     if exists and current!=name and (elsewhere:=holder(root,name)):
         raise Refused(f'{name} is checked out in {elsewhere}; type the command there to carry on with it.')
-    if exists and (contained(root,base,name) or merged_tree(root,base,name)==git(root,'rev-parse',base+'^{tree}')):
+    if exists and (tip:=absorbed(root,base,name)):
+        # Remember the merged branch: its commits carry the progress a private plan recorded.
+        git(root,'update-ref','refs/oh/delivered/'+name,tip)
         if current==name:git(root,'switch','--quiet','--detach',base)  # only while the spent branch is replaced
         git(root,'branch','-D',name);exists=False
+        from .storage import checkout_file,read_json
+        marker=checkout_file(root,'oh-without-main.json')
+        try:
+            if read_json(marker)['branch']==name:marker.unlink()
+        except FileNotFoundError:pass
     if not exists:
         git(root,'switch','--quiet','--no-track','-c',name,base);return None
     if current!=name:git(root,'switch','--quiet',name)
     return base
+
+
+def absorbed(root,base,name):
+    """The tip of branch `name` that main holds, or None. The pull request's head on origin counts too: it holds the
+    person's resolution of a conflict when they resolved it on GitHub before merging."""
+    tips=[name]
+    if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0:
+        run_git(root,'fetch','--quiet','origin',name,timeout=60)
+        if run_git(root,'merge-base','--is-ancestor',name,'origin/'+name).returncode==0:tips.append('origin/'+name)
+    tree=git(root,'rev-parse',base+'^{tree}')
+    return next((git(root,'rev-parse',tip) for tip in tips if contained(root,base,tip) or merged_tree(root,base,tip)==tree),None)
+
+
+def delivered(root,into,commit):
+    """Whether `into` holds a merged delivery branch that carried `commit`, even when a squash of it holds the
+    person's resolution of a conflict rather than `commit`'s own change."""
+    tips=run_git(root,'for-each-ref','--contains',commit,'--format=%(objectname)','refs/oh/delivered/').stdout.split()
+    return any(contained(root,into,tip) for tip in tips)
 
 
 def refresh(root,name,base):
