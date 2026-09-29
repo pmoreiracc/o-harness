@@ -43,7 +43,8 @@ def main_ref(root):
 def run_git(root,*args,timeout=None):
     import subprocess
     env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}|{'GIT_TERMINAL_PROMPT':'0'}
-    try:return subprocess.run(['git','-C',str(root),*args],capture_output=True,text=True,env=env,timeout=timeout)
+    # UTF-8, whatever the platform's default, keeping other bytes (such as a latin-1 file's) exactly.
+    try:return subprocess.run(['git','-C',str(root),*args],capture_output=True,text=True,encoding='utf-8',errors='surrogateescape',env=env,timeout=timeout)
     except subprocess.TimeoutExpired:return subprocess.CompletedProcess(args,1,'','timed out')
 
 
@@ -52,7 +53,7 @@ def squashed(root,into,start,end):
     by Git's patch id, so still found after main changed the same lines again."""
     import subprocess
     def ids(text):
-        found=subprocess.run(['git','-C',str(root),'patch-id','--stable'],input=text,capture_output=True,text=True,
+        found=subprocess.run(['git','-C',str(root),'patch-id','--stable'],input=text,capture_output=True,text=True,encoding='utf-8',errors='surrogateescape',
                              env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')})
         return {line.split()[0] for line in found.stdout.splitlines() if line.strip()}
     change=run_git(root,'diff','--no-color','--no-ext-diff',start,end).stdout

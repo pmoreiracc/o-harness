@@ -134,6 +134,9 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['human']['session'],'new')
         _choose(self.root,'pr',self.event('pr','pr'))
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
+        # The person amends OH's last commit: OH can't offer that head's PR any more, and says so once.
+        (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-q','--amend','--no-edit')
+        with self.assertRaisesRegex(Final,'open one yourself'):typed('new')
 
     def stopped_in_conflict(self,location='repo'):
         """A delivery stopped after task 1 while someone else's change on main touches the file it wrote."""
@@ -339,7 +342,8 @@ class DeliveryTest(unittest.TestCase):
         choose(self.root,'stop',self.event('stop','stop'));self.git('switch','main')
         self.git('merge','--squash',branch);self.git('commit','-qm','Squash reviewed code')
         self.git('update-ref','refs/remotes/origin/main','HEAD')  # the pull request was squash-merged
-        (self.root/'output.txt').write_text('changed again on main\n',newline='\n');self.git('commit','-qam','Later work')
+        # Non-ASCII text, which Windows would decode with its own codepage unless OH asks for UTF-8.
+        (self.root/'output.txt').write_text('changed again on main 📝 Łódź\n',encoding='utf-8',newline='\n');self.git('commit','-qam','Later work 🔍')
         self.git('update-ref','refs/remotes/origin/main','HEAD')  # and main changed those lines again since
         self.start_delivery(turn='squashed')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
