@@ -18,12 +18,13 @@ parser=argparse.ArgumentParser(add_help=False)
 parser.add_argument('--root',default=os.getcwd())
 options,remaining=parser.parse_known_args()
 command=remaining[0] if remaining else ''
+payload=None  # only a prompt hook reads its payload from stdin
 if command=='setup':
     entry=plugin/'core/oh'
 else:
     home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
     active=home/'runtime/active.json'
-    payload=None;explicit=True
+    explicit=True
     if command=='plugin-hook':
         # Bare choices such as "continue" only matter to an active run; they never install OH.
         payload=sys.stdin.buffer.read();prompt=json.loads(payload).get('prompt')

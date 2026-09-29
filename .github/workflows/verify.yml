@@ -25,9 +25,12 @@ jobs:
         with:
           node-version: '22.18.0'
       - run: bash integrations/test.sh "${{ matrix.suite }}"
+  # The full Windows suite is slow: a pull request runs the tests that can break on Windows,
+  # and the full suite (full.yml) runs all of them nightly and on demand, as a release does.
   windows:
+    if: github.event_name == 'pull_request'
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     defaults:
       run:
         shell: bash
@@ -43,4 +46,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18.0'
-      - run: bash integrations/test.sh native
+      - run: bash integrations/test.sh windows

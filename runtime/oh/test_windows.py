@@ -265,7 +265,7 @@ class WindowsTest(unittest.TestCase):
         run(test.root, hiding)
         diff, prompt = seen[0]
         self.assertIn('+++ b/output.txt', diff);self.assertIn('+1', diff);self.assertNotIn('Binary files', diff)
-        self.assertIn('subject.diff', prompt)
+        self.assertIn('change.diff', prompt)
 
 
 class TaskScheduler:

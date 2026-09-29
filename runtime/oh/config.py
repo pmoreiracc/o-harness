@@ -15,6 +15,7 @@ EFFORTS = {'codex': {'low', 'medium', 'high', 'xhigh', 'max', 'ultra'},
 
 
 MODEL = r'[A-Za-z0-9][A-Za-z0-9._:/-]*'
+FOLDER = r'^(~(?:[/\\].*)?|/.*|[A-Za-z]:[\\/].*)'  # absolute, or in your home folder
 PLAN_PATH = r'^(?!.*(^|/)\.\.?(/|$))[A-Za-z0-9_-][A-Za-z0-9._/-]*'  # relative, no . or .. parts
 ROLE_MEANING = {'simple': 'small, bounded tasks', 'standard': 'ordinary tasks',
                 'complex': 'cross-cutting or safety-sensitive tasks, and retries after a failure',
@@ -39,7 +40,9 @@ def rules():
                'Where roadmaps, design docs and decisions live: repo (committed in the repository), private (OH\'s folder), or ask'),
               ('plans.roadmap', {'type': 'string', 'pattern': PLAN_PATH + r'\.md$'}, 'Roadmap file, relative to where plans live'),
               ('plans.designs', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Design docs folder, relative to where plans live'),
-              ('plans.decisions', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Decision records (ADRs) folder, relative to where plans live')]
+              ('plans.decisions', {'type': 'string', 'pattern': PLAN_PATH + '$'}, 'Decision records (ADRs) folder, relative to where plans live'),
+              ('plans.private_folder', {'type': 'string', 'pattern': FOLDER},
+               'Folder for private plans; each project gets a subfolder named after it')]
     for host in ('claude', 'codex'):
         for role in ROLES:
             result.append((f'models.{host}.{role}.model', {'type': 'string', 'pattern': '^' + MODEL + '$'},
@@ -91,6 +94,7 @@ def allowed(spec):
     if 'enum' in spec:return 'one of: ' + ', '.join(spec['enum'])
     if spec['type'] == 'integer':return f'whole number from {spec["minimum"]} to {spec["maximum"]}'
     if spec['type'] == 'array':return 'a list of checks, each with a name and a command'
+    if spec['pattern'] == FOLDER:return 'an absolute folder, or one starting with ~'
     if spec['pattern'].startswith(PLAN_PATH):return 'a relative path with no . or .. parts' + (', ending in .md' if spec['pattern'].endswith(r'\.md$') else '')
     return 'a model name your subscription offers'
 
@@ -106,6 +110,8 @@ def check(key, spec, item):
     if spec['type'] == 'integer':valid = type(item) is int and spec['minimum'] <= item <= spec['maximum']
     elif 'enum' in spec:valid = item in spec['enum']
     else:valid = isinstance(item, str) and bool(re.fullmatch(spec['pattern'], item))
+    if valid and spec.get('pattern') == FOLDER:
+        valid = Path(os.path.expanduser(item)).is_absolute()
     if not valid:raise Refused(f'{key} must be {allowed(spec)}; got {json.dumps(item)}')
 
 
@@ -600,7 +606,7 @@ def remove(data, parts):
         if not parent[part]:parent.pop(part)
 
 
-def edit(root, scope, apply, *, creating=False):
+def edit(root, scope, apply, *, creating=False, reserve_plans=False):
     """Read, change and check settings.json as one step; nothing invalid is ever written. Only a
     change you ask for (`creating`) may start a new file where a recorded one went missing."""
     from .storage import lock
@@ -620,7 +626,18 @@ def edit(root, scope, apply, *, creating=False):
         result = apply(layer)
         if valid:layers(data)  # a valid file stays valid
         if data != before or not settings_file().exists():
-            try:write_file(data)
+            from contextlib import nullcontext
+            from .private_storage import reservations,configured_folders,published
+            guard=reservations(configured_folders(data)) if reserve_plans else nullcontext()
+            try:
+                with guard:
+                    try:write_file(data)
+                    except OSError as exc:
+                        # Settings support dotfiles symlinks; reconcile the same target write_text uses.
+                        if not published(settings_file().resolve(),data|{'$schema':data.get('$schema','./'+SCHEMA_NAME)}):raise
+                        # A committed settings file must retain its reservations (and renamed profile).
+                        import sys
+                        print(f'OH: Settings were saved, but publication reported an error: {exc}. Run oh config to inspect them.',file=sys.stderr)
             except OSError as exc:raise Refused(f'Cannot write {settings_file()}: {exc.strerror or exc}') from None
     return result
 
@@ -683,7 +700,12 @@ def change(root, key, raw=None, *, scope=None):
             remove(layer, parts);return True
         if present(layer, parts) and type(get(layer, parts)) is type(value) and get(layer, parts) == value:return False
         put(layer, parts, value);return True
-    changed = edit(root, scope, apply, creating=creating)
+    from contextlib import nullcontext
+    from .storage import lock,state_home,snapshot_guard
+    plan_change=key in ('plans.location','plans.private_folder')
+    # Match registry -> settings -> ownership lock order used by registration and rename.
+    with snapshot_guard(), (lock(state_home()/'registry/.lock') if plan_change else nullcontext()):
+        changed = edit(root, scope, apply, creating=creating,reserve_plans=plan_change)
     result = {'setting': key, 'scope': where, 'file': str(settings_file())}
     if changed is False:
         return result | {'unchanged': True, 'note': f'Not set in {where}' if raw is None else 'Already set to this value'}
@@ -801,6 +823,8 @@ def snapshot(root):
 
 def classify(task):
     # Stable pre-execution signals; spend and outcome never change the assigned cohort.
+    if (task.get('transition') or {}).get('profile') == 'plans':
+        return 'complex', 'A design decides how a whole initiative is built (rubric 1)'
     text = (task['title'] + ' ' + task.get('instructions', '')).lower()
     critical = ('authorization', 'migration', 'concurrency', 'security boundary', 'cryptograph', 'transaction')
     if any(word in text for word in critical) or len(task.get('paths', [])) > 6:

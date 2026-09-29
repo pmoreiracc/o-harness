@@ -84,21 +84,22 @@ class ControlsTest(unittest.TestCase):
         self.assertEqual([c[0] for c in self.calls],['implementation'])
 
     def test_pause_at_batch_checkpoint_cannot_grant_next_batch_on_resume(self):
-        start(self.root,{'tasks':self.tasks},self.event())
+        fixtures.configure(self.root,tasks_per_batch=1)  # one task per batch shows it; more only add Git work
+        start(self.root,{'tasks':self.tasks[:2]},self.event())
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertEqual(request(self.root,'pause')['status'],'paused')
         choose(self.root,'resume',self.event('2','oh-resume'))
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
-        self.assertEqual(len(self.calls),10)
+        self.assertEqual(len(self.calls),2)  # task 1's implementation and review; resume ran nothing more
         choose(self.root,'continue',self.event('3','continue'))
-        self.assertEqual(run(self.root,self.fake)['completed'],6)
+        self.assertEqual(run(self.root,self.fake)['completed'],2)
 
     def test_accepted_concern_survives_pause_without_spending_another_review(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         def concern(*args,**kwargs):
             result=self.fake(*args,**kwargs)
             if args[4]=='review':
-                result['structured'].update(verdict='concern',findings=[{'severity':'concern','description':'Accepted tradeoff','path':'output.txt'}])
+                result['structured'].update(verdict='concern',findings=[{'severity':'concern','description':'Accepted tradeoff','path':'output.txt','family':'accepted-tradeoff','relation':'original'}])
             return result
         self.assertEqual(run(self.root,concern)['status'],'findings_checkpoint')
         choose(self.root,'accept concerns',self.event('2','accept concerns'))

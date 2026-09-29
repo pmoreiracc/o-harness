@@ -26,6 +26,18 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
      'lenses':{'type':'object','additionalProperties':False,'required':list(LENSES),
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
+# A design worker returns prose only; OH adds the number, frontmatter, roadmap link and decision log row.
+DESIGN_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['kind','title','body','context','alternatives','consequences','summary'],'properties':{
+ 'kind':{'type':'string','enum':['design','decision']},
+ **{key:{'type':'string'} for key in ('title','body','context','alternatives','consequences','summary')}}}
+# An intake worker routes one idea and writes its prose; OH writes the row, task or decision record.
+PROPOSAL_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['route','understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
+             'depends','design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary'],
+ 'properties':{'route':{'type':'string','enum':['roadmap','task','improvement','unclear']},'depends':{'type':'array','items':{'type':'string'}},
+   **{key:{'type':'string'} for key in ('understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
+                                        'design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary')}}}
 
 def script(stream):
     """A wrapper that needs an interpreter, not a native binary. Windows binaries start with MZ."""
@@ -148,6 +160,23 @@ def authentication(host,root):
         raise Refused(f'{host}: subscription login could not be confirmed. Sign in with the installed CLI; no API fallback was attempted.')
 
 
+def codex_home():
+    """Codex's own folder: CODEX_HOME when set, as Codex itself reads it."""
+    import os
+    return Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
+
+
+def oh_plugins():
+    """OH's plugin as installed in Codex, under each marketplace that provides it."""
+    import re
+    import tomllib
+    import os
+    home=codex_home()
+    try:plugins=tomllib.loads((home/'config.toml').read_text()).get('plugins',{})
+    except (OSError,ValueError):return []
+    return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
+
+
 def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
     if host=='codex':
         args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
@@ -156,14 +185,18 @@ def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
           '--config',f'model_auto_compact_token_limit={compact_tokens}',
           '--sandbox','read-only' if role in ('review','analysis') else 'workspace-write',
           '--cd',str(root)]
+        # Workers never load OH itself: its menu server would run outside their sandbox.
+        for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
         if schema_path:args+=['--output-schema',str(schema_path)]
         return args+['-']
     from .storage import state_home
     from .storage import git
     git_paths=[git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
     from .config import protected_paths
-    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
+    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
     if role in ('review','analysis'):protected.append(str(root))
+    private=private_plans(root)
+    if private:protected.append(str(private))  # workers read private plans; only OH writes them
     deny=['Agent','Task']+[f'Edit({rule_path(p)}/**)' for p in protected]
     if WINDOWS:
         # Claude Code's sandbox doesn't run on native Windows, so workers there get no shell at all: they read
@@ -182,6 +215,7 @@ def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
     # Reviewers read their admission, prior reviews, diff and artifacts in the run folder; with no shell
     # (Windows) Read is their only way in. Edits there stay denied.
     if run_dir and role in ('review','analysis'):args+=['--add-dir',str(run_dir)]
+    if private:args+=['--add-dir',str(private)]
     return args
 
 
@@ -190,6 +224,14 @@ def rule_path(path):
     path=str(path)
     if len(path)>2 and path[1]==':' and path[2] in '\\/':return '//'+path[0].lower()+path[2:].replace('\\','/')
     return '/'+path
+
+
+def private_plans(root):
+    """This project's private plans folder, or None when its plans live in the repository or aren't chosen yet."""
+    from .plans import layout
+    try:where=layout(root)
+    except Refused:return None
+    return where['base'] if where['location']=='private' else None
 
 
 def parse_usage(host,event,attempt):
@@ -268,9 +310,13 @@ def review_result(result):
     if not evidence['anchors'] or not evidence['attacks']:return 'failed',[]
     if not isinstance(evidence['lenses'],dict) or set(evidence['lenses'])!=set(LENSES) or any(not isinstance(v,str) or not v.strip() for v in evidence['lenses'].values()):return 'failed',[]
     findings=value['findings']
+    if value['verdict'] not in REVIEW_SCHEMA['properties']['verdict']['enum']:return 'failed',[]
     if not isinstance(findings,list) or not isinstance(value['summary'],str):return 'failed',[]
-    if any(not isinstance(f,dict) or f.get('severity') not in ('blocking','concern','scope')
-           or not isinstance(f.get('description'),str) or not isinstance(f.get('path'),str) for f in findings):
+    shape=REVIEW_SCHEMA['properties']['findings']['items']
+    if any(not isinstance(f,dict) or set(f)!=set(shape['required'])
+           or any(not isinstance(v,str) for v in f.values())
+           or f['severity'] not in shape['properties']['severity']['enum']
+           or f['relation'] not in shape['properties']['relation']['enum'] for f in findings):
         return 'failed',[]
     if value['verdict']=='clean' and not findings:return 'clean',[]
     # Never trust a declared clean count over visible findings.

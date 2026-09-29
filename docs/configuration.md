@@ -92,12 +92,26 @@ Workers can't write the settings folder. `oh backup` includes `settings.json`.
 | `context.result_chars` | 4000 | Maximum feedback kept in model prompts |
 | `context.compact_at_tokens` | 60000 | Codex worker compaction threshold (Codex only) |
 | `plans.location` | ask | Where roadmaps, design docs and decisions live: `repo` (committed in the repository) or `private` (OH's folder) |
+| `plans.private_folder` | ~/oh-plans | Parent of visible private project plan folders; absolute or home-relative |
 | `plans.roadmap` | docs/roadmap.md | Roadmap file, relative to where plans live |
 | `plans.designs` | docs/design | Design docs folder |
 | `plans.decisions` | docs/decisions | Decision records (ADRs) folder |
 
 `oh plans path` shows where a project's plans live; `oh plans check` checks the roadmap and
-design docs against their rules.
+design docs against their rules. `oh plans list` shows each initiative's design and approval
+status. New private plans live at `~/oh-plans/<project name>/`; the relative document paths
+above apply inside that folder. Renaming a project preserves its existing document folder.
+Folders remain reserved to their project after rename or checkout deletion, including case-only
+aliases. OH refuses an existing unowned folder; preserve its contents and choose another project
+name or `plans.private_folder`. Only explicit checkout replacement can transfer ownership, without
+transferring approvals, including when a reserved folder has no documents yet. Settings changes
+reserve the affected private folders before saving; a collision leaves the settings unchanged.
+Private edits hold both the project lock and the canonical folder lock.
+Private plans from older installations remain at their existing OH state path; `plans path`
+is authoritative. `init --replace` preserves that document location but creates fresh checkout
+authority. Profile export excludes private documents and approvals explicitly; copy those
+documents separately when moving machines and review them again. `oh backup` covers OH state,
+not the external `~/oh-plans` folder: include your visible plan folder in your regular backups.
 
 ## Models
 

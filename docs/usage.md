@@ -5,17 +5,58 @@ login page" never starts OH. Claude uses `/`, Codex uses `$`.
 
 ## Plan: oh-propose and oh-design
 
-`/oh-propose <idea>` returns options and a recommendation. `/oh-design <idea>` returns a
-reviewed task plan. Both are read-only: an independent reviewer checks the result, it is
-saved outside your repository, and nothing is implemented.
+`/oh-propose <idea>` finds where the idea belongs, such as
+`/oh-propose search across my notes`. A fresh worker reads your roadmap, designs, decisions
+and code and picks one route:
+
+- a new **roadmap row** (and a new milestone, or a proposed decision record when where it
+  belongs is genuinely contested);
+- a **task** added to an approved design;
+- an **improvement** to existing behaviour, which needs no document;
+- or **unclear**, with the two readings and the question to answer.
+
+OH writes the row, milestone, decision record or task itself (on a new `propose/<topic>`
+branch; start from `main` or `master`), runs your checks and has it reviewed independently. Then
+it shows what it understood, the route and why, and exactly what it wrote, and waits for you
+to type **approve** (commit it), **refine: <what to change>** (ask again with your words), or
+**reconsider** (undo it and write nothing). After approve, **pr** opens the pull request;
+merging it approves the plan change.
+
+`/oh-design <slug>` writes the design doc for one row of your roadmap, such as
+`/oh-design auth`. A fresh worker writes the design; OH numbers the doc, links it from the
+row and checks its task list. An independent reviewer checks the design, and OH commits it
+(on a new `design/<slug>` branch; start from `main` or `master`). Type **pr** to open the pull request; merging it approves the
+design. When a question has to be answered before the design can be written, OH writes a
+proposed decision record instead, with the question, the options and a recommendation, and
+leaves the decision to you.
+
+The first time, choose where plans live ([configuration](configuration.md)). The repository
+flow above uses pull requests. With `plans.location=private`, documents live outside the
+checkout, normally in `~/oh-plans/<project name>/`, with no Git branch or commit. Both commands
+wait for **approve**, **refine: <what to change>**, or **reconsider** after independent review.
+Approving a private design records its exact content hash; later edits invalidate approval.
+Run `/oh-design <slug>` on an edited private design to review the existing text and approve it
+again. `oh plans list` distinguishes approved, draft, and edited-since-approval designs.
+A proposed decision document still needs a human decision; approving its saved text does not
+choose an option.
 
 ## Build: oh-deliver
 
-1. Run `/oh-deliver` and agree on the tasks with the agent.
-2. The agent prepares that exact scope and shows you a trigger such as
-   `$o-harness:oh-deliver request:<id>`.
-3. Type the trigger yourself. That is your approval; the agent cannot approve for you,
-   and the approved scope can't grow afterwards.
+- `/oh-deliver` lists ready designs and explains why others are unavailable.
+- `/oh-deliver 0005` starts the next ready tasks from approved design 0005 immediately.
+  Add a track name to select only that track. Repository designs must match their approved
+  revision on `origin/main`; private designs must match their saved human approval.
+- `/oh-deliver fix the sign-in timeout` proposes a bounded task list. The agent prepares
+  it and shows the tasks, limits and a trigger such as `$o-harness:oh-deliver request:<id>`.
+  Type that trigger yourself to approve execution. The approved scope cannot grow afterwards.
+
+Ready tasks are selected in dependency order; blocked work stays pending. OH owns task
+checkboxes and freezes a design when its last task completes. For private plans, the reviewer
+sees the proposed document update alongside the code; OH publishes the update only after the
+reviewed code commit, with recovery if saving is interrupted. Private documents stay out of Git.
+Private progress also records its code revision: use the delivery branch or merge its code before
+continuing elsewhere. An older private plan with completed tasks but no recorded revision needs
+review and reapproval through `/oh-design <slug>` from the checkout containing that completed code.
 
 OH then runs the tasks on a branch (it creates one if you are on `main`). For each task a
 fresh worker implements it, your project checks run, an independent reviewer checks the
@@ -24,8 +65,12 @@ OH's state, your settings or Git internals.
 
 A batch has 5 tasks and each task gets up to 3 review rounds by default; change that with
 `/oh-config` ([configuration](configuration.md)). If a task still has findings after its review rounds,
-OH pauses and lists the choices you can type. At the end of a batch, type **continue**,
-**pr** or **stop**. **pr** lets the agent push the branch and open a pull request with the
+OH pauses and shows the choices. At the end of a batch, choose **continue**, **pr** or
+**stop**. The agent shows the choices as a menu where the host can show one: Claude's
+question menu, or a Codex pop-up. Menus were checked in the Claude CLI, desktop app and phone
+(Remote Control), and in the Codex CLI, desktop app and iPhone. Typing the word always works too,
+and is the way to choose where no menu can be shown, such as `codex exec`. At an approval, pick **Other** in Claude,
+or **Refine** in Codex, to say what to change. **pr** lets the agent push the branch and open a pull request with the
 review summary; you merge it.
 
 You can still code, commit and open PRs without OH at any time.

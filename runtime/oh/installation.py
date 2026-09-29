@@ -48,6 +48,14 @@ def build(destination, host):
             # Codex's default Windows runner supplies cmd /C and its outer quote pair.
             # Keep the quoted executable first, avoiding a redundant nested shell.
             if host=='codex':hook['commandWindows']='"%PLUGIN_ROOT%\\scripts\\hook.cmd" codex'
+    menus=destination/'codex-mcp.json'
+    if host=='codex':
+        # Codex shows OH menus through OH's MCP server; Claude asks with its own question tool and hooks.
+        for event in ('PreToolUse','PostToolUse'):hooks['hooks'].pop(event,None)
+        menus.replace(destination/'.mcp.json')
+        manifest=read_json(destination/'.codex-plugin/plugin.json')
+        atomic_json(destination/'.codex-plugin/plugin.json',manifest|{'mcpServers':'./.mcp.json'})
+    else:menus.unlink()
     atomic_json(destination/'hooks/hooks.json',hooks)
     if host=='codex':
         for path in (destination/'skills').glob('*/SKILL.md'):

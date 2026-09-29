@@ -21,25 +21,50 @@ def host_hook(root,host,payload,*,verified):
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
     if planning:
         kind,intent=planning.groups()
-        start(root,{'workflow':kind,'tasks':[{'id':kind,'title':kind.title()+' requested work','instructions':intent}]},verified)
-        return checkpoint(root)
-    delivery=re.fullmatch(r'[$/](?:o-harness:)?oh-deliver\s+([0-9]{4})(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(request:[0-9a-f]{64}))?',prompt)
-    if delivery:
-        from .prepared import resolve
-        prepared=resolve(root,delivery[3],verified,'design') if delivery[3] else None
-        if not prepared:raise Refused('Prepare the approved design before its human trigger')
-        if prepared['doc']!=delivery[1] or prepared['track']!=(delivery[2] or ''):
-            raise Refused('Prepared design and requested track differ')
-        start(root,prepared['manifest'],verified,prepared=prepared)
+        from .workflow import unfinished
+        if unfinished(root,verified):raise Refused('An unfinished run exists in this checkout; resume it, or stop it with /oh-stop, first')
+        if kind=='design':
+            from .plans import design_manifest
+            manifest,plan=design_manifest(root,intent.strip())
+            start(root,manifest,verified,plan=plan)
+        else:
+            from .plans import propose_manifest
+            manifest,plan=propose_manifest(root,intent)
+            start(root,manifest,verified,plan=plan)
         return checkpoint(root)
     from .entry import command
     parsed=command(prompt)
+    from .delivery import parse
+    delivery=parse(parsed[1]) if parsed and parsed[0]=='deliver' else None
+    if delivery and delivery['kind']=='list':
+        from .delivery import listing
+        return listing(root)
+    if delivery and delivery['kind']=='quick_fix':return delivery
+    if delivery and delivery['kind']=='design':
+        from .prepared import resolve
+        if delivery['request']:
+            prepared=resolve(root,delivery['request'],verified,'design')
+            if prepared['doc']!=delivery['doc'] or prepared['track']!=delivery['track']:raise Refused('Prepared design and requested track differ')
+            start(root,prepared['manifest'],verified,prepared=prepared)
+        else:
+            from .workflow import unfinished,load_run
+            if unfinished(root,verified):raise Refused('An unfinished run exists; resume it or stop it first')
+            source=digest({k:verified[k] for k in ('host','session','turn','prompt')})
+            if active_file(root).exists() and load_run(root)[1]['source']==source:return checkpoint(root)
+            from .delivery import selection
+            from .plans import editing
+            with editing(root):
+                manifest,binding=selection(root,delivery['doc'],delivery['track'])
+                start(root,manifest,verified,plan=binding)
+        return checkpoint(root)
     if parsed and parsed[0] in ('oh-start','deliver') and parsed[1].startswith('request:'):
         from .prepared import resolve
         prepared=resolve(root,parsed[1],verified,'tasks')
         start(root,prepared['manifest'],verified,prepared=prepared)
         return checkpoint(root)
-    if prompt in ('pause','continue','resume','retry','pr','stop','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope') and active_file(root).exists():
+    from .entry import REFINE
+    if (prompt in ('pause','continue','resume','retry','pr','stop','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope','approve','reconsider')
+            or re.fullmatch(REFINE,prompt,re.S)) and active_file(root).exists():
         choose(root,prompt,verified)
         return checkpoint(root)
     return None
@@ -50,7 +75,22 @@ def git_branch(root):
     return git(root,'branch','--show-current')
 
 
+class Tolerant:
+    """An output whose reader may go away, such as a host that ended a tool call: OH's notes, progress and result
+    are then lost, but the run they describe goes on."""
+    def __init__(self,stream):self.stream=stream
+    def write(self,text):
+        try:return self.stream.write(text)
+        except (OSError,ValueError):return len(text)
+    def flush(self):
+        try:self.stream.flush()
+        except (OSError,ValueError):pass
+    def __getattr__(self,name):return getattr(self.stream,name)
+
+
 def main(argv=None):
+    for name in ('stdout','stderr'):
+        if not isinstance(getattr(sys,name),Tolerant):setattr(sys,name,Tolerant(getattr(sys,name)))
     parser=argparse.ArgumentParser(prog='oh')
     parser.add_argument('--root',type=Path)
     sub=parser.add_subparsers(dest='command',required=True)
@@ -72,12 +112,12 @@ def main(argv=None):
     sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
     settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
     settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
-    planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check'])
+    planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check','list'])
     hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
     serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4318)
     sub.add_parser('service-install');sub.add_parser('service-uninstall')
     suggest=sub.add_parser('suggest');suggest.add_argument('--host',choices=['codex','claude'],default='codex')
-    deliver=sub.add_parser('deliver');deliver.add_argument('doc');deliver.add_argument('track',nargs='?',default='')
+    deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*')
     resource=sub.add_parser('resource');resource.add_argument('path')
     args=parser.parse_args(argv);invocation=Path.cwd();root=(args.root or invocation).resolve()
     from .system import WINDOWS
@@ -144,9 +184,9 @@ def main(argv=None):
                 if value and value.startswith('@') and len(value)>1:value=(invocation/Path(value[1:]).expanduser()).read_text(encoding='utf-8-sig')
                 result=change(root,args.key,value if args.action=='set' else None,scope='global' if args.everywhere else None)
         elif args.command=='plans':
-            from .plans import check,layout
+            from .plans import check,layout,listing
             where=layout(root)
-            result=check(root,where) if args.action=='check' else {k:str(v) for k,v in where.items()}
+            result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
         elif args.command=='status':result=checkpoint(root)
         elif args.command in ('pause','stop'):
             from .controls import request
@@ -163,7 +203,8 @@ def main(argv=None):
             from .authority import stage
             result=stage(root,args.host,json.load(sys.stdin))
         elif args.command in ('run','start'):
-            from .authority import materialize
+            from .authority import materialize,refused_last
+            refused_last(root)
             materialize(root)
             if args.command=='start' and args.request:
                 from .workflow import load_run
@@ -191,10 +232,20 @@ def main(argv=None):
             from .suggestions import generate
             result=generate(root,args.host)
         elif args.command=='deliver':
-            from .authority import materialize
-            materialize(root)
-            from .design_runner import run
-            result=run(root,args.doc,args.track)
+            from .delivery import parse,listing
+            selected=parse(' '.join(args.arguments))
+            if selected['kind']=='list':result=listing(root)
+            elif selected['kind']=='quick_fix':result=selected
+            else:
+                from .authority import materialize,refused_last
+                refused_last(root);admitted=materialize(root)
+                if admitted and admitted.get('limits'):print(admitted['limits'],flush=True)
+                if selected['kind']=='design':
+                    from .design_runner import run
+                    result=run(root,selected['doc'],selected['track'])
+                else:
+                    from .runner import run
+                    result=run(root)
         elif args.command=='resource':
             path=(HOME/args.path).resolve()
             if not path.is_relative_to(HOME):raise Refused('Resource outside OH')

@@ -23,6 +23,14 @@ class AuthorityTest(unittest.TestCase):
                     records=[{'type':'user','sessionId':'session','promptId':'turn','cwd':str(root),'message':{'role':'user','content':'continue'}}]
                 def save():path.write_text(''.join(json.dumps(r)+'\n' for r in records))
                 save();self.assertEqual(attest(host,payload,root)['turn'],'turn')
+                if host=='claude':  # the desktop app saves a typed turn as from a person, with its SDK marker
+                    records[0]|={'origin':{'kind':'human'},'turnOrigin':'human','promptSource':'sdk','entrypoint':'claude-desktop'}
+                    save();self.assertEqual(attest(host,payload,root)['turn'],'turn')
+                    records[0]['origin']={'kind':'peer'}  # another agent's message is never the person's
+                    save()
+                    with self.assertRaises(Refused):attest(host,payload,root)
+                    for key in ('origin','turnOrigin','promptSource','entrypoint'):del records[0][key]
+                    save()
                 with self.assertRaises(Refused):attest(host,payload|{'prompt':'grant review'},root)
                 with self.assertRaises(Refused):attest(host,payload|{'turn_id':'other'},root)
                 with self.assertRaises(Refused):attest(host,payload,home/'other-project')
@@ -44,11 +52,11 @@ class AuthorityTest(unittest.TestCase):
             path=home/'.codex/sessions/session.jsonl';path.parent.mkdir(parents=True)
             records=[{'type':'session_meta','payload':{'id':'session','cwd':str(root),'source':'vscode','originator':'Codex Desktop'}},
               {'type':'event_msg','payload':{'type':'task_started','turn_id':'one'}},
-              {'type':'event_msg','payload':{'type':'user_message','message':'$o-harness:oh-design Describe the next change'}}]
+              {'type':'event_msg','payload':{'type':'user_message','message':'$o-harness:oh-propose Describe the next change'}}]
             def save():path.write_text(''.join(json.dumps(x)+'\n' for x in records))
             records[-1]['payload']['message']='$o-harness:oh-deliver implement a new idea'
             save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
-            records[-1]['payload']['message']='$o-harness:oh-design Describe the next change'
+            records[-1]['payload']['message']='$o-harness:oh-propose Describe the next change'
             save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()
             records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'two'}},{'type':'event_msg','payload':{'type':'user_message','message':'Discuss a different subject'}}]
             save();desktop_pending(root);self.assertFalse(pending_file(root).exists())

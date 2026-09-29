@@ -58,6 +58,7 @@
     "location": "ask",
     "roadmap": "docs/roadmap.md",
     "designs": "docs/design",
-    "decisions": "docs/decisions"
+    "decisions": "docs/decisions",
+    "private_folder": "~/oh-plans"
   }
 }
