@@ -191,7 +191,9 @@ class DeliveryTest(unittest.TestCase):
         self.git('update-ref','refs/pull/1/head','HEAD');self.git('update-ref','refs/remotes/origin/deliver/0001',head)
         self.git('switch','-q','main');self.git('merge','-q','--squash','refs/pull/1/head');self.git('commit','-qm','Squash (#1)')
         self.git('update-ref','refs/remotes/origin/main','HEAD');self.git('remote','add','origin',str(self.root))
+        from .delivery import delivered_base
         with patch('oh.branches.merged_pulls',return_value=['1']):
+            delivered_base(self.root,read_json(plans.approvals_file(self.root))['0001'],progressed=True)  # before it is retired, too
             self.start_delivery(turn='next')  # the merged branch is retired and its task stays done
         self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','origin/main'))
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])

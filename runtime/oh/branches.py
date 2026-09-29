@@ -184,8 +184,11 @@ def merged_pulls(root,name):
 def delivered(root,into,commit):
     """Whether `into` holds a merged delivery branch that carried `commit`, even when a squash of it holds the
     person's resolution of a conflict rather than `commit`'s own change."""
-    tips=run_git(root,'for-each-ref','--contains',commit,'--format=%(objectname)','refs/oh/delivered/').stdout.split()
-    return any(contained(root,into,tip) for tip in tips)
+    retired=run_git(root,'for-each-ref','--contains',commit,'--format=%(objectname)','refs/oh/delivered/').stdout.split()
+    if any(contained(root,into,tip) for tip in retired):return True
+    # One not retired yet, because no /oh-deliver of its design has run since it merged.
+    branches=run_git(root,'for-each-ref','--contains',commit,'--format=%(refname:short)','refs/heads/deliver/').stdout.split()
+    return any(absorbed(root,into,branch) for branch in branches)
 
 
 def refresh(root,name,base):
