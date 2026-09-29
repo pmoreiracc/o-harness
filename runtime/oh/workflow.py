@@ -158,7 +158,8 @@ def _start(root, manifest, event, prepared=None, plan=None):
         raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
     try:
         if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
-            created='codex/oh-'+run[:8]
+            from .branches import delivery_branch
+            created=delivery_branch(manifest['design'],manifest.get('track') or '') if manifest.get('design') else 'codex/oh-'+run[:8]
             git(root,'switch','-c',created)
         import re
         current=git(root,'branch','--show-current')
@@ -271,7 +272,7 @@ def _choose(root, choice, event):
             if not commits:raise Refused('Nothing was committed, so there is nothing to publish')
             if head!=commits[-1] or branch!=state['branch']:
                 raise Refused('PR choice must cover the exact completed branch head')
-            decision.update(head=head,branch=branch,commits=commits)
+            decision.update(head=head,branch=branch,commits=adopted(root,state,commits)+commits)
         append('decision',decision)
         append('run.status',{'status':'pr' if choice=='pr' else 'stopped'})
     elif choice in ('accept concerns','route scope','accept concerns and route scope'):
@@ -362,6 +363,22 @@ def next_task(state):
 
 def review_limit(state,task):
     return state['config']['review_rounds']+sum(g['rounds'] for g in state.get('review_grants',[]) if g['task']==task)
+
+
+def adopted(root,state,own):
+    """The reviewed commits a stopped run left on this branch before this run resumed it. They were never
+    published, so this run's PR choice publishes them with its own."""
+    from .branches import run_git
+    from .publication import commits,trailer
+    base='origin/main' if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/main').returncode==0 else 'main'
+    found=[]
+    for commit in commits(root,base):
+        if commit in own:break
+        other=reduce(Journal(state['project'],trailer(root,commit,'OH-Run')).records())
+        if other['status']=='pr' and commit in (other.get('publication') or {}).get('commits',[]):found=[];continue
+        if other['status']!='stopped' or other['branch']!=state['branch']:raise Refused('This branch holds commits of another unfinished run')
+        found.append(commit)
+    return found
 
 
 def checkpoint(root):

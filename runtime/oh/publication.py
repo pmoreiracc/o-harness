@@ -42,10 +42,25 @@ def trailer(root,commit,name):
 
 
 def commits(root,base):
-    anchor=git(root,'merge-base',base,'HEAD')
-    values=git(root,'rev-list','--reverse',anchor+'..HEAD').splitlines()
+    """The branch's commits since `base`, oldest first, without the merges that brought `base` into it."""
+    anchor=git(root,'merge-base',base,'HEAD');values=[]
+    for line in git(root,'rev-list','--reverse','--parents',anchor+'..HEAD').splitlines():
+        commit,*parents=line.split()
+        if len(parents)>1:merged(root,commit,parents,base)
+        else:values.append(commit)
     if not values:raise Refused('No reviewed commits to publish')
     return values
+
+
+def merged(root,commit,parents,base):
+    """Refuse a merge unless it brought `base` into the branch exactly as Git merges it without conflicts, so it
+    carries no change of its own for review to miss."""
+    from subprocess import CalledProcessError
+    try:
+        git(root,'merge-base','--is-ancestor',parents[-1],base)
+        clean=len(parents)==2 and git(root,'merge-tree','--write-tree',*parents).splitlines()[0]==git(root,'rev-parse',commit+'^{tree}')
+    except CalledProcessError:clean=False
+    if not clean:raise Refused(f'Merge {commit[:12]} is not a clean merge of {base} into the branch, so OH cannot publish it as reviewed')
 
 
 def verify_record(root,commit,evidence):
@@ -66,8 +81,9 @@ def render(root,base='origin/main'):
     records=[];grants={};p=project(root);branch=git(root,'branch','--show-current')
     for commit in commits(root,base):
         run=trailer(root,commit,'OH-Run');state=reduce(Journal(p['id'],run).records())
-        if state['status']!='pr':raise Refused('A recorded human PR choice is required before exporting native evidence')
-        grants[run]=state.get('publication')
+        # A stopped run's commits are published by the PR choice of the run that resumed its branch.
+        if state['status'] not in ('pr','stopped'):raise Refused('A recorded human PR choice is required before exporting native evidence')
+        if state['status']=='pr':grants[run]=state.get('publication')
         done=[t for t in state['summaries'] if t['commit']==commit]
         if len(done)!=1:raise Refused('Commit has no unique authoritative task completion')
         evidence=state['commit_intents'][done[0]['task']].get('publication')
@@ -83,15 +99,19 @@ def render(root,base='origin/main'):
 
 
 def validate_grants(value):
-    grouped={}
-    for record in value['records']:grouped.setdefault(record['evidence']['run'],[]).append(record['commit'])
-    grants=value.get('grants',{})
-    if set(grants)!=set(grouped):raise Refused('Every run needs its retained publication grant')
-    for run,commits in grouped.items():
-        grant=grants[run]
-        if not isinstance(grant,dict) or grant.get('choice')!='pr' or not re.fullmatch('[0-9a-f]{64}',grant.get('source','')) or grant.get('branch')!=value['branch'] or grant.get('commits')!=commits or grant.get('head')!=commits[-1]:
+    """Each run's PR choice covers the next stretch of the branch's commits: its own, after any that a stopped run
+    left on the branch before this run resumed it. Together they cover every commit once, in order."""
+    records=value['records'];grants=value.get('grants',{});at=0
+    if not isinstance(grants,dict) or not grants:raise Refused('Every run needs its retained publication grant')
+    for run,grant in grants.items():
+        if not isinstance(grant,dict) or grant.get('choice')!='pr' or not re.fullmatch('[0-9a-f]{64}',grant.get('source','')) or grant.get('branch')!=value['branch'] or not isinstance(grant.get('commits'),list) or not grant['commits'] or grant.get('head')!=grant['commits'][-1]:
             raise Refused('Publication grant does not cover the exact reviewed run commits')
-    if value['records'][-1]['commit']!=value['head']:raise Refused('Publication grant does not cover this branch head')
+        stretch=records[at:at+len(grant['commits'])];at+=len(stretch)
+        own=[r['evidence']['run']==run for r in stretch]
+        if [r['commit'] for r in stretch]!=grant['commits'] or not own[-1] or own!=sorted(own) or any(r['evidence']['run'] in grants for r,mine in zip(stretch,own) if not mine):
+            raise Refused('Publication grant does not cover the exact reviewed run commits')
+    if at!=len(records):raise Refused('Every run needs its retained publication grant')
+    if records[-1]['commit']!=value['head']:raise Refused('Publication grant does not cover this branch head')
 
 
 def validate_event(root,event,base):

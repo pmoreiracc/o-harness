@@ -54,9 +54,10 @@ class DeliveryTest(unittest.TestCase):
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
         where,path=self.documents();listed=delivery.listing(self.root)
         self.assertEqual(len(listed['ready']),1);self.assertEqual(len(self.calls),0)
+        self.git('branch','deliver/0001')  # an earlier delivery main already absorbed: retired for a fresh one
         self.start_delivery();first=load_run(self.root)[1]['id']
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
-        self.assertTrue(self.git('branch','--show-current').startswith('codex/oh-'))
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertIn('- [x] **1.**',path.read_text())
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
@@ -65,6 +66,21 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertIn('status: frozen',path.read_text())
         self.assertEqual(self.git('status','--porcelain'),'')
+
+    def test_a_stopped_delivery_resumes_on_its_branch_and_one_pr_publishes_both_runs(self):
+        from .publication import render
+        self.documents()
+        self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        choose(self.root,'stop',self.event('stop','stop'));stopped=self.git('rev-parse','HEAD')
+        self.git('switch','-q','main');(self.root/'other.txt').write_text('merged elsewhere')
+        self.git('add','other.txt');self.git('commit','-qm','merged elsewhere');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        self.start_delivery(turn='again')
+        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD^1')),('deliver/0001',stopped))  # main merged in
+        self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        choose(self.root,'pr',self.event('pr','pr'))
+        body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
+        self.assertEqual([r['commit'] for r in body['records']],self.git('rev-list','--reverse','--no-merges','origin/main..HEAD').splitlines())
+        self.assertEqual(len(body['records']),2);self.assertEqual(list(body['grants']),[load_run(self.root)[1]['id']])
 
     def test_private_progress_is_reviewed_then_published_after_code_commit(self):
         where,path=self.documents('private');original=path.read_bytes();observed=[]
@@ -180,14 +196,12 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,mutate)['status'],'needs_attention')
         self.assertEqual(path.read_bytes(),original);self.assertEqual(self.git('rev-parse','HEAD'),head)
 
-    def test_private_progress_cannot_skip_code_missing_from_another_branch(self):
+    def test_private_progress_resumes_the_branch_holding_its_code(self):
         self.documents('private');self.start_delivery()
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
-        branch=self.git('branch','--show-current')
         choose(self.root,'stop',self.event('stop','stop'));self.git('switch','main')
-        with self.assertRaisesRegex(Refused,'checkout does not contain'):self.start_delivery(turn='other')
-        self.git('merge','--ff-only',branch)
-        self.start_delivery(turn='merged')
+        self.start_delivery(turn='other')
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
 
     def test_private_progress_accepts_exact_code_after_squash_merge(self):
@@ -197,6 +211,7 @@ class DeliveryTest(unittest.TestCase):
         self.git('merge','--squash',branch);self.git('commit','-qm','Squash reviewed code')
         self.start_delivery(turn='squashed')
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+        self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','main'))  # the squashed branch was retired
 
     def test_listing_does_not_claim_private_storage(self):
         from .storage import state_home

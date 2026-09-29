@@ -60,3 +60,29 @@ def from_main(root):
             run_git(root,'merge','--ff-only','--quiet','origin/'+name).returncode:
         raise Refused(f'Your local {name} has commits that are not on origin/{name}, so OH cannot bring it up to date. '
                       f'Push them, or reset {name} to origin/{name}, then OH carries on with your command.')
+
+
+def delivery_branch(doc,track=''):
+    """deliver/<doc>, or deliver/<doc>-<track> for one track of a design, as the pre-separation harness named them."""
+    return f'deliver/{doc}-{track}' if track else f'deliver/{doc}'
+
+
+def resume(root,name):
+    """Pick up the work left on the delivery branch `name`, as the pre-separation harness did. OH runs this on main
+    just brought up to date: a branch whose work main already holds is retired, so a fresh one starts from main; a
+    branch with unmerged work is checked out and main is merged into it."""
+    if run_git(root,'rev-parse','--verify','--quiet','refs/heads/'+name).returncode:return
+    main=git(root,'branch','--show-current')
+    merged=run_git(root,'merge-tree','--write-tree','HEAD',name)
+    if run_git(root,'merge-base','--is-ancestor',name,'HEAD').returncode==0 or \
+            merged.returncode==0 and merged.stdout.split()[0]==git(root,'rev-parse','HEAD^{tree}'):
+        # main already holds all of it, merged, squashed or rebased: nothing is left to resume.
+        git(root,'branch','-D',name);return
+    git(root,'switch','--quiet',name)
+    merging=run_git(root,'merge','--quiet','--no-edit',main)
+    if merging.returncode:
+        conflicted=git(root,'diff','--name-only','--diff-filter=U').splitlines()
+        run_git(root,'merge','--abort')
+        if not conflicted:raise Refused(f'Git could not merge {main} into {name}: {merging.stderr.strip()}')
+        raise Refused(f'{name} holds unfinished work that conflicts with {main} in {", ".join(conflicted[:5])}. '
+                      f'Merge {main} into it and resolve the conflicts, then OH carries on with your command.')

@@ -64,6 +64,14 @@ def dependencies(root,where,rows,name):
     return [row[3] for row in rows if row[1]==name]
 
 
+def progress_only(root,fork,paths):
+    """Whether every commit since `fork` that changed the plans is one of OH's reviewed commits, and nothing
+    uncommitted changes them."""
+    changed=git(root,'rev-list','--no-merges',fork+'..HEAD','--',*paths).splitlines()
+    return not git(root,'diff','--name-only','HEAD','--',*paths) and all(
+        re.search(r'^OH-Run: ',git(root,'show','-s','--format=%B',commit),re.M) for commit in changed)
+
+
 def selection(root,doc,track='',*,claim=True):
     where=plans.layout(root,claim=claim);path=document(root,where,doc)
     status=plans.approval(root,where,doc)
@@ -74,11 +82,14 @@ def selection(root,doc,track='',*,claim=True):
         paths=[Path(where[key]).relative_to(root).as_posix() for key in ('roadmap','designs','decisions')]
         try:git(root,'rev-parse','--verify','origin/main^{commit}')
         except CalledProcessError:raise Refused('Fetch origin/main before delivering repository plans') from None
-        if git(root,'diff','--name-only','origin/main','--',*paths):
+        # The plans are origin/main's, apart from the progress OH's own reviewed commits recorded on a delivery
+        # branch that is being resumed.
+        fork=git(root,'merge-base','HEAD','origin/main')
+        if git(root,'diff','--name-only',fork,'origin/main','--',*paths) or not progress_only(root,fork,paths):
             raise Refused('The design and planning context must match origin/main; merge the plans first')
         for filename in inputs(where):
             relative=Path(filename).relative_to(root).as_posix()
-            try:matches=git(root,'hash-object','--no-filters','--',relative)==git(root,'rev-parse','origin/main:'+relative)
+            try:matches=git(root,'hash-object','--no-filters','--',relative)==git(root,'rev-parse','HEAD:'+relative)
             except CalledProcessError:matches=False
             if not matches:raise Refused('The design and planning context must match origin/main; merge the plans first')
     rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]

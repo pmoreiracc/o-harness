@@ -45,16 +45,21 @@ def host_hook(root,host,payload,*,verified):
         return listing(root)
     if delivery and delivery['kind']=='quick_fix':return delivery
     if delivery and delivery['kind']=='design':
+        from .workflow import unfinished,load_run
+        if unfinished(root,verified):
+            _,state=load_run(root)
+            # The same design typed again carries on with its run.
+            if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return checkpoint(root)
+            raise Refused('An unfinished run exists; resume it or stop it first')
+        if started(root,verified):return checkpoint(root)
+        from .branches import delivery_branch,from_main,resume
+        from_main(root);resume(root,delivery_branch(delivery['doc'],delivery['track']))
         from .prepared import resolve
         if delivery['request']:
             prepared=resolve(root,delivery['request'],verified,'design')
             if prepared['doc']!=delivery['doc'] or prepared['track']!=delivery['track']:raise Refused('Prepared design and requested track differ')
             start(root,prepared['manifest'],verified,prepared=prepared)
         else:
-            from .workflow import unfinished,load_run
-            if unfinished(root,verified):raise Refused('An unfinished run exists; resume it or stop it first')
-            source=digest({k:verified[k] for k in ('host','session','turn','prompt')})
-            if active_file(root).exists() and load_run(root)[1]['source']==source:return checkpoint(root)
             from .delivery import selection
             from .plans import editing
             with editing(root):
