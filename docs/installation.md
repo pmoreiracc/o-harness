@@ -136,7 +136,8 @@ Only when all of that passes does it create the `vX.Y.Z` tag, publish that packa
 `dist` branch and create the GitHub release, whose notes list the merged pull requests. If a
 test or the install check fails, nothing is published: fix it on `main` and run **Actions →
 release → Run workflow**. If a later step fails, running it again finishes the same version
-from the same tagged commit, so users never get two different builds of one version.
+from the same tagged commit, so users never get two different builds of one version; if it
+keeps failing there, release the fix as a new version.
 
 Once, in the repository's **Settings → Actions → General**, allow GitHub Actions to create pull
 requests, so the prepare step can open one.
