@@ -1,6 +1,12 @@
-#!/usr/bin/env -S python3 -I
-"""Codex starts this from the plugin's .mcp.json: OH's tools for Codex (see runtime/oh/mcp_server.py). No `oh`
-command reaches this server, so a host rule that allows `oh` commands never lets a model start it outside its sandbox.
+#!/bin/sh
+""":"
+self=$0
+while [ -h "$self" ]; do link=$(readlink "$self"); case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac; done
+exec sh "$(dirname "$self")/python.sh" --launcher "$self" "$@"
+":"""
+"""Codex starts this from the plugin's .mcp.json (on Windows through mcp-server.cmd, which Codex finds next to it):
+OH's tools for Codex (see runtime/oh/mcp_server.py). No `oh` command reaches this server, so a host rule that allows
+`oh` commands never lets a model start it outside its sandbox.
 
 The server runs from the core this plugin carries, so its tools exist in every session, before setup and right after
 an update. Each command still goes through the plugin's launcher, which uses (and, when newer, activates) the
@@ -11,6 +17,8 @@ sys.dont_write_bytecode=True
 plugin=Path(__file__).resolve().parents[1]
 if not (plugin/'core/runtime/oh/mcp_server.py').is_file():
     raise SystemExit('This OH plugin is incomplete. Rebuild or reinstall it.')
+# One JSON message per line, in UTF-8, on every system: Windows would otherwise end lines with \r\n.
+sys.stdin.reconfigure(encoding='utf-8');sys.stdout.reconfigure(encoding='utf-8',newline='\n')
 sys.path.insert(0,str(plugin/'core/runtime'))
 from oh.mcp_server import serve
 serve(sys.stdin,sys.stdout,plugin/'scripts/oh')

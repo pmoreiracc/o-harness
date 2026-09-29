@@ -193,9 +193,15 @@ class CodexToolsTest(unittest.TestCase):
         requests = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},
                     {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}]
         empty = Path(self.temp.name) / 'no-oh-yet'
-        done = subprocess.run([sys.executable, '-I', str(plugin / 'scripts/mcp-server')], input=''.join(json.dumps(r) + '\n' for r in requests),
-                              capture_output=True, text=True, env=dict(os.environ, OH_DATA_HOME=str(empty)), timeout=60)
-        tools = next(json.loads(line) for line in done.stdout.splitlines() if json.loads(line).get('id') == 2)['result']['tools']
+        # Started as Codex starts it: the command .mcp.json names, from the plugin folder. On Windows Codex finds the
+        # .cmd next to it through PATHEXT.
+        server = json.loads((plugin / '.mcp.json').read_text())['mcpServers']['o-harness']
+        program = plugin / server['command']
+        if os.name == 'nt':program = program.with_name(program.name + '.cmd')
+        done = subprocess.run([str(program), *server['args']], cwd=plugin, input=''.join(json.dumps(r) + '\n' for r in requests).encode(),
+                              capture_output=True, env=dict(os.environ, OH_DATA_HOME=str(empty)), timeout=60)
+        self.assertNotIn(b'\r', done.stdout)  # one message per line on every system
+        tools = next(json.loads(line) for line in done.stdout.decode().splitlines() if json.loads(line).get('id') == 2)['result']['tools']
         self.assertIn('run', {t['name'] for t in tools})
 
     def test_oh_reads_codex_conversations_from_codex_home(self):

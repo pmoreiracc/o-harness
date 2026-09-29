@@ -171,9 +171,12 @@ class WorkflowTest(unittest.TestCase):
 
     def test_clean_filter_transformation_rejected_before_review(self):
         from .verification import candidate_tree
-        (self.root/'.gitattributes').write_text('*.txt text eol=lf\n')
+        (self.root/'.gitattributes').write_text('*.txt text eol=lf\n*.dat filter=upper\n')  # windows-ok: Git reads either line ending
         (self.root/'data.txt').write_bytes(b'line\r\n')
-        with self.assertRaises(Refused):candidate_tree(self.root)
+        candidate_tree(self.root)  # line endings alone: the reviewed text is the committed text
+        self.git('config','filter.upper.clean','tr a-z A-Z')
+        (self.root/'data.dat').write_bytes(b'lower\n')
+        with self.assertRaisesRegex(Refused,'beyond line endings'):candidate_tree(self.root)
 
     def test_fabricated_native_user_choice_is_only_pending(self):
         from .authority import stage,materialize

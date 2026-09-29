@@ -4,7 +4,10 @@ from .storage import checkout_file
 
 from .storage import state_writer
 
+import hashlib
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime,timezone
 import time
@@ -62,6 +65,9 @@ def prompt_for(root,state,task,role,feedback=''):
                  'For design, return a clear bounded task plan with dependencies, three-level difficulty rationale, '
                  'acceptance checks, relevant invariants and risks. Do not invent approval or impose an ADR process.\n')
     else:common+='Implement and self-review this task. The runner executes required mechanical checks afterward.\n'
+    if state['host']=='claude' and hosts.WINDOWS:
+        common+=('On Windows this worker has no shell: read and edit files only. OH runs the project\'s checks '
+                 'afterwards and sends failures back to you.\n')
     return common+text
 
 
@@ -107,6 +113,13 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         data['private_inputs']=private_inputs(layout(root))
     prompt=prompt_for(root,state,task,role,feedback)
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
+    if role=='review' and git_tree:
+        # The exact code change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
+        diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','--text','--no-textconv','HEAD',git_tree],capture_output=True,check=True,
+                            env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout
+        (directory/'change.diff').write_bytes(diff)
+        data['diff']={'path':str(directory/'change.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
+        prompt+='\nThe exact code change under review, from HEAD to the reviewed tree, is in '+str(directory/'change.diff')+'.'
     if role=='review' and state.get('delivery',{}).get('layout',{}).get('location')=='private':
         from .plans import file_identity,digest_of
         render=state['delivery_render'];candidate=Path(render['candidate'])

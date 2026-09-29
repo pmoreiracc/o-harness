@@ -55,8 +55,14 @@ def binary_identity(path,root=None):
     if WINDOWS:unsafe.append(Path(tempfile.gettempdir()).resolve())
     if root:unsafe.append(Path(root).resolve())
     if any(path.is_relative_to(p) for p in unsafe):raise Refused('Host binary must be installed outside temporary and project directories')
-    # Windows has no POSIX owner or group/other write bits, so only this check is skipped there;
-    # the location, native-binary, hash and version checks still apply.
+    if WINDOWS:
+        # The same rule through Windows access lists: only you, the system or administrators may change the
+        # program, add files next to it (a planted DLL), or replace a folder above it.
+        from .system import untrusted
+        for component,kind in [(path,'file'),(path.parent,'folder'),*((p,'above') for p in path.parent.parents)]:
+            try:reason=untrusted(component,kind)
+            except OSError as exc:raise Refused(f'OH cannot read who may change {component} ({exc}); install the host where you can read its permissions') from None
+            if reason:raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
     for component in [] if WINDOWS else [path,*path.parents]:
         info=component.stat()
         if info.st_uid not in (0,os.getuid()) or info.st_mode & (stat.S_IWGRP|stat.S_IWOTH):
@@ -171,7 +177,7 @@ def oh_plugins():
     return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
 
 
-def command(host,profile,root,role,schema_path,compact_tokens):
+def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
     if host=='codex':
         args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
           '--config','features.multi_agent=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
@@ -191,15 +197,33 @@ def command(host,profile,root,role,schema_path,compact_tokens):
     if role in ('review','analysis'):protected.append(str(root))
     private=private_plans(root)
     if private:protected.append(str(private))  # workers read private plans; only OH writes them
-    settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
-      'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':['Agent','Task']+[f'Edit(/{p}/**)' for p in protected]}}
-    args=[executable(host,root),'--settings',json.dumps(settings),'--tools','Read,Glob,Grep,Bash' if role in ('review','analysis') else 'Read,Glob,Grep,Bash,Edit,Write','--print','--output-format','stream-json','--verbose',
+    deny=['Agent','Task']+[f'Edit({rule_path(p)}/**)' for p in protected]
+    if WINDOWS:
+        # Claude Code's sandbox doesn't run on native Windows, so workers there get no shell at all: they read
+        # and edit files. OH runs the project's checks after each task and gives the results to the reviewer.
+        settings={'sandbox':{'enabled':False},'permissions':{'deny':deny+['Bash','PowerShell']}}
+        tools='Read,Glob,Grep' if role in ('review','analysis') else 'Read,Glob,Grep,Edit,Write'
+    else:
+        settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
+          'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':deny}}
+        tools='Read,Glob,Grep,Bash' if role in ('review','analysis') else 'Read,Glob,Grep,Bash,Edit,Write'
+    args=[executable(host,root),'--settings',json.dumps(settings),'--tools',tools,'--print','--output-format','stream-json','--verbose',
           '--model',profile['model'],'--effort',profile['effort'],
           '--permission-mode','plan' if role in ('review','analysis') else 'acceptEdits',
           '--permission-prompts','none']
     if schema_path:args+=['--json-schema',schema_path.read_text()]
+    # Reviewers read their admission, prior reviews, diff and artifacts in the run folder; with no shell
+    # (Windows) Read is their only way in. Edits there stay denied.
+    if run_dir and role in ('review','analysis'):args+=['--add-dir',str(run_dir)]
     if private:args+=['--add-dir',str(private)]
     return args
+
+
+def rule_path(path):
+    """An absolute path the way Claude's permission rules write it: //c/Users/me for C:\\Users\\me, //Users/me on POSIX."""
+    path=str(path)
+    if len(path)>2 and path[1]==':' and path[2] in '\\/':return '//'+path[0].lower()+path[2:].replace('\\','/')
+    return '/'+path
 
 
 def private_plans(root):
@@ -234,12 +258,12 @@ def parse_usage(host,event,attempt):
 def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=1800):
     authentication(host,root)
     from .capabilities import validate_profile
-    validate_profile(host,profile)
+    validate_profile(host,profile,root)
     attempt_dir=Path(attempt_dir);attempt_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     schema_path=None
     if schema:
         schema_path=attempt_dir/'output-schema.json';atomic_json(schema_path,schema,immutable=True)
-    args=command(host,profile,root,role,schema_path,context['compact_tokens'])
+    args=command(host,profile,root,role,schema_path,context['compact_tokens'],attempt_dir.parent.parent)
     started=time.monotonic();final='';usage_seen=False;structured=None;failed=False
     with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
         from .processes import launch

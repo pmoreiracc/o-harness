@@ -1,13 +1,10 @@
 {
   "mcpServers": {
     "o-harness": {
-      "command": "python3",
-      "args": [
-        "-I",
-        "./scripts/mcp-server"
-      ],
+      "command": "./scripts/mcp-server",
+      "args": [],
       "cwd": ".",
-      "startup_timeout_sec": 30,
+      "startup_timeout_sec": 120,
       "tool_timeout_sec": 21600,
       "env_vars": [
         "OH_CHILD_ATTEMPT",
@@ -16,7 +13,8 @@
         "CODEX_HOME",
         "CLAUDE_CONFIG_DIR",
         "LANG",
-        "LC_ALL"
+        "LC_ALL",
+        "OH_PYTHON_DOWNLOAD"
       ]
     }
   }

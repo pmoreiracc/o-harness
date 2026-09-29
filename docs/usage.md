@@ -106,5 +106,5 @@ repository, such as `["./scripts/check.sh"]`.
 
 ## Dashboard
 
-On macOS, `oh service-install` starts the dashboard at <http://localhost:4318> and keeps it
-running across logins. Elsewhere, run `oh serve`. See [dashboard and data](analytics.md).
+On macOS and Windows, `oh service-install` starts the dashboard at <http://localhost:4318> and keeps it
+running across logins. On Linux, run `oh serve`. See [dashboard and data](analytics.md).

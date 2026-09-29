@@ -119,7 +119,14 @@ def main(argv=None):
     suggest=sub.add_parser('suggest');suggest.add_argument('--host',choices=['codex','claude'],default='codex')
     deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*')
     resource=sub.add_parser('resource');resource.add_argument('path')
-    args=parser.parse_args(argv);root=(args.root or Path.cwd()).resolve()
+    args=parser.parse_args(argv);invocation=Path.cwd();root=(args.root or invocation).resolve()
+    from .system import WINDOWS
+    if WINDOWS:
+        # CreateProcess searches OH's own current folder for bare commands whatever that variable says, so OH
+        # leaves the checkout for its own installed folder once every path argument is absolute.
+        for name,value in vars(args).items():
+            if isinstance(value,Path):setattr(args,name,value.resolve())
+        os.chdir(HOME)
     try:
         if args.command=='build-plugin':
             from .installation import build
@@ -171,7 +178,11 @@ def main(argv=None):
             if not args.action:result=describe(root)
             elif args.action=='open':result=open_settings(root)
             elif not args.key or (args.action=='set')!=(args.value is not None):raise Refused('Use: oh config set <key> <value>, or oh config unset <key>')
-            else:result=change(root,args.key,args.value if args.action=='set' else None,scope='global' if args.everywhere else None)
+            else:
+                value=args.value
+                # @file reads the value from a file: JSON passes through PowerShell and cmd without losing its quotes.
+                if value and value.startswith('@') and len(value)>1:value=(invocation/Path(value[1:]).expanduser()).read_text(encoding='utf-8-sig')
+                result=change(root,args.key,value if args.action=='set' else None,scope='global' if args.everywhere else None)
         elif args.command=='plans':
             from .plans import check,layout,listing
             where=layout(root)

@@ -1,4 +1,9 @@
-#!/usr/bin/env -S python3 -I
+#!/bin/sh
+""":"
+self=$0
+while [ -h "$self" ]; do link=$(readlink "$self"); case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac; done
+exec sh "$(dirname "$self")/python.sh" --launcher "$self" "$@"
+":"""
 """Resolve bundled setup or the explicitly installed shared core, never the product cwd."""
 import json
 import os
