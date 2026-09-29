@@ -8,10 +8,9 @@ from .storage import Refused
 
 
 @lru_cache(maxsize=1)
-def codex_models():
+def codex_models(root):
     from .hosts import executable,subscription_env
-    from pathlib import Path
-    child=subprocess.Popen([executable('codex',Path.cwd()),'app-server'],env=subscription_env(),stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+    child=subprocess.Popen([executable('codex',root),'app-server'],env=subscription_env(),stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                            stderr=subprocess.DEVNULL,text=True)
     def send(value):child.stdin.write(json.dumps(value)+'\n');child.stdin.flush()
     # A reader thread instead of select(), which Windows supports only on sockets, not pipes.
@@ -45,9 +44,10 @@ def codex_models():
         except subprocess.TimeoutExpired:child.kill();child.wait()
 
 
-def validate_profile(host,profile):
+def validate_profile(host,profile,root):
+    """root is the run's project: OH never trusts a codex found inside it (its own folder isn't the project)."""
     if host=='codex':
-        supported=codex_models()
+        supported=codex_models(root)
         if profile['model'] not in supported:
             raise Refused(f"Codex CLI does not advertise {profile['model']}; supported: {', '.join(supported)}. Change the OH profile before starting a new run.")
         if profile['effort'] not in supported[profile['model']]:

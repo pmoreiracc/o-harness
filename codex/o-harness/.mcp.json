@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "o-harness": {
+      "command": "./scripts/mcp-server",
+      "args": [],
+      "cwd": ".",
+      "startup_timeout_sec": 120,
+      "tool_timeout_sec": 21600,
+      "env_vars": [
+        "OH_CHILD_ATTEMPT",
+        "OH_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "LANG",
+        "LC_ALL",
+        "OH_PYTHON_DOWNLOAD"
+      ]
+    }
+  }
+}

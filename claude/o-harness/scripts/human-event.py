@@ -10,8 +10,8 @@ payload=json.loads(sys.stdin.buffer.read())
 prompt=payload.get('prompt','')
 if not isinstance(prompt,str):raise SystemExit(0)
 prompt=prompt.strip()
-choices={'continue','pr','stop','resume','retry','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope'}
-if prompt not in choices and not re.match(r'^(?:[$/](?:o-harness:)?oh-(?:start|pause|resume|stop|propose|design|deliver))(?:\s|$)',prompt):
+choices={'continue','pr','stop','resume','retry','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope','approve','reconsider'}
+if prompt not in choices and not re.fullmatch(r'refine:\s*\S.*',prompt,re.S) and not re.match(r'^(?:[$/](?:o-harness:)?oh-(?:start|pause|resume|stop|propose|design|deliver))(?:\s|$)',prompt):
     raise SystemExit(0)
 if os.environ.get('OH_CHILD_ATTEMPT'):raise SystemExit(0)
 entry=Path(__file__).resolve().with_name('oh')

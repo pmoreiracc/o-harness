@@ -26,6 +26,18 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
      'lenses':{'type':'object','additionalProperties':False,'required':list(LENSES),
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
+# A design worker returns prose only; OH adds the number, frontmatter, roadmap link and decision log row.
+DESIGN_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['kind','title','body','context','alternatives','consequences','summary'],'properties':{
+ 'kind':{'type':'string','enum':['design','decision']},
+ **{key:{'type':'string'} for key in ('title','body','context','alternatives','consequences','summary')}}}
+# An intake worker routes one idea and writes its prose; OH writes the row, task or decision record.
+PROPOSAL_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['route','understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
+             'depends','design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary'],
+ 'properties':{'route':{'type':'string','enum':['roadmap','task','improvement','unclear']},'depends':{'type':'array','items':{'type':'string'}},
+   **{key:{'type':'string'} for key in ('understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
+                                        'design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary')}}}
 
 def script(stream):
     """A wrapper that needs an interpreter, not a native binary. Windows binaries start with MZ."""
@@ -43,8 +55,14 @@ def binary_identity(path,root=None):
     if WINDOWS:unsafe.append(Path(tempfile.gettempdir()).resolve())
     if root:unsafe.append(Path(root).resolve())
     if any(path.is_relative_to(p) for p in unsafe):raise Refused('Host binary must be installed outside temporary and project directories')
-    # Windows has no POSIX owner or group/other write bits, so only this check is skipped there;
-    # the location, native-binary, hash and version checks still apply.
+    if WINDOWS:
+        # The same rule through Windows access lists: only you, the system or administrators may change the
+        # program, add files next to it (a planted DLL), or replace a folder above it.
+        from .system import untrusted
+        for component,kind in [(path,'file'),(path.parent,'folder'),*((p,'above') for p in path.parent.parents)]:
+            try:reason=untrusted(component,kind)
+            except OSError as exc:raise Refused(f'OH cannot read who may change {component} ({exc}); install the host where you can read its permissions') from None
+            if reason:raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
     for component in [] if WINDOWS else [path,*path.parents]:
         info=component.stat()
         if info.st_uid not in (0,os.getuid()) or info.st_mode & (stat.S_IWGRP|stat.S_IWOTH):
@@ -142,7 +160,24 @@ def authentication(host,root):
         raise Refused(f'{host}: subscription login could not be confirmed. Sign in with the installed CLI; no API fallback was attempted.')
 
 
-def command(host,profile,root,role,schema_path,compact_tokens):
+def codex_home():
+    """Codex's own folder: CODEX_HOME when set, as Codex itself reads it."""
+    import os
+    return Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
+
+
+def oh_plugins():
+    """OH's plugin as installed in Codex, under each marketplace that provides it."""
+    import re
+    import tomllib
+    import os
+    home=codex_home()
+    try:plugins=tomllib.loads((home/'config.toml').read_text()).get('plugins',{})
+    except (OSError,ValueError):return []
+    return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
+
+
+def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
     if host=='codex':
         args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
           '--config','features.multi_agent=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
@@ -150,21 +185,53 @@ def command(host,profile,root,role,schema_path,compact_tokens):
           '--config',f'model_auto_compact_token_limit={compact_tokens}',
           '--sandbox','read-only' if role in ('review','analysis') else 'workspace-write',
           '--cd',str(root)]
+        # Workers never load OH itself: its menu server would run outside their sandbox.
+        for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
         if schema_path:args+=['--output-schema',str(schema_path)]
         return args+['-']
     from .storage import state_home
     from .storage import git
     git_paths=[git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
-    protected=git_paths+[str(state_home()),str(Path.home()/'.codex'),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
+    from .config import protected_paths
+    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
     if role in ('review','analysis'):protected.append(str(root))
-    settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
-      'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':['Agent','Task']+[f'Edit(/{p}/**)' for p in protected]}}
-    args=[executable(host,root),'--settings',json.dumps(settings),'--tools','Read,Glob,Grep,Bash' if role in ('review','analysis') else 'Read,Glob,Grep,Bash,Edit,Write','--print','--output-format','stream-json','--verbose',
+    private=private_plans(root)
+    if private:protected.append(str(private))  # workers read private plans; only OH writes them
+    deny=['Agent','Task']+[f'Edit({rule_path(p)}/**)' for p in protected]
+    if WINDOWS:
+        # Claude Code's sandbox doesn't run on native Windows, so workers there get no shell at all: they read
+        # and edit files. OH runs the project's checks after each task and gives the results to the reviewer.
+        settings={'sandbox':{'enabled':False},'permissions':{'deny':deny+['Bash','PowerShell']}}
+        tools='Read,Glob,Grep' if role in ('review','analysis') else 'Read,Glob,Grep,Edit,Write'
+    else:
+        settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
+          'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':deny}}
+        tools='Read,Glob,Grep,Bash' if role in ('review','analysis') else 'Read,Glob,Grep,Bash,Edit,Write'
+    args=[executable(host,root),'--settings',json.dumps(settings),'--tools',tools,'--print','--output-format','stream-json','--verbose',
           '--model',profile['model'],'--effort',profile['effort'],
           '--permission-mode','plan' if role in ('review','analysis') else 'acceptEdits',
           '--permission-prompts','none']
     if schema_path:args+=['--json-schema',schema_path.read_text()]
+    # Reviewers read their admission, prior reviews, diff and artifacts in the run folder; with no shell
+    # (Windows) Read is their only way in. Edits there stay denied.
+    if run_dir and role in ('review','analysis'):args+=['--add-dir',str(run_dir)]
+    if private:args+=['--add-dir',str(private)]
     return args
+
+
+def rule_path(path):
+    """An absolute path the way Claude's permission rules write it: //c/Users/me for C:\\Users\\me, //Users/me on POSIX."""
+    path=str(path)
+    if len(path)>2 and path[1]==':' and path[2] in '\\/':return '//'+path[0].lower()+path[2:].replace('\\','/')
+    return '/'+path
+
+
+def private_plans(root):
+    """This project's private plans folder, or None when its plans live in the repository or aren't chosen yet."""
+    from .plans import layout
+    try:where=layout(root)
+    except Refused:return None
+    return where['base'] if where['location']=='private' else None
 
 
 def parse_usage(host,event,attempt):
@@ -191,12 +258,12 @@ def parse_usage(host,event,attempt):
 def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=1800):
     authentication(host,root)
     from .capabilities import validate_profile
-    validate_profile(host,profile)
+    validate_profile(host,profile,root)
     attempt_dir=Path(attempt_dir);attempt_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     schema_path=None
     if schema:
         schema_path=attempt_dir/'output-schema.json';atomic_json(schema_path,schema,immutable=True)
-    args=command(host,profile,root,role,schema_path,context['compact_tokens'])
+    args=command(host,profile,root,role,schema_path,context['compact_tokens'],attempt_dir.parent.parent)
     started=time.monotonic();final='';usage_seen=False;structured=None;failed=False
     with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
         from .processes import launch
@@ -243,9 +310,13 @@ def review_result(result):
     if not evidence['anchors'] or not evidence['attacks']:return 'failed',[]
     if not isinstance(evidence['lenses'],dict) or set(evidence['lenses'])!=set(LENSES) or any(not isinstance(v,str) or not v.strip() for v in evidence['lenses'].values()):return 'failed',[]
     findings=value['findings']
+    if value['verdict'] not in REVIEW_SCHEMA['properties']['verdict']['enum']:return 'failed',[]
     if not isinstance(findings,list) or not isinstance(value['summary'],str):return 'failed',[]
-    if any(not isinstance(f,dict) or f.get('severity') not in ('blocking','concern','scope')
-           or not isinstance(f.get('description'),str) or not isinstance(f.get('path'),str) for f in findings):
+    shape=REVIEW_SCHEMA['properties']['findings']['items']
+    if any(not isinstance(f,dict) or set(f)!=set(shape['required'])
+           or any(not isinstance(v,str) for v in f.values())
+           or f['severity'] not in shape['properties']['severity']['enum']
+           or f['relation'] not in shape['properties']['relation']['enum'] for f in findings):
         return 'failed',[]
     if value['verdict']=='clean' and not findings:return 'clean',[]
     # Never trust a declared clean count over visible findings.

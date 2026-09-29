@@ -66,7 +66,7 @@ def verify(root, checks, project_id, *, controlled=False):
         if isinstance(toolchain,list) and all(isinstance(cmd,list) and cmd and all(isinstance(x,str) for x in cmd) for cmd in toolchain):
             for command in toolchain:
                 from .processes import capture
-                probe,cancellation=capture(root,command,controlled=controlled,timeout=10)
+                probe,cancellation=capture(root,command,controlled=controlled,timeout=10,env=check_env())
                 if cancellation or probe.returncode:raise Refused('Verification toolchain probe failed or was cancelled: '+probe.stderr[-1000:])
                 versions.append(probe.stdout+probe.stderr)
         fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],
@@ -80,7 +80,7 @@ def verify(root, checks, project_id, *, controlled=False):
             continue
         start=time.monotonic()
         from .processes import capture
-        output,cancellation=capture(root,check['command'],controlled=controlled,timeout=check.get('timeout_seconds',900))
+        output,cancellation=capture(root,check['command'],controlled=controlled,timeout=check.get('timeout_seconds',900),env=check_env())
         result={'name':check['name'],'fingerprint':fingerprint,'returncode':output.returncode,
                 'duration_ms':round((time.monotonic()-start)*1000),'reused':False,
                 'output':(output.stdout+'\n'+output.stderr)[-12000:], 'cancellation':cancellation}
@@ -90,6 +90,11 @@ def verify(root, checks, project_id, *, controlled=False):
         if reusable:
             atomic_json(cache,result)
     return results
+
+
+def check_env():
+    """Checks run the project's own scripts, like cmd /c build.bat, so they keep Windows' search of their folder."""
+    return {k:v for k,v in os.environ.items() if k!='NoDefaultCurrentDirectoryInExePath'}
 
 
 def candidate_tree(root,replacements=None):
@@ -109,8 +114,9 @@ def candidate_tree(root,replacements=None):
             if mode=='160000':
                 if git(path,'status','--porcelain'):raise Refused('Commit submodule changes in their own reviewed repository first')
             elif mode=='120000':continue
-            elif path.read_bytes()!=command('cat-file','blob',blob):
-                raise Refused(f'Git filters transform {os.fsdecode(name)}; normalize it before review so reviewed bytes equal committed bytes')
+            elif (data:=path.read_bytes())!=(stored:=command('cat-file','blob',blob)) and data.replace(b'\r\n',b'\n')!=stored:
+                # Only line endings may differ (core.autocrlf, the Git for Windows default): the reviewed text is the committed text.
+                raise Refused(f'Git filters transform {os.fsdecode(name)} beyond line endings; normalize it before review so reviewed bytes equal committed bytes')
         for name,replacement in (replacements or {}).items():
             if Path(name).is_absolute() or '..' in Path(name).parts:raise Refused('Invalid final-tree replacement')
             info=command('ls-files','--stage','--',name).decode().split()

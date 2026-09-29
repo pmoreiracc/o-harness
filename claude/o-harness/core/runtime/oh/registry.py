@@ -1,5 +1,6 @@
 """External project profiles and checkout identities; consumers remain untouched."""
 from pathlib import Path
+from contextlib import ExitStack
 from .storage import (Refused, atomic_json, digest, git, identifier, lock, read_json,
                       state_home, state_writer, validate_id)
 
@@ -11,16 +12,59 @@ def identity(root):
         raise Refused('Select the repository root, not a subdirectory')
     admin = Path(git(root, 'rev-parse', '--absolute-git-dir')).resolve(strict=True)
     common = Path(git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')).resolve(strict=True)
-    def stamp(path):
-        st = path.stat()
-        value = {'device': st.st_dev, 'inode': st.st_ino}
-        # Directory mtime/ctime change during normal Git work. Birth time does not.
-        if hasattr(st, 'st_birthtime'):
-            value['birth'] = st.st_birthtime
-        return value
     return {'root': str(root), 'admin': str(admin), 'common': str(common),
             'root_identity': stamp(root), 'admin_identity': stamp(admin),
             'common_identity': stamp(common)}
+
+
+def stamp(path):
+    st = Path(path).stat()
+    value = {'device': st.st_dev, 'inode': st.st_ino}
+    # Directory mtime/ctime change during normal Git work. Birth time does not.
+    if hasattr(st, 'st_birthtime'):
+        value['birth'] = st.st_birthtime
+    return value
+
+
+def verified(recorded):
+    """Whether a recorded checkout is still there, with the same folder and Git folders (no Git call)."""
+    try:return all(stamp(recorded[key]) == recorded[key + '_identity'] for key in ('root', 'admin', 'common'))
+    except (OSError, KeyError, TypeError, ValueError):return False
+
+
+def repository_projects(current):
+    """Registered projects of the Git repository `current` belongs to: those with a registration whose
+    Git common folder is this checkout's (same path and folder id). Without birth times (Linux), a
+    folder deleted and re-created at the same path may get the same id back; see issue #20."""
+    from .config import registrations
+    def same(recorded):
+        try:return (recorded.get('common_identity') == current['common_identity'] == stamp(recorded['common'])
+                    and recorded['common'] == current['common'])
+        except (OSError, KeyError, TypeError, ValueError):return False
+    return {p for p, found in registrations().items() if any(same(e) for e in found)}
+
+
+def join_candidates(current, name, here):
+    """(present projects holding `name`, projects of this repository named `name` that a checkout could
+    join). When a present project holds the name, only it can be joined."""
+    from .config import name_of, projects_named
+    holders = projects_named(name, excluding_root=here)
+    same = {p for p in repository_projects(current) if name_of(p) == name}
+    return holders, (holders & same if holders else same)
+
+
+def repository_name(current):
+    """The repository's folder name: the main checkout's, also for a worktree (my-app for my-app/.git)."""
+    common = Path(current['common'])
+    return common.parent.name if common.name == '.git' else Path(current['root']).name
+
+
+def joinable(root):
+    """Names oh init would join for an unregistered checkout: exactly the ones register accepts."""
+    from .config import name_of
+    current, here = identity(root), str(Path(root).resolve())
+    names = {n for n in map(name_of, repository_projects(current)) if n}
+    return sorted(n for n in names if (lambda h, m: len(m) == 1 and len(h) <= 1)(*join_candidates(current, n, here)))
 
 
 def index_path(root):
@@ -33,13 +77,16 @@ def lookup(root):
         raise Refused('Project is not registered. Run oh init once for this checkout.')
     value = read_json(path)
     if value.get('schema_version') != 1 or value.get('identity') != identity(root):
-        raise Refused('Checkout identity changed. Register the new checkout or explicitly reattach the moved checkout; old grants were not reused.')
+        from .config import name_of
+        name = name_of(value.get('project', '')) if isinstance(value.get('project'), str) else None
+        raise Refused(f'Checkout identity changed. For a new checkout at this path, run oh init --name "{name or "<name>"}" --replace; '
+                      'for a moved one, reattach it. Old grants were not reused.')
     validate_id(value['checkout']); validate_id(value['project'])
     return value
 
 
 def profile_path(root, name='profile.json'):
-    if name not in ('profile.json', 'config.json', 'config.local.json', 'checks.json'):
+    if name != 'profile.json':
         raise Refused('Unknown project profile resource')
     return state_home() / 'projects' / lookup(root)['project'] / name
 
@@ -56,28 +103,75 @@ def checkout_state(root):
     return state_home() / 'checkout-state' / lookup(root)['checkout']
 
 
+def planning_settings(name):
+    # Registration already holds the registry lock. Do not migrate unrelated legacy
+    # settings (or archive them) while deciding whether a private folder is available.
+    from .config import defaults, layers, read_file, merge
+    top, projects = layers(read_file(upgrade_first=False))
+    return merge(merge(defaults(), top), {k:v for k,v in projects.get(name,{}).items() if k!='checks'})
+
+
 @state_writer
-def register(root, name, kind='product', *, attach=None, reattach=None, imported=None, replace=False):
-    """Onboarding grants no work. Reattachment is explicit and identity-checked."""
-    if kind not in ('product', 'harness') or not isinstance(name, str) or not name.strip():
-        raise Refused('A project needs a name and product/harness kind')
+def register(root, name=None, kind='product', *, attach=None, reattach=None, imported=None, replace=False):
+    """Onboarding grants no work. Reattachment is explicit and identity-checked. Without a name, a
+    checkout joins the project of its Git repository, or starts one named after the repository."""
     current = identity(root)
+    if name is None and not (attach or reattach or imported) and (replace or not index_path(root).is_file()):
+        # A replaced checkout keeps its project's name, so its settings and checks still apply, unless
+        # the checkout now belongs to a repository with other OH projects.
+        from .config import name_of
+        entry = read_json(index_path(root)) if replace and index_path(root).is_file() else {}
+        previous = name_of(entry['project']) if entry.get('checkout') and isinstance(entry.get('project'), str) else None
+        known = joinable(root)
+        if previous and (previous in known or not known):name = previous
+        elif len(known) > 1:
+            raise Refused(f'OH projects of this repository: {", ".join(known)}; pass --name with the one this checkout belongs to')
+        else:name = known[0] if known else repository_name(current)
+    if kind not in ('product', 'harness') or not (attach or reattach or isinstance(name, str) and name.strip()):
+        raise Refused('A project needs a name and product/harness kind')
     home = state_home()
-    with lock(home / 'registry' / '.lock'):
+    with lock(home / 'registry' / '.lock'), ExitStack() as transaction:
         path = index_path(root)
         if imported:
             admin=Path(current['admin'])
             if any((admin/name).exists() for name in ('oh-active-run.json','oh-design-run.json')):
                 raise Refused('An old run binding exists. Finish or stop it with its retained runtime and archive its binding before importing this checkout.')
+        note, joined, preserved_plans = None, False, {}
+        if not (attach or reattach) and (replace or not path.exists()):
+            # A new project needs a free name, checked before anything changes so a refusal changes nothing.
+            # A checkout of the Git repository of the project that has the name (a worktree, or one recreated
+            # at an old path, whose replaced registration counts too) joins that project, as --attach would,
+            # with a fresh checkout id and no grants.
+            here = str(Path(root).resolve())
+            holders, match = join_candidates(current, name, here)
+            if len(match) > 1 and not holders:
+                raise Refused(f'Several earlier OH projects of this repository are named {name}; join one with '
+                              f'oh init --name "{name}" --attach <id> (ids: {", ".join(sorted(match))})')
+            if len(match) == 1 and len(holders) <= 1 and not imported:
+                attach, joined = next(iter(match)), True
+                note = f'This checkout belongs to the Git repository of {name}, so it joined that project: its settings and checks apply here.'
+            else:free(name, excluding_root=here)
         if replace:
-            if attach or reattach or imported:raise Refused('Replacement needs a fresh profile; it cannot import old grants')
+            if (attach and not joined) or reattach or imported:raise Refused('Replacement needs a fresh profile; it cannot import old grants')
             if not path.exists():raise Refused('No prior checkout registration exists to replace')
             previous=read_json(path)
             if previous.get('identity')==current:raise Refused('This checkout has not been replaced; its existing registration remains authoritative')
+            old_profile=read_json(home/'projects'/previous['project']/'profile.json')
+            preserved_plans={'private_plans_name':old_profile.get('private_plans_name',old_profile['name']),
+                             'private_plans_legacy':old_profile.get('private_plans_legacy',previous['project'])}
+            from .plans import private_base
+            old_settings=planning_settings(old_profile['name'])
+            legacy=home/'projects'/preserved_plans['private_plans_legacy']/'plans'
+            old_folder=Path(old_profile['private_plans_path']) if old_profile.get('private_plans_path') else legacy if legacy.is_dir() else private_base(old_settings['plans']['private_folder'],preserved_plans['private_plans_name'])
+            from .private_storage import owned
+            if old_folder.is_dir() or owned(old_folder,old_profile):preserved_plans['private_plans_path']=str(old_folder)
+            preserved_plans['private_plans_previous_owner']=previous['project']
+            if old_folder.is_dir() and not attach:
+                from .private_storage import reserve
+                reserve(old_folder,preserved_plans|{'id':identifier()},claim=False)
             archive=home/'registry/retired'/(digest(previous)+'.json')
             if not archive.exists():atomic_json(archive,previous,immutable=True)
-            path.unlink()
-        if path.exists():
+        if path.exists() and not replace:
             existing = lookup(root)
             if attach and existing['project'] != attach:
                 raise Refused('Checkout is already registered to another project')
@@ -94,6 +188,11 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
                 raise Refused('This is not the original moved checkout; register it separately')
             if Path(previous['identity']['root']).exists():
                 raise Refused('Original checkout still exists; do not alias its active grants')
+            from .config import name_of, projects_named
+            taken = projects_named(name_of(previous['project'])) - {previous['project']}
+            if taken:
+                raise Refused(f'Another project took the name {name_of(previous["project"])} while this checkout was away. '
+                              'Rename that project first (oh --root <its checkout> rename <new name>), then reattach.')
             entry = previous | {'identity': current}
             atomic_json(path, entry, immutable=True)
             # Old locator becomes a tombstone; it can never silently authorize a replacement.
@@ -105,14 +204,80 @@ def register(root, name, kind='product', *, attach=None, reattach=None, imported
         if attach:
             value = read_json(destination)
             known = [read_json(p) for p in (home / 'registry/checkouts').glob('*.json')]
-            if not any(v.get('project') == attach and v['identity']['common_identity'] == current['common_identity'] for v in known):
+            if not joined and not any(v.get('project') == attach and v['identity']['common_identity'] == current['common_identity'] for v in known):
                 raise Refused('Automatic project attachment is limited to sibling worktrees; clones need separate registration')
         else:
-            value = (dict(imported) if imported else {}) | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
+            value = (dict(imported) if imported else {}) | preserved_plans | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
+            from .plans import private_base
+            from .private_storage import reservations,configured_folders
+            from .config import read_file
+            settings=planning_settings(name)
+            if settings['plans']['location']=='private' or value.get('private_plans_path'):
+                base=Path(value['private_plans_path']) if value.get('private_plans_path') else private_base(settings['plans']['private_folder'],value.get('private_plans_name',name))
+                transaction.enter_context(reservations(configured_folders(read_file(upgrade_first=False))+[(base,value)]))
             if destination.exists() and read_json(destination) != value:
                 raise Refused('Existing external profile differs; preserve it and resolve the import explicitly')
             if not destination.exists():
                 atomic_json(destination, value, immutable=True)
         entry = {'schema_version': 1, 'checkout': identifier(), 'project': project_id, 'identity': current}
-        atomic_json(path, entry, immutable=True)
-        return value
+        try:atomic_json(path, entry, immutable=not replace)
+        except OSError as exc:
+            from .private_storage import published
+            if not published(path,entry):raise
+            # The published index is authoritative. Keep its profile and folder ownership.
+            note=(note+' ' if note else '')+f'Registration was saved, but its durability could not be confirmed: {exc}. Run oh config to inspect it.'
+        return value | ({'note':note} if note else {}) | ({'joined':name} if joined else {})
+
+
+def free(name, project=None, excluding_root=None):
+    """A project name picks its section of the settings file, so no two present projects share one."""
+    from .config import projects_named, registrations
+    others = projects_named(name, excluding_root) - {project}
+    if others:
+        where = ', '.join(sorted(e['root'] for p in others for e in registrations()[p] if e['root'] != excluding_root))
+        raise Refused(f'Another OH project is already named {name} ({where}); choose another name')
+
+
+@state_writer
+def rename(root, name):
+    """Gives a project a new name, and its section of the settings file with it. Refuses to take over a
+    section that already holds other settings; when another project still has the old name (from before
+    names were unique), the section stays theirs and this project starts from an empty one."""
+    from .config import edit, load_global, projects_named, section_differences
+    if not isinstance(name, str) or not name.strip() or name != name.strip():raise Refused('A project name needs text without surrounding spaces')
+    with lock(state_home() / 'registry' / '.lock'), ExitStack() as transaction:
+        value = profile(root)
+        if value['name'] == name:return value
+        free(name, value['id'])
+        old, base, outcome, path = value['name'], load_global(), {}, state_home() / 'projects' / value['id'] / 'profile.json'
+        def move(data):
+            projects = data.setdefault('projects', {})
+            if not isinstance(projects, dict):raise Refused('projects in the settings file must be an object; fix it with oh config open')
+            shared = bool(projects_named(old) - {value['id']})
+            mine, theirs = ({} if shared else projects.get(old) or {}), projects.get(name) or {}
+            if theirs and (not mine or section_differences(theirs, mine, base)):
+                raise Refused(f'projects.{name} already holds settings of an earlier project named {name}'
+                              + (f' ({", ".join(section_differences(theirs, mine, base))} differ)' if mine else '')
+                              + '; remove them with oh config open, or choose another name')
+            if mine or not shared:projects.pop(old, None)
+            projects[name] = theirs or mine
+            outcome['section'] = (f'projects.{old} stays with the other project named {old}; projects.{name} starts empty'
+                                  if shared else f'projects.{old} is now projects.{name}')
+            from .plans import private_base
+            from .private_storage import owned, reservation
+            folder_name=value.get('private_plans_name',old)
+            try:
+                folder=mine.get('plans',{}).get('private_folder',base['plans']['private_folder'])
+                previous_folder=private_base(folder,folder_name)
+                if not previous_folder.is_dir() and not owned(previous_folder,value):folder_name=name
+            except Refused:folder_name=name  # renaming can repair a nonportable old name
+            updated=value | {'name': name, 'private_plans_name': folder_name}
+            if mine.get('plans',{}).get('location',base['plans']['location'])=='private':
+                candidate=Path(value['private_plans_path']) if value.get('private_plans_path') else private_base(folder,folder_name)
+                transaction.enter_context(reservation(candidate,updated))
+            atomic_json(path, updated)
+        try:edit(root, 'global', move)
+        except BaseException:
+            if read_json(path).get('name') == name:atomic_json(path, value)  # the settings weren't written
+            raise
+    return profile(root) | outcome | {'plans': 'Private documents keep their existing folder; oh plans path shows it.'}

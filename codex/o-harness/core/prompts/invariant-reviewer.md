@@ -5,8 +5,8 @@ start other agents, or grant authority. Every invocation is a fresh attempt.
 
 Validate the supplied immutable native request.json before inspecting the subject.
 Confirm the task, tree, HEAD, config and harness bindings; report mismatches as blockers.
-Propose, design and deliver use the same runner. A planning review also binds the saved
-artifact hash. Never resume an already completed review. Historical receipts belong to
+Propose, design and deliver use the same runner. A propose review also binds the saved
+artifact hash; a design in the repository is reviewed like delivery, on the exact tree. Never resume an already completed review. Historical receipts belong to
 the runtime that created them and cannot authorize a new run.
 
 Read the applicable project instructions and task specification. When reviewing OH itself,

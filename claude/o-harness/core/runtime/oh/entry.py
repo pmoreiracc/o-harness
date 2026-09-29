@@ -3,7 +3,8 @@ import re
 from .storage import Refused
 
 CHOICES={'continue','pr','stop','resume','retry','grant review','fix concerns','fix scope',
-         'fix findings','accept concerns','route scope','accept concerns and route scope'}
+         'fix findings','accept concerns','route scope','accept concerns and route scope','approve','reconsider'}
+REFINE=r'refine:\s*\S.*'  # refine: <what to change>, the person's own words for the next proposal
 PREFIX=r'[$/](?:o-harness:)?'
 
 
@@ -13,7 +14,7 @@ def command(prompt):
     match=re.fullmatch(PREFIX+r'oh-(start|pause|resume|stop|propose|design|deliver)(?:\s+(.*))?',prompt,re.S)
     # Workflow skills are invoked as oh-propose/oh-design/oh-deliver; internally they keep their workflow names.
     if match:return (match[1] if match[1] in ('propose','design','deliver') else 'oh-'+match[1]),match[2] or ''
-    if prompt in CHOICES:return 'choice',prompt
+    if prompt in CHOICES or re.fullmatch(REFINE,prompt,re.S):return 'choice',prompt
     return None
 
 
@@ -39,7 +40,17 @@ def receive(root,host,payload):
             return {'authorized':False,'onboarding':str(exc),'next':'Complete explicit setup/registration, prepare the scope if needed, then submit a fresh workflow invocation.'}
         exact_request=re.fullmatch(r'request:[0-9a-f]{64}',args)
         design_request=re.fullmatch(r'[0-9]{4}(?:\s+[a-zA-Z0-9_-]+)?\s+request:[0-9a-f]{64}',args)
-        planning=(name in ('propose','design') and bool(args.strip())) or (name=='oh-start' and re.fullmatch(r'(?:propose|design)\s+\S.*',args,re.S))
+        if name=='deliver':
+            from .delivery import parse,listing
+            selected=parse(args)
+            if selected['kind']=='list':return listing(root)
+            if selected['kind']=='quick_fix':return selected
+            design_request=selected['kind']=='design'
+        from .plans import SLUG
+        design=args.strip() if name=='design' else (re.fullmatch(r'design\s+(.*)',args,re.S) or [None,None])[1] if name=='oh-start' else None
+        if design is not None and not re.fullmatch(SLUG,design.strip()):
+            return {'authorized':False,'next':'Name one roadmap initiative by its slug: /oh-design <slug>. New ideas start with /oh-propose.'}
+        planning=(name=='propose' and bool(args.strip())) or design is not None or (name=='oh-start' and re.fullmatch(r'propose\s+\S.*',args,re.S))
         binding=planning or (name in ('deliver','oh-start') and exact_request) or (name=='deliver' and design_request) or (name=='oh-resume' and not args)
         if not binding:
             return {'authorized':False,'prepare':True,'next':'Select propose/design with an explicit intent, or prepare agreed delivery scope and present its exact trigger. A fresh human invocation grants that prepared scope.'}

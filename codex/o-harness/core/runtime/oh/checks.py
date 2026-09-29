@@ -1,15 +1,15 @@
 """Consumer-owned verification contracts; OH never imports a product toolchain."""
 import fnmatch
 from pathlib import Path
-from .storage import Refused,git,project,read_json
+from .storage import Refused,git,project
 from .verification import verify
 
 
 def selected(root,base='origin/main',mode='review'):
-    from .registry import profile_path
-    path=profile_path(root, 'checks.json')
-    if not path.is_file():raise Refused('Register project checks in the external OH profile before executing tasks')
-    return resolve(root,read_json(path),base,mode)
+    from .config import project_checks
+    checks=project_checks(root)
+    if not checks:raise Refused("Add this project's checks first: oh config set checks '<JSON list>'")
+    return resolve(root,checks,base,mode)
 
 
 def resolve(root,checks,base='origin/main',mode='review'):

@@ -29,14 +29,26 @@ def number(a,b):
     return float(a)==float(b)
 
 
-def design_file(root,doc):
-    found=sorted(Path(root,'docs/design').glob(doc+'-*.md'))
-    return str(root)+'/docs/design/'+found[0].name if found and found[0].is_file() else None
+def places(root,layout=None):
+    """The design folder and roadmap file: OH's default layout, or a project's plans layout."""
+    if layout:return Path(layout['designs']),Path(layout['roadmap'])
+    return Path(root)/'docs/design',Path(root)/'docs/roadmap.md'
 
 
-def frontmatter(path):
+def shown(root,path):
+    try:return Path(path).relative_to(root).as_posix()
+    except ValueError:return str(path)
+
+
+def design_file(root,doc,layout=None):
+    designs,_=places(root,layout)
+    found=sorted(designs.glob(doc+'-*.md'))
+    return str(designs/found[0].name) if found and found[0].is_file() else None
+
+
+def frontmatter(path,rows=None):
     result=[]
-    for index,line in enumerate(lines(path)):
+    for index,line in enumerate(lines(path) if rows is None else rows):
         if index==0:
             if line!='---':break
             continue
@@ -45,17 +57,17 @@ def frontmatter(path):
     return result
 
 
-def fm_value(path,key):
+def fm_value(path,key,rows=None):
     if not Path(path).is_file():return ''
-    for line in frontmatter(path):
+    for line in frontmatter(path,rows):
         if line.startswith(key+':'):return re.sub(SPACE+'*$','',re.sub('^'+key+':'+SPACE+'*','',line,count=1),count=1)
     return ''
 
 
-def plan(root,doc):
+def plan(root,doc,layout=None):
     """Task rows: n, status, owner, needs, blocked and title, separated by 0x1f."""
-    path=design_file(root,doc)
-    if not path:raise Refused(f'plan.sh: no design doc matching docs/design/{doc}-*.md\n')
+    path=design_file(root,doc,layout)
+    if not path:raise Refused(f'plan.sh: no design doc matching {shown(root,places(root,layout)[0])}/{doc}-*.md\n')
     rows=[];errors=[]
     state={'cur':'','owner':'','status':'','title':'','block':''}
     def flush():
@@ -114,13 +126,20 @@ def plan(root,doc):
     return ''.join(row+'\n' for row in rows)
 
 
-LINK=r'\[[0-9]{4}\]\(\./design/[0-9]{4}-[a-z0-9]+(-[a-z0-9]+)*\.md\)'
+def link_prefix(root,layout=None):
+    """How the roadmap links to design docs: ./design/ in the default layout."""
+    import os
+    designs,roadmap_path=places(root,layout)
+    return './'+os.path.relpath(designs,roadmap_path.parent).replace(os.sep,'/')+'/'
 
 
-def roadmap(root,mode=''):
+def roadmap(root,mode='',layout=None):
     """Initiative rows (slug, milestone, depends, design) or, with --delivered, collapsed pointers."""
-    path=str(root)+'/docs/roadmap.md'
-    if not Path(path).is_file():raise Refused(f'roadmap.sh: no docs/roadmap.md under {root}\n')
+    prefix=link_prefix(root,layout)
+    LINK=r'\[[0-9]{4}\]\('+re.escape(prefix)+r'[0-9]{4}-[a-z0-9]+(-[a-z0-9]+)*\.md\)'
+    def target_of(text):return text.split(prefix,1)[1][:4]
+    path=str(places(root,layout)[1])
+    if not Path(path).is_file():raise Refused(f'roadmap.sh: no {shown(root,path)} under {root}\n')
     rows=[];errors=[];delivered=[];shipped={};milestone=''
     for line in lines(path):
         if re.match('###'+SPACE+'+M[0-9]+('+SPACE+'|$)',line):
@@ -133,12 +152,12 @@ def roadmap(root,mode=''):
         if milestone and line.startswith('Delivered as '):
             rest=line
             while match:=re.search(LINK,rest):
-                label=match.group(0)[1:5];target=re.sub(r'^.*\./design/','',match.group(0))[:4]
+                label=match.group(0)[1:5];target=target_of(match.group(0))
                 if label!=target:errors.append(f'collapsed pointer in {milestone} names design {label} but links to design {target}')
                 if shipped[milestone]!='shipped':errors.append(f'collapsed pointer for design {label} appears before {milestone} has shipped')
                 delivered.append(label+US+milestone)
                 rest=rest[match.end():]
-            if re.search(r'\]\(\./design/',rest):errors.append(f'invalid collapsed design pointer in {milestone}: {line}')
+            if '](' +prefix in rest:errors.append(f'invalid collapsed design pointer in {milestone}: {line}')
             continue
         if not milestone:
             # An initiative outside every milestone belongs to no table and would vanish.
@@ -161,7 +180,7 @@ def roadmap(root,mode=''):
                     errors.append(f'{slug} depends on "{item}", which is not a slug or a milestone id')
         if design=='—':design=''
         elif re.fullmatch(LINK,design):
-            label=design[1:5];target=re.sub(r'^.*\./design/','',design)[:4]
+            label=design[1:5];target=target_of(design)
             if label!=target:errors.append(f'{slug} names design {label} but links to design {target}')
             design=label
         else:
@@ -175,18 +194,21 @@ def roadmap(root,mode=''):
     return ''.join(row+'\n' for row in rows) or '\n'
 
 
-def freeze_render(root,doc,task=''):
+def freeze_render(root,doc,task='',layout=None):
     """The design document after task completes; with no task, after the design is finalized."""
     def fail(*messages):raise Refused(''.join('freeze.sh: '+m+'\n' if i==0 else m+'\n' for i,m in enumerate(messages)))
     if not re.fullmatch('[0-9]{4}',doc):raise Refused('usage: freeze.sh <four-digit-design-doc-number>\n')
     if task and not re.fullmatch('[0-9]+',task):fail('completion task must be numeric.')
-    path=design_file(root,doc)
-    if not path:fail(f'no design doc matching docs/design/{doc}-*.md')
+    path=design_file(root,doc,layout)
+    if not path:fail(f'no design doc matching {shown(root,places(root,layout)[0])}/{doc}-*.md')
     name=Path(path).name
-    try:state=plan(root,doc).rstrip('\n')
+    try:state=plan(root,doc,layout).rstrip('\n')
     except Refused as exc:raise Refused(f'freeze.sh: {name} does not have a valid task list.\n'+captured(str(exc))) from None
     rows=[row.split(US) for row in state.split('\n')]
-    kind=fm_value(path,'type');status=fm_value(path,'status');delivered=fm_value(path,'delivered')
+    # Native plans support CRLF and preserve their line endings; the legacy adapter keeps its byte contract.
+    from .plans import rows_of
+    source,ending=rows_of(path) if layout is not None else (lines(path),'\n')
+    kind=fm_value(path,'type',source);status=fm_value(path,'status',source);delivered=fm_value(path,'delivered',source)
     if kind!='design':fail(f"{name} has type '{kind or 'missing'}', not 'design'.")
     pending=[row[0] for row in rows if len(row)>1 and row[1]=='pending']
     tick=False
@@ -202,10 +224,10 @@ def freeze_render(root,doc,task=''):
         fail(f"design doc {doc} is '{status or 'missing a status'}', not 'approved'.",'Only an approved, complete design doc can be frozen.')
     freeze=status=='approved' and not after;milestone=''
     if freeze or status=='frozen':
-        try:initiatives=roadmap(root)
+        try:initiatives=roadmap(root,'',layout)
         except Refused as exc:raise Refused('freeze.sh: the roadmap does not parse, so the delivering milestone is unknown.\n'+captured(str(exc))) from None
         milestones=[row[1] for row in (line.split(US) for line in initiatives.split('\n')) if len(row)>3 and row[3]==doc]
-        try:collapsed=roadmap(root,'--delivered')
+        try:collapsed=roadmap(root,'--delivered',layout)
         except Refused as exc:raise Refused('freeze.sh: collapsed milestone pointers do not parse.\n'+captured(str(exc))) from None
         if status=='approved':
             if len(milestones)!=1:
@@ -222,16 +244,16 @@ def freeze_render(root,doc,task=''):
             if delivered!=milestone:
                 fail(f"design doc {doc} says delivered: '{delivered or 'missing'}', but its roadmap record is in {milestone}.")
     if freeze:
-        fields=frontmatter(path)
+        fields=frontmatter(path,source)
         if [sum(line.startswith(k) for line in fields) for k in ('status:','last-verified:','delivered:')]!=[1,1,0]:
             fail(f'{name} has ambiguous lifecycle frontmatter.','Expected one status, one last-verified, and no delivered field before freezing.')
     pending_marker=f'- [ ] **{task}.**';done_marker=f'- [x] **{task}.**'
     output=[];inside=False
-    for index,line in enumerate(lines(path)):
+    for index,line in enumerate(source):
         if index==0 and line=='---':inside=True;output.append(line);continue
         if inside and line=='---':inside=False;output.append(line);continue
         if freeze and inside and line.startswith('status:'):output+=['status: frozen','delivered: '+milestone];continue
         if freeze and inside and line.startswith('last-verified:'):output.append('last-verified: '+date.today().isoformat());continue
         if tick and line.startswith(pending_marker):output.append(done_marker+line[len(pending_marker):]);continue
         output.append(line)
-    return ''.join(line+'\n' for line in output)
+    return ''.join(line+ending for line in output)
