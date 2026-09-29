@@ -28,7 +28,7 @@ bash integrations/test.sh syntax   # Python, JavaScript and shell syntax
    and any limits. Keep docs in sync with what the code actually does.
 
 Maintainers run an independent review of every PR before merging. Only maintainers merge.
-Merging to `main` doesn't release anything; see
+Merging to `main` releases nothing unless the merge changes the version; see
 [releasing](docs/installation.md#releasing-maintainers).
 
 To try your change as a real plugin, see the local build steps in the same section. Your

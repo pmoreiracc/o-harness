@@ -1,0 +1,53 @@
+name: prepare release
+# Actions > prepare release > Run workflow, with the new version: opens a pull request that sets it and lists
+# what the release holds. Merging that pull request releases it (release.yml).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New version, like 0.4.0 (higher than the current one)
+        required: true
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Open the release pull request
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Run it on main"; exit 1; }
+          # OH activates updates by comparing plain numeric versions.
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::The version must look like 0.4.0"; exit 1; }
+          current=$(jq -r .version plugins/o-harness/.claude-plugin/plugin.json)
+          python3 -c 'import sys; new, old = (tuple(map(int, v.split("."))) for v in sys.argv[1:]); sys.exit(new <= old)' "$VERSION" "$current" \
+            || { echo "::error::$VERSION is not higher than the current version, $current"; exit 1; }
+          for host in claude codex; do
+            file="plugins/o-harness/.$host-plugin/plugin.json"
+            sed -i -E "s/^(  \"version\": \")[^\"]+\"/\1$VERSION\"/" "$file"
+            [ "$(jq -r .version "$file")" = "$VERSION" ] || { echo "::error::Could not set the version in $file"; exit 1; }
+          done
+          branch="release/$VERSION"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git commit -qam "Release $VERSION"
+          git push -q origin "$branch"
+          notes=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="v$VERSION" -f target_commitish=main --jq .body)
+          {
+            echo "Merging this releases **$VERSION**. The release workflow runs every test on Linux and Windows, installs the package in Claude Code and Codex on Windows, macOS and Linux, and publishes it only if all of that passes."
+            echo
+            echo "A workflow opened this pull request, so GitHub runs no checks on it: the release runs them all."
+            echo
+            echo "## What this release holds"
+            echo
+            echo "$notes"
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base main --head "$branch" --title "Release $VERSION" --body-file "$RUNNER_TEMP/body.md"
