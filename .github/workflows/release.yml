@@ -1,21 +1,23 @@
 name: release
 # A new version reaching main releases it: "prepare release" opens the pull request that sets it (see
-# docs/installation.md, "Releasing"). Nothing is published unless the full Windows suite and the install check
-# pass. Linux tests and syntax aren't repeated: each merged pull request passed them against the main of its time.
+# docs/installation.md, "Releasing"). The release starts only after main's own checks (verify: Linux tests and
+# syntax) pass on that exact commit, and publishes only if the full Windows suite and the install check pass too.
 # The tag is created first and pins the release's commit: running this again by hand, after a failure, finishes
 # that same version from that same commit, so users never get two different builds under one version.
 on:
-  push:
+  workflow_run:
+    workflows: [verify]
+    types: [completed]
     branches: [main]
-    paths:
-      - plugins/o-harness/.claude-plugin/plugin.json
-      - plugins/o-harness/.codex-plugin/plugin.json
   workflow_dispatch:
 permissions:
+  actions: read
   contents: write
 concurrency: release
 jobs:
   version:
+    # After every push to main whose checks passed; it releases only a version that isn't released yet.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -23,11 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
       - id: version
         name: Find the version to release, and its commit
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Releases come from main"; exit 1; }
           version=$(jq -r .version plugins/o-harness/.claude-plugin/plugin.json)
@@ -35,8 +39,11 @@ jobs:
             echo "::error::The Claude and Codex plugin versions differ"; exit 1; }
           tag="v$version"
           if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "Releasing $tag from $GITHUB_SHA."
-            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT";exit 0
+            # Started by hand, it still needs main's checks to have passed on this commit.
+            passed=$(gh run list --workflow verify.yml --commit "$COMMIT" --event push --json conclusion --jq 'map(select(.conclusion == "success")) | length')
+            [ "$passed" -gt 0 ] || { echo "::error::main's checks (verify) have not passed on $COMMIT"; exit 1; }
+            echo "Releasing $tag from $COMMIT."
+            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$COMMIT" >> "$GITHUB_OUTPUT";exit 0
           fi
           published=$(git fetch -q origin dist && git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version || true)
           if [ "$published" = "$version" ] && gh release view "$tag" >/dev/null 2>&1; then

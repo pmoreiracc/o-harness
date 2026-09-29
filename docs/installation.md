@@ -130,15 +130,16 @@ delete `~/.local/share/o-harness` after uninstalling from both hosts.
 2. On that pull request, click **Approve and run** (GitHub asks before running checks on a pull
    request a workflow opened), then merge it once the checks pass.
 
-Merging it starts the release workflow. It runs the full Windows suite (pull requests run only
-part of it), then installs the package in the real Claude Code and Codex on Windows, macOS and Linux and checks
-that OH sets up and its tools start (`integrations/install-check.py`, no AI login needed).
-Only when all of that passes does it create the `vX.Y.Z` tag, publish that package to the
-`dist` branch and create the GitHub release, whose notes list the merged pull requests. If a
-test or the install check fails, nothing is published: fix it on `main` and run **Actions →
-release → Run workflow**. If a later step fails, running it again finishes the same version
-from the same tagged commit, so users never get two different builds of one version; if it
-keeps failing there, release the fix as a new version.
+Merging it starts the release workflow once main's own checks pass on that commit. It runs the
+full Windows suite (pull requests run only part of it), then installs the package in the real
+Claude Code and Codex on Windows, macOS and Linux and checks that OH sets up and its tools
+start (`integrations/install-check.py`, no AI login needed). Only when all of that passes does
+it create the `vX.Y.Z` tag, publish that package to the `dist` branch and create the GitHub
+release, whose notes list the merged pull requests. If a test or the install check fails,
+nothing is published: merge the fix to `main`, and the release runs again once its checks
+pass. If a later step fails, running it again (**Actions → release → Run workflow**) finishes
+the same version from the same tagged commit, so users never get two different builds of one
+version; if it keeps failing there, release the fix as a new version.
 
 Once, in the repository's **Settings → Actions → General**, allow GitHub Actions to create pull
 requests, so the prepare step can open one.
