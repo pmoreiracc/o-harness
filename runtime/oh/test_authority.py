@@ -21,18 +21,16 @@ class AuthorityTest(unittest.TestCase):
                       {'type':'response_item','payload':{'role':'user','content':[{'type':'input_text','text':'continue'}]}}]
                 else:
                     records=[{'type':'user','sessionId':'session','promptId':'turn','cwd':str(root),'message':{'role':'user','content':'continue'}}]
-                def save():path.write_text(''.join(json.dumps(r)+'\n' for r in records))
+                def save(*extra):path.write_text(''.join(json.dumps(r)+'\n' for r in records+list(extra)),newline='\n')
                 save();self.assertEqual(attest(host,payload,root)['turn'],'turn')
                 # A notification in its own turn changes nothing; once the person types something newer, this turn
                 # is no longer what they asked for.
                 if host=='claude':
                     note={'type':'user','sessionId':'session','promptId':'later','cwd':str(root),'origin':{'kind':'task-notification'},'message':{'role':'user','content':'done'}}
-                    save_with=lambda *extra:path.write_text(''.join(json.dumps(r)+'\n' for r in records+list(extra)))
-                    save_with(note);self.assertEqual(attest(host,payload,root)['turn'],'turn')
-                    save_with(note,{'type':'user','sessionId':'session','promptId':'later','cwd':str(root),'message':{'role':'user','content':'never mind'}})
+                    save(note);self.assertEqual(attest(host,payload,root)['turn'],'turn')
+                    save(note,{'type':'user','sessionId':'session','promptId':'later','cwd':str(root),'message':{'role':'user','content':'never mind'}})
                 else:
-                    path.write_text(''.join(json.dumps(r)+'\n' for r in records+[{'type':'event_msg','payload':{'type':'task_started','turn_id':'later'}},
-                                    {'type':'event_msg','payload':{'type':'user_message','message':'never mind'}}]))
+                    save({'type':'event_msg','payload':{'type':'task_started','turn_id':'later'}},{'type':'event_msg','payload':{'type':'user_message','message':'never mind'}})
                 with self.assertRaises(Expired):attest(host,payload,root)
                 save()
                 if host=='claude':  # the desktop app saves a typed turn as from a person, with its SDK marker
