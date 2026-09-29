@@ -8,7 +8,7 @@ from .cli import host_hook
 from .config import change
 from .hosts import DESIGN_SCHEMA
 from .runner import run
-from .storage import Refused
+from .storage import Refused, read_json
 from .workflow import choose, load_run
 
 BODY = '''## 1. Why this, and why now
@@ -302,8 +302,7 @@ class DesignRunTest(unittest.TestCase):
                 unittest.mock.patch('oh.transcripts.register'):
             stage(self.root, 'codex', payload('1', '/oh-design login'))
             with self.assertRaisesRegex(Refused, "no initiative 'login'"):materialize(self.root)
-            self.assertFalse(pending_file(self.root).exists())
-            stage(self.root, 'codex', payload('1', '/oh-design login'))  # the same turn again gives the same answer
+            self.assertTrue(pending_file(self.root).exists())  # kept until carried out, so it is never typed again
             with self.assertRaisesRegex(Refused, "no initiative 'login'"):materialize(self.root)
             stage(self.root, 'codex', payload('2', '/oh-design auth'))
             self.assertEqual(materialize(self.root)['status'], 'running')
@@ -361,20 +360,17 @@ class DesignRunTest(unittest.TestCase):
         self.design_run()
         self.assertEqual(run(self.root, self.worker([design()]))['status'], 'completed')
 
-    def test_a_refused_start_says_to_type_the_command_again(self):
-        from .authority import materialize, stage
-        from .cli import main
+    def test_a_refused_start_is_carried_out_once_its_reason_is_fixed(self):
+        from .authority import materialize, pending_file, stage
         payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
         with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
                 unittest.mock.patch('oh.transcripts.register'):
             (self.root / 'notes.txt').write_text('dirty')
             stage(self.root, 'codex', payload('1', '/oh-design auth'))
-            with self.assertRaisesRegex(Refused, 'clean execution checkout.*type it again'):materialize(self.root)
+            with self.assertRaisesRegex(Refused, 'clean execution checkout'):materialize(self.root)
             (self.root / 'notes.txt').unlink()
-            with self.assertRaisesRegex(Refused, 'Your last OH command was refused'), unittest.mock.patch('sys.stderr'):
-                try:main(['--root', str(self.root), 'run'])
-                except SystemExit:raise Refused('Your last OH command was refused')
-            self.assertFalse(self.root.joinpath('docs/design').exists())
+            self.assertEqual(materialize(self.root)['status'], 'running')  # not typed again
+        self.assertFalse(pending_file(self.root).exists())
 
     def test_an_unexpected_failure_never_blocks_the_next_command(self):
         from .authority import materialize, pending_file, stage
@@ -389,7 +385,8 @@ class DesignRunTest(unittest.TestCase):
                 unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}):
             stage(self.root, 'codex', payload('2', 'stop'))
             with self.assertRaisesRegex(Refused, 'RuntimeError: boom'):materialize(self.root)
-        self.assertFalse(pending_file(self.root).exists())
+            stage(self.root, 'codex', payload('3', 'continue'))  # the newest typed choice replaces it
+        self.assertEqual(read_json(pending_file(self.root))['event']['turn'], '3')
 
     def test_a_check_that_rewrites_a_plan_file_stops_the_run(self):
         import sys

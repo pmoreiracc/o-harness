@@ -34,6 +34,9 @@ class PluginTransitions(unittest.TestCase):
         self.assertFalse(pending_file(self.root).exists())
         self.assertFalse(receive(self.root,'codex',payload|{'prompt':'$o-harness:oh-start'})['authorized'])
         self.assertTrue(receive(self.root,'codex',payload|{'turn_id':'2','prompt':'$o-harness:oh-deliver request:'+'a'*64})['pending'])
+        # The first command typed in a new checkout registers it, as init would, and carries on.
+        fresh=Path(self.temp.name)/'fresh';fresh.mkdir();subprocess.run(['git','init','-q',str(fresh)],check=True)
+        self.assertTrue(receive(fresh,'codex',payload|{'cwd':str(fresh),'prompt':'$o-harness:oh-propose an idea'})['pending'])
 
     def test_unprefixed_prose_is_not_an_invocation(self):
         payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root)}

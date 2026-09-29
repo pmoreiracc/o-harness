@@ -12,15 +12,8 @@ from .storage import Refused,atomic_json,digest,git,lock,now,read_json,state_hom
 def pending_file(root):return checkout_file(root, 'oh-pending-human.json')
 
 
-def refusal_file(root):return checkout_file(root, 'oh-last-refusal.json')
-
-
-def refused_last(root):
-    """After a typed command was refused, the next plain run says so once instead of acting on an older run."""
-    path=refusal_file(root)
-    if pending_file(root).exists() or not path.exists():return
-    message=read_json(path)['refused'];path.unlink()
-    raise Refused('Your last OH command was refused: '+message)
+class Expired(Refused):
+    """The person typed something newer in the conversation, so this command is no longer what they asked for."""
 
 
 def stage(root,host,payload):
@@ -31,8 +24,7 @@ def stage(root,host,payload):
     locator={'host':host,'payload':payload,'event':event}
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        if path.exists() and read_json(path)!=locator:
-            raise Refused('A prior human choice is pending verification; resolve it before another choice')
+        # The newest typed command or choice replaces one OH hasn't carried out yet: the person moved on.
         atomic_json(path,locator)
     return {'pending':True,'message':'Run OH to verify and apply this native human choice'}
 
@@ -156,11 +148,10 @@ def answer(root,hint=None):
 
 
 def answered(root,host,session,transcript):
-    """What the typed path does after a human choice applies: forget an older refusal, and count the owner
-    conversation's usage toward this run when it is running again."""
+    """What the typed path does after a human choice applies: count the owner conversation's usage toward this
+    run when it is running again."""
     from .transcripts import register
     from .workflow import load_run
-    refusal_file(root).unlink(missing_ok=True)
     _,run=load_run(root)
     if run['status']=='running' and transcript:
         register(root,host,{'session_id':session,'transcript_path':transcript},run['id'],run['project'])
@@ -201,6 +192,15 @@ def expanded_skill(x):
     return Path(found[1].strip()).name if found else None
 
 
+def prompted(x,session):
+    """Whether a Claude record is something the person typed in this conversation: a prompt or a command, not a
+    tool result, a menu answer or a summary Claude wrote."""
+    content=(x.get('message') or {}).get('content')
+    text=isinstance(content,str) or isinstance(content,list) and bool(content) and all(isinstance(c,dict) and c.get('type')=='text' for c in content)
+    return (x.get('type')=='user' and x.get('sessionId')==session and bool(x.get('promptId')) and text
+            and not x.get('isCompactSummary') and human(x))
+
+
 def attest(host,payload,root=None):
     from .workflow import human_event
     event=human_event(payload,host)
@@ -211,7 +211,7 @@ def attest(host,payload,root=None):
     else:paths=list(allowed.rglob('*'+event['session']+'*.jsonl'))
     if len(paths)!=1 or not paths[0].is_relative_to(allowed) or not paths[0].is_file():
         raise Refused('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
-    path=paths[0];matches=[];times=[];turn=None;session=None;source=None;tagged=[];expanded={}
+    path=paths[0];matches=[];times=[];turn=None;session=None;source=None;tagged=[];expanded={};latest=None
     with path.open('rb') as stream:
         first=stream.readline()
         stream.seek(max(len(first),path.stat().st_size-8*1024*1024))
@@ -227,6 +227,7 @@ def attest(host,payload,root=None):
                 if p.get('type')=='task_started':turn=p.get('turn_id')
                 # exec/subagent input is model-delegated work, not a new human grant.
                 if isinstance(source,dict) or source in ('exec','subagent'):continue
+                if session==event['session'] and (x.get('type')=='event_msg' and p.get('type')=='user_message' or x.get('type')=='response_item' and p.get('role')=='user'):latest=turn
                 if session!=event['session'] or turn!=event['turn']:continue
                 if x.get('type')=='event_msg' and p.get('type')=='user_message':
                     text=p.get('message')
@@ -234,6 +235,7 @@ def attest(host,payload,root=None):
                     text='\n'.join(c.get('text','') for c in p.get('content',[]) if c.get('type') in ('input_text','text'))
                 else:continue
             else:
+                if prompted(x,event['session']):latest=x['promptId']
                 if x.get('type')!='user' or x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
                 if x.get('isMeta') and not x.get('isSidechain'):
                     # The model's own Skill tool call saves the same text; only a typed command's expansion
@@ -262,6 +264,7 @@ def attest(host,payload,root=None):
             name,args=typed_command(event['prompt'])
             event=event|{'prompt':'/o-harness:'+name+(' '+args if args else '')}
     if not matches:raise Refused('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
+    if latest not in (None,event['turn']):raise Expired('The person typed something newer in this conversation')
     # Codex can retain the same turn as both event_msg and response_item; the native turn ID
     # and exact text collapse them into one source, with both evidence hashes retained.
     return event|{'at':min(times) if times else None,'record_hashes':sorted(set(matches)),'transcript_path':str(path)}
@@ -282,7 +285,9 @@ def materialize(root):
                 raise Refused('Your typed choice is not saved in the conversation yet; run OH again in a moment')
             path.unlink();return answer(root,hint=locator['event']['turn'])
         if not path.exists():return answer(root)
-        locator=read_json(path);event=attest(locator['host'],locator['payload'],root)
+        locator=read_json(path)
+        try:event=attest(locator['host'],locator['payload'],root)
+        except Expired:path.unlink();return answer(root)
         used=used_file(root,event)
         if used.exists():
             path.unlink();record=read_json(used)
@@ -292,16 +297,11 @@ def materialize(root):
         try:
             result=host_hook(root,locator['host'],locator['payload'],verified=event)
             if result is None:raise Refused('This input is not a supported native OH transition')
+        except Refused:raise
         except Exception as exc:
-            # The human's turn was verified and answered with this refusal: it is spent, so the next typed command
-            # isn't blocked behind it. Replaying the same turn gives the same refusal, and the next plain `oh run`
-            # says the command has to be typed again instead of showing an older run.
-            message=(str(exc) if isinstance(exc,Refused) else f'OH could not carry out this command ({type(exc).__name__}: {exc})').strip()
-            message+=' OH answered this command; type it again once this is fixed.'
-            atomic_json(used,{'source':event,'refused':message},immutable=True)
-            atomic_json(refusal_file(root),{'refused':message});path.unlink()
-            raise Refused(message) from exc
-        refusal_file(root).unlink(missing_ok=True)
+            raise Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})') from exc
+        # A refused command stays pending and is spent only once carried out, so `oh run` carries it out when the
+        # reason is fixed, without the person typing it again. A newer command replaces it; a newer prompt retires it.
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
         from .workflow import load_run

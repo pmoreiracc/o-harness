@@ -205,8 +205,7 @@ def main(argv=None):
             from .authority import stage
             result=stage(root,args.host,json.load(sys.stdin))
         elif args.command in ('run','start'):
-            from .authority import materialize,refused_last
-            refused_last(root)
+            from .authority import materialize
             materialize(root)
             if args.command=='start' and args.request:
                 from .workflow import load_run
@@ -239,8 +238,8 @@ def main(argv=None):
             if selected['kind']=='list':result=listing(root)
             elif selected['kind']=='quick_fix':result=selected
             else:
-                from .authority import materialize,refused_last
-                refused_last(root);admitted=materialize(root)
+                from .authority import materialize
+                admitted=materialize(root)
                 if admitted and admitted.get('limits'):print(admitted['limits'],flush=True)
                 if selected['kind']=='design':
                     from .design_runner import run

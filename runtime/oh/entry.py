@@ -36,8 +36,14 @@ def receive(root,host,payload):
     if name!='choice':
         from .registry import lookup
         try:lookup(root)
-        except Refused as exc:
-            return {'authorized':False,'onboarding':str(exc),'next':'Complete explicit setup/registration, prepare the scope if needed, then submit a fresh workflow invocation.'}
+        except Refused:
+            # Typing an OH command in a checkout is the person's choice to use OH here: register it as `init` would,
+            # so the command they typed carries on.
+            from .config import ensure_project
+            from .registry import register
+            try:register(root);ensure_project(root)
+            except Refused as exc:
+                return {'authorized':False,'onboarding':str(exc),'next':'Register this checkout with init (it says which name to pick), then run the command.'}
         exact_request=re.fullmatch(r'request:[0-9a-f]{64}',args)
         design_request=re.fullmatch(r'[0-9]{4}(?:\s+[a-zA-Z0-9_-]+)?\s+request:[0-9a-f]{64}',args)
         if name=='deliver':

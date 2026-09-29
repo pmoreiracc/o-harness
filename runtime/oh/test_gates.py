@@ -237,13 +237,10 @@ class GateTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.assertEqual(self.click(question, 'Stop', use='toolu_again')['status'], 'stopped')
 
-    def test_an_applied_answer_clears_an_old_refusal_and_counts_the_owner_conversation(self):
-        from .authority import refusal_file
-        from .storage import atomic_json, digest, read_json, state_home
+    def test_an_applied_answer_counts_the_owner_conversation(self):
+        from .storage import digest, read_json, state_home
         question = self.begin('claude')['gate']['ask']['questions'][0]
-        atomic_json(refusal_file(self.root), {'refused': 'an older command'})
         self.assertEqual(self.click(question, 'Continue')['status'], 'running')
-        self.assertFalse(refusal_file(self.root).exists())
         source = read_json(state_home() / 'sources' / (digest({'host': 'claude', 'session': 's'}) + '.json'))
         self.assertEqual((source['run'], source['path']), (load_run(self.root)[1]['id'], str(self.transcript)))
 
@@ -281,15 +278,11 @@ class GateTest(unittest.TestCase):
         return sent, next(m for m in sent if m.get('id') == 2)['result']['content'][0]['text']
 
     def test_codex_menu_records_the_click_itself(self):
-        from .authority import refusal_file
-        from .storage import atomic_json
         self.begin('codex')
-        atomic_json(refusal_file(self.root), {'refused': 'an older command'})
         sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
         self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
         self.assertIn('Recorded', text)
-        self.assertFalse(refusal_file(self.root).exists())
         self.assertIn(f'Project Fixture · {self.root.resolve()} · run ', asked['params']['message'])  # the person sees the target
         self.assertIn('Continue runs 1 of the 1 remaining task', asked['params']['message'])
         _, state = load_run(self.root)
