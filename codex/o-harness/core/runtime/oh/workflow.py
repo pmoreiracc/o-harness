@@ -8,7 +8,7 @@ from .storage import state_writer
 
 from pathlib import Path
 from .config import classify, snapshot
-from .storage import Journal, Refused, atomic_json, checkout_id, digest, git, identifier, project, read_json, state_home, lock
+from .storage import Journal, Refused, atomic_json, changes, checkout_id, digest, git, identifier, project, read_json, state_home, lock
 from .telemetry import best_effort
 
 
@@ -57,6 +57,15 @@ def unfinished(root,event):
     return state['source']!=digest({k:event[k] for k in ('host','session','turn','prompt')}) and state['status'] not in ('stopped','pr','completed')
 
 
+def occupied(state):
+    """Why a new command can't start while this checkout's run is open, and the person's choice the agent asks."""
+    what=f"its {state['workflow']} run {state['id'][:8]}"
+    if state['status']=='stopping':
+        return Refused(f'OH is stopping {what} in this checkout; run `run` again once `status` says it stopped.')
+    return Refused(f'OH is still working on {what} in this checkout. Ask the person with a menu: stop it and start '
+        'this command (run `stop`, then `run`), or keep it and cancel this command (run `cancel`).')
+
+
 def active_file(root):
     return checkout_file(root, 'oh-active-run.json')
 
@@ -94,6 +103,7 @@ def reduce(records):
             if d['status']=='paused':state['pause_snapshot']={'tree':d['tree'],'head':d['head']}
         elif kind=='task.intervention':state['interventions'][d['task']]=state['interventions'].get(d['task'],0)+1
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
+        elif kind=='run.owner':state['human']=d['human']
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
@@ -143,13 +153,12 @@ def _start(root, manifest, event, prepared=None, plan=None):
     if active_file(root).exists():
         journal,state=load_run(root)
         if state['source']==source:return journal,state
-        if state['status'] not in ('stopped','pr','completed'):
-            raise Refused('An unfinished run exists; resume it or explicitly stop first')
+        if state['status'] not in ('stopped','pr','completed'):raise occupied(state)
     config=prepared['snapshot'] if prepared else snapshot(root)
     from .config import project_checks
     required=prepared['project_checks'] if prepared else project_checks(root)
     if workflow=='deliver' and not required and not manifest.get('checks'):raise Refused("Add this project's checks before starting paid work: oh config set checks '<JSON list>'")
-    if git(root,'status','--porcelain'):
+    if changes(root):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
     original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
@@ -158,7 +167,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
         raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
     try:
         if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
-            created='codex/oh-'+run[:8]
+            created='codex/oh-'+run[:8]  # design deliveries are already on their deliver/ branch
             git(root,'switch','-c',created)
         import re
         current=git(root,'branch','--show-current')
@@ -171,7 +180,10 @@ def _start(root, manifest, event, prepared=None, plan=None):
         from .branches import incarnation
         branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
         for task in tasks:
-            task['difficulty'],task['difficulty_reason']=classify(task)
+            # The design or the agent that prepared the tasks decides each task's difficulty; the rubric decides
+            # only when they didn't.
+            if task.get('difficulty') not in ('simple','standard','complex') or not isinstance(task.get('difficulty_reason'),str) or not task['difficulty_reason'].strip():
+                task['difficulty'],task['difficulty_reason']=classify(task)
         data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
               'host':event['host'],'checkout':checkout,'source':source,'human':event,
               'branch':git(root,'branch','--show-current'),'incarnation':branch_incarnation,'base':git(root,'rev-parse','HEAD'),
@@ -189,7 +201,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
         active=read_json(active_file(root)) if active_file(root).exists() else {}
         if created and active.get('run')!=run:
             if (git(root,'branch','--show-current')!=created or git(root,'rev-parse','HEAD')!=base
-                    or git(root,'status','--porcelain')):
+                    or changes(root)):
                 raise Refused('Run start failed and the checkout changed; inspect it, then switch back to '+original+' before typing the command again')
             git(root,'switch',original)
             from subprocess import CalledProcessError
@@ -271,7 +283,7 @@ def _choose(root, choice, event):
             if not commits:raise Refused('Nothing was committed, so there is nothing to publish')
             if head!=commits[-1] or branch!=state['branch']:
                 raise Refused('PR choice must cover the exact completed branch head')
-            decision.update(head=head,branch=branch,commits=commits)
+            decision.update(head=head,branch=branch,commits=adopted(root,state,commits)+commits)
         append('decision',decision)
         append('run.status',{'status':'pr' if choice=='pr' else 'stopped'})
     elif choice in ('accept concerns','route scope','accept concerns and route scope'):
@@ -336,11 +348,11 @@ def discard_proposal(root,journal,state):
         raise Refused('The proposal branch changed; preserve it and restore its recorded identity before cleanup')
     if current==branch:
         undo(root,state.get('rendered'))
-        if git(root,'status','--porcelain'):raise Refused('Preserve unrelated edits before retrying proposal cleanup')
+        if changes(root):raise Refused('Preserve unrelated edits before retrying proposal cleanup')
         if target:
             if git(root,'rev-parse',target)!=pending['base']:raise Refused('The original branch moved; restore its base before retrying proposal cleanup')
             git(root,'switch',target)
-    elif git(root,'status','--porcelain'):
+    elif changes(root):
         raise Refused('Preserve new edits before retrying proposal cleanup')
     if target and exists:
         from subprocess import CalledProcessError
@@ -362,6 +374,61 @@ def next_task(state):
 
 def review_limit(state,task):
     return state['config']['review_rounds']+sum(g['rounds'] for g in state.get('review_grants',[]) if g['task']==task)
+
+
+def adopted(root,state,own):
+    """The reviewed commits a stopped run, or a completed one nobody chose to publish, left on this branch before
+    this run resumed it. They were never published, so this run's PR choice publishes them with its own."""
+    import subprocess
+    from .branches import main_ref
+    from .publication import commits,made
+    base=main_ref(root)
+    if not base:raise Refused('This repository has no main or master branch to publish against')
+    try:mine=commits(root,base,reviewed=None)  # render checks the merges
+    except subprocess.CalledProcessError as exc:raise Refused(f'OH could not list this branch\'s commits since {base}') from exc
+    runs={commit:other for commit in mine if (other:=made(root,state['project'],commit))}
+    # Commits OH didn't make (the person's own, or OH's they amended or rebased) belong to no run: a review covered
+    # them, or render refuses the PR.
+    covers={c for other in runs.values() for intent in other['commit_intents'].values() for c in (intent.get('publication') or {}).get('covers',[])}
+    found=[]
+    for commit in mine:
+        if commit in own:break
+        if commit in covers:continue
+        if not (other:=runs.get(commit)):raise Refused(f'Commit {commit[:12]} on this branch was neither made nor reviewed by OH')
+        if other['status']=='pr' and commit in (other.get('publication') or {}).get('commits',[]):found=[];continue
+        if other['status'] not in ('stopped','completed') or other['branch']!=state['branch']:raise Refused('This branch holds commits of another unfinished run')
+        found.append(commit)
+    return found
+
+
+def reopen(root,state,event):
+    """Make a finished run this checkout's run again, so its pull request can be chosen: the person typing the
+    delivery again after stopping it at completion wants that choice back. It grants no new work."""
+    journal=Journal(state['project'],state['id'])
+    with lock(checkout_file(root,'oh-control.lock')):
+        owned(journal,state,event)
+        if state['status']=='stopped':
+            journal.append('decision',{'source':digest({k:event[k] for k in ('host','session','turn','prompt')}),'choice':'reopen'})
+            journal.append('run.status',{'status':'completed'})
+        atomic_json(active_file(root),{'project':state['project'],'run':state['id'],'checkout':checkout_id(root)})
+    return checkpoint(root)
+
+
+def carry_on(root,event):
+    """The person typed the checkout's open run's command again: carry on with it, from this conversation."""
+    with lock(checkout_file(root,'oh-control.lock')):
+        journal,state=load_run(root)
+        owned(journal,state,event)
+    return checkpoint(root)
+
+
+def owned(journal,state,event):
+    """A verified command typed in another conversation of the run's host makes that conversation the run's owner,
+    so its menus are answered there. The host stays: its workers and transcripts are that host's."""
+    if state['human'].get('session')==event['session']:return
+    from .storage import Final
+    if state['host']!=event['host']:raise Final(f"This run belongs to {state['host'].title()}; carry on with it there")
+    journal.append('run.owner',{'human':event})
 
 
 def checkpoint(root):
@@ -410,7 +477,8 @@ def start(root,manifest,event,prepared=None,plan=None):
 
 @state_writer
 def choose(root,choice,event):
-    if choice in ('pause','stop'):
+    # A stop typed at completion declines the pull request, as the menu's Stop does; controls only reduce a run's work.
+    if choice=='pause' or choice=='stop' and load_run(root)[1]['status']!='completed':
         from .controls import request
         return request(root,choice)
     with lock(checkout_file(root, 'oh-control.lock')):

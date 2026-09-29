@@ -21,8 +21,12 @@ def host_hook(root,host,payload,*,verified):
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
     if planning:
         kind,intent=planning.groups()
-        from .workflow import unfinished
-        if unfinished(root,verified):raise Refused('An unfinished run exists in this checkout; resume it, or stop it with /oh-stop, first')
+        from .workflow import load_run,occupied,unfinished
+        if unfinished(root,verified):raise occupied(load_run(root)[1])
+        from .plans import layout
+        if not started(root,verified) and layout(root)['location']=='repo':
+            from .branches import from_main
+            from_main(root)
         if kind=='design':
             from .plans import design_manifest
             manifest,plan=design_manifest(root,intent.strip())
@@ -41,16 +45,25 @@ def host_hook(root,host,payload,*,verified):
         return listing(root)
     if delivery and delivery['kind']=='quick_fix':return delivery
     if delivery and delivery['kind']=='design':
+        from .workflow import carry_on,load_run,occupied,unfinished
+        if unfinished(root,verified):
+            _,state=load_run(root)
+            # The same design typed again carries on with its run.
+            if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return carry_on(root,verified)
+            raise occupied(state)
+        if started(root,verified):return checkpoint(root)
         from .prepared import resolve
-        if delivery['request']:
+        if delivery['request']:  # prepared on a branch it is bound to, which OH leaves where it is
             prepared=resolve(root,delivery['request'],verified,'design')
             if prepared['doc']!=delivery['doc'] or prepared['track']!=delivery['track']:raise Refused('Prepared design and requested track differ')
             start(root,prepared['manifest'],verified,prepared=prepared)
         else:
-            from .workflow import unfinished,load_run
-            if unfinished(root,verified):raise Refused('An unfinished run exists; resume it or stop it first')
-            source=digest({k:verified[k] for k in ('host','session','turn','prompt')})
-            if active_file(root).exists() and load_run(root)[1]['source']==source:return checkpoint(root)
+            from .branches import delivery_branch,refresh,to_delivery
+            from .delivery import finished
+            name=delivery_branch(delivery['doc'],delivery['track'])
+            if base:=to_delivery(root,name):
+                if again:=finished(root,delivery['doc'],delivery['track'],name,verified):return again
+                refresh(root,name,base)
             from .delivery import selection
             from .plans import editing
             with editing(root):
@@ -68,6 +81,12 @@ def host_hook(root,host,payload,*,verified):
         choose(root,prompt,verified)
         return checkpoint(root)
     return None
+
+
+def started(root,event):
+    """Whether this very command already started the checkout's run, so carrying it out again only continues it."""
+    from .workflow import active_file,load_run
+    return active_file(root).exists() and load_run(root)[1]['source']==digest({k:event[k] for k in ('host','session','turn','prompt')})
 
 
 def git_branch(root):
@@ -102,6 +121,7 @@ def main(argv=None):
     imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
     renamed=sub.add_parser('rename');renamed.add_argument('name')
     prep=sub.add_parser('prepare');prep.add_argument('manifest')
+    clash=sub.add_parser('conflict');clash.add_argument('choice',choices=['fresh','keep']);clash.add_argument('doc');clash.add_argument('track',nargs='?',default='')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?',default='origin/main');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
     publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?',default='origin/main');publication.add_argument('--validate-event',type=Path)
@@ -109,7 +129,7 @@ def main(argv=None):
     init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
-    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
+    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('cancel');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
     settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
     settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
     planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check','list'])
@@ -193,6 +213,12 @@ def main(argv=None):
         elif args.command in ('pause','stop'):
             from .controls import request
             result=request(root,args.command)
+        elif args.command=='conflict':
+            from .delivery import conflict
+            result=conflict(root,args.choice,args.doc,args.track)
+        elif args.command=='cancel':
+            from .authority import cancel
+            result=cancel(root)
         elif args.command=='resume':
             from .authority import materialize
             materialize(root)
@@ -205,9 +231,9 @@ def main(argv=None):
             from .authority import stage
             result=stage(root,args.host,json.load(sys.stdin))
         elif args.command in ('run','start'):
-            from .authority import materialize,refused_last
-            refused_last(root)
-            materialize(root)
+            from .authority import materialize
+            admitted=materialize(root)
+            if admitted and admitted.get('note'):print(admitted['note'],flush=True)
             if args.command=='start' and args.request:
                 from .workflow import load_run
                 _,state=load_run(root)
@@ -239,10 +265,13 @@ def main(argv=None):
             if selected['kind']=='list':result=listing(root)
             elif selected['kind']=='quick_fix':result=selected
             else:
-                from .authority import materialize,refused_last
-                refused_last(root);admitted=materialize(root)
+                from .authority import materialize
+                admitted=materialize(root)
                 if admitted and admitted.get('limits'):print(admitted['limits'],flush=True)
-                if selected['kind']=='design':
+                if admitted and admitted.get('note'):
+                    # A menu answer set the typed command aside: say so, and carry on with nothing else.
+                    print(admitted['note'],flush=True);result=admitted
+                elif selected['kind']=='design':
                     from .design_runner import run
                     result=run(root,selected['doc'],selected['track'])
                 else:

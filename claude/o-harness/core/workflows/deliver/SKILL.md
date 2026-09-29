@@ -12,12 +12,20 @@ host, so the person approves it. Stopping a long Codex tool call does not stop O
 as a menu: in Claude, the question tool (AskUserQuestion); in Codex, the o-harness `confirm` tool, which waits for
 the click (never Codex's own question tool, which closes when your turn ends).
 
-Resolve the selected Git checkout. Run `config`; if unregistered, run `init` once: it
-joins the project of the same repository, or names a new one after the repository (pass
-`--name` only when the user asks for another name, or when `config` or `init` says the name is
-taken or ambiguous; then ask the user which name to use). If `config` then lists no checks, save appropriate ordinary
-project checks with `config set checks '<JSON list>'` and tell the user which; never replace
-existing checks here. No OH files, hooks or settings belong in the product.
+When OH refuses, the command you were given stays valid until OH carries it out, so the person never types it
+again. Fix what is yours to fix and run the same OH command again without mentioning it. When the fix is the
+person's call, such as their own uncommitted changes, a merge conflict or another run still open, say what is in
+the way in one sentence and ask only with a menu, never in plain chat: anything they type instead sets the command
+aside. Do what they pick, with exactly the commands OH names for it, then run it again; run `cancel` only when
+they pick dropping the command, and `stop` only when they pick ending the other run. Never commit, stash or
+discard their changes unless they pick that, and never switch, pull or create branches for OH: it does that
+itself. After opening a pull request, give its link; don't wait for or watch its checks.
+
+Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
+ambiguous, ask the user which name to use and run `init --name <name>`. If OH says the project has no checks,
+save the checks the product's own instructions and CI run, never invented ones, with
+`config set checks '<JSON list>'`; give a check `when` paths when the product runs it only for changes there,
+so OH runs what is affected. Tell the user which, and run the command again; never replace existing checks here. No OH files, hooks or settings belong in the product.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
 Pass the user's arguments to `deliver [arguments]`; quote prose as one
@@ -27,19 +35,23 @@ argument. OH's parser selects the mode; do not infer a different workflow:
   ready commands and limits. Do not run an older active batch merely because the list is empty.
 - `0005 [track]` verifies the native human invocation and immediately runs the next ready
   tasks from that approved design. Plans can live in the repository or privately. There is
-  no prepare step or second trigger. Show the resulting checkpoint and limits.
+  no prepare step or second trigger. Show the resulting checkpoint and limits. OH works on
+  `deliver/0005` (`deliver/0005-<track>` for one track) from an up-to-date `main`; when that branch holds
+  unfinished work, OH resumes it and merges `main` into it; when they conflict, OH names the person's three choices. A
+  branch that already holds the whole design shows its PR choice again and takes no tasks. The same command while
+  its run is open continues it.
 - Prose returns `quick_fix` with the original intent. Inspect that fix and prepare a bounded task
   list: in Codex, pass it to the `prepare` tool as `tasks`; in Claude, save it as a JSON object with `tasks`
   under the project's external OH directory and run `prepare <absolute-path>`.
   Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
-  Use simple/standard/complex difficulty with rationale when known. Present the proposed
+  Give each task `difficulty` (simple, standard or complex) and a short `difficulty_reason`: OH picks
+  the model that builds it from them. Present the proposed
   tasks, returned `limits` sentence and exact trigger once. Only a new genuine human
   invocation approves that prepared scope; never echo the trigger as approval.
 - `request:<id>` verifies and runs the already prepared quick-fix scope. The older
   `0005 [track] request:<id>` consumer-profile spelling remains supported.
 
-If OH refuses a command, explain its concrete recovery step. Do not reinterpret a refused
-design number as permission for a quick fix, or run a different active design.
+Do not reinterpret a refused design number as permission for a quick fix, or run a different active design.
 
 The runner owns automatic models, fresh workers, checks, review, final rendering, commits
 and batch boundaries. Do not reproduce that loop in the parent conversation. At a batch

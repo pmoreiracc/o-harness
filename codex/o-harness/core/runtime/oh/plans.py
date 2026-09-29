@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import threading
 from .design_parse import US, design_file, lines, link_prefix, plan, roadmap
-from .storage import Refused
+from .storage import Refused, changes
 
 SLUG = r'[a-z0-9]+(-[a-z0-9]+)*'
 TABLE = ['| Slug | Initiative | Depends | Design |', '|---|---|---|---|']
@@ -631,18 +631,6 @@ def answer(value):
                 if owner in tracks:raise Refused('Each track name must be unique')
                 tracks.add(owner)
     return value
-
-
-def changes(root):
-    """Paths Git sees as changed or untracked in the checkout."""
-    import subprocess
-    output = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
-                            capture_output=True, check=True).stdout.decode().split('\0')
-    paths, skip = [], False
-    for entry in output:
-        if skip or not entry:skip = False;continue
-        paths.append(entry[3:]);skip = entry[0] in 'RC'  # a rename or copy is followed by its old path
-    return paths
 
 
 def ignored(root, relative):

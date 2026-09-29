@@ -1,7 +1,7 @@
 """Consumer-owned verification contracts; OH never imports a product toolchain."""
 import fnmatch
 from pathlib import Path
-from .storage import Refused,git,project
+from .storage import Refused,changes,git,project
 from .verification import verify
 
 
@@ -15,7 +15,7 @@ def selected(root,base='origin/main',mode='review'):
 def resolve(root,checks,base='origin/main',mode='review'):
     if not isinstance(checks,list) or not checks:raise Refused('At least one project verification check is required')
     ancestor=git(root,'merge-base','HEAD',base)
-    changed=set(git(root,'diff','--name-only',ancestor).splitlines()+git(root,'ls-files','--others','--exclude-standard').splitlines())
+    changed=set(git(root,'diff','--name-only',ancestor).splitlines()+changes(root))
     result=[]
     for check in checks:
         if not isinstance(check,dict) or not isinstance(check.get('name'),str):raise Refused('Invalid project check')

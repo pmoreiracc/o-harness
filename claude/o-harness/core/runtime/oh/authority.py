@@ -12,15 +12,8 @@ from .storage import Refused,atomic_json,digest,git,lock,now,read_json,state_hom
 def pending_file(root):return checkout_file(root, 'oh-pending-human.json')
 
 
-def refusal_file(root):return checkout_file(root, 'oh-last-refusal.json')
-
-
-def refused_last(root):
-    """After a typed command was refused, the next plain run says so once instead of acting on an older run."""
-    path=refusal_file(root)
-    if pending_file(root).exists() or not path.exists():return
-    message=read_json(path)['refused'];path.unlink()
-    raise Refused('Your last OH command was refused: '+message)
+class Expired(Refused):
+    """The person typed something newer in the conversation, so this command is no longer what they asked for."""
 
 
 def stage(root,host,payload):
@@ -31,8 +24,7 @@ def stage(root,host,payload):
     locator={'host':host,'payload':payload,'event':event}
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        if path.exists() and read_json(path)!=locator:
-            raise Refused('A prior human choice is pending verification; resolve it before another choice')
+        # The newest typed command or choice replaces one OH hasn't carried out yet: the person moved on.
         atomic_json(path,locator)
     return {'pending':True,'message':'Run OH to verify and apply this native human choice'}
 
@@ -124,11 +116,12 @@ def menu_waiting(root):
     return (gate,state,journal.records()[-1]['at']) if gate else None
 
 
-def answer(root,hint=None):
+def answer(root,hint=None,after=None):
     """Apply the person's latest answer to the menu the run waits on, read from the owner's own transcript.
     Only that single latest answer counts: once it is applied or refused, no earlier answer can take its place,
     and applying it moves the menu on so every earlier answer is out of date. `hint` is a typed menu word the
-    prompt hook saw: if it can't be read as that latest answer, nothing is applied."""
+    prompt hook saw: if it can't be read as that latest answer, nothing is applied. `after` is when a waiting
+    command was typed: an answer given before it waits, since the command is the person's latest act."""
     from .gates import apply,ask,pick
     waiting=menu_waiting(root)
     if not waiting:return None
@@ -140,7 +133,7 @@ def answer(root,hint=None):
         if found and not used_file(root,found).exists():
             atomic_json(used_file(root,found),{'source':found,'refused':'Set aside: a later typed choice could not be read.'},immutable=True)
         raise Refused('OH could not read your typed choice from the conversation, so nothing was applied. Choose again from the menu, or type it again.')
-    if not found:return None
+    if not found or after and not newer(found.get('at'),after):return None
     used=used_file(root,found)
     if used.exists():return None
     try:
@@ -152,15 +145,20 @@ def answer(root,hint=None):
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
     answered(root,'claude',found['session'],str(path))
-    return result
+    return noted(result,supersede(root,'claude',locked=True))
+
+
+def noted(result,dropped):
+    """Say once that a menu answer given after a typed command set that command aside."""
+    if not dropped:return result
+    return result|{'note':f'You answered the menu after typing {dropped}, so OH set that command aside; type it again to run it.'}
 
 
 def answered(root,host,session,transcript):
-    """What the typed path does after a human choice applies: forget an older refusal, and count the owner
-    conversation's usage toward this run when it is running again."""
+    """What the typed path does after a human choice applies: count the owner conversation's usage toward this
+    run when it is running again."""
     from .transcripts import register
     from .workflow import load_run
-    refusal_file(root).unlink(missing_ok=True)
     _,run=load_run(root)
     if run['status']=='running' and transcript:
         register(root,host,{'session_id':session,'transcript_path':transcript},run['id'],run['project'])
@@ -201,6 +199,15 @@ def expanded_skill(x):
     return Path(found[1].strip()).name if found else None
 
 
+def prompted(x,session):
+    """Whether a Claude record is something the person typed in this conversation: a prompt or a command, not a
+    tool result, a menu answer or a summary Claude wrote."""
+    content=(x.get('message') or {}).get('content')
+    typed=isinstance(content,str) or isinstance(content,list) and any(isinstance(c,dict) and c.get('type')!='tool_result' for c in content)
+    return (x.get('type')=='user' and x.get('sessionId')==session and bool(x.get('promptId')) and typed
+            and not x.get('isCompactSummary') and human(x))
+
+
 def attest(host,payload,root=None):
     from .workflow import human_event
     event=human_event(payload,host)
@@ -211,7 +218,7 @@ def attest(host,payload,root=None):
     else:paths=list(allowed.rglob('*'+event['session']+'*.jsonl'))
     if len(paths)!=1 or not paths[0].is_relative_to(allowed) or not paths[0].is_file():
         raise Refused('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
-    path=paths[0];matches=[];times=[];turn=None;session=None;source=None;tagged=[];expanded={}
+    path=paths[0];matches=[];times=[];turn=None;session=None;source=None;tagged=[];expanded={};latest=None
     with path.open('rb') as stream:
         first=stream.readline()
         stream.seek(max(len(first),path.stat().st_size-8*1024*1024))
@@ -227,6 +234,8 @@ def attest(host,payload,root=None):
                 if p.get('type')=='task_started':turn=p.get('turn_id')
                 # exec/subagent input is model-delegated work, not a new human grant.
                 if isinstance(source,dict) or source in ('exec','subagent'):continue
+                # Only what the person typed moves Codex on: it may add user-role items of its own within a turn.
+                if session==event['session'] and x.get('type')=='event_msg' and p.get('type')=='user_message':latest=turn
                 if session!=event['session'] or turn!=event['turn']:continue
                 if x.get('type')=='event_msg' and p.get('type')=='user_message':
                     text=p.get('message')
@@ -234,6 +243,7 @@ def attest(host,payload,root=None):
                     text='\n'.join(c.get('text','') for c in p.get('content',[]) if c.get('type') in ('input_text','text'))
                 else:continue
             else:
+                if prompted(x,event['session']):latest=x['promptId']
                 if x.get('type')!='user' or x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
                 if x.get('isMeta') and not x.get('isSidechain'):
                     # The model's own Skill tool call saves the same text; only a typed command's expansion
@@ -262,6 +272,7 @@ def attest(host,payload,root=None):
             name,args=typed_command(event['prompt'])
             event=event|{'prompt':'/o-harness:'+name+(' '+args if args else '')}
     if not matches:raise Refused('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
+    if latest not in (None,event['turn']):raise Expired('The person typed something newer in this conversation')
     # Codex can retain the same turn as both event_msg and response_item; the native turn ID
     # and exact text collapse them into one source, with both evidence hashes retained.
     return event|{'at':min(times) if times else None,'record_hashes':sorted(set(matches)),'transcript_path':str(path)}
@@ -282,7 +293,19 @@ def materialize(root):
                 raise Refused('Your typed choice is not saved in the conversation yet; run OH again in a moment')
             path.unlink();return answer(root,hint=locator['event']['turn'])
         if not path.exists():return answer(root)
-        locator=read_json(path);event=attest(locator['host'],locator['payload'],root)
+        locator=read_json(path)
+        try:event=attest(locator['host'],locator['payload'],root)
+        except Expired:
+            # Said once: the person moved on, so this command is spent and never carried out behind their back.
+            message=f"You typed something after {locator['event']['prompt']}, so OH set it aside; type it again to run it."
+            spent(root,locator['event'],message);path.unlink()
+            raise Refused(message)
+        except Refused:
+            # A command that can't be verified never holds up the open menu.
+            if menu_waiting(root) and (result:=answer(root)) is not None:return result
+            raise
+        # The person answered the open menu after typing this command: that answer is their latest act.
+        if menu_waiting(root) and (result:=answer(root,after=event.get('at'))) is not None:return result
         used=used_file(root,event)
         if used.exists():
             path.unlink();record=read_json(used)
@@ -293,15 +316,16 @@ def materialize(root):
             result=host_hook(root,locator['host'],locator['payload'],verified=event)
             if result is None:raise Refused('This input is not a supported native OH transition')
         except Exception as exc:
-            # The human's turn was verified and answered with this refusal: it is spent, so the next typed command
-            # isn't blocked behind it. Replaying the same turn gives the same refusal, and the next plain `oh run`
-            # says the command has to be typed again instead of showing an older run.
-            message=(str(exc) if isinstance(exc,Refused) else f'OH could not carry out this command ({type(exc).__name__}: {exc})').strip()
-            message+=' OH answered this command; type it again once this is fixed.'
-            atomic_json(used,{'source':event,'refused':message},immutable=True)
-            atomic_json(refusal_file(root),{'refused':message});path.unlink()
-            raise Refused(message) from exc
-        refusal_file(root).unlink(missing_ok=True)
+            # A refused command that starts work stays pending and is spent only once carried out, so `oh run`
+            # carries it out when the reason is fixed, without the person typing it again. A newer command or a
+            # later menu answer replaces it; a newer prompt sets it aside. A choice (a menu word, /oh-resume)
+            # answers the moment it was typed at, and a failure OH did not foresee would only repeat: those are
+            # said once and spent, as is a refusal that is the command's last word.
+            refused=exc if isinstance(exc,Refused) else Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})')
+            from .storage import Final
+            if not starts_work(locator) or not isinstance(exc,Refused) or isinstance(exc,Final):
+                atomic_json(used,{'source':event,'refused':str(refused)},immutable=True);path.unlink()
+            raise refused from exc
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
         from .workflow import load_run
@@ -310,6 +334,19 @@ def materialize(root):
             if run['status']=='running':register(root,locator['host'],locator['payload']|{'transcript_path':event['transcript_path']},run['id'],run['project'])
         path.unlink()
         return result
+
+
+def starts_work(locator):
+    """A typed command that starts work (propose, design, deliver, a prepared request), which OH keeps until done."""
+    from .entry import command
+    parsed=command((locator.get('event') or {}).get('prompt'))
+    return bool(parsed) and parsed[0] in ('propose','design','deliver','oh-start')
+
+
+def waiting_work(root):
+    """Whether a typed command that starts work waits in this checkout."""
+    try:return starts_work(read_json(pending_file(root)))
+    except FileNotFoundError:return False
 
 
 def bare_choice(locator,host='claude'):
@@ -345,15 +382,46 @@ def typed_choice(root,host):
     return locator if bare_choice(locator,host) else None
 
 
-def supersede(root,host):
-    """A click made after a typed menu word spends that word: the person's latest answer wins."""
+def supersede(root,host,locked=False):
+    """A menu answer applied after something was typed wins over it: the person's latest act counts. A typed
+    menu word is spent; a typed command waits only when the answer ended the run, which makes room for it.
+    Returns the command it set aside, if any. `locked` when the caller already holds the pending lock (the lock
+    is per open file, so never take it twice)."""
+    path=pending_file(root)
+    if not locked:
+        with lock(path.with_suffix('.lock')):return supersede(root,host,locked=True)
+    try:locator=read_json(path)
+    except FileNotFoundError:return
+    if locator.get('host')!=host:return
+    if not bare_choice(locator,host):
+        from .workflow import active_file,load_run
+        if not active_file(root).exists() or load_run(root)[1]['status'] in ('stopped','pr','completed'):return
+    spent(root,locator['event'],'Superseded by a later answer on the menu.')
+    path.unlink(missing_ok=True)
+    return None if bare_choice(locator,host) else locator['event']['prompt']
+
+
+def spent(root,event,refused):
+    """Record a waiting command or choice as used without carrying it out, so a replay of it is refused. A Claude
+    command is recorded under its typed spelling and under the one `attest` verifies from its command tags."""
+    events=[event]
+    if event.get('host')=='claude' and (typed:=typed_command(event.get('prompt'))) is not None:
+        name,args=typed;events.append(event|{'prompt':'/o-harness:'+name+(' '+args if args else '')})
+    for each in events:
+        used=used_file(root,each)
+        if not used.exists():atomic_json(used,{'source':each,'refused':refused},immutable=True)
+
+
+def cancel(root):
+    """The person chose not to run the command waiting in this checkout. Like stop, it only takes authority away,
+    but a worker never decides for the person."""
+    if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Delegated agents cannot cancel the person\'s command')
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        locator=typed_choice(root,host)
-        if not locator:return
-        used=used_file(root,locator['event'])
-        if not used.exists():atomic_json(used,{'source':locator['event'],'refused':'Superseded by a later click on the same menu.'},immutable=True)
-        path.unlink()
+        try:locator=read_json(path)
+        except FileNotFoundError:return {'cancelled':None,'message':'No typed command is waiting in this checkout.'}
+        spent(root,locator['event'],'Cancelled by the person.');path.unlink()
+    return {'cancelled':locator['event']['prompt'],'message':'The waiting command was cancelled; nothing of it ran.'}
 
 
 def desktop_pending(root):
