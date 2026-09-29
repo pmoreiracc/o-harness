@@ -15,7 +15,6 @@ from . import test_workflow as fixtures
 from .authority import materialize
 from .config import HOME
 from .gates import ask, current, pick
-from .gate_server import serve
 from .runner import run
 from .storage import Refused
 from .workflow import choose, human_event, load_run, start
@@ -268,23 +267,17 @@ class GateTest(unittest.TestCase):
         payload = {'hook_event_name': 'PreToolUse', 'tool_input': {'questions': [{'question': 'Continue? [OH gate abc]'}, {'question': 'Also?'}]}}
         self.assertIn('one question on its own', subprocess.run([sys.executable, str(script), 'pre'], input=json.dumps(payload), capture_output=True, text=True).stdout)
 
-    def server(self, root, reply, capabilities=None, while_open=None):
-        """Play the Codex host: answer the menu the server opens with `reply`."""
-        output = io.StringIO()
-        class Host:
-            queue = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18',
-                      'capabilities': {'elicitation': {}} if capabilities is None else capabilities}},
-                     {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'choose', 'arguments': {'root': str(root)}}}]
-            def readline(self):
-                if not self.queue:
-                    opened = [json.loads(line) for line in output.getvalue().splitlines() if 'elicitation/create' in line]
-                    if not opened or getattr(self, 'answered', False):return ''
-                    self.answered = True
-                    if while_open:while_open()
-                    self.queue.append({'jsonrpc': '2.0', 'id': opened[-1]['id'], 'result': reply})
-                return json.dumps(self.queue.pop(0)) + '\n'
-        serve(Host(), output)
-        sent = [json.loads(line) for line in output.getvalue().splitlines()]
+    def server(self, root, reply, capabilities=None, while_open=None, thread='s'):
+        """Play the Codex host in conversation `thread`: answer the menu the server opens with `reply`."""
+        from .test_mcp_server import calling, codex_session, play
+        codex_session(self.home, thread, self.root)
+        def respond(_):
+            if while_open:while_open()
+            return reply
+        with patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex')}):
+            sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18',
+                          'capabilities': {'elicitation': {}} if capabilities is None else capabilities}},
+                         {'id': 2, 'method': 'tools/call', 'params': {'name': 'choose', 'arguments': {'root': str(root)}} | calling(thread)}], respond)
         return sent, next(m for m in sent if m.get('id') == 2)['result']['content'][0]['text']
 
     def test_codex_menu_records_the_click_itself(self):
@@ -334,15 +327,20 @@ class GateTest(unittest.TestCase):
         self.assertIn('belongs to Claude', self.server(self.root, {})[1])
         self.assertIn('absolute path', self.server(Path('project'), {})[1])
 
-    def test_no_oh_command_reaches_the_menu_server(self):
+    def test_codex_menu_answers_only_in_the_conversation_that_started_the_run(self):
+        self.begin('codex')
+        self.assertIn('conversation that started this run', self.server(self.root, {'action': 'accept', 'content': {'choice': 'stop'}}, thread='other')[1])
+        self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
+
+    def test_no_oh_command_reaches_the_tool_server(self):
         from .cli import main
-        for argv in (['gate-server'], ['--', 'gate-server'], ['--root', str(self.root), '--', 'gate-server']):
+        for argv in (['mcp-server'], ['--', 'mcp-server'], ['--root', str(self.root), '--', 'mcp-server']):
             with self.subTest(argv), patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit):main(argv)
 
     def test_codex_menu_is_never_shown_to_workers_or_by_a_different_runtime(self):
         self.begin('codex')
         with patch.dict(os.environ, {'OH_CHILD_ATTEMPT': '1'}):
-            self.assertIn('workers cannot ask', self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})[1])
+            self.assertIn('workers cannot', self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})[1])
         with patch('oh.config.version', return_value='another-revision'):
             sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})
         self.assertIn('updated after this run started', text)
@@ -370,5 +368,6 @@ class GateTest(unittest.TestCase):
                 self.assertEqual(manifest.get('mcpServers'), './.mcp.json' if host == 'codex' else None)
                 if host == 'codex':  # Codex clears a server's environment: OH's worker marker and data home are passed on
                     server = json.loads((plugin / '.mcp.json').read_text())['mcpServers']['o-harness']
-                    self.assertEqual(server['env_vars'], ['OH_CHILD_ATTEMPT', 'OH_DATA_HOME'])
+                    self.assertEqual(server['env_vars'][:2], ['OH_CHILD_ATTEMPT', 'OH_DATA_HOME'])
+                    self.assertEqual(server['args'], ['-I', './scripts/mcp-server'])
                     self.assertEqual(server['cwd'], '.')  # Codex resolves it from the plugin folder and expands no variables

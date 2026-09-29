@@ -169,7 +169,8 @@ def answered(root,host,session,transcript):
 def attest(host,payload,root=None):
     from .workflow import human_event
     event=human_event(payload,host)
-    allowed=(Path.home()/('.codex/sessions' if host=='codex' else '.claude/projects')).resolve()
+    from .hosts import codex_home
+    allowed=(codex_home()/'sessions' if host=='codex' else Path.home()/'.claude/projects').resolve()
     if payload.get('transcript_path'):
         paths=[Path(payload['transcript_path']).expanduser().resolve()]
     else:paths=list(allowed.rglob('*'+event['session']+'*.jsonl'))
@@ -308,7 +309,8 @@ def desktop_pending(root):
     if os.environ.get('OH_CHILD_ATTEMPT'):return
     session=os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID')
     if not session or not re.fullmatch(r'[a-zA-Z0-9_-]+',session):return
-    files=list((Path.home()/'.codex/sessions').rglob('*'+session+'*.jsonl'))
+    from .hosts import codex_home
+    files=list((codex_home()/'sessions').rglob('*'+session+'*.jsonl'))
     if len(files)!=1:return
     path=files[0];meta=None;turn=None;prompt=None
     # The first record establishes origin; a bounded tail locates the current turn.

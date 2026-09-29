@@ -35,11 +35,29 @@ current menu counts, typed or clicked; if OH refuses it, no earlier answer appli
 messages Claude saved as the person's count, never another agent's or a notification; if OH can't
 read a typed menu word as the latest answer, it applies nothing and asks the person to choose again.
 In Codex, OH's MCP server shows the menu itself and records the click, which travels from the
-Codex menu to OH without passing through the model; a click spends any menu word typed before it. Codex doesn't
-tell the server which conversation called it, so there the click is bound to the run, its host
-and the exact menu, and the menu names the project, checkout and run it is for. The menu server
-is started only by Codex from the plugin, never by an `oh` command. OH's worker commands turn
-OH's Codex plugin off, and the menu server refuses to ask when an OH worker started it.
+Codex menu to OH without passing through the model; a click spends any menu word typed before it.
+
+In Codex, the agent runs OH through that same server rather than the shell. Codex's sandbox lets
+shell commands write only inside the project, while OH's state lives in its own folder so the
+model can't write it; Codex runs a plugin's MCP server outside that sandbox. Each everyday OH
+command (status, init, deliver, prepare, start, run, pause, resume, stop and a few read-only ones)
+is a tool that runs the command through the plugin's `oh` launcher, as the shell would: with the
+person's own shell setup (read once from their login shell, since Codex gives the server almost
+none of it), while OH's and the hosts' own settings come only from Codex, so a command and the
+server always use the same OH state. A command runs in its own session, and OH ignores an output
+nobody reads any more, so a run keeps working if Codex ends the server. OH's progress lines become progress notifications.
+The server runs from the core the plugin carries, so its tools exist before setup and right after
+an update; the launcher still picks and activates the installed core. Stopping a tool call does
+not stop OH, which keeps working within its grant; `status` and `stop` still apply.
+Commands that change what OH runs on the machine (settings and checks, setup, host trust,
+backups, services) are not tools, so Codex asks the person before they run. Codex puts the
+calling conversation in each request's metadata, which the model can't set: a tool acts only on
+the Git checkout that conversation works in (read from Codex's saved session), never on a
+repository around a nested one, a menu answers only in
+the conversation that started the run, and OH checks a typed choice against that conversation's
+saved turn as before. The server is started only by Codex from the plugin, never by an `oh`
+command. OH's worker commands turn OH's Codex plugin off, and the server refuses any tool when an
+OH worker started it.
 
 The runner keeps a hash-chained journal per run. For each task it picks a model profile,
 starts a fresh worker, runs the checks, starts an independent reviewer on the exact tree

@@ -2,8 +2,15 @@
 name: deliver
 description: Deliver approved design tasks, prepare an approved quick fix, or list ready work through the shared runner.
 ---
-Use the absolute `<plugin>/scripts/oh` entry supplied by the invoking skill. Resolve the
-selected Git checkout. Run `--root <checkout> config`; if unregistered, run `init` once: it
+How to run OH commands, such as `config`, `init`, `deliver` or `run`: in Codex, call the o-harness tool of
+that name (use `prepare_design` and `pr_summary` for the hyphenated ones) with the checkout's absolute path as
+`root`; never run OH from Codex's shell, which cannot write OH's state. In Claude, run the absolute
+`<plugin>/scripts/oh` entry supplied by the invoking skill as `<plugin>/scripts/oh --root <checkout> <command>`.
+Changing settings (`config set`, `config unset`) is never a tool: run it with `<plugin>/scripts/oh` on either
+host, so the person approves it. Stopping a long Codex tool call does not stop OH: call `status` to follow it and
+`stop` to end it.
+
+Resolve the selected Git checkout. Run `config`; if unregistered, run `init` once: it
 joins the project of the same repository, or names a new one after the repository (pass
 `--name` only when the user asks for another name, or when `config` or `init` says the name is
 taken or ambiguous; then ask the user which name to use). If `config` then lists no checks, save appropriate ordinary
@@ -11,7 +18,7 @@ project checks with `config set checks '<JSON list>'` and tell the user which; n
 existing checks here. No OH files, hooks or settings belong in the product.
 Read existing product instructions and business documents. Generic OH does not require ADRs.
 
-Pass the user's arguments to `--root <checkout> deliver [arguments]`; quote prose as one
+Pass the user's arguments to `deliver [arguments]`; quote prose as one
 argument. OH's parser selects the mode; do not infer a different workflow:
 
 - No arguments lists ready designs and unavailable designs with their reasons. Show the
@@ -19,8 +26,9 @@ argument. OH's parser selects the mode; do not infer a different workflow:
 - `0005 [track]` verifies the native human invocation and immediately runs the next ready
   tasks from that approved design. Plans can live in the repository or privately. There is
   no prepare step or second trigger. Show the resulting checkpoint and limits.
-- Prose returns `quick_fix` with the original intent. Inspect that fix, save a bounded JSON
-  manifest under the project's external OH directory, and call `prepare <absolute-path>`.
+- Prose returns `quick_fix` with the original intent. Inspect that fix and prepare a bounded task
+  list: in Codex, pass it to the `prepare` tool as `tasks`; in Claude, save it as a JSON object with `tasks`
+  under the project's external OH directory and run `prepare <absolute-path>`.
   Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
   Use simple/standard/complex difficulty with rationale when known. Present the proposed
   tasks, returned `limits` sentence and exact trigger once. Only a new genuine human
@@ -36,8 +44,7 @@ and batch boundaries. Do not reproduce that loop in the parent conversation. At 
 checkpoint show continue / PR / stop with the returned `limits` sentence; at completion show PR / stop. Exact choices from the
 owning human session are verified by `run`; they never silently renew another allowance.
 When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
-with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool with the checkout's
-absolute path as `root`. Then run OH `run`, which carries out the answer, unless the `choose` tool says nothing is
-left to run. Never answer for the person. Typed
+with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool. Then run `run`,
+which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 Keep results concise and link saved evidence. Human merging remains separate.

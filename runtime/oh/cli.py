@@ -75,7 +75,22 @@ def git_branch(root):
     return git(root,'branch','--show-current')
 
 
+class Tolerant:
+    """An output whose reader may go away, such as a host that ended a tool call: OH's notes, progress and result
+    are then lost, but the run they describe goes on."""
+    def __init__(self,stream):self.stream=stream
+    def write(self,text):
+        try:return self.stream.write(text)
+        except (OSError,ValueError):return len(text)
+    def flush(self):
+        try:self.stream.flush()
+        except (OSError,ValueError):pass
+    def __getattr__(self,name):return getattr(self.stream,name)
+
+
 def main(argv=None):
+    for name in ('stdout','stderr'):
+        if not isinstance(getattr(sys,name),Tolerant):setattr(sys,name,Tolerant(getattr(sys,name)))
     parser=argparse.ArgumentParser(prog='oh')
     parser.add_argument('--root',type=Path)
     sub=parser.add_subparsers(dest='command',required=True)
