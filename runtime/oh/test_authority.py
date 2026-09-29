@@ -41,6 +41,43 @@ class AuthorityTest(unittest.TestCase):
                 path.write_text('')
                 with self.assertRaises(Refused):attest(host,payload,root)
 
+    def test_claude_slash_command_is_read_from_the_tags_claude_saves(self):
+        with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home',return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            path=home/'.claude/projects/session.jsonl';path.parent.mkdir(parents=True)
+            payload={'hook_event_name':'UserPromptSubmit','session_id':'session','turn_id':'turn','transcript_path':str(path),
+                     'prompt':'/o-harness:oh-propose  Add a <confirm> tool\nfor Codex'}
+            def save(content,skill='oh-propose',**expansion):
+                typed={'type':'user','sessionId':'session','promptId':'turn','cwd':str(root),'uuid':'u1',
+                    'origin':{'kind':'human'},'turnOrigin':'human','message':{'role':'user','content':content}}
+                expanded={'type':'user','sessionId':'session','promptId':'turn','cwd':str(root),'isMeta':True,'parentUuid':'u1'}|expansion|{'message':{'role':'user',
+                    'content':[{'type':'text','text':f'Base directory for this skill: /Users/Jane Doe/plugins/o-harness/skills/{skill}\n\nResolve...'}]}}
+                path.write_text(''.join(json.dumps(r)+'\n' for r in ([typed,expanded] if skill else [typed])),newline='\n')
+            args='<command-args>Add a <confirm> tool\nfor Codex</command-args>'
+            for content in ('<command-message>o-harness:oh-propose</command-message>\n<command-name>/o-harness:oh-propose</command-name>\n'+args,
+                            '<command-name>/o-harness:oh-propose</command-name>\n<command-message>o-harness:oh-propose</command-message>\n'+args):
+                save(content);self.assertEqual(attest('claude',payload,root)['turn'],'turn')
+                for skill,expansion in ((None,{}),('oh-deliver',{}),  # tags the person pasted: Claude expanded no such skill
+                                        ('oh-propose',{'sourceToolUseID':'toolu_1'}),('oh-propose',{'parentUuid':'u0'})):  # the model's Skill tool
+                    save(content,skill,**expansion)
+                    with self.assertRaises(Refused):attest('claude',payload,root)
+            for content in ('<command-name>/o-harness:oh-deliver</command-name>\n'+args,  # another command
+                            '<command-name>/o-harness:oh-propose</command-name>\n<command-args>Something else</command-args>',
+                            'approve\n<command-name>/o-harness:oh-propose</command-name>\n'+args,  # text beside the tags
+                            '<command-name>/o-harness:oh-propose</command-name>\n'+args+'\n'+args):  # a repeated tag
+                save(content)
+                with self.assertRaises(Refused):attest('claude',payload,root)
+            save('<command-name>/o-harness:oh-stop</command-name>','oh-stop')
+            self.assertEqual(attest('claude',payload|{'prompt':'/o-harness:oh-stop'},root)['turn'],'turn')
+            self.assertEqual(attest('claude',payload|{'prompt':'/oh-stop'},root)['turn'],'turn')  # typed without the plugin name
+            save('<command-name>/oh-stop</command-name>\n<command-args>now</command-args>','oh-stop')
+            # Every spelling of one turn is the same prompt, so a respelled replay finds the turn already spent.
+            self.assertEqual({attest('claude',payload|{'prompt':p},root)['prompt'] for p in ('/o-harness:oh-stop\tnow','/oh-stop now','/oh-stop  now')},
+                             {'/o-harness:oh-stop now'})
+            save('<command-name>/other:oh-stop</command-name>','oh-stop')  # another plugin's command of the same name
+            with self.assertRaises(Refused):attest('claude',payload|{'prompt':'/oh-stop'},root)
+            with self.assertRaises(Refused):attest('claude',payload|{'prompt':'approve'},root)  # only slash commands are tagged
+
     def test_desktop_fallback_uses_only_current_native_human_turn(self):
         import os
         from .authority import desktop_pending,pending_file

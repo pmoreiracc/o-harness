@@ -85,12 +85,40 @@ class CodexToolsTest(unittest.TestCase):
     def test_tools_cover_everyday_commands_and_nothing_that_changes_what_oh_runs(self):
         names = {t['name'] for t in TOOLS}
         self.assertEqual(names, {'status', 'config', 'init', 'plans', 'resource', 'deliver', 'prepare', 'prepare_design',
-                                 'start', 'run', 'pause', 'resume', 'stop', 'pr_summary', 'choose'})
+                                 'start', 'run', 'pause', 'resume', 'stop', 'pr_summary', 'choose', 'confirm'})
         self.assertTrue(next(t for t in TOOLS if t['name'] == 'stop')['annotations']['destructiveHint'])  # a stop is final
         config = next(t for t in TOOLS if t['name'] == 'config')
         self.assertEqual(set(config['inputSchema']['properties']), {'root'})  # reading only: `config set` stays in the shell
         init = next(t for t in TOOLS if t['name'] == 'init')
         self.assertEqual(set(init['inputSchema']['properties']), {'root', 'name'})  # never --replace, --attach or --reattach
+
+    def test_confirm_waits_for_the_person_and_never_answers_for_them(self):
+        codex_session(self.home, 't1', self.root)
+        def ask(arguments, reply, capabilities=None):
+            asked = []
+            def respond(message):asked.append(message['params']);return reply
+            with patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex')}):
+                sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18',
+                              'capabilities': {'elicitation': {}} if capabilities is None else capabilities}},
+                             {'id': 2, 'method': 'tools/call', 'params': {'name': 'confirm', 'arguments': {'root': str(self.root)} | arguments} | calling('t1')}], respond)
+            result = next(m for m in sent if m.get('id') == 2)['result']
+            return result['content'][0]['text'], result['isError'], asked
+        question = {'question': 'Apply these settings?', 'options': ['Every project', 'This project', 'Keep them']}
+        text, error, asked = ask(question, {'action': 'accept', 'content': {'choice': 'This project'}})
+        self.assertEqual((text, error), ('The person chose: This project', False))
+        self.assertEqual(asked[0]['message'], 'Apply these settings?')
+        self.assertEqual(asked[0]['requestedSchema']['properties']['choice']['enum'], question['options'])
+        text, _, asked = ask(question | {'typed': True}, {'action': 'accept', 'content': {'choice': 'Other', 'answer': ' My  Name '}})
+        self.assertEqual(text, 'The person answered: My Name')
+        self.assertIn('answer', asked[0]['requestedSchema']['properties'])
+        for reply, capabilities in (({'action': 'decline'}, None), ({'action': 'cancel'}, None), ({'action': 'accept', 'content': {'choice': 'Yes'}}, None),
+                                    ({'action': 'accept', 'content': {'choice': 'Other'}}, None), ({}, {})):
+            text, error, asked = ask(question | {'typed': reply.get('content', {}).get('choice') == 'Other'}, reply, capabilities)
+            self.assertIn('No answer was given', text);self.assertFalse(error)
+        self.assertEqual(asked, [])  # no menu capability: never asked
+        for bad in ({'options': []}, {'options': ['a', 'a']}, {'question': ' '}, {'options': ['Other'], 'typed': True}, {'typed': 'yes'}):
+            text, error, asked = ask(question | bad, {'action': 'accept', 'content': {'choice': 'a'}})
+            self.assertTrue(error);self.assertEqual(asked, [])
 
     def test_a_tool_runs_its_command_in_the_calling_conversation_and_values_stay_values(self):
         text, error = self.call('deliver', {'root': str(self.root), 'arguments': ['0005', '--root', '/elsewhere']})

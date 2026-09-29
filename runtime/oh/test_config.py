@@ -43,7 +43,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(project_checks(self.root),[{'name':'tests','command':['true']}])
         listed={item['key']:item for item in describe(self.root)['settings']}
         self.assertEqual([listed[k]['source'] for k in ('tasks_per_batch','review_rounds','max_escalations')],['global','project','default'])
-        self.assertIn('No OH project on this machine is named Other',describe(self.root)['note'])
+        self.assertNotIn('Other',json.dumps(describe(self.root)))  # one project never mentions another
         for bad,words in (({'projects':{'Fixture':{'tasks_per_batch':0}}},'projects.Fixture.tasks_per_batch must be whole number from 1 to 100'),
                           ({'taskz':1},'Unknown setting: taskz'),({'checks':[]},'checks belong to one project'),
                           ({'projects':{'Fixture':{'models':{'codex':{'review':{'effort':'huge'}}}}}},'projects.Fixture.models.codex.review.effort must be one of'),
