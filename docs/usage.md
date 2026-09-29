@@ -6,8 +6,9 @@ registers it.
 
 You type a command once. If something is in the way, the agent fixes it and OH carries the
 command out, without asking you to type it again. Only choices that are yours reach you, as a
-menu: for example, what to do with your own uncommitted changes. A new command replaces one
-that hasn't run yet, and anything else you type retires it.
+menu: for example, what to do with your own uncommitted changes, or whether to stop a run that
+is still open. Answer in the menu: if you type something else instead, OH sets the command
+aside and tells you so. A new command replaces one that hasn't run yet.
 
 ## Plan: oh-propose and oh-design
 
@@ -27,6 +28,9 @@ it shows what it understood, the route and why, and exactly what it wrote, and w
 to type **approve** (commit it), **refine: <what to change>** (ask again with your words), or
 **reconsider** (undo it and write nothing). After approve, **pr** opens the pull request;
 merging it approves the plan change.
+
+With repository plans, `/oh-propose` and `/oh-design` work in the checkout that has `main`; in
+another worktree of the project, OH asks you to type the command there.
 
 `/oh-design <slug>` writes the design doc for one row of your roadmap, such as
 `/oh-design auth`. A fresh worker writes the design; OH numbers the doc, links it from the

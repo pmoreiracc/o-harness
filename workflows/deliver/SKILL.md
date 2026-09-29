@@ -14,8 +14,10 @@ the click (never Codex's own question tool, which closes when your turn ends).
 
 When OH refuses, the command you were given stays valid until OH carries it out, so the person never types it
 again. Fix what is yours to fix and run the same OH command again without mentioning it. When the fix is the
-person's call, such as their own uncommitted changes or a merge conflict, say what is in the way in one sentence
-and ask with a menu; do what they pick, then run it again. Never commit, stash or discard their changes unless
+person's call, such as their own uncommitted changes, a merge conflict or another run still open, say what is in
+the way in one sentence and ask only with a menu, never in plain chat: anything they type instead sets the command
+aside. Do what they pick, then run it again; run `cancel` only when they pick dropping the command, and `stop`
+only when they pick ending the other run. Never commit, stash or discard their changes unless
 they pick that, and never switch, pull or create branches for OH: it does that itself. After opening a pull
 request, give its link; don't wait for or watch its checks.
 

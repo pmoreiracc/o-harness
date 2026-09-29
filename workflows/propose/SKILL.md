@@ -14,8 +14,10 @@ the click (never Codex's own question tool, which closes when your turn ends).
 
 When OH refuses, the command you were given stays valid until OH carries it out, so the person never types it
 again. Fix what is yours to fix and run the same OH command again without mentioning it. When the fix is the
-person's call, such as their own uncommitted changes or a merge conflict, say what is in the way in one sentence
-and ask with a menu; do what they pick, then run it again. Never commit, stash or discard their changes unless
+person's call, such as their own uncommitted changes, a merge conflict or another run still open, say what is in
+the way in one sentence and ask only with a menu, never in plain chat: anything they type instead sets the command
+aside. Do what they pick, then run it again; run `cancel` only when they pick dropping the command, and `stop`
+only when they pick ending the other run. Never commit, stash or discard their changes unless
 they pick that, and never switch, pull or create branches for OH: it does that itself. After opening a pull
 request, give its link; don't wait for or watch its checks.
 
@@ -35,7 +37,8 @@ Run `run`. It verifies the native human invocation; a fresh worker reads the
 roadmap, designs, decisions and code and routes the idea; OH writes the change (for repository plans, on a
 new `propose/<topic>` branch from `main`, which OH brings up to date and switches to itself; private plans need
 no branch), runs the checks and has it reviewed independently. Never write or edit plan files yourself, and
-never run your own worker or review loop.
+never run your own worker or review loop. Repository plans need the checkout that has `main`: when OH says another worktree holds it, tell the
+person to type the command there.
 
 When the returned status is `approval_checkpoint`, present `proposal` in this order:
 1. what OH understood the idea to be (`understanding`);
