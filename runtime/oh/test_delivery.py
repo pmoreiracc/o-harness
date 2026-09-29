@@ -182,15 +182,17 @@ class DeliveryTest(unittest.TestCase):
     def test_a_delivery_merged_with_the_persons_resolution_is_retired_and_keeps_its_progress(self):
         from .delivery import conflict,without_main
         _,path,head=self.stopped_in_conflict('private');conflict(self.root,'keep','0001')
-        # The person resolves the conflict on the pull request's branch on GitHub, then squash-merges it.
+        # The person resolves the conflict on the pull request on GitHub, squash-merges it, and GitHub deletes the
+        # branch: only the pull request's head holds the resolution.
         import subprocess
         self.git('switch','-q','--detach',head)
         subprocess.run(['git','-C',str(self.root),'merge','-q','origin/main'],capture_output=True)
         (self.root/'output.txt').write_text('resolved\n',newline='\n');self.git('commit','-qam','Merge main')
-        self.git('update-ref','refs/remotes/origin/deliver/0001','HEAD')
-        self.git('switch','-q','main');self.git('merge','-q','--squash','origin/deliver/0001');self.git('commit','-qm','Squash (#1)')
-        self.git('update-ref','refs/remotes/origin/main','HEAD')
-        self.start_delivery(turn='next')  # the merged branch is retired and its task stays done
+        self.git('update-ref','refs/pull/1/head','HEAD');self.git('update-ref','refs/remotes/origin/deliver/0001',head)
+        self.git('switch','-q','main');self.git('merge','-q','--squash','refs/pull/1/head');self.git('commit','-qm','Squash (#1)')
+        self.git('update-ref','refs/remotes/origin/main','HEAD');self.git('remote','add','origin',str(self.root))
+        with patch('oh.branches.merged_pulls',return_value=['1']):
+            self.start_delivery(turn='next')  # the merged branch is retired and its task stays done
         self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','origin/main'))
         self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
         self.assertFalse(without_main(self.root))

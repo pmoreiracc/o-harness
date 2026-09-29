@@ -153,14 +153,32 @@ def to_delivery(root,name):
 
 
 def absorbed(root,base,name):
-    """The tip of branch `name` that main holds, or None. The pull request's head on origin counts too: it holds the
-    person's resolution of a conflict when they resolved it on GitHub before merging."""
-    tips=[name]
-    if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0:
-        run_git(root,'fetch','--quiet','origin',name,timeout=60)
-        if run_git(root,'merge-base','--is-ancestor',name,'origin/'+name).returncode==0:tips.append('origin/'+name)
+    """The tip of branch `name` that main holds, or None. A later head of it on GitHub counts too, where the person
+    may have resolved a conflict before merging: origin's branch, or the merged pull request's head once GitHub
+    deleted that branch. Only one holding every local commit counts, so no unmerged work is retired."""
     tree=git(root,'rev-parse',base+'^{tree}')
-    return next((git(root,'rev-parse',tip) for tip in tips if contained(root,base,tip) or merged_tree(root,base,tip)==tree),None)
+    for tip in heads(root,name):
+        if tip!=name and run_git(root,'merge-base','--is-ancestor',name,tip).returncode:continue
+        if contained(root,base,tip) or merged_tree(root,base,tip)==tree:return git(root,'rev-parse',tip)
+
+
+def heads(root,name):
+    yield name
+    if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0:
+        run_git(root,'fetch','--quiet','origin',name,timeout=60);yield 'origin/'+name
+    if run_git(root,'remote','get-url','origin').returncode:return
+    for number in merged_pulls(root,name):
+        if run_git(root,'fetch','--quiet','origin',f'refs/pull/{number}/head',timeout=60).returncode==0:yield git(root,'rev-parse','FETCH_HEAD')
+
+
+def merged_pulls(root,name):
+    """The numbers of the merged pull requests from branch `name`, as GitHub's CLI lists them; none without it."""
+    import shutil,subprocess
+    if not shutil.which('gh'):return []
+    try:found=subprocess.run(['gh','pr','list','--head',name,'--state','merged','--json','number','--jq','.[].number'],
+                             cwd=root,capture_output=True,text=True,timeout=30)
+    except (OSError,subprocess.SubprocessError):return []
+    return [number for number in found.stdout.split() if number.isdigit()] if found.returncode==0 else []
 
 
 def delivered(root,into,commit):
