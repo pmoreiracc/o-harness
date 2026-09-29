@@ -8,6 +8,7 @@ on:
         description: New version, like 0.4.0 (higher than the current one)
         required: true
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 jobs:
@@ -44,10 +45,12 @@ jobs:
           {
             echo "Merging this releases **$VERSION**. The release workflow runs every test on Linux and Windows, installs the package in Claude Code and Codex on Windows, macOS and Linux, and publishes it only if all of that passes."
             echo
-            echo "A workflow opened this pull request, so GitHub runs no checks on it: the release runs them all."
+            echo "Its checks were started by the workflow that opened it (GitHub starts none for such pull requests); merge it once they pass."
             echo
             echo "## What this release holds"
             echo
             echo "$notes"
           } > "$RUNNER_TEMP/body.md"
           gh pr create --base main --head "$branch" --title "Release $VERSION" --body-file "$RUNNER_TEMP/body.md"
+          # main requires the pull request checks, which GitHub starts on its own only for pull requests people open.
+          gh workflow run verify.yml --ref "$branch"
