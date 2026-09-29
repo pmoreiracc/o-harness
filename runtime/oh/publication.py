@@ -44,6 +44,14 @@ def trailer(root,commit,name):
     return values[0]
 
 
+def made(root,project_id,commit):
+    """The state of the OH run that made `commit`, or None: its trailer names the run, and that run recorded this
+    exact commit. A message that merely claims to be OH's, or an OH commit the person amended or rebased, is not."""
+    try:state=reduce(Journal(project_id,trailer(root,commit,'OH-Run')).records())
+    except Refused:return None
+    return state if any(done.get('commit')==commit for done in state['summaries']) else None
+
+
 def commits(root,base,reviewed=()):
     """The branch's commits since `base`, oldest first, without the merges that brought `base` into it and without
     `reviewed`, the commits OH didn't make that a review covered. Every other merge must be Git's clean merge of
@@ -92,9 +100,9 @@ def render(root,base='origin/main'):
     if changes(root):raise Refused('Publish only from a clean reviewed checkout')
     records=[];grants={};p=project(root);branch=git(root,'branch','--show-current')
     for commit in commits(root,base,reviewed=None):
-        try:run=trailer(root,commit,'OH-Run')
-        except Refused:continue  # not OH's: it must be one a review covered, checked below
-        state=reduce(Journal(p['id'],run).records())
+        state=made(root,p['id'],commit)
+        if not state:continue  # not OH's: it must be one a review covered, checked below
+        run=state['id']
         # A stopped run's commits, or those of a completed run nobody chose to publish, are published by the PR
         # choice of the run that resumed its branch.
         if state['status'] not in ('pr','stopped','completed'):raise Refused('A recorded human PR choice is required before exporting native evidence')

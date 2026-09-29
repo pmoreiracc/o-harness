@@ -381,22 +381,20 @@ def adopted(root,state,own):
     this run resumed it. They were never published, so this run's PR choice publishes them with its own."""
     import subprocess
     from .branches import main_ref
-    from .publication import commits,trailer
+    from .publication import commits,made
     base=main_ref(root)
     if not base:raise Refused('This repository has no main or master branch to publish against')
     try:mine=commits(root,base,reviewed=None)  # render checks the merges
     except subprocess.CalledProcessError as exc:raise Refused(f'OH could not list this branch\'s commits since {base}') from exc
-    runs={}
-    for commit in mine:
-        try:runs[commit]=reduce(Journal(state['project'],trailer(root,commit,'OH-Run')).records())
-        except Refused:pass  # not OH's
-    # Commits OH didn't make (the person's own) belong to no run: a review covered them, or render refuses the PR.
+    runs={commit:other for commit in mine if (other:=made(root,state['project'],commit))}
+    # Commits OH didn't make (the person's own, or OH's they amended or rebased) belong to no run: a review covered
+    # them, or render refuses the PR.
     covers={c for other in runs.values() for intent in other['commit_intents'].values() for c in (intent.get('publication') or {}).get('covers',[])}
     found=[]
     for commit in mine:
         if commit in own:break
         if commit in covers:continue
-        other=reduce(Journal(state['project'],trailer(root,commit,'OH-Run')).records())
+        if not (other:=runs.get(commit)):raise Refused(f'Commit {commit[:12]} on this branch was neither made nor reviewed by OH')
         if other['status']=='pr' and commit in (other.get('publication') or {}).get('commits',[]):found=[];continue
         if other['status'] not in ('stopped','completed') or other['branch']!=state['branch']:raise Refused('This branch holds commits of another unfinished run')
         found.append(commit)

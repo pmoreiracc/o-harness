@@ -76,7 +76,7 @@ class DeliveryTest(unittest.TestCase):
         # A commit that only claims to be OH's cannot change the approved design.
         path.write_text(path.read_text().replace('credential store','credential store and send it out'),newline='\n')
         self.git('commit','-qam','tweak\n\nOH-Run: '+first)
-        with self.assertRaisesRegex(Refused,'origin/main'):self.start_delivery(turn='forged')
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery(turn='forged')
         self.git('reset','-q','--hard',done)
         # The person commits an edit of their own on the stopped branch, as OH suggests for uncommitted changes.
         (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-qm','My edit')
@@ -93,6 +93,17 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual([r['commit'] for r in body['records']],[c for c in self.git('rev-list','--reverse','--no-merges','origin/main..HEAD').splitlines() if c!=mine])
         self.assertEqual([r['evidence'].get('covers') for r in body['records']],[None,[mine]])  # reviewed with task 2
         self.assertEqual(len(body['records']),2);self.assertEqual(list(body['grants']),[load_run(self.root)[1]['id']])
+
+    def test_an_oh_commit_the_person_amended_is_reviewed_again_before_it_is_published(self):
+        from .publication import render
+        self.documents();self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        choose(self.root,'stop',self.event('stop','stop'))
+        (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-q','--amend','--no-edit')
+        amended=self.git('rev-parse','HEAD')  # still says OH-Run, but OH didn't make this commit
+        self.start_delivery(turn='again');self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        choose(self.root,'pr',self.event('pr','pr'))
+        body=json.loads(render(self.root).split('```json\n',1)[1].rsplit('\n```',1)[0])
+        self.assertEqual([(r['commit'],r['evidence'].get('covers')) for r in body['records']],[(self.git('rev-parse','HEAD'),[amended])])
 
     def finish(self):
         """Deliver the whole design and stop at its pull request choice."""
@@ -177,7 +188,7 @@ class DeliveryTest(unittest.TestCase):
         subprocess.run(['git','-C',str(self.root),'merge','-q','origin/main'],capture_output=True)
         (self.root/'output.txt').write_text('both\n',newline='\n')
         self.git('checkout','--ours','--',str(path));self.git('commit','-qam','Merge main, keeping ours')
-        with self.assertRaisesRegex(Refused,"plans must be exactly main's"):self.start_delivery(turn='stale plan')  # old task 2
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery(turn='stale plan')  # old task 2
         path.write_text(self.git('show','origin/main:'+path.relative_to(self.root).as_posix()).replace('- [ ] **1.**','- [x] **1.**')+'\n',newline='\n')
         self.git('commit','-qa','--amend','--no-edit')
         merge=self.git('rev-parse','HEAD')
@@ -216,7 +227,7 @@ class DeliveryTest(unittest.TestCase):
     def test_unmerged_or_edited_private_design_does_not_grant_work(self):
         where,path=self.documents();self.git('switch','-qc','deliver/0001')  # scope added on the branch, not by OH
         path.write_text(path.read_text()+'\nUnmerged scope\n');self.git('add','.');self.git('commit','-qm','unmerged')
-        with self.assertRaisesRegex(Refused,'origin/main'):self.start_delivery()
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery()
 
     def test_private_edits_invalidate_start_and_inflight_work(self):
         where,path=self.documents('private');original=path.read_bytes()
@@ -275,7 +286,7 @@ class DeliveryTest(unittest.TestCase):
         plans.add_initiative(self.root,where,'M1','ledger','Ledger',['auth'])
         n,ledger=plans.write_design(self.root,where,'ledger','Ledger',BODY,'approved');plans.claim(self.root,where,'ledger',n)
         self.git('add','.');self.git('commit','-qm','unmerged context')
-        with self.assertRaisesRegex(Refused,'origin/main'):self.start_delivery()
+        with self.assertRaisesRegex(Refused,"must be main's exactly"):self.start_delivery()
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         with self.assertRaisesRegex(Refused,'unfinished auth'):self.start_delivery(n)
 

@@ -66,29 +66,25 @@ def dependencies(root,where,rows,name):
     return [row[3] for row in rows if row[1]==name]
 
 
-def progress_only(root,fork,paths):
-    """Whether the plans changed since `fork` only through OH's own reviewed commits, which its journal records, and
-    merges of main, with nothing uncommitted. A message that merely claims to be OH's changes nothing. A merge
-    resolved by hand is reviewed with the run's first task (`unreviewed`), but the plans are bound here: after
-    a merge of main they must be main's exactly, apart from the tasks this branch's runs completed."""
+def progress_only(root,fork,paths,doc):
+    """Whether the committed plans are origin/main's exactly, apart from ticks for the tasks of design `doc` that
+    OH's runs on this branch completed, with nothing uncommitted. However the branch got there (OH's commits, a
+    merge of main resolved by hand, the person rebasing or amending OH's commits), the plans can't say more: a
+    message that merely claims to be OH's changes nothing."""
     from subprocess import CalledProcessError
     from .publication import trailer
     from .storage import Journal,project
     from .workflow import reduce
     if git(root,'diff','--name-only','HEAD','--',*paths):return False
+    branch=git(root,'branch','--show-current');completed=set()
     try:
-        for commit in git(root,'rev-list','--no-merges',fork+'..HEAD','--',*paths).splitlines():
-            state=reduce(Journal(project(root)['id'],trailer(root,commit,'OH-Run')).records())
-            if commit not in [done.get('commit') for done in state['summaries']]:return False
-        if git(root,'rev-list','--merges',fork+'..HEAD'):
-            completed=set()
-            for commit in git(root,'rev-list','--no-merges',fork+'..HEAD').splitlines():
-                try:run=trailer(root,commit,'OH-Run')
-                except Refused:continue
-                completed|={done['task'] for done in reduce(Journal(project(root)['id'],run).records())['summaries'] if done.get('commit')==commit}
-            for path in git(root,'diff','--name-only','origin/main','HEAD','--',*paths).splitlines():
-                if unticked(git(root,'show','HEAD:'+path),completed)!=git(root,'show','origin/main:'+path):return False
-    except (Refused,CalledProcessError,KeyError,IndexError):return False
+        for commit in git(root,'rev-list','--no-merges',fork+'..HEAD').splitlines():
+            try:state=reduce(Journal(project(root)['id'],trailer(root,commit,'OH-Run')).records())
+            except Refused:continue
+            if state.get('design')==doc and state['branch']==branch:completed|={done['task'] for done in state['summaries']}
+        for path in git(root,'diff','--name-only','origin/main','HEAD','--',*paths).splitlines():
+            if unticked(git(root,'show','HEAD:'+path),completed)!=git(root,'show','origin/main:'+path):return False
+    except (CalledProcessError,KeyError,IndexError):return False
     return True
 
 
@@ -183,10 +179,10 @@ def forget_progress(root,where,doc,name,base):
 def unreviewed(root,fork,base):
     """Commits on this branch since `fork` that OH didn't make and no review has covered yet: the person's own
     commits, and merges of `base` (main) that aren't Git's clean merge because a conflict was resolved by hand. The
-    next task's review covers them, so the pull request carries only reviewed code."""
-    from .publication import merged,trailer
-    from .storage import Journal,project
-    from .workflow import reduce
+    next task's review covers them, so the pull request carries only reviewed code. An OH commit the person amended
+    or rebased is theirs now, like a message that merely claims to be OH's."""
+    from .publication import made,merged
+    from .storage import project
     covered=set();found=[]
     for line in git(root,'rev-list','--reverse','--parents',fork+'..HEAD').splitlines():
         commit,*parents=line.split()
@@ -194,9 +190,9 @@ def unreviewed(root,fork,base):
             try:merged(root,commit,parents,base)
             except Refused:found.append(commit)
             continue
-        try:run=trailer(root,commit,'OH-Run')
-        except Refused:found.append(commit);continue
-        for intent in reduce(Journal(project(root)['id'],run).records())['commit_intents'].values():
+        state=made(root,project(root)['id'],commit)
+        if not state:found.append(commit);continue
+        for intent in state['commit_intents'].values():
             covered|=set((intent.get('publication') or {}).get('covers',[]))
     return [commit for commit in found if commit not in covered]
 
@@ -220,16 +216,16 @@ def selection(root,doc,track='',*,claim=True):
         # The plans are origin/main's, apart from the progress OH's own reviewed commits recorded on a delivery
         # branch that is being resumed.
         fork=git(root,'merge-base','HEAD','origin/main')
-        if git(root,'diff','--name-only',fork,'origin/main','--',*paths) or not progress_only(root,fork,paths):
+        if git(root,'diff','--name-only',fork,'origin/main','--',*paths) or not progress_only(root,fork,paths,doc):
             if without_main(root):
                 branch=git(root,'branch','--show-current')
                 raise Final(f'Delivery {doc} stops here: main changed the plans since {branch} started, and main\'s code '
                             f'conflicts with it, so OH can\'t bring main in. The tasks done so far are saved on {branch}. '
                             'From here it\'s yours: merge main into it, resolve the conflicts and open the pull request '
                             'when you\'re ready.')
-            if git(root,'rev-list','--merges',fork+'..HEAD'):
-                raise Refused('After merging main, the plans must be exactly main\'s apart from the tasks this branch '
-                              'completed; resolve the merge\'s plan files that way, amend the merge and run again')
+            if not git(root,'diff','--name-only',fork,'origin/main','--',*paths):
+                raise Refused('The plans on this branch must be main\'s exactly, apart from ticks for the tasks OH '
+                              'completed; restore their files to main\'s version with only those ticks, commit, and run again')
             raise Refused('The design and planning context must match origin/main; merge the plans first')
         for filename in inputs(where):
             relative=Path(filename).relative_to(root).as_posix()
