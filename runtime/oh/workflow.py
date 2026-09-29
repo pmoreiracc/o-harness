@@ -396,6 +396,18 @@ def adopted(root,state,own):
     return found
 
 
+def reopen(root,state,event):
+    """Make a finished run this checkout's run again, so its pull request can be chosen: the person typing the
+    delivery again after stopping it at completion wants that choice back. It grants no new work."""
+    journal=Journal(state['project'],state['id'])
+    with lock(checkout_file(root,'oh-control.lock')):
+        if state['status']=='stopped':
+            journal.append('decision',{'source':digest({k:event[k] for k in ('host','session','turn','prompt')}),'choice':'reopen'})
+            journal.append('run.status',{'status':'completed'})
+        atomic_json(active_file(root),{'project':state['project'],'run':state['id'],'checkout':checkout_id(root)})
+    return checkpoint(root)
+
+
 def checkpoint(root):
     journal,state=load_run(root)
     from .prepared import limits
@@ -442,7 +454,8 @@ def start(root,manifest,event,prepared=None,plan=None):
 
 @state_writer
 def choose(root,choice,event):
-    if choice in ('pause','stop'):
+    # A stop typed at completion declines the pull request, as the menu's Stop does; controls only reduce a run's work.
+    if choice=='pause' or choice=='stop' and load_run(root)[1]['status']!='completed':
         from .controls import request
         return request(root,choice)
     with lock(checkout_file(root, 'oh-control.lock')):

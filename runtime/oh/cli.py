@@ -58,8 +58,12 @@ def host_hook(root,host,payload,*,verified):
             if prepared['doc']!=delivery['doc'] or prepared['track']!=delivery['track']:raise Refused('Prepared design and requested track differ')
             start(root,prepared['manifest'],verified,prepared=prepared)
         else:
-            from .branches import delivery_branch,to_delivery
-            to_delivery(root,delivery_branch(delivery['doc'],delivery['track']))
+            from .branches import delivery_branch,refresh,to_delivery
+            from .delivery import finished
+            name=delivery_branch(delivery['doc'],delivery['track'])
+            if base:=to_delivery(root,name):
+                if again:=finished(root,delivery['doc'],delivery['track'],name,verified):return again
+                refresh(root,name,base)
             from .delivery import selection
             from .plans import editing
             with editing(root):
@@ -224,7 +228,8 @@ def main(argv=None):
             result=stage(root,args.host,json.load(sys.stdin))
         elif args.command in ('run','start'):
             from .authority import materialize
-            materialize(root)
+            admitted=materialize(root)
+            if admitted and admitted.get('note'):print(admitted['note'],flush=True)
             if args.command=='start' and args.request:
                 from .workflow import load_run
                 _,state=load_run(root)

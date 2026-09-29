@@ -90,6 +90,40 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual([r['commit'] for r in body['records']],self.git('rev-list','--reverse','--no-merges','origin/main..HEAD').splitlines())
         self.assertEqual(len(body['records']),2);self.assertEqual(list(body['grants']),[load_run(self.root)[1]['id']])
 
+    def finish(self):
+        """Deliver the whole design and stop at its pull request choice."""
+        self.start_delivery();run(self.root,self.fake);choose(self.root,'continue',self.event('next','continue'))
+        self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        return load_run(self.root)[1]['id'],self.git('rev-parse','HEAD')
+
+    def test_a_finished_delivery_goes_to_its_pull_request_and_takes_no_more_tasks(self):
+        from .workflow import _choose
+        self.documents();first,head=self.finish()
+        # Meanwhile the person merges a proposal that adds a task to the same design.
+        self.git('switch','-q','main');where=plans.layout(self.root)
+        plans.add_task(self.root,where,'0001','Core','Add sign-out.',[]);self.git('commit','-qam','Add task 3')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        again=self.start_delivery(turn='again')  # no merge of main, no new task: the finished delivery's PR choice
+        self.assertEqual((again['run'],again['gate']['choices']),(first,['pr','stop']))
+        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
+        choose(self.root,'stop',self.event('declined','stop'))  # typed at completion, like the menu's Stop
+        self.assertEqual(load_run(self.root)[1]['status'],'stopped')
+        self.assertEqual(self.start_delivery(turn='later')['gate']['choices'],['pr','stop'])  # the PR choice is back
+        _choose(self.root,'pr',self.event('pr','pr'))
+        self.assertEqual(load_run(self.root)[1]['status'],'pr')
+
+    def test_a_stopped_delivery_resumes_without_main_when_they_conflict(self):
+        self.documents()
+        self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        choose(self.root,'stop',self.event('stop','stop'));head=self.git('rev-parse','HEAD')
+        # Someone else's change on main touches the file this delivery wrote.
+        self.git('switch','-q','main');(self.root/'output.txt').write_text('main\n',newline='\n')
+        self.git('add','output.txt');self.git('commit','-qm','main work');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        self.start_delivery(turn='again')
+        self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
+        self.assertEqual(self.git('status','--porcelain'),'')
+        self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+
     def test_a_worktree_delivers_while_main_is_checked_out_elsewhere(self):
         from .registry import register
         self.documents();side=Path(self.temp.name)/'side'

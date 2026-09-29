@@ -496,8 +496,10 @@ def finish_move(root,journal,state):
 
 
 def apply_pending(root):
-    from .authority import materialize
-    materialize(root)
+    """Apply the person's menu answers and typed choices while the run works. A typed command that starts other
+    work waits for the agent's next `run`, and never stops this one."""
+    from .authority import materialize,waiting_work
+    if not waiting_work(root):materialize(root)
 
 
 def complete_reviewed(root,journal,state,task,review):

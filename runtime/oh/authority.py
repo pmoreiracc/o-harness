@@ -116,11 +116,12 @@ def menu_waiting(root):
     return (gate,state,journal.records()[-1]['at']) if gate else None
 
 
-def answer(root,hint=None):
+def answer(root,hint=None,after=None):
     """Apply the person's latest answer to the menu the run waits on, read from the owner's own transcript.
     Only that single latest answer counts: once it is applied or refused, no earlier answer can take its place,
     and applying it moves the menu on so every earlier answer is out of date. `hint` is a typed menu word the
-    prompt hook saw: if it can't be read as that latest answer, nothing is applied."""
+    prompt hook saw: if it can't be read as that latest answer, nothing is applied. `after` is when a waiting
+    command was typed: an answer given before it waits, since the command is the person's latest act."""
     from .gates import apply,ask,pick
     waiting=menu_waiting(root)
     if not waiting:return None
@@ -132,7 +133,7 @@ def answer(root,hint=None):
         if found and not used_file(root,found).exists():
             atomic_json(used_file(root,found),{'source':found,'refused':'Set aside: a later typed choice could not be read.'},immutable=True)
         raise Refused('OH could not read your typed choice from the conversation, so nothing was applied. Choose again from the menu, or type it again.')
-    if not found:return None
+    if not found or after and not newer(found.get('at'),after):return None
     used=used_file(root,found)
     if used.exists():return None
     try:
@@ -144,8 +145,13 @@ def answer(root,hint=None):
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
     answered(root,'claude',found['session'],str(path))
-    supersede(root,'claude',locked=True)
-    return result
+    return noted(result,supersede(root,'claude',locked=True))
+
+
+def noted(result,dropped):
+    """Say once that a menu answer given after a typed command set that command aside."""
+    if not dropped:return result
+    return result|{'note':f'You answered the menu after typing {dropped}, so OH set that command aside; type it again to run it.'}
 
 
 def answered(root,host,session,transcript):
@@ -288,13 +294,18 @@ def materialize(root):
             path.unlink();return answer(root,hint=locator['event']['turn'])
         if not path.exists():return answer(root)
         locator=read_json(path)
-        if menu_waiting(root) and (result:=answer(root)) is not None:return result  # the person answered the open menu
         try:event=attest(locator['host'],locator['payload'],root)
         except Expired:
             # Said once: the person moved on, so this command is spent and never carried out behind their back.
             message=f"You typed something after {locator['event']['prompt']}, so OH set it aside; type it again to run it."
             spent(root,locator['event'],message);path.unlink()
             raise Refused(message)
+        except Refused:
+            # A command that can't be verified never holds up the open menu.
+            if menu_waiting(root) and (result:=answer(root)) is not None:return result
+            raise
+        # The person answered the open menu after typing this command: that answer is their latest act.
+        if menu_waiting(root) and (result:=answer(root,after=event.get('at'))) is not None:return result
         used=used_file(root,event)
         if used.exists():
             path.unlink();record=read_json(used)
@@ -305,12 +316,13 @@ def materialize(root):
             result=host_hook(root,locator['host'],locator['payload'],verified=event)
             if result is None:raise Refused('This input is not a supported native OH transition')
         except Exception as exc:
-            # A refused command stays pending and is spent only once carried out, so `oh run` carries it out when
-            # the reason is fixed, without the person typing it again. A newer command or a menu answer replaces
-            # it; a newer prompt retires it. A menu word answers the menu it was typed at, and a failure OH did not
-            # foresee would only repeat: those are said once and spent.
+            # A refused command that starts work stays pending and is spent only once carried out, so `oh run`
+            # carries it out when the reason is fixed, without the person typing it again. A newer command or a
+            # later menu answer replaces it; a newer prompt sets it aside. A choice (a menu word, /oh-resume)
+            # answers the moment it was typed at, and a failure OH did not foresee would only repeat: those are
+            # said once and spent.
             refused=exc if isinstance(exc,Refused) else Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})')
-            if bare_choice(locator,locator['host']) or not isinstance(exc,Refused):
+            if not starts_work(locator) or not isinstance(exc,Refused):
                 atomic_json(used,{'source':event,'refused':str(refused)},immutable=True);path.unlink()
             raise refused from exc
         atomic_json(used,{'source':event,'result':result},immutable=True)
@@ -321,6 +333,19 @@ def materialize(root):
             if run['status']=='running':register(root,locator['host'],locator['payload']|{'transcript_path':event['transcript_path']},run['id'],run['project'])
         path.unlink()
         return result
+
+
+def starts_work(locator):
+    """A typed command that starts work (propose, design, deliver, a prepared request), which OH keeps until done."""
+    from .entry import command
+    parsed=command((locator.get('event') or {}).get('prompt'))
+    return bool(parsed) and parsed[0] in ('propose','design','deliver','oh-start')
+
+
+def waiting_work(root):
+    """Whether a typed command that starts work waits in this checkout."""
+    try:return starts_work(read_json(pending_file(root)))
+    except FileNotFoundError:return False
 
 
 def bare_choice(locator,host='claude'):
@@ -359,7 +384,8 @@ def typed_choice(root,host):
 def supersede(root,host,locked=False):
     """A menu answer applied after something was typed wins over it: the person's latest act counts. A typed
     menu word is spent; a typed command waits only when the answer ended the run, which makes room for it.
-    `locked` when the caller already holds the pending lock (the lock is per open file, so never take it twice)."""
+    Returns the command it set aside, if any. `locked` when the caller already holds the pending lock (the lock
+    is per open file, so never take it twice)."""
     path=pending_file(root)
     if not locked:
         with lock(path.with_suffix('.lock')):return supersede(root,host,locked=True)
@@ -371,6 +397,7 @@ def supersede(root,host,locked=False):
         if not active_file(root).exists() or load_run(root)[1]['status'] in ('stopped','pr','completed'):return
     spent(root,locator['event'],'Superseded by a later answer on the menu.')
     path.unlink(missing_ok=True)
+    return None if bare_choice(locator,host) else locator['event']['prompt']
 
 
 def spent(root,event,refused):

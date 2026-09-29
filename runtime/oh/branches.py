@@ -99,8 +99,8 @@ def delivery_branch(doc,track=''):
 def to_delivery(root,name):
     """Put the checkout on the delivery branch `name`, as the pre-separation harness did. A branch whose work main
     already holds (merged, squashed or rebased) is retired and a fresh one starts from origin's main; a branch with
-    unmerged work is resumed, with origin's main merged into it. Only the person's own edits, a conflict, or the
-    branch being checked out in another worktree need them."""
+    unmerged work is resumed: the returned base is what `refresh` merges into it. Only the person's own edits, or
+    the branch being checked out in another worktree, need them."""
     untouched(root)
     main=trunk(root)
     if main is None:return
@@ -113,12 +113,17 @@ def to_delivery(root,name):
         if current==name:git(root,'switch','--quiet','--detach',base)  # only while the spent branch is replaced
         git(root,'branch','-D',name);exists=False
     if not exists:
-        git(root,'switch','--quiet','--no-track','-c',name,base);return
+        git(root,'switch','--quiet','--no-track','-c',name,base);return None
     if current!=name:git(root,'switch','--quiet',name)
+    return base
+
+
+def refresh(root,name,base):
+    """Merge origin's main into a resumed delivery branch. When it conflicts, the delivery carries on without it:
+    OH delivers one design at a time, so the conflict is someone else's change, settled when the pull request
+    merges, as for any branch."""
     merging=run_git(root,'merge','--quiet','--no-edit',base)
     if merging.returncode:
         conflicted=git(root,'diff','--name-only','--diff-filter=U').splitlines()
         run_git(root,'merge','--abort')
         if not conflicted:raise Refused(f'Git could not merge {base} into {name}: {merging.stderr.strip()}')
-        raise Refused(f'{name} holds unfinished work that conflicts with {base} in {", ".join(conflicted[:5])}. '
-                      f'Merge {base} into it and resolve the conflicts, then OH carries on with your command.')

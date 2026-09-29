@@ -336,9 +336,10 @@ class Server:
             choice = 'refine: ' + ' '.join(words.split())
         event = {'host': 'codex', 'session': thread, 'turn': 'menu-' + identifier(), 'prompt': choice, 'via': 'elicitation', 'at': now()}
         after = apply(root, event, gate['id'])
-        supersede(root, 'codex')  # anything typed while the menu was open is older than this click
+        dropped = supersede(root, 'codex')  # anything typed while the menu was open is older than this click
         answered(root, 'codex', thread, state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
+        if dropped:label += f' (this set aside {dropped}, which the person typed earlier; they type it again to run it)'
         if after['status'] in ('stopped', 'completed') and not after.get('gate'):
             return f'Recorded the person\'s choice: {label}. The run is {after["status"]}; there is nothing left to run.'
         return f'Recorded the person\'s choice: {label}. Call `run` to carry it out. Status now: {after["status"]}.'

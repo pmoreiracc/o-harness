@@ -82,6 +82,26 @@ def progress_only(root,fork,paths):
     return True
 
 
+def finished(root,doc,track,branch,event):
+    """A resumed delivery branch that already holds all its work goes to its pull request, as the pre-separation
+    harness did: OH offers that run's PR choice again, even after the person stopped it, and never merges main
+    into it or adds tasks. New tasks for the design are delivered after that pull request merges."""
+    from .publication import trailer
+    from .storage import Journal,checkout_id,project
+    from .workflow import reduce,reopen
+    where=plans.layout(root)
+    rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
+    if any(row[1]=='pending' and (not track or row[2]==track) for row in rows):return None
+    if not track and plans.approval(root,where,doc)!='frozen':return None  # its finalize step is still to run
+    refused=Refused(f'{branch} already holds all of design {doc}, but OH did not make its last commit here, so OH '
+                    'cannot offer its pull request; open one yourself')
+    try:state=reduce(Journal(project(root)['id'],trailer(root,'HEAD','OH-Run')).records())
+    except Refused:raise refused from None
+    if ((state.get('design'),state.get('track') or '')!=(doc,track) or state['branch']!=branch
+            or state['checkout']!=checkout_id(root) or state['status'] not in ('completed','stopped','pr')):raise refused
+    return reopen(root,state,event)
+
+
 def difficulty(block):
     """The difficulty the design gives a task on its `Difficulty: <level> — <why>` line, or nothing."""
     found=re.search(r'^[ \t]*Difficulty:[ \t]*(simple|standard|complex)\b[ \t—–:-]*(.*)$',block,re.M|re.I)
