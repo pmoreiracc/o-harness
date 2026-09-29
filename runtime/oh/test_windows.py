@@ -290,6 +290,24 @@ class TaskScheduler:
 
 @unittest.skipUnless(os.name == 'nt', 'Windows only')
 class NativeWindowsTest(unittest.TestCase):
+    def test_codex_tool_server_without_python_ends_instead_of_waiting_on_codex_input(self):
+        # As Codex starts it: few variables, no Python on PATH, and its input left open after the first message.
+        # The Python fetch must not read that input; OH_PYTHON_DOWNLOAD=0 (forwarded by Codex) is honored.
+        with tempfile.TemporaryDirectory() as tmp:
+            system=os.environ['SystemRoot']
+            env={'PATH':system+r'\System32','SystemRoot':system,'COMSPEC':os.environ['COMSPEC'],'USERPROFILE':tmp,
+                 'OH_DATA_HOME':tmp,'OH_PYTHON_DOWNLOAD':'0'}
+            server=subprocess.Popen([str(HOME/'plugins/o-harness/scripts/mcp-server.cmd')],stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env)
+            server.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n');server.stdin.flush()
+            try:server.wait(timeout=60)  # not communicate(): that would close the input
+            except subprocess.TimeoutExpired:
+                server.kill();server.wait();self.fail('The tool server waited on its input instead of ending')
+            finally:server.stdin.close()
+            out,err=server.stdout.read(),server.stderr.read();server.stdout.close();server.stderr.close()
+            self.assertEqual((server.returncode,out),(2,b''))
+            self.assertIn(b'OH_PYTHON_DOWNLOAD is 0',err)
+
     def test_simultaneous_python_bootstraps_keep_the_first_complete_interpreter(self):
         import time
         from . import service

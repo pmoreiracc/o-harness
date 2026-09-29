@@ -59,8 +59,8 @@ Windows has been recorded yet, so treat Windows support as a preview.
   `python` or `py -3`). If there is none, it downloads the official Python 3.14.7 Windows
   package from python.org into `%USERPROFILE%\.local\share\o-harness\python` once: about
   12 MB, checked against its published SHA-256, with no admin rights and no `PATH` change. In
-  Claude Code that happens at the first OH command, which says so first; in Codex, when the
-  first session starts OH's tools. OH then uses that Python first. Set `OH_PYTHON_DOWNLOAD=0`
+  Claude Code that happens at OH's `setup`, which the first OH command runs and which says so
+  first; in Codex, when the first session starts OH's tools. OH then uses that Python first. Set `OH_PYTHON_DOWNLOAD=0`
   to stop the download and install Python yourself.
 - From PowerShell or cmd, run OH through `scripts\oh.cmd` (the plugin's, or
   `%USERPROFILE%\.local\share\o-harness\bin\oh.cmd` after setup). cmd re-reads `& | < > ^`
