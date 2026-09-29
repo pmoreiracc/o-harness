@@ -1,7 +1,0 @@
-project_doc_fallback_filenames = ["CLAUDE.md"]
-model = "gpt-6-astra"
-model_reasoning_effort = "high"
-model_auto_compact_token_limit = 60000
-[features]
-hooks = true
-multi_agent = true
