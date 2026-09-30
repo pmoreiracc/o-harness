@@ -22,12 +22,21 @@ and code and picks one route:
 - an **improvement** to existing behaviour, which needs no document;
 - or **unclear**, with the two readings and the question to answer.
 
-OH writes the row, milestone, decision record or task itself (on a new `propose/<topic>`
-branch from `main`, which OH brings up to date and switches to first), runs your checks and has it reviewed independently. Then
-it shows what it understood, the route and why, and exactly what it wrote, and waits for you
-to type **approve** (commit it), **refine: <what to change>** (ask again with your words), or
-**reconsider** (undo it and write nothing). After approve, **pr** opens the pull request;
-merging it approves the plan change.
+Before writing anything, OH shows what it understood, the route and why, and the exact lines it
+would write, and waits for **approve**, **refine: <what to change>** (ask again with your words)
+or **reconsider** (nothing is written; OH asks what you meant, and your next message is the new
+idea). After approve, OH writes the row, milestone, decision record or task itself (on a new
+`propose/<topic>` branch from `main`, which OH brings up to date and switches to first), checks
+the plan rules and has it reviewed independently, then commits it. You see everything it will
+write (the lines, the milestone, a new milestone's "Done when", a task's track, a decision
+record's text); if the review would change any of it, OH asks you again first. An improvement or an unclear idea writes
+nothing and needs no review. After the commit, **pr** opens the pull request; merging it
+approves the plan change. Plans run none of your project's checks: OH checks every plan file
+it writes against the plan rules and undoes a write that breaks one.
+
+Typed without its argument, `/oh-propose` asks "What's the idea?" and `/oh-design` lists the
+roadmap rows without a design; your next message is the answer. Another OH command replaces
+the question, and `/oh-stop` drops it.
 
 With repository plans, `/oh-propose` and `/oh-design` work in the checkout that has `main`; in
 another worktree of the project, OH asks you to type the command there.
@@ -42,8 +51,9 @@ leaves the decision to you.
 
 The first time, choose where plans live ([configuration](configuration.md)). The repository
 flow above uses pull requests. With `plans.location=private`, documents live outside the
-checkout, normally in `~/oh-plans/<project name>/`, with no Git branch or commit. Both commands
-wait for **approve**, **refine: <what to change>**, or **reconsider** after independent review.
+checkout, normally in `~/oh-plans/<project name>/`, with no Git branch or commit. `/oh-propose`
+asks before it writes, as above; `/oh-design` waits for **approve**, **refine: <what to change>**,
+or **reconsider** after independent review.
 Approving a private design records its exact content hash; later edits invalidate approval.
 Run `/oh-design <slug>` on an edited private design to review the existing text and approve it
 again. `oh plans list` distinguishes approved, draft, and edited-since-approval designs.

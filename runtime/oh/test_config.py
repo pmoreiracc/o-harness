@@ -181,13 +181,17 @@ class ConfigTest(unittest.TestCase):
         with patch('oh.config.launch'):config.open_settings(self.root)
         self.assertEqual(load(self.root)['review_rounds'],3)
 
-    def test_status_before_any_run_says_there_is_none(self):
+    def test_before_any_run_status_and_run_say_which_command_to_type(self):
         import io
-        from contextlib import redirect_stdout
+        from contextlib import redirect_stderr,redirect_stdout
         from .cli import main
         out=io.StringIO()
         with redirect_stdout(out):main(['--root',str(self.root),'status'])
         self.assertEqual(json.loads(out.getvalue())['status'],'none')
+        self.assertIn('Type /oh-propose <idea>',json.loads(out.getvalue())['next'])
+        error=io.StringIO()
+        with redirect_stderr(error),self.assertRaises(SystemExit):main(['--root',str(self.root),'run'])
+        self.assertIn('No OH command is waiting in this checkout. Type /oh-propose <idea>',error.getvalue())
 
     def test_the_repair_tools_work_on_broken_files(self):
         for broken in ('{"review_rounds": 3,','{"a": 1, "a": 2}','{"projects": []}','{"projects": {"Fixture": 5}}'):

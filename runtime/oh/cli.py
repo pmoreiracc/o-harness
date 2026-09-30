@@ -13,15 +13,27 @@ from .storage import Refused, atomic_json, checkout_id, digest, identifier, proj
 from .workflow import active_file, checkpoint, choose, human_event, start
 
 
-def host_hook(root,host,payload,*,verified):
+def host_hook(root,host,payload,*,verified,idea=None):
+    """Carry out a verified typed command. `idea`: the command whose argument the text is, because OH asked for it
+    (see authority.wait_for)."""
     prompt=payload.get('prompt','').strip()
     import re
     prompt=re.sub(r'^[$/](?:o-harness:)?(oh-(?:pause|resume|stop))$',lambda m:m[1],prompt)
     prompt={'oh-pause':'pause','oh-stop':'stop','oh-resume':'resume'}.get(prompt,prompt)
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
+    from .workflow import load_run,occupied,unfinished
+    if idea:
+        if idea=='design':
+            from .plans import listing
+            if prompt not in {i['slug'] for i in listing(root)['initiatives'] if 'design' not in i}:
+                # Not one of the rows OH offered: ask again, rather than keep an answer OH can't use.
+                return ask_for(root,verified,'design')|{'note':f'"{prompt[:80]}" is not one of those rows; OH asked again.'}
+        planning=[None,idea,prompt]
+    elif bare:=re.fullmatch(r'[$/](?:o-harness:)?oh-(propose|design)',prompt):
+        if unfinished(root,verified):raise occupied(load_run(root)[1])
+        return ask_for(root,verified,bare[1])
     if planning:
-        kind,intent=planning.groups()
-        from .workflow import load_run,occupied,unfinished
+        kind,intent=planning[1],planning[2]
         if unfinished(root,verified):raise occupied(load_run(root)[1])
         from .plans import layout
         if not started(root,verified) and layout(root)['location']=='repo':
@@ -81,6 +93,22 @@ def host_hook(root,host,payload,*,verified):
         choose(root,prompt,verified)
         return checkpoint(root)
     return None
+
+
+def ask_for(root,event,kind):
+    """A command typed without its argument waits for the person's next message instead of failing."""
+    from .authority import wait_for
+    from .storage import Final
+    from .workflow import WAIT_NEXT
+    extra={}
+    if kind=='design':
+        from .plans import listing
+        free=[{k:i[k] for k in ('slug','milestone','depends')} for i in listing(root)['initiatives'] if 'design' not in i]
+        if not free:raise Final('Every roadmap initiative has a design already. New ideas start with /oh-propose.')
+        ask,extra='Which initiative should OH design?',{'initiatives':free}
+    else:ask="What's the idea?"
+    wait_for(root,event,kind,ask)
+    return {'waiting':{'command':kind,'ask':ask,'next':WAIT_NEXT}|extra}
 
 
 def started(root,event):
@@ -208,8 +236,11 @@ def main(argv=None):
             where=layout(root)
             result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
         elif args.command=='status':
-            result=checkpoint(root) if active_file(root).exists() else {
-                'status':'none','next':'No OH run in this checkout yet: start one with oh-propose, oh-design or oh-deliver.'}
+            from .authority import waits
+            from .workflow import NO_RUN,WAIT_NEXT
+            waiting=[{'command':w['command'],'ask':w['ask'],'next':WAIT_NEXT} for w in waits(root).values()]
+            result=(checkpoint(root) if active_file(root).exists() else
+                    {'status':'waiting','waiting':waiting[0]} if waiting else {'status':'none','next':NO_RUN})
         elif args.command in ('pause','stop'):
             from .controls import request
             result=request(root,args.command)
@@ -234,6 +265,7 @@ def main(argv=None):
             from .authority import materialize
             admitted=materialize(root)
             if admitted and admitted.get('note'):print(admitted['note'],flush=True)
+            if admitted and admitted.get('waiting'):print(json.dumps(admitted,indent=2));return  # nothing runs until they answer
             if args.command=='start' and args.request:
                 from .workflow import load_run
                 _,state=load_run(root)

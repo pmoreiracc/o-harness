@@ -73,24 +73,52 @@ class ProposeTest(unittest.TestCase):
     def propose(self, text='Search my notes'):
         return host_hook(self.root, 'codex', {'prompt': f'/oh-propose {text}'}, verified=self.event('1', f'/oh-propose {text}'))
 
-    def test_a_row_is_written_reviewed_and_waits_for_approval_before_its_commit(self):
+    def test_a_row_is_shown_first_then_written_reviewed_and_committed(self):
+        import sys
+        from pathlib import Path
+        ran = Path(self.temp.name) / 'check-ran'  # plans run no project checks: OH checks the plan files itself
+        fixtures.configure(self.root, checks=[{'name': 'tests', 'command': [sys.executable, '-c', f'open({str(ran)!r}, "w"); raise SystemExit(1)']}])
         self.propose()
-        self.assertEqual(self.git('branch', '--show-current'), 'main')  # nothing is written yet
+        self.assertEqual(load_run(self.root)[1]['tasks'][0]['difficulty'], 'complex')  # a wrong placement isn't caught later
         result = run(self.root, self.worker([idea()]))
         self.assertEqual(result['status'], 'approval_checkpoint')
-        self.assertEqual(self.git('branch', '--show-current'), 'propose/search')
         self.assertEqual(result['proposal']['lines'], ['| `search` | Full-text search over notes | — | — |'])
         self.assertEqual(result['proposal']['choices'], ['approve', 'refine: <what to change>', 'reconsider'])
-        self.assertEqual([c[0] for c in self.calls], ['analysis', 'review'])
+        self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))  # nothing written yet
+        self.assertEqual([c[0] for c in self.calls], ['analysis'])
         self.assertIn('Routing an idea', self.calls[0][1]);self.assertEqual(self.calls[0][2], PROPOSAL_SCHEMA)
-        self.assertIn('The subject is a proposal', self.calls[1][1]);self.assertIn('Search across notes.', self.calls[1][1])
-        self.assertEqual(self.git('rev-parse', 'HEAD'), self.git('rev-parse', 'main'))  # not committed before approval
         self.say('approve')
         self.assertEqual(run(self.root, self.worker([]))['status'], 'completed')
+        self.assertEqual([c[0] for c in self.calls], ['analysis', 'review'])
+        self.assertIn('The subject is a proposal', self.calls[1][1]);self.assertIn('Search across notes.', self.calls[1][1])
+        self.assertEqual(self.git('branch', '--show-current'), 'propose/search')
         self.assertEqual(self.git('log', '-1', '--format=%s'), 'propose: | `search` | Full-text search over notes | — | — |')
         self.assertEqual(self.git('diff', '--name-only', 'main', 'HEAD'), 'docs/roadmap.md')
+        self.assertFalse(ran.exists())
         self.say('pr')
         self.assertEqual(load_run(self.root)[1]['status'], 'pr')
+
+    def test_a_review_that_moves_the_idea_asks_the_person_again(self):
+        self.propose();run(self.root, self.worker([idea()]));self.say('approve')
+        result = run(self.root, self.worker([idea('task')], reviews=['blocking']))
+        self.assertEqual(result['status'], 'approval_checkpoint')
+        self.assertEqual(result['proposal']['lines'], ['- [ ] **3.** Rate-limit sign-in attempts. Read §1. Depends on task 2.'])
+        self.assertEqual([c[0] for c in self.calls], ['analysis', 'review', 'analysis'])
+        self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
+        self.assertNotIn('propose/search', self.git('branch', '--list'))
+
+    def test_a_repair_that_moves_the_row_to_another_milestone_asks_again(self):
+        plans.add_milestone(self.root, self.where, 'M2', 'Second slice', 'A person finds notes');self.git('commit', '-qam', 'M2')
+        self.propose();run(self.root, self.worker([idea()]));self.say('approve')
+        result = run(self.root, self.worker([idea(milestone='M2')], reviews=['blocking']))
+        self.assertEqual((result['status'], result['proposal']['writes']['milestone']), ('approval_checkpoint', 'M2'))
+        self.assertEqual(result['proposal']['lines'], ['| `search` | Full-text search over notes | — | — |'])  # same line, other place
+
+    def test_a_repair_that_writes_the_approved_lines_needs_no_second_approval(self):
+        self.propose();run(self.root, self.worker([idea()]));self.say('approve')
+        self.assertEqual(run(self.root, self.worker([idea(evidence='Read docs/roadmap.md twice.')], reviews=['blocking']))['status'], 'completed')
+        self.assertEqual([c[0] for c in self.calls], ['analysis', 'review', 'analysis', 'review'])
+        self.assertEqual(self.where['roadmap'].read_text().count('`search`'), 1)
 
     def test_a_new_milestone_and_a_contested_choice_are_written_too(self):
         self.propose()
@@ -101,17 +129,24 @@ class ProposeTest(unittest.TestCase):
         result = run(self.root, self.worker([answer]))
         self.assertEqual(result['proposal']['lines'][0], '### M2 — Find things')
         self.assertIn('Decision record 0001 (proposed)', result['proposal']['lines'][-1])
+        writes = result['proposal']['writes']  # what the lines don't say is shown, and approved, too
+        self.assertEqual((writes['done_when'], writes['decision']['recommendation']), ('A person finds any note in a second', 'Recommend one index per space.'))
+        self.assertFalse(self.where['decisions'].exists())
+        self.say('approve');run(self.root, self.worker([]))
         record = (self.where['decisions'] / '0001-one-search-index-or-one-per-space.md').read_text()
         self.assertIn('status: proposed', record);self.assertIn('## Recommendation\n\nRecommend one index per space.', record)
 
-    def test_approval_preserves_a_human_mode_change(self):
-        self.propose();run(self.root,self.worker([idea()]))
-        path=self.where['roadmap'];path.chmod(0o444)
-        mode=path.stat().st_mode & 0o777
-        self.say('approve')
+    def test_a_human_mode_change_during_review_is_kept(self):
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
+        path=self.where['roadmap'];reviewer=self.worker([])
+        modes=[]
+        def invoke(host,root,profile,prompt,role,directory,context,**kwargs):
+            path.chmod(0o444);modes.append(path.stat().st_mode & 0o777)
+            return reviewer(host,root,profile,prompt,role,directory,context,**kwargs)
         try:
-            with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([]))
-            self.assertEqual(path.stat().st_mode & 0o777,mode)
+            with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,invoke)
+            kept=path.stat().st_mode & 0o777
+            self.assertEqual(kept,modes[0])
         finally:path.chmod(0o600)
         self.assertEqual(self.git('rev-parse','HEAD'),self.git('rev-parse','main'))
 
@@ -136,8 +171,8 @@ class ProposeTest(unittest.TestCase):
         self.propose('Rate-limit sign-in')
         result = run(self.root, self.worker([idea('task')]))
         self.assertEqual(result['proposal']['lines'], ['- [ ] **3.** Rate-limit sign-in attempts. Read §1. Depends on task 2.'])
-        self.assertEqual(self.git('branch', '--show-current'), 'propose/design-0001')
         self.say('approve');run(self.root, self.worker([]))
+        self.assertEqual(self.git('branch', '--show-current'), 'propose/design-0001')
         doc = (self.where['designs'] / '0001-auth.md').read_text()
         self.assertLess(doc.index('**2.**'), doc.index('**3.**'))
 
@@ -151,15 +186,19 @@ class ProposeTest(unittest.TestCase):
         self.assertIn('frozen design has shipped', [c[1] for c in self.calls if c[0] == 'analysis'][1])
         self.assertEqual(result['proposal']['route'], 'roadmap')
 
-    def test_an_improvement_writes_nothing_and_needs_no_commit(self):
-        self.propose('Make the sign-in button bigger')
-        result = run(self.root, self.worker([idea('improvement', text='Make the sign-in button 48px tall')]))
-        self.assertEqual((result['status'], result['proposal']['lines']), ('approval_checkpoint', []))
-        self.assertEqual([c[0] for c in self.calls], ['analysis','review'])
-        self.assertEqual(self.git('branch', '--show-current'), 'main')
-        self.say('approve')
-        self.assertEqual(run(self.root, self.worker([]))['status'], 'completed')
-        with self.assertRaisesRegex(Refused, 'nothing to publish'):self.say('pr')
+    def test_an_improvement_or_unclear_idea_is_shown_with_no_review(self):
+        for route in ('improvement', 'unclear'):
+            with self.subTest(route=route):
+                self.calls.clear()
+                self.propose(f'Make the sign-in button bigger ({route})')
+                result = run(self.root, self.worker([idea(route, text='Make the sign-in button 48px tall')]))
+                self.assertEqual((result['status'], result['proposal']['route'], result['proposal']['lines']), ('approval_checkpoint', route, []))
+                self.say('approve')
+                self.assertEqual(run(self.root, self.worker([]))['status'], 'completed')
+                self.assertEqual([c[0] for c in self.calls], ['analysis'])
+                self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
+                with self.assertRaisesRegex(Refused, 'nothing to publish'):self.say('pr')
+                self.say('stop')
 
     def test_refine_asks_again_with_the_person_s_words(self):
         self.propose()
@@ -170,7 +209,7 @@ class ProposeTest(unittest.TestCase):
         prompts = [c[1] for c in self.calls if c[0] == 'analysis']
         self.assertIn('put it in a new milestone M2 called Find things', prompts[1])
         self.assertEqual(result['proposal']['lines'][0], '### M2 — Find things')
-        self.assertEqual(self.where['roadmap'].read_text().count('`search`'), 1)
+        self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
 
     def test_new_milestone_number_is_assigned_by_code(self):
         self.propose()
@@ -184,39 +223,15 @@ class ProposeTest(unittest.TestCase):
                 plans.add_task(self.root,self.where,'0001','Core',text,[])
         self.assertEqual(self.git('status','--porcelain'),'')
 
-    def test_unclear_proposal_is_reviewed_and_bound_before_approval(self):
-        from .storage import read_json,digest
-        self.propose()
-        result=run(self.root,self.worker([idea('unclear')],reviews=['concern']))
-        self.assertEqual(result['status'],'findings_checkpoint')
-        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
-        with self.assertRaisesRegex(Refused,'No proposal is waiting'):self.say('approve')
-        review=load_run(self.root)[1]['attempts'][-1]
-        artifact=read_json(review['artifact']['path'])
-        self.assertEqual(digest(artifact),review['artifact']['hash'])
-        self.assertEqual(artifact['answer'],idea('unclear'))
-        self.assertEqual(artifact['rendered']['route'],'unclear')
-
-    def test_refining_to_no_files_returns_to_main_before_approval(self):
-        self.propose();run(self.root,self.worker([idea()]))
-        self.say('refine: this is an improvement')
-        result=run(self.root,self.worker([idea('improvement')]))
-        self.assertEqual(result['status'],'approval_checkpoint')
-        self.assertEqual(self.git('branch','--show-current'),'main')
-        self.assertNotIn('propose/search',self.git('branch','--list'))
-        self.assertEqual(self.git('status','--porcelain'),'')
-        self.say('approve');self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
-
-    def test_no_file_cleanup_recovers_each_transition_without_new_analysis(self):
+    def test_putting_back_a_moved_proposal_recovers_each_step_without_new_analysis(self):
         from .storage import git,Journal
-        self.propose();run(self.root,self.worker([idea()]))
-        self.say('refine: this is unclear')
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         original=Journal.append
         def fail_switch(root,*args,**kwargs):
             if args[:1]==('switch',):raise OSError('switch interrupted')
             return git(root,*args,**kwargs)
         with patch('oh.workflow.git',fail_switch):
-            with self.assertRaisesRegex(OSError,'switch interrupted'):run(self.root,self.worker([idea('unclear')]))
+            with self.assertRaisesRegex(OSError,'switch interrupted'):run(self.root,self.worker([idea('unclear')],reviews=['blocking']))
         human=self.root/'human.txt';human.write_text('keep me')
         with self.assertRaisesRegex(Refused,'Preserve unrelated edits'):run(self.root,self.worker([]))
         self.assertEqual(human.read_text(),'keep me');human.unlink()
@@ -233,17 +248,63 @@ class ProposeTest(unittest.TestCase):
             with self.assertRaisesRegex(OSError,'record interrupted'):run(self.root,self.worker([]))
         self.assertNotIn('propose/search',self.git('branch','--list'))
         self.assertEqual(run(self.root,self.worker([]))['status'],'approval_checkpoint')
-        self.assertEqual([c[0] for c in self.calls],['analysis','review','analysis','review'])
+        self.assertEqual([c[0] for c in self.calls],['analysis','review','analysis'])
         self.say('reconsider');self.assertEqual(load_run(self.root)[1]['status'],'stopped')
-        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertEqual((self.git('branch','--show-current'),self.git('status','--porcelain')),('main',''))
 
-    def test_reconsider_writes_nothing_and_leaves_no_branch(self):
+    def test_reconsider_writes_nothing_and_asks_what_the_person_meant(self):
         self.propose()
         run(self.root, self.worker([idea()]))
         self.say('reconsider')
-        self.assertEqual(load_run(self.root)[1]['status'], 'stopped')
+        result = load_run(self.root)[1]
+        self.assertEqual(result['status'], 'stopped')
         self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
         self.assertNotIn('propose/search', self.git('branch', '--list'))
+        from .workflow import checkpoint
+        self.assertEqual(checkpoint(self.root)['waiting']['ask'], 'What did you mean?')
+        # The person's next message is the new idea, for the same command.
+        reply = 'I meant searching inside attachments'
+        from .entry import receive
+        receive(self.root, 'codex', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '12', 'prompt': reply})
+        result = host_hook(self.root, 'codex', {'prompt': reply}, verified=self.event('12', reply), idea='propose')
+        self.assertEqual(result['status'], 'running');self.assertNotIn('waiting', result)
+        self.assertIn(reply, load_run(self.root)[1]['tasks'][0]['instructions'])
+
+    def test_a_bare_command_waits_for_the_person_s_next_message(self):
+        from .authority import pending_file
+        from .entry import receive
+        from .storage import read_json
+        payload = lambda session, turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': session, 'turn_id': turn, 'prompt': prompt}
+        self.assertIsNone(receive(self.root, 'codex', payload('s', '0', 'Search my notes')))  # ordinary text never reaches OH
+        result = host_hook(self.root, 'codex', {'prompt': '/oh-propose'}, verified=self.event('1', '/oh-propose'))
+        self.assertEqual(result['waiting']['ask'], "What's the idea?");self.assertEqual(self.calls, [])
+        self.assertIsNone(receive(self.root, 'codex', payload('other', '2', 'Search my notes')))  # another conversation can't answer
+        from .cli import main
+        import io, json
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):main(['--root', str(self.root), 'status'])
+        self.assertEqual(json.loads(out.getvalue())['waiting']['ask'], "What's the idea?")
+        receive(self.root, 'codex', payload('s', '3', 'Search my notes'))
+        self.assertEqual(read_json(pending_file(self.root))['idea'], 'propose')
+        self.assertIsNone(receive(self.root, 'codex', payload('s', '3b', 'and tags')))  # the first reply used the question up
+        result = host_hook(self.root, 'codex', {'prompt': 'Search my notes'}, verified=self.event('3', 'Search my notes'), idea='propose')
+        self.assertEqual(result['status'], 'running');self.assertNotIn('waiting', result)
+        self.assertIn('Search my notes', load_run(self.root)[1]['tasks'][0]['instructions'])
+        self.say('stop')
+        # A bare /oh-design offers the rows without a design; another command replaces the wait.
+        plans.add_initiative(self.root, self.where, 'M1', 'tags', 'Tag notes', []);self.git('commit', '-qam', 'tags')
+        result = host_hook(self.root, 'codex', {'prompt': '/oh-design'}, verified=self.event('5', '/oh-design'))
+        self.assertEqual(result['waiting']['initiatives'], [{'slug': 'tags', 'milestone': 'M1', 'depends': []}])
+        receive(self.root, 'codex', payload('s', '6', 'the tagging one'))
+        result = host_hook(self.root, 'codex', {'prompt': 'the tagging one'}, verified=self.event('6', 'the tagging one'), idea='design')
+        self.assertIn('not one of those rows', result['note'])  # asked again, so the next reply answers
+        receive(self.root, 'codex', payload('s', '7', '/oh-deliver'))
+        self.assertIsNone(receive(self.root, 'codex', payload('s', '8', 'tags')))  # another command replaced the question
+        host_hook(self.root, 'codex', {'prompt': '/oh-design'}, verified=self.event('9', '/oh-design'))
+        from .authority import cancel
+        cancel(self.root)  # stop and cancel drop it too, however they were given
+        self.assertIsNone(receive(self.root, 'codex', payload('s', '10', 'tags')))
 
     def test_proposals_start_from_main_wherever_the_checkout_was(self):
         self.git('switch','-qc','feature/work')
@@ -257,13 +318,12 @@ class ProposeTest(unittest.TestCase):
         def fail(journal,kind,data):
             if kind=='branch.moved':raise OSError('publication interrupted')
             return original(journal,kind,data)
-        self.propose()
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         with patch.object(Journal,'append',fail):
-            with self.assertRaisesRegex(OSError,'publication interrupted'):run(self.root,self.worker([idea()]))
+            with self.assertRaisesRegex(OSError,'publication interrupted'):run(self.root,self.worker([]))
         self.assertEqual(self.git('branch','--show-current'),'propose/search')
         self.assertIn('branch_move',load_run(self.root)[1])
-        result=run(self.root,self.worker([]))
-        self.assertEqual(result['status'],'approval_checkpoint')
+        self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
         self.assertEqual([c[0] for c in self.calls],['analysis','review'])
         self.assertNotIn('branch_move',load_run(self.root)[1])
         self.assertEqual(self.where['roadmap'].read_text().count('`search`'),1)
@@ -275,15 +335,14 @@ class ProposeTest(unittest.TestCase):
             result=original(root,*args,**kwargs)
             if args[0]=='update-ref':raise KeyboardInterrupt('killed after ref creation')
             return result
-        self.propose()
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         with patch.object(runner,'git',interrupt):
-            with self.assertRaises(KeyboardInterrupt):run(self.root,self.worker([idea()]))
+            with self.assertRaises(KeyboardInterrupt):run(self.root,self.worker([]))
         self.assertIn('branch_creation',load_run(self.root)[1])
         self.assertEqual(self.git('branch','--show-current'),'main')
-        self.assertEqual(run(self.root,self.worker([]))['status'],'approval_checkpoint')
+        self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
         self.assertEqual([c[0] for c in self.calls],['analysis','review'])
         self.assertEqual(self.git('branch','--list','propose/*'),'* propose/search')
-        self.say('reconsider');self.assertEqual(self.git('branch','--list','propose/*'),'')
 
     def test_stop_prevents_pending_branch_creation_recovery(self):
         from .storage import Journal
@@ -292,9 +351,9 @@ class ProposeTest(unittest.TestCase):
             result=original(journal,kind,data)
             if kind=='branch.creating':raise KeyboardInterrupt('killed before creation')
             return result
-        self.propose()
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         with patch.object(Journal,'append',interrupt):
-            with self.assertRaises(KeyboardInterrupt):run(self.root,self.worker([idea()]))
+            with self.assertRaises(KeyboardInterrupt):run(self.root,self.worker([]))
         self.say('stop')
         self.assertEqual(run(self.root,self.worker([]))['status'],'stopped')
         self.assertEqual(self.git('branch','--list','propose/*'),'')
@@ -309,10 +368,10 @@ class ProposeTest(unittest.TestCase):
                 self.git('update-ref','refs/heads/'+data['branch'],human)
                 raise OSError('publication failed')
             return original(journal,kind,data)
-        self.propose()
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         with patch.object(Journal,'append',fail):
             with self.assertRaisesRegex(Refused,'changed during cleanup'):
-                run(self.root,self.worker([idea()]))
+                run(self.root,self.worker([]))
         self.assertEqual(self.git('rev-parse','propose/search'),human)
         self.assertEqual(self.git('branch','--show-current'),'main')
         with self.assertRaisesRegex(Refused,'changed or created elsewhere'):
@@ -320,24 +379,24 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(self.git('rev-parse','propose/search'),human)
         self.assertEqual([c[0] for c in self.calls],['analysis'])
 
-    def test_reconsider_cleanup_preserves_a_ref_changed_after_switch(self):
+    def test_putting_back_a_proposal_preserves_a_ref_changed_after_switch(self):
         from .storage import git
-        self.propose();run(self.root,self.worker([idea()]))
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         human=self.git('commit-tree','HEAD^{tree}','-p','HEAD','-m','Human work')
         def race(root,*args,**kwargs):
             result=git(root,*args,**kwargs)
             if args==('switch','main'):self.git('update-ref','refs/heads/propose/search',human)
             return result
         with patch('oh.workflow.git',race):
-            with self.assertRaisesRegex(Refused,'changed during cleanup'):self.say('reconsider')
+            with self.assertRaisesRegex(Refused,'changed during cleanup'):run(self.root,self.worker([idea('unclear')],reviews=['blocking']))
         self.assertEqual(self.git('rev-parse','propose/search'),human)
         self.assertEqual(self.git('branch','--show-current'),'main')
         self.assertIn('discard',load_run(self.root)[1])
         with self.assertRaisesRegex(Refused,'proposal branch changed'):run(self.root,self.worker([]))
         self.assertEqual(self.git('rev-parse','propose/search'),human)
-        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
+        self.assertEqual([c[0] for c in self.calls],['analysis','review','analysis'])
 
-    def test_oversized_slug_returns_feedback_before_any_branch_creation(self):
+    def test_oversized_slug_returns_feedback_before_the_person_sees_it(self):
         from .storage import Journal
         original=Journal.append;created=[]
         def record(journal,kind,data):
@@ -345,15 +404,15 @@ class ProposeTest(unittest.TestCase):
             return original(journal,kind,data)
         self.propose()
         with patch.object(Journal,'append',record):
-            result=run(self.root,self.worker([idea(slug='x'*300),idea(slug='x'*60)]))
-        self.assertEqual(result['status'],'approval_checkpoint')
+            self.assertEqual(run(self.root,self.worker([idea(slug='x'*300),idea(slug='x'*60)]))['status'],'approval_checkpoint')
+            self.assertIn('at most 60 characters',[c[1] for c in self.calls if c[0]=='analysis'][1])
+            self.assertEqual(created,[])
+            self.say('approve');run(self.root,self.worker([]))
         self.assertEqual(created,['propose/'+'x'*60])
-        self.assertIn('at most 60 characters',[c[1] for c in self.calls if c[0]=='analysis'][1])
         self.assertEqual([c[0] for c in self.calls],['analysis','analysis','review'])
-        self.say('reconsider')
-        self.assertEqual(self.git('branch','--list','propose/*'),'')
 
     @unittest.skipIf(__import__('os').name=='nt','Symlink creation requires Windows privileges')
+
     def test_proposal_output_symlinks_are_refused_before_branch_or_write(self):
         from pathlib import Path
         cases=[(self.where['designs']/'0001-auth.md',idea('task')),
@@ -380,15 +439,15 @@ class ProposeTest(unittest.TestCase):
 
     def test_branch_identity_failure_removes_only_the_unpublished_branch(self):
         from .branches import incarnation
-        self.propose()
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         def fail(root,branch,**kwargs):
             if branch.startswith('propose/'):raise OSError('identity unavailable')
             return incarnation(root,branch,**kwargs)
         with patch('oh.branches.incarnation',fail):
-            with self.assertRaisesRegex(OSError,'identity unavailable'):run(self.root,self.worker([idea()]))
+            with self.assertRaisesRegex(OSError,'identity unavailable'):run(self.root,self.worker([]))
         self.assertEqual(self.git('branch','--show-current'),'main')
         self.assertNotIn('propose/search',self.git('branch','--list'))
-        self.assertEqual(run(self.root,self.worker([]))['status'],'approval_checkpoint')
+        self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
         self.assertEqual([c[0] for c in self.calls],['analysis','review'])
 
     def test_pending_branch_transition_preserves_new_human_edits(self):
@@ -397,38 +456,21 @@ class ProposeTest(unittest.TestCase):
         def fail(journal,kind,data):
             if kind=='branch.moved':raise OSError('publication interrupted')
             return original(journal,kind,data)
-        self.propose()
+        self.propose();run(self.root,self.worker([idea()]));self.say('approve')
         with patch.object(Journal,'append',fail):
-            with self.assertRaises(OSError):run(self.root,self.worker([idea()]))
+            with self.assertRaises(OSError):run(self.root,self.worker([]))
         path=self.root/'human.txt';path.write_text('keep this')
         with self.assertRaisesRegex(Refused,'Restore the unchanged proposal branches'):
             run(self.root,self.worker([]))
         self.assertEqual(path.read_text(),'keep this')
         self.assertEqual([c[0] for c in self.calls],['analysis'])
 
-    def test_reconsider_recovers_after_switch_before_branch_deletion(self):
-        from .storage import git
-        self.propose();run(self.root,self.worker([idea()]))
-        def fail(root,*args,**kwargs):
-            if args[:2]==('update-ref','-d'):raise OSError('delete interrupted')
-            return git(root,*args,**kwargs)
-        with patch('oh.workflow.git',fail):
-            with self.assertRaisesRegex(OSError,'delete interrupted'):self.say('reconsider')
-        self.assertEqual(self.git('branch','--show-current'),'main')
-        state=load_run(self.root)[1]
-        self.assertEqual(state['status'],'stopped');self.assertIn('discard',state)
-        self.assertEqual(run(self.root,self.worker([]))['status'],'stopped')
-        self.assertNotIn('discard',load_run(self.root)[1])
-        self.assertNotIn('propose/search',self.git('branch','--list'))
-        self.assertEqual(self.git('status','--porcelain'),'')
-        self.assertEqual([c[0] for c in self.calls],['analysis','review'])
-
-    def test_reconsider_never_discards_a_human_edit(self):
+    def test_reconsider_never_touches_a_human_edit(self):
         self.propose();run(self.root,self.worker([idea()]))
         path=self.where['roadmap'];path.write_text(path.read_text()+'\nHuman note\n')
-        with self.assertRaises(Refused):self.say('reconsider')
+        self.say('reconsider')
         self.assertIn('Human note',path.read_text())
-        self.assertEqual(load_run(self.root)[1]['status'],'approval_checkpoint')
+        self.assertEqual(load_run(self.root)[1]['status'],'stopped')
 
     def test_the_gate_words_reach_oh_only_while_a_proposal_waits(self):
         from .entry import command

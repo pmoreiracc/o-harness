@@ -22,12 +22,13 @@ discard their changes unless they pick that, and never switch, pull or create br
 itself. After opening a pull request, give its link; don't wait for or watch its checks.
 
 Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
-ambiguous, ask the user which name to use and run `init --name <name>`. Existing project checks run when
-configured; design can proceed without checks. No OH files, hooks or settings belong in the product.
+ambiguous, ask the user which name to use and run `init --name <name>`. Designing runs no project checks: OH
+checks every plan file it writes against the plan rules itself. No OH files, hooks or settings belong in the product.
 
-The argument is one roadmap slug, such as `/oh-design auth`. Without one, read the roadmap
-that `plans path` names and list the initiatives that have no design yet, or say new work
-starts with `/oh-propose`; never pick one yourself.
+The argument is one roadmap slug, such as `/oh-design auth`. Without one, run `run` anyway: OH answers with
+`waiting` and the roadmap rows that have no design yet (`initiatives`), or says new work starts with
+`/oh-propose`. List those rows, ask `waiting.ask` in plain chat and end your turn; the person's next message
+(a slug) is the argument, then run `run`. Never pick one yourself.
 
 Run `plans path`. If it says to choose where plans live, ask the user once:
 in the repository (recommended: the design is reviewed and approved through a pull request)
