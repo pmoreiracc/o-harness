@@ -1,58 +1,61 @@
-name: release
-# A new version reaching main releases it: "prepare release" opens the pull request that sets it (see
-# docs/installation.md, "Releasing"). The release starts only after main's own checks (verify: Linux tests and
-# syntax) pass on that exact commit, and publishes only if the full Windows suite and the install check pass too.
-# The tag is created first and pins the release's commit: running this again by hand, after a failure, finishes
-# that same version from that same commit, so users never get two different builds under one version.
+name: Release
+# Only the owner can start this workflow. The release App merges the version-only PR
+# under main's normal checks; the remaining jobs test and publish its exact merge commit.
 on:
-  workflow_run:
-    workflows: [verify]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (X.Y.Z); use the same version to retry
+        required: true
+        type: string
 permissions:
-  actions: read
-  contents: write
-concurrency: release
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
 jobs:
-  version:
-    # After every push to main whose checks passed; it releases only a version that isn't released yet.
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+  authorize:
     runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require Pedro on main, including reruns
+        env:
+          ACTOR_ID: ${{ github.actor_id }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          [ "$GITHUB_REPOSITORY" = pmoreiracc/o-harness ] &&
+          [ "$GITHUB_REF" = refs/heads/main ] &&
+          [ "$ACTOR_ID" = 154069128 ] && [ "$TRIGGERING_ACTOR" = pmoreiracc ] || {
+            echo "::error::Only Pedro may start or rerun Release, on main"; exit 1; }
+  version:
+    needs: authorize
+    if: github.actor_id == '154069128' && github.triggering_actor == 'pmoreiracc'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 0
+          persist-credentials: false
+      - name: Create the release App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: read
       - id: version
-        name: Find the version to release, and its commit
+        name: Prepare version, wait for checks, and merge its PR
         env:
-          GH_TOKEN: ${{ github.token }}
-          COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
-        run: |
-          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Releases come from main"; exit 1; }
-          version=$(jq -r .version plugins/o-harness/.claude-plugin/plugin.json)
-          [ "$version" = "$(jq -r .version plugins/o-harness/.codex-plugin/plugin.json)" ] || {
-            echo "::error::The Claude and Codex plugin versions differ"; exit 1; }
-          tag="v$version"
-          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            # Started by hand, it still needs main's checks to have passed on this commit.
-            passed=$(gh run list --workflow verify.yml --commit "$COMMIT" --event push --json conclusion --jq 'map(select(.conclusion == "success")) | length')
-            [ "$passed" -gt 0 ] || { echo "::error::main's checks (verify) have not passed on $COMMIT"; exit 1; }
-            echo "Releasing $tag from $COMMIT."
-            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$COMMIT" >> "$GITHUB_OUTPUT";exit 0
-          fi
-          published=$(git fetch -q origin dist && git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version || true)
-          if [ "$published" = "$version" ] && gh release view "$tag" >/dev/null 2>&1; then
-            echo "$tag is already released; nothing to do."
-          else
-            # A release that stopped after its tag: finish it from the tagged commit.
-            echo "Finishing $tag from its tagged commit."
-            echo "tag=$tag" >> "$GITHUB_OUTPUT";echo "commit=$(git rev-list -n1 "$tag")" >> "$GITHUB_OUTPUT"
-          fi
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_BOT: ${{ steps.app.outputs.app-slug }}[bot]
+        run: python3 .github/scripts/release.py
   # Pull requests run only part of the Windows suite; a release waits for all of it.
   windows:
     needs: version
@@ -86,17 +89,19 @@ jobs:
       ref: ${{ needs.version.outputs.commit }}
   release:
     needs: [version, windows, install]
+    if: github.actor_id == '154069128' && github.triggering_actor == 'pmoreiracc'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    environment: release
     env:
       TAG: ${{ needs.version.outputs.tag }}
       COMMIT: ${{ needs.version.outputs.commit }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -117,16 +122,38 @@ jobs:
           [ "$(ls -A "$RUNNER_TEMP/tested")" = package.tgz ] || { echo "::error::The tested artifact holds more than package.tgz"; exit 1; }
           mkdir "$RUNNER_TEMP/checked" && tar -xzf "$RUNNER_TEMP/tested/package.tgz" -C "$RUNNER_TEMP/checked"
           diff -r "$BUILT" "$RUNNER_TEMP/checked"
+      - name: Create the publishing token only after tests and package comparison
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Configure authenticated Git without saving the token
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh auth setup-git
       - name: Create the tag, which pins this release to its commit
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { git tag "$TAG" "$COMMIT" && git push origin "$TAG"; }
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            [ "$(git rev-list -n1 "$TAG")" = "$COMMIT" ] || { echo "::error::Tag moved; refusing publication"; exit 1; }
+          else
+            git tag "$TAG" "$COMMIT" && git push origin "$TAG"
+          fi
       - name: Publish the package to the dist branch
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           out="$RUNNER_TEMP/dist"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if git ls-remote --exit-code --heads origin dist >/dev/null; then
             git fetch origin dist
+            published=$(git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version)
+            python3 -c 'import sys; a,b=(tuple(map(int,v.split("."))) for v in sys.argv[1:]); sys.exit(a>b)' "$published" "${TAG#v}" || {
+              echo "::error::Refusing to replace a newer published version"; exit 1; }
             # A retry after the package was published leaves it exactly as users received it.
             [ "$(git show FETCH_HEAD:claude/o-harness/core/revision.json | jq -r .version)" != "${TAG#v}" ] || {
               echo "dist already carries $TAG"; exit 0; }
@@ -140,4 +167,6 @@ jobs:
           git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $TAG ($(git rev-parse --short "$COMMIT"))"
           git -C "$out" push origin dist
       - name: Create the GitHub release, with notes listing the merged pull requests
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
