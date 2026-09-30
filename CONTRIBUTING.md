@@ -36,5 +36,47 @@ Maintainers run an independent review of every PR before merging. Only maintaine
 Merging to `main` releases nothing unless the merge changes the version; see
 [releasing](docs/installation.md#releasing-maintainers).
 
-To try your change as a real plugin, see the local build steps in the same section. Your
-installed OH doesn't change when you edit this checkout.
+## Try the local source in Claude Code and Codex
+
+From this checkout, define `oh-dev` once in Bash or Zsh:
+
+```sh
+alias oh-dev="'$(python3 -I -c 'import sys; print(sys.executable)')' -I '$PWD/integrations/oh_dev.py'"
+oh-dev on
+```
+
+For PowerShell:
+
+```powershell
+$ohDevPython = (Get-Command python).Source
+$ohDevScript = Join-Path $PWD 'integrations/oh_dev.py'
+function oh-dev { & $ohDevPython -I $ohDevScript @args }
+oh-dev on
+```
+
+Save the definition with expanded absolute paths in your shell profile to keep it.
+Python 3.12+ and both host CLIs must be installed. No commit, push or version bump is needed.
+
+`oh-dev on` enables a separate local development plugin in **both hosts**, for fresh sessions
+in **any repository**. `oh-dev off` restores the previous released-plugin enablement;
+`oh-dev status` shows the current state. Add `--host codex` or `--host claude` to select one.
+Released plugin files are retained. Use `off` before switching to another source checkout.
+
+The development plugin runs this checkout's runtime, workflows, prompts, config and dashboard.
+Skills and hook definitions refresh on each `on`. Start fresh host sessions after switching or
+refreshing; restart them after MCP changes. Finish active OH runs before changing source.
+Project-level plugin overrides take precedence; remove an OH override before testing there.
+
+State lives in `~/.local/share/oh-dev`, separate from normal OH data. No consumer files or
+services are installed. `oh-dev exec` runs source CLI commands with development data:
+
+```sh
+oh-dev exec profile-import integrations/oh-profile.json
+oh-dev exec status
+oh-dev exec serve --port 4319
+```
+
+Development launchers refuse `setup` and service installation/removal. If switching fails,
+run `oh-dev off --host <reported-host>`, fix the reported cause, and retry.
+The helper, these instructions and two installation regression cases are committed;
+generated plugins, host settings and development data are not.
