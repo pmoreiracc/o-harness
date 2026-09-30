@@ -1,6 +1,5 @@
 """Owner-started version PR, protected merge, and exact-commit release selection.
 
-The permissions and retry contract is documented in docs/installation.md.
 No token can bypass required checks; GitHub performs the final merge authorization.
 """
 import base64
@@ -116,7 +115,7 @@ def merge_pr(api, pr, sha, bot, pause=time.sleep, attempts=120):
         require(current.get('mergeable_state') != 'dirty',
                 'The release PR conflicts with main. Close it, delete its branch, and run Release again.')
         if current.get('mergeable') is True:
-            # The update restriction can report "blocked" even for an allowed App.
+            # Conflict-free does not mean the required checks have passed.
             # GitHub's merge endpoint enforces required checks and the pinned SHA;
             # 405 means not mergeable yet. Never bypass checks or retry other errors.
             try:

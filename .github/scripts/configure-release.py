@@ -1,7 +1,6 @@
 """Apply the release permissions after installing the private release GitHub App.
 
 Run as Pedro with gh authenticated. Does not read or print the App private key.
-See docs/installation.md for the one-time setup sequence.
 """
 import argparse
 import json
@@ -27,8 +26,8 @@ def configure(app_id, publication=True):
     user = json.loads(subprocess.check_output(['gh', 'api', 'user'], text=True))
     require(user['id'] == OWNER_ID, 'Run this setup as pmoreiracc.')
     api = GitHub(REPO)
-    # These checks stay separate: the App bypasses only the restriction on WHO may
-    # update main. It must still satisfy main's PR and status-check protections.
+    # Both Pedro and the release App must satisfy main's existing PR and checks.
+    # Do not add a restrict-updates ruleset: it forces normal merges to use bypass.
     protection = api('GET', 'branches/main/protection')
     require(protection.get('enforce_admins', {}).get('enabled')
             and protection.get('required_pull_request_reviews') is not None
@@ -39,9 +38,6 @@ def configure(app_id, publication=True):
     if app_id:
         require(app_id > 0, 'Use the numeric ID of the App installed on this repository.')
         actors.append({'actor_id': app_id, 'actor_type': 'Integration', 'bypass_mode': 'pull_request'})
-    upsert(api, 'rulesets', {'name': 'Only Pedro and release App may merge main', 'target': 'branch',
-        'enforcement': 'active', 'conditions': {'ref_name': {'include': ['refs/heads/main'], 'exclude': []}},
-        'bypass_actors': actors, 'rules': [{'type': 'update'}]})
     api('PUT', 'environments/release', {'deployment_branch_policy': {'protected_branches': False, 'custom_branch_policies': True}})
     policies = api('GET', 'environments/release/deployment-branch-policies')['branch_policies']
     require(all(p['name'] == 'main' and p['type'] == 'branch' for p in policies),
@@ -49,7 +45,7 @@ def configure(app_id, publication=True):
     if not policies:
         api('POST', 'environments/release/deployment-branch-policies', {'name': 'main', 'type': 'branch'})
     if not publication:
-        print('Prepared main merge restriction and release environment. Publication settings await the App and merged PR.')
+        print('Prepared release environment. Publication settings await the App and merged PR.')
         return
     require(app_id, 'Provide --app-id after installing the release App.')
     variable = 'environments/release/variables/RELEASE_APP_ID'
@@ -83,7 +79,7 @@ def configure(app_id, publication=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app-id', type=int)
-    parser.add_argument('--prepare', action='store_true', help='Set up main/environment without changing existing publication permissions')
+    parser.add_argument('--prepare', action='store_true', help='Set up release environment without changing existing publication permissions')
     args = parser.parse_args()
     require(args.prepare or args.app_id, 'Provide --app-id, or use --prepare before App setup.')
     configure(args.app_id, publication=not args.prepare)

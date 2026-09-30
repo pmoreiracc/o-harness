@@ -1,10 +1,16 @@
-"""Causal authorization and retry coverage for docs/installation.md#releasing-maintainers."""
+"""Causal authorization, protected merge, retry and setup coverage."""
 import base64
 import json
+import importlib.util
+from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
 import release
+
+spec = importlib.util.spec_from_file_location('configure_release', Path(__file__).with_name('configure-release.py'))
+configure_release = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(configure_release)
 
 
 OWNER = {'GITHUB_REPOSITORY': 'pmoreiracc/o-harness', 'GITHUB_EVENT_NAME': 'workflow_dispatch',
@@ -94,8 +100,8 @@ class ReleaseTest(unittest.TestCase):
         def response(body, status=None):
             return Mock(returncode=1 if status else 0, stdout=json.dumps(body),
                         stderr=f'gh: Merge refused (HTTP {status})' if status else '')
-        # GitHub reports "blocked" for the update restriction even for an allowed
-        # publisher. The protected merge endpoint decides whether checks are ready.
+        # A conflict-free PR can still be blocked by checks. The protected merge
+        # endpoint decides whether they are ready.
         responses = [response(pull(mergeable=None)), response(pull(mergeable_state='blocked')),
                      response({}, 405), response(pull(mergeable_state='blocked')),
                      response({'merged': True, 'sha': 'merged'})]
@@ -141,6 +147,36 @@ class ReleaseTest(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(RuntimeError):
                 release.verified(Mock(return_value={'workflow_runs': [run | changes]}), 'merged', lambda _: None, attempts=1)
         release.verified(Mock(return_value={'workflow_runs': [run | {'conclusion': 'success'}]}), 'merged', lambda _: None, attempts=1)
+
+    def test_setup_keeps_main_protection_without_requiring_bypass(self):
+        writes = []
+        protection = {'enforce_admins': {'enabled': True}, 'required_pull_request_reviews': {},
+                      'required_status_checks': {'checks': [{'context': name} for name in
+                          ('checks (native)', 'checks (syntax)', 'windows')]}}
+        def api(method, path, data=None, missing=False):
+            if method != 'GET':
+                writes.append((method, path, data))
+                return {}
+            if path == 'branches/main/protection': return protection
+            if path == 'environments/release/deployment-branch-policies': return {'branch_policies': []}
+            if path == 'environments/release/variables/RELEASE_APP_ID': return None
+            if path == 'environments/release/secrets/RELEASE_APP_PRIVATE_KEY': return {}
+            if path == 'rulesets': return []
+            if path == 'actions/policies': return {'policies': []}
+            raise AssertionError((method, path))
+        with patch.object(configure_release.subprocess, 'check_output', return_value='{"id":154069128}'), \
+             patch.object(configure_release, 'GitHub', return_value=api):
+            configure_release.configure(12345)
+            self.assertTrue(writes)
+            self.assertFalse(any(path.startswith('branches/') for _, path, _ in writes))
+            rulesets = [data for _, path, data in writes if path == 'rulesets']
+            self.assertTrue(rulesets)
+            self.assertFalse(any('refs/heads/main' in data['conditions']['ref_name']['include'] for data in rulesets))
+            writes.clear()
+            protection['enforce_admins']['enabled'] = False
+            with self.assertRaisesRegex(RuntimeError, 'Restore main PR/check protections'):
+                configure_release.configure(12345)
+            self.assertEqual(writes, [])
 
 
 if __name__ == '__main__':
