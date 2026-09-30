@@ -76,7 +76,9 @@ class WorkflowTest(unittest.TestCase):
         # Replaying the same host response cannot create another grant.
         before=len(journal.records());choose(self.root,'continue',self.event('2','continue'))
         self.assertEqual(len(journal.records()),before)
-        self.assertTrue(all(len(c[2])<14000 for c in self.calls))
+        from .config import HOME
+        contract_size=len((HOME/'prompts/invariant-reviewer.md').read_text())
+        self.assertTrue(all(len(c[2])<contract_size+14000 for c in self.calls))
 
     def test_review_budget_survives_failures_and_restart(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
@@ -240,10 +242,16 @@ class WorkflowTest(unittest.TestCase):
     def test_native_pr_evidence_binds_all_commits_and_refuses_tampering(self):
         from .publication import render,validate_event,START,END
         self.git('update-ref','refs/remotes/origin/main','HEAD')
-        start(self.root,{'tasks':self.tasks[:2]},self.event());run(self.root,self.fake)
+        def report(*args,**kwargs):
+            result=self.fake(*args,**kwargs)
+            if args[4]=='implementation':result['structured']={'summary':'Done','found_along_way':['Follow-up outside this quick fix']}
+            return result
+        start(self.root,{'tasks':self.tasks[:2]},self.event());run(self.root,report)
         with self.assertRaises(Refused):render(self.root)
         choose(self.root,'pr',self.event('2','pr'))
         body=render(self.root)
+        self.assertIn('Found along the way (task 1)',body)  # docs/usage.md: quick-fix observations reach the PR
+        self.assertIn('Follow-up outside this quick fix',body)
         event={'pull_request':{'head':{'ref':'work','sha':self.git('rev-parse','HEAD')},'body':body}}
         self.assertEqual(validate_event(self.root,event,'origin/main')['commits'],2)
         packet=json.loads(body.split('```json\n')[1].split('\n```')[0]);packet['records'][0]['evidence']['attempts'][0]['duration_ms']=999
@@ -278,6 +286,38 @@ class WorkflowTest(unittest.TestCase):
             self.assertNotIn('Review history',result.stdout)
 
 class ReviewResultTest(unittest.TestCase):
+    def test_scope_without_a_mutable_design_routes_or_dismisses_but_never_grants_work(self):
+        """docs/usage.md: frozen designs and quick fixes retain scope in an issue or a dismissal."""
+        from .scope import prepare
+        from .gates import options
+        from .publication import validate_evidence
+        finding={'severity':'scope','description':'Unrelated logout','path':'logout.py','family':'logout','relation':'original'}
+        attempt={'id':'review','task':'1','findings':[finding],'git_tree':'tree','head':'parent','outcome':'needs_resolution'}
+        state={'id':'run','project':'project','status':'findings_checkpoint','attempts':[attempt]}
+        for delivery in ({},{'status':'frozen'}):
+            with patch('oh.delivery.guard'),patch('oh.issues.route',return_value={'url':'https://github.com/example/repo/issues/1'}) as issue:
+                value=prepare(None,None,state|{'delivery':delivery},attempt,'route','human choice')
+                self.assertEqual(value['destination'],{'issue':issue.return_value});issue.assert_called_once()
+                dismissed=prepare(None,None,state|{'delivery':delivery},attempt,'dismiss','human choice')
+                self.assertEqual(dismissed['destination'],{'pr':True});self.assertNotIn('render',dismissed)
+        evidence={'schema':1,'attempts':[attempt],'review':'review','parent':'parent','git_tree':'tree','resolutions':{
+            'review':{'choice':'dismiss scope','tree':'tree','source':'human','scope':dismissed}}}
+        validate_evidence(evidence)
+        dismissed['findings']=[]
+        with self.assertRaises(Refused):validate_evidence(evidence)
+        attempt['findings'].append(finding|{'severity':'concern'})
+        choices=[c for c,_ in options(state)]
+        self.assertEqual(choices,['fix concerns and route scope','fix concerns and dismiss scope',
+                                  'accept concerns and route scope','accept concerns and dismiss scope'])
+        self.assertNotIn('fix scope',choices)
+        from .cli import host_hook
+        from .entry import CHOICES
+        for choice in CHOICES:
+            with patch('oh.cli.choose') as choose,patch('oh.cli.active_file') as active,patch('oh.cli.checkpoint',return_value={'waiting':True}):
+                active.return_value.exists.return_value=True
+                self.assertEqual(host_hook(Path('/unused'),'codex',{'prompt':choice},verified={'prompt':choice}),{'waiting':True})
+                choose.assert_called_once_with(Path('/unused'),choice,{'prompt':choice})
+
     def test_malformed_host_results_cannot_become_review_evidence(self):
         from copy import deepcopy
         from .hosts import review_result

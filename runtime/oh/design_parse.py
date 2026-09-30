@@ -86,8 +86,13 @@ def plan(root,doc,layout=None):
         if position>=0:blocked=re.split('[.*]',block[position+11:],maxsplit=1)[0].strip(WS)
         rows.append(US.join((cur,state['status'],state['owner'],needs,blocked,state['title'])))
         state['cur']=''
-    blank=False
+    blank=False;scope_section=False
     for line in lines(path):
+        if re.match(r'^## (Open review scope|Scope decisions)[ \t\r]*$',line):
+            flush();state['owner']='';scope_section=True;continue
+        if scope_section:
+            if not re.match(r'^## ',line):continue
+            scope_section=False
         was_blank,blank=blank,re.fullmatch(SPACE+'*',line) is not None
         if re.match('###'+SPACE+'+.*[Tt]rack'+SPACE+'*$',line):
             flush()

@@ -9,12 +9,14 @@ LABELS = {'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committ
           'stop': ('Stop', 'End this run here.'), 'approve': ('Approve', ''),
           'reconsider': ('Reconsider', 'Undo what OH wrote and write nothing.'),
           'retry': ('Retry', 'Try the unfinished task again.'), 'grant review': ('More reviews', 'Allow another round of reviews.'),
-          'fix findings': ('Fix findings', 'Send every finding back to be fixed.'),
           'fix concerns': ('Fix concerns', 'Send the concerns back to be fixed.'),
-          'fix scope': ('Fix scope', 'Fix the scope findings here instead of filing them.'),
+          'dismiss scope': ('Dismiss scope', 'Record the finding as dismissed; add no work.'),
           'accept concerns': ('Accept concerns', 'Keep the work as it is; the concerns stay on record.'),
-          'route scope': ('File scope issue', 'File the scope findings as an issue and go on.'),
-          'accept concerns and route scope': ('Accept and file', 'Accept the concerns and file the scope findings as an issue.')}
+          'route scope': ('Route scope', 'Record future work in the design, or file an issue when no mutable design exists.'),
+          'accept concerns and route scope': ('Accept and route', 'Accept concerns and record scope as future work.'),
+          'accept concerns and dismiss scope': ('Accept and dismiss', 'Accept concerns and record scope as dismissed.'),
+          'fix concerns and route scope': ('Fix and route', 'Record scope as future work, then fix only concerns.'),
+          'fix concerns and dismiss scope': ('Fix and dismiss', 'Record scope as dismissed, then fix only concerns.')}
 REFINE = {'claude': 'To change it, pick Other and type what to change.', 'codex': 'To change it, pick Refine and say what to change.'}
 
 
@@ -41,10 +43,10 @@ def options(state):
         return ([('retry', '')] if task and task in state['granted'] else []) + [('stop', '')]
     if status == 'findings_checkpoint':
         severities = {f['severity'] for f in state['attempts'][-1].get('findings', [])}
-        pairs = {frozenset({'concern'}): ('fix concerns', 'accept concerns'), frozenset({'scope'}): ('fix scope', 'route scope'),
-                 frozenset({'concern', 'scope'}): ('fix findings', 'accept concerns and route scope')}
-        found = pairs.get(frozenset(severities), ('fix findings',))
-        return [(choice, '') for choice in found] + [('stop', '')]
+        pairs = {frozenset({'concern'}): ('fix concerns', 'accept concerns'), frozenset({'scope'}): ('route scope', 'dismiss scope'),
+                 frozenset({'concern', 'scope'}): ('fix concerns and route scope', 'fix concerns and dismiss scope', 'accept concerns and route scope', 'accept concerns and dismiss scope')}
+        found = pairs.get(frozenset(severities), ())
+        return [(choice, '') for choice in found] + ([('stop', '')] if len(found)<4 else [])
     return None
 
 

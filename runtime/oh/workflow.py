@@ -114,6 +114,9 @@ def reduce(records):
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
         elif kind=='subject.existing':state['rendered']=d['plan']
         elif kind=='private.approval.intent':state['private_approval']=d
+        elif kind=='scope.recorded':
+            state.setdefault('scope_records',{})[d['attempt']]=d
+            if d.get('render'):state['delivery_render']=d['render']
         elif kind=='delivery.render':state['delivery_render']=d
         elif kind=='delivery.approval.intent':state['delivery_approval']=d
         elif kind=='branch.creating':state['branch_creation']=d
@@ -305,30 +308,30 @@ def _choose(root, choice, event):
             decision.update(head=head,branch=branch,commits=adopted(root,state,commits)+commits)
         append('decision',decision)
         append('run.status',{'status':'pr' if choice=='pr' else 'stopped'})
-    elif choice in ('accept concerns','route scope','accept concerns and route scope'):
+    elif choice in ('accept concerns','route scope','dismiss scope','accept concerns and route scope',
+                    'accept concerns and dismiss scope','fix concerns','fix concerns and route scope','fix concerns and dismiss scope'):
         if state['status']!='findings_checkpoint':raise Refused('No unresolved review findings')
         review=state['attempts'][-1];task=review['task'];findings=review.get('findings',[])
         severities={f['severity'] for f in findings}
-        expected={'accept concerns':{'concern'},'route scope':{'scope'},'accept concerns and route scope':{'concern','scope'}}[choice]
+        expected=({'concern','scope'} if ' and ' in choice else {'scope'} if choice in ('route scope','dismiss scope') else {'concern'})
         if severities!=expected:raise Refused('The choice must resolve every retained finding without dismissing blockers')
         from .verification import candidate_tree,tree
         if tree(root)!=review['tree'] or candidate_tree(root)!=review['git_tree']:raise Refused('Findings no longer describe the current tree; repair and review it again')
-        issue=None
+        from .delivery import guard
+        guard(root,state)
+        scope=None
         if 'scope' in severities:
-            from .issues import route
-            issue=route(root,state['project'],state['id'],review['id'],[f for f in findings if f['severity']=='scope'])
-        append('review.resolution',{'attempt':review['id'],'source':source,'choice':choice,'issue':issue,'tree':review['git_tree']})
+            from .scope import prepare
+            scope=prepare(root,journal,state,review,'dismiss' if 'dismiss' in choice else 'route','human choice')
+            if scope:append('scope.recorded',scope)
+        if not choice.startswith('fix concerns'):
+            append('review.resolution',{'attempt':review['id'],'source':source,'choice':choice,
+                'issue':((scope or {}).get('destination') or {}).get('issue'),
+                'scope':{k:v for k,v in (scope or {}).items() if k!='render'},'tree':review['git_tree']})
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':'running'})
         append('task.intervention',{'task':task})
         best_effort('task.intervention',state['project'],state['id'],review['task'],reason=choice)
-    elif choice in ('fix concerns','fix scope','fix findings'):
-        if state['status']!='findings_checkpoint':raise Refused('No unresolved review findings')
-        append('decision',{'source':source,'choice':choice})
-        append('run.status',{'status':'running'})
-        task=next(t['id'] for t in state['tasks'] if t['id'] not in state['done'])
-        append('task.intervention',{'task':task})
-        best_effort('task.intervention',state['project'],state['id'],task,reason=choice)
     elif choice=='grant review':
         if state['status']!='review_checkpoint':raise Refused('No spent review window')
         task=next(t['id'] for t in state['tasks'] if t['id'] not in state['done'])

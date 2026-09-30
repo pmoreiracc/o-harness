@@ -26,6 +26,10 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
      'lenses':{'type':'object','additionalProperties':False,'required':list(LENSES),
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
+# Implementation reports keep unrelated observations separate from the authorized change.
+WORK_SCHEMA={'type':'object','additionalProperties':False,'required':['summary','found_along_way'],
+ 'properties':{'summary':{'type':'string'},'found_along_way':STRINGS}}
+
 # A design worker returns prose only; OH adds the number, frontmatter, roadmap link and decision log row.
 DESIGN_SCHEMA={'type':'object','additionalProperties':False,
  'required':['kind','title','body','context','alternatives','consequences','summary'],'properties':{

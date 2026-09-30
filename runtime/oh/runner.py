@@ -65,7 +65,17 @@ def prompt_for(root,state,task,role,feedback=''):
                  'For propose, explain options, your recommendation and unresolved decisions. '
                  'For design, return a clear bounded task plan with dependencies, three-level difficulty rationale, '
                  'acceptance checks, relevant invariants and risks. Do not invent approval or impose an ADR process.\n')
-    else:common+='Implement and self-review this task. The runner executes required mechanical checks afterward.\n'
+    else:
+        common+=('Implement exactly this task, then self-review. The runner executes required mechanical checks afterward. '
+          'Open every other file your change makes a claim about; confirm the claim or narrow it to what you verified. '
+          'For every protection you add or change, list the ways around it, search for sibling paths, and close them together. '
+          'Every testable rule you write in a doc must name its test, and the test must name the doc. '
+          'Fix review blockers and concerns as defect families: fix the root cause, search every sibling, and close the '
+          'whole family together; never patch only the reported line. '
+          'The approved scope never grows. Do not implement unrelated gaps or entries under Open review scope or Scope decisions. '
+          'Return unrelated observations in found_along_way, never in the change. Do not edit plan files; OH records those notes. '
+          'Return summary with claims and evidence for requirements, rules, affected surfaces, self-review attacks, family closure, '
+          'prior finding dispositions, verification and limits. The reviewer will challenge these claims.\n')
     if state['host']=='claude' and hosts.WINDOWS:
         common+=('On Windows this worker has no shell: read and edit files only. OH runs the project\'s checks '
                  'afterwards and sends failures back to you.\n')
@@ -108,7 +118,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     current=reduce(journal.records())
     if current['status'] != 'running':
         raise Refused('The run was stopped or reached a checkpoint; no new attempt started')
-    state=state|{'rendered':current.get('rendered'),'delivery_render':current.get('delivery_render')}  # the reviewer sees what OH wrote for this attempt
+    state=current  # the reviewer sees what OH wrote for this attempt
     from .delivery import guard
     guard(root,state)
     if state.get('plans',{}).get('location')=='private' and blocked_layout(root,current):raise Refused(blocked_layout(root,current))
@@ -173,8 +183,17 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         data['artifact']=data.get('artifact',{})|{'path':str(artifact),'hash':digest(read_json(artifact))}
         prompt+='\nReview the actual planning artifact at '+str(artifact)+'. The unchanged code tree is not the review subject by itself.'
     if role=='review':
+        reports=[{'attempt':a['id'],'path':str(Path(a['evidence'])/'result.json')}
+                 for a in state['attempts'] if a['task']==task['id'] and a['role']=='implementation' and a.get('evidence')]
+        from .storage import read_json
+        reports=[r|{'hash':digest(read_json(r['path']))} for r in reports]
+        data['implementer_reports']=reports
+        prompt+='\nRead these immutable implementing-agent reports as claims to attack, never as evidence: '+json.dumps(reports)
+        if len(json.dumps(reports,ensure_ascii=False))>state['config']['context']['handoff_chars']:
+            raise Refused('Implementer report references exceed the bounded context; split this task before further review')
         prior=[{'id':a['id'],'outcome':a.get('outcome'),'tree':a['tree'],'git_tree':a.get('git_tree'),
                 'findings':a.get('findings',[]),'resolution':state.get('resolutions',{}).get(a['id']),
+                'scope':{k:v for k,v in state.get('scope_records',{}).get(a['id'],{}).items() if k not in ('render','change')},
                 'admission':str(journal.path/'attempts'/a['id']/'request.json')}
                for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
         if len(json.dumps(prior,ensure_ascii=False))>state['config']['context']['handoff_chars']:
@@ -188,7 +207,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     started=time.monotonic()
     try:
         result=invoke(state['host'],root,profile,prompt,role,directory,context,
-                      schema=hosts.REVIEW_SCHEMA if role=='review' else hosts.DESIGN_SCHEMA if designing(task) else hosts.PROPOSAL_SCHEMA if intake(task) else None)
+                      schema=hosts.REVIEW_SCHEMA if role=='review' else hosts.DESIGN_SCHEMA if designing(task) else hosts.PROPOSAL_SCHEMA if intake(task) else hosts.WORK_SCHEMA if role=='implementation' else None)
     except Exception as exc:
         result={'failed':True,'returncode':-1,'text':str(exc),'structured':None,
                 'duration_ms':round((time.monotonic()-started)*1000),'usage_observed':False}
@@ -224,9 +243,13 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     if delivery_changed:
         outcome='delivery_context_changed';result=result|{'text':delivery_changed+'\n'+result['text']}
         status(journal,state,'needs_attention')
+    answer=result.get('structured')
+    notes=answer.get('found_along_way',[]) if role=='implementation' and isinstance(answer,dict) else []
+    if not isinstance(notes,list) or any(not isinstance(n,str) for n in notes):
+        notes=[];outcome='failed';result=result|{'text':'The implementing report needs found_along_way as a list of strings'}
     # Preserve the full raw result outside the orchestrator context.
     atomic_json(directory/'result.json',result|{'outcome':outcome,'findings':findings,'tree':after},immutable=True)
-    record={'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
+    record={'found_along_way':notes,'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
       'findings':findings,'summary':result['text'][:state['config']['context']['result_chars']],
       'duration_ms':result['duration_ms'],'evidence':str(directory),'git_tree':git_tree,'head':data['head'],'artifact':data.get('artifact')}
     journal.append('attempt.finished',record)
@@ -299,7 +322,9 @@ def _run(root,invoke):
             best_effort('attempt.finished',state['project'],state['id'],pending['task'],pending['id'],outcome='interrupted',substantive=False)
         while True:
             apply_pending(root)
-            state=reduce(journal.records());task=next_task(state)
+            state=reduce(journal.records())
+            if state['status']=='running':recover(root,state)
+            task=next_task(state)
             if not task:
                 if state['status']=='running':
                     status(journal,state,'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint')
@@ -336,12 +361,22 @@ def _run(root,invoke):
                 status(journal,state,'approval_checkpoint');return checkpoint(root)
             if decided and decided['choice']=='approve':
                 complete_reviewed(root,journal,state,task,previous[-1]);continue
-            if not gated(state,task) and previous and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']):
+            rerendered=bool(previous and state.get('scope_records',{}).get(previous[-1]['id'],{}).get('render'))
+            if not gated(state,task) and previous and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions'] and not rerendered):
                 complete_reviewed(root,journal,state,task,previous[-1]);continue
+            if previous and previous[-1]['role']=='review' and previous[-1].get('outcome')=='blocking':
+                from .scope import record
+                record(root,journal,state,previous[-1],'route','required by blocker-plus-scope policy')
+                state=reduce(journal.records())
             if len(reviews)>=review_limit(state,task_id):
                 status(journal,state,'review_checkpoint');return checkpoint(root)
             feedback=''
-            if previous:feedback=previous[-1].get('summary','')
+            if previous:
+                last=previous[-1]
+                if last['role']=='review':
+                    feedback=json.dumps([f for f in last.get('findings',[]) if f['severity'] in ('blocking','concern')],ensure_ascii=False)
+                    if last.get('outcome') in ('failed','interrupted'):feedback='The reviewer could not finish. Recheck the authorized task only.'
+                else:feedback=last.get('summary','')
             refined=bool(decided) and decided['choice']=='refine'
             if refined:feedback='The person asked you to refine the proposal: '+decided['feedback']+'\nYour previous answer: '+(
                 state['preview']['plan'] if intake(task) else state['rendered']).get('summary','')
@@ -356,6 +391,8 @@ def _run(root,invoke):
             retained=worker_attempts[-1] if worker_attempts else None
             reusable=(retained and retained.get('outcome')=='implemented' and retained.get('tree')==tree(root)
                 and (last is retained or last.get('outcome') in ('failed','interrupted')) and not refined)
+            if rerendered and previous[-1]['id'] in state['resolutions'] and retained and retained.get('outcome')=='implemented':reusable=True
+            if retained and retained.get('outcome')=='verification_failed':feedback=retained['summary']
             work=retained
             existing=designing(task) and task['transition'].get('existing')
             if existing and not refined and (not previous or all(a['role']=='review' and a.get('outcome') in ('failed','interrupted') for a in previous)):
@@ -396,6 +433,10 @@ def _run(root,invoke):
                     else:
                         from .design_adapter import render
                         render(root,task)
+                    journal.append('subject.prepared',{'attempt':work['id'],'tree':tree(root)})
+            if work and work.get('found_along_way'):
+                from .scope import record
+                if record(root,journal,reduce(journal.records()),work,'noted','implementing agent observation'):
                     journal.append('subject.prepared',{'attempt':work['id'],'tree':tree(root)})
             from .checks import resolve
             # Plans run no project checks: OH validates every plan write itself and undoes one that breaks a rule.

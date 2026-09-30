@@ -62,3 +62,13 @@ with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `ch
 which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 Keep results concise and link saved evidence. Human merging remains separate.
+
+The approved scope never grows. A login-timeout task does not grow a logout-timeout fix
+because a reviewer noticed it. OH records scope findings in the draft or approved design's
+`## Open review scope`, or dismissals under `## Scope decisions`. Without a mutable design,
+route to a GitHub issue or retain a dismissal in the PR. When bugs and scope appear together,
+OH records scope first and sends only bugs and concerns to the fixing worker. Never offer
+“Fix scope.” Workers leave plan edits to OH and report unrelated observations separately;
+OH records them before review or includes them in a quick-fix PR. The last pending task
+across all tracks also updates documentation the delivery made outdated.
+The behavior tests are named in `docs/usage.md` beside these rules.

@@ -87,9 +87,8 @@ def host_hook(root,host,payload,*,verified,idea=None):
         prepared=resolve(root,parsed[1],verified,'tasks')
         start(root,prepared['manifest'],verified,prepared=prepared)
         return checkpoint(root)
-    from .entry import REFINE
-    if (prompt in ('pause','continue','resume','retry','pr','stop','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope','approve','reconsider')
-            or re.fullmatch(REFINE,prompt,re.S)) and active_file(root).exists():
+    from .entry import CHOICES,REFINE
+    if (prompt in CHOICES|{'pause'} or re.fullmatch(REFINE,prompt,re.S)) and active_file(root).exists():
         choose(root,prompt,verified)
         return checkpoint(root)
     return None
