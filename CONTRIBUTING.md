@@ -13,6 +13,11 @@
 
 You need Python 3.12+, Git, Node.js and Bash. Tests need no AI subscription or API key.
 
+To develop OH with OH, import this repository's settings once in your fresh clone, before any OH
+command: `oh profile-import integrations/oh-profile.json`. OH never reads settings from a repository
+by itself, so this is your choice to run its checks: when OH delivers a task here it runs only the
+tests the change affects (`integrations/test.sh affected`) and the syntax checks.
+
 ```sh
 bash integrations/test.sh native   # behavior tests
 bash integrations/test.sh syntax   # Python, JavaScript and shell syntax

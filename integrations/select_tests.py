@@ -7,6 +7,15 @@ A module counts as edited when its code differs before and after the change, com
 and comments change nothing. Edited modules run whole. Test ids come from unittest's own loader, so every id loads.
 
   python3 integrations/select_tests.py [base]   print the chosen test ids, one per line
+
+Locally (and as the check OH runs on this repository's deliveries, when its `checks` setting names
+`integrations/test.sh affected {base}`), `--affected <base>` runs only the test modules a change needs,
+learned from the pre-separation harness's verify-change.sh: each changed path maps to what it needs (OWNERS),
+explanatory text needs nothing, a runtime module needs the test modules that import it (directly or through other
+modules), and a path no rule names stops the run with its name, so its owner is added here rather than guessed.
+Two test processes run at a time. The full suite still runs before every push and in CI.
+
+  python3 integrations/select_tests.py --affected [base] [--list]   run (or list) the affected test modules
 """
 import ast
 import inspect
@@ -80,6 +89,87 @@ def select(base=None):
     return chosen
 
 
-if __name__ == '__main__':
+# Each changed path's needs, first match wins: runtime modules (their importing tests run) or test modules.
+OWNERS = [
+    ('docs/*', ()), ('README.md', ()), ('CONTRIBUTING.md', ()), ('SECURITY.md', ()), ('LICENSE', ()), ('AGENTS.md', ()),
+    ('CLAUDE.md', ()), ('.github/*', ()), ('.gitignore', ()), ('.claude/*', ()), ('.codex/*', ()), ('config/invariants.json', ()),
+    ('.gitattributes', ('test_windows',)),
+    ('integrations/select_tests.py', ('test_select_tests',)), ('integrations/test.sh', ('test_select_tests',)),
+    ('integrations/windows-*.ps1', ('test_windows',)), ('integrations/*', ()),  # the rest run only in CI
+    ('prompts/*', ('runner',)), ('workflows/*', ('installation', 'mcp_server')), ('config/*', ('config',)),
+    ('plugins/*', ('installation', 'test_gates', 'test_plugin_transitions', 'test_windows')),
+    ('dashboard/*', ('server', 'test_installation')), ('oh', ('installation', 'test_plugin_transitions', 'test_windows')),
+]
+
+
+def changed(base):
+    """Paths that differ between `base` and the working tree, including new untracked files."""
+    def git(*a):
+        done = subprocess.run(['git', '-C', str(ROOT), *a], capture_output=True, text=True)
+        if done.returncode:sys.exit(f'select_tests: git {a[0]} failed ({done.stderr.strip()}); fetch {base} or pass another base')
+        return done.stdout.split('\n')
+    return sorted({p for p in git('diff', '--name-only', '--no-renames', base) + git('ls-files', '--others', '--exclude-standard') if p})
+
+
+def needs(path):
+    """The modules a changed path needs; None when no rule names it."""
+    import fnmatch
+    if re.fullmatch(r'runtime/oh/\w+\.py', path):return {Path(path).stem}
+    return next((set(modules) for pattern, modules in OWNERS if fnmatch.fnmatchcase(path, pattern)), None)
+
+
+def affected(paths, sources):
+    """The test modules that exercise these paths. A runtime module needs the test modules that use it directly (an
+    import, or a patch of `oh.<module>`); one that no test uses needs the tests of the modules that import it. A
+    needed test module brings the test modules built on it (a shared fixture). Following every import instead would
+    select the whole suite: OH's modules import each other inside functions. `sources` maps each module under
+    runtime/oh to its source."""
+    unowned = [p for p in paths if needs(p) is None]
+    if unowned:
+        sys.exit('select_tests: no owner for ' + ', '.join(unowned) + '; add what it needs to OWNERS in integrations/select_tests.py')
+    gone = [p for p in paths if re.fullmatch(r'runtime/oh/\w+\.py', p) and (Path(p).stem not in sources or Path(p).stem == '__init__')]
+    if gone:  # a deleted or renamed module, or the package itself: whatever used it can break anywhere
+        return sorted(m for m in sources if m.startswith('test_'))
+    uses = {m: imports(source, sources.keys()) | ({n for n in sources if re.search(rf'\boh\.{n}\b', source)} if m.startswith('test_') else set())
+            for m, source in sources.items()}
+    tests, seen, todo = set(), set(), sorted(set().union(*[needs(p) for p in paths]) & sources.keys())
+    while todo:
+        module = todo.pop()
+        if module in seen:continue
+        seen.add(module)
+        if module.startswith('test_'):tests.add(module);continue
+        users = {m for m, used in uses.items() if module in used and m != module}
+        direct = {m for m in users if m.startswith('test_')}
+        tests |= direct
+        if not direct:todo += sorted(users)
+    while more := {m for m, used in uses.items() if m.startswith('test_') and used & tests} - tests:
+        tests |= more
+    return sorted(tests)
+
+
+def run(modules):
+    """Run test modules, two processes at a time; True when every one passed."""
+    from concurrent.futures import ThreadPoolExecutor
+    import os
+    def one(module):
+        return module, subprocess.run([sys.executable, '-m', 'unittest', 'oh.' + module], cwd=ROOT, capture_output=True, text=True,
+                                      env=os.environ | {'PYTHONPATH': str(ROOT / 'runtime')})
+    passed = True
+    with ThreadPoolExecutor(2) as pool:
+        for module, result in pool.map(one, modules):
+            print(f"{'ok' if not result.returncode else 'FAILED'}  {module}", flush=True)
+            if result.returncode:passed = False;print(result.stderr[-20000:], flush=True)
+    return passed
+
+
+if __name__ == '__main__' and sys.argv[1:2] == ['--affected']:
+    base = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != '--list' else 'origin/main'
+    sources = {p.stem: p.read_text(encoding='utf-8') for p in sorted(TESTS.glob('*.py'))}
+    modules = affected(changed(base), sources)
+    if '--list' in sys.argv:print('\n'.join(modules));sys.exit()
+    if not modules:print('No test module is affected by this change');sys.exit()
+    print(f'Running {len(modules)} affected test modules: {" ".join(modules)}', flush=True)
+    sys.exit(0 if run(modules) else 1)
+elif __name__ == '__main__':
     # Bytes, so Windows never adds \r to the test names the shell passes on.
     sys.stdout.buffer.write(''.join(t + '\n' for t in select(sys.argv[1] if len(sys.argv) > 1 else None)).encode())

@@ -328,12 +328,6 @@ class DesignRunTest(unittest.TestCase):
         with self.assertRaisesRegex(plans.Blocked, 'changed after OH wrote it'):run(self.root, self.worker([design()]))
         self.assertEqual(len(self.calls), calls);self.assertIn('A human note.', doc.read_text())
 
-    def test_checks_that_leave_files_stop_the_run(self):
-        import sys
-        fixtures.configure(self.root, checks=[{'name': 'coverage', 'command': [sys.executable, '-c', 'open("coverage.xml", "w").write("x")']}])
-        self.design_run()
-        with self.assertRaisesRegex(plans.Blocked, r"checks left files OH didn't write \(coverage.xml\)"):run(self.root, self.worker([design()]))
-
     def test_a_broken_roadmap_is_refused_before_the_design_starts(self):
         text = self.where['roadmap'].read_text().replace('| `auth` | Sign-in with passkeys | — |', '| `auth` | Sign-in with passkeys | `ledger` |')
         self.where['roadmap'].write_text(text)
@@ -386,29 +380,16 @@ class DesignRunTest(unittest.TestCase):
             stage(self.root, 'codex', payload('3', 'continue'))  # the newest typed choice replaces it
         self.assertEqual(read_json(pending_file(self.root))['event']['turn'], '3')
 
-    def test_a_check_that_rewrites_a_plan_file_stops_the_run(self):
+    def test_a_design_runs_no_project_checks(self):
+        # OH validates every plan write itself; the project's tests have nothing to say about plan files.
         import sys
-        script = 'open("docs/roadmap.md", "a").write("formatted\\n")'
-        fixtures.configure(self.root, checks=[{'name': 'format', 'command': [sys.executable, '-c', script], 'when': ['docs/**']}])
+        ran = Path(self.temp.name) / 'check-ran'
+        fixtures.configure(self.root, checks=[{'name': name, 'command': [sys.executable, '-c', f'open({str(ran)!r}, "w"); raise SystemExit(1)']}
+                                              | ({'when': ['docs/**']} if name == 'lint' else {}) for name in ('tests', 'lint')])
         self.design_run()
-        with self.assertRaisesRegex(plans.Blocked, 'A check changed docs/roadmap.md after OH wrote it'):run(self.root, self.worker([design()]))
-
-    def test_a_failing_check_that_runs_on_everything_stops_the_run_after_one_worker(self):
-        import sys
-        fixtures.configure(self.root, checks=[{'name': 'tests', 'command': [sys.executable, '-c', 'raise SystemExit(1)']}])
-        self.design_run()
-        with self.assertRaisesRegex(plans.Blocked, r"checks fail with the design in place \(tests\)"):run(self.root, self.worker([design(), design()]))
-        self.assertEqual([c[0] for c in self.calls], ['analysis'])
-
-    def test_a_scoped_failing_check_goes_back_to_the_worker(self):
-        import sys
-        lint = 'import sys,glob; sys.exit(any("TODO" in open(p).read() for p in glob.glob("docs/design/*.md")))'
-        fixtures.configure(self.root, checks=[{'name': 'lint', 'command': [sys.executable, '-c', lint], 'when': ['docs/**']}])
-        self.design_run()
-        result = run(self.root, self.worker([design(body=BODY + '\nTODO\n'), design()]))
-        self.assertEqual(result['status'], 'completed')
-        feedback = json.loads(json.loads([c[1] for c in self.calls if c[0] == 'analysis'][1].rsplit('\n', 1)[-1])['feedback'])
-        self.assertEqual([(r['name'], r['returncode']) for r in feedback], [('lint', 1)])
+        self.assertEqual(run(self.root, self.worker([design()]))['status'], 'completed')
+        self.assertEqual([c[0] for c in self.calls], ['analysis', 'review'])
+        self.assertFalse(ran.exists())
 
     def test_ignored_plan_paths_are_refused_before_a_worker_is_paid(self):
         (self.root / '.gitignore').write_text('docs/design/\n');self.git('add', '.gitignore');self.git('commit', '-qm', 'ignore')
@@ -564,15 +545,6 @@ class DesignRunTest(unittest.TestCase):
         result=plans.render(self.root,'auth',safe,lambda intent:None)
         rows=plans.plan(self.root,result['number']).splitlines()
         self.assertEqual([(row.split(plans.US)[0],row.split(plans.US)[2]) for row in rows],[('1','core'),('2','core')])
-
-    def test_check_cannot_replace_plan_with_same_byte_symlink(self):
-        import sys
-        target=Path(self.temp.name)/'external-design.md'
-        script='from pathlib import Path; p=Path("docs/design/0001-auth.md"); t=Path('+repr(str(target))+'); t.write_bytes(p.read_bytes()); p.unlink(); p.symlink_to(t)'
-        fixtures.configure(self.root,checks=[{'name':'swap','command':[sys.executable,'-c',script]}])
-        self.design_run()
-        with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([design()]))
-        self.assertEqual([c[0] for c in self.calls],['analysis'])
 
     def test_human_mode_only_edit_is_preserved_before_repair(self):
         self.interrupt_review()

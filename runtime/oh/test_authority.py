@@ -110,6 +110,15 @@ class AuthorityTest(unittest.TestCase):
             save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()
             records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'two'}},{'type':'event_msg','payload':{'type':'user_message','message':'Discuss a different subject'}}]
             save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
+            # While OH waits for this conversation's answer (a bare $oh-propose), a plain message typed after the
+            # question is the answer; one typed before it is not.
+            from .authority import wait_for
+            from .storage import now,read_json
+            wait_for(root,{'host':'codex','session':'session'},'propose',"What's the idea?")
+            desktop_pending(root);self.assertFalse(pending_file(root).exists())
+            records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'three'}},
+                        {'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','message':'Search my notes'}}]
+            save();desktop_pending(root);self.assertEqual(read_json(pending_file(root))['idea'],'propose');pending_file(root).unlink()
             records[0]['payload']['source']='exec';records[-1]['payload']['message']='continue'
             save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
 

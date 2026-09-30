@@ -428,17 +428,21 @@ class PrivatePlansTest(unittest.TestCase):
         self.assertNotIn('private_approval',load_run(self.root)[1])
         self.assertFalse(plans.approvals_file(self.root).exists())
 
-    def test_private_proposal_exposes_complete_multi_file_diff(self):
+    def test_private_proposal_shows_the_decision_and_reviews_every_file(self):
         proposal_fixtures.ProposeTest.propose(self,'Search notes')
         value=idea(decision_title='Which index?',decision_context='Keep notes isolated.',
                    decision_alternatives='Shared or separate indexes.',decision_consequences='Storage changes.')
         result=run(self.root,proposal_fixtures.ProposeTest.worker(self,[value]))
-        diff=result['private_diff']
+        self.assertEqual(result['proposal']['writes']['decision'],{'title':'Which index?','context':'Keep notes isolated.',
+            'alternatives':'Shared or separate indexes.','consequences':'Storage changes.','recommendation':'A new search row in M1.'})
+        self.assertNotIn('private_diff',result)
+        self.say('approve');run(self.root,proposal_fixtures.ProposeTest.worker(self,[]))
+        review=[a for a in load_run(self.root)[1]['attempts'] if a['role']=='review'][-1]
+        diff=(Path(review['evidence'])/'subject.diff').read_text()
         self.assertIn('+| `search` |',diff)
         self.assertIn('+Keep notes isolated.',diff)
         self.assertIn('+Shared or separate indexes.',diff)
         self.assertIn('+Storage changes.',diff)
-        self.assertEqual(diff,plans.changed_text(self.root,load_run(self.root)[1]['rendered']))
         self.assertEqual(self.git('status','--porcelain'),'')
 
     def test_approval_refuses_a_file_changed_after_review(self):
@@ -516,7 +520,7 @@ class PrivatePlansTest(unittest.TestCase):
         proposal_worker=proposal_fixtures.ProposeTest.worker(self,[idea('task')])
         result=run(self.root,proposal_worker)
         self.assertEqual(result['status'],'approval_checkpoint')
-        self.assertEqual(plans.approval(self.root,self.where,'0001'),'edited since approval')
+        self.assertEqual(plans.approval(self.root,self.where,'0001'),'approved')  # nothing is written before approval
         self.say('approve');run(self.root,proposal_fixtures.ProposeTest.worker(self,[]))
         self.assertEqual(plans.approval(self.root,self.where,'0001'),'approved')
         self.assertEqual(self.git('status','--porcelain'),'')

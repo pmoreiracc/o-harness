@@ -17,6 +17,8 @@ case "${1:-native}" in
     # shellcheck disable=SC2086
     PYTHONPATH=runtime python3 -m unittest --durations 15 $tests
     ;;
+  # Only the test modules this change affects (see integrations/select_tests.py).
+  affected) python3 integrations/select_tests.py --affected "${2:-origin/main}" ;;
   syntax)
     python3 integrations/windows_risk.py "${2:-origin/main}"
     python3 -m compileall -q runtime

@@ -31,8 +31,10 @@ def options(state):
         if not committed(state) or not any('commit' in s for s in state['summaries']):return None
         return [('pr', ''), ('stop', '')]
     if status == 'approval_checkpoint':
-        what = 'the proposal' if state.get('workflow') == 'propose' else 'this plan'
-        return [('approve', f'Accept {what} exactly as reviewed. {REFINE[state["host"]]}'), ('reconsider', '')]
+        if state.get('workflow') == 'propose':
+            return [('approve', f'OH writes exactly these lines, has them reviewed and commits them. {REFINE[state["host"]]}'),
+                    ('reconsider', 'Write nothing; OH asks what you meant.')]
+        return [('approve', f'Accept this plan exactly as reviewed. {REFINE[state["host"]]}'), ('reconsider', '')]
     if status == 'review_checkpoint':return [('grant review', ''), ('stop', '')]
     if status == 'needs_attention':
         task = next((t['id'] for t in state['tasks'] if t['id'] not in state['done']), None)

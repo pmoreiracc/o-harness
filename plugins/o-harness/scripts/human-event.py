@@ -11,7 +11,13 @@ prompt=payload.get('prompt','')
 if not isinstance(prompt,str):raise SystemExit(0)
 prompt=prompt.strip()
 choices={'continue','pr','stop','resume','retry','grant review','fix concerns','fix scope','fix findings','accept concerns','route scope','accept concerns and route scope','approve','reconsider'}
-if prompt not in choices and not re.fullmatch(r'refine:\s*\S.*',prompt,re.S) and not re.match(r'^(?:[$/](?:o-harness:)?oh-(?:start|pause|resume|stop|propose|design|deliver))(?:\s|$)',prompt):
+def waiting():
+    """Whether OH waits for this conversation's next message (a bare /oh-propose, or Reconsider): one file check."""
+    session=payload.get('session_id')
+    if not isinstance(session,str) or not re.fullmatch(r'[a-zA-Z0-9_-]+',session):return False
+    data=Path(os.environ.get('OH_DATA_HOME',str(Path.home()/'.local/share/o-harness'))).expanduser()
+    return (data/'waiting'/(session+'.json')).is_file()
+if prompt not in choices and not re.fullmatch(r'refine:\s*\S.*',prompt,re.S) and not re.match(r'^(?:[$/](?:o-harness:)?oh-(?:start|pause|resume|stop|propose|design|deliver))(?:\s|$)',prompt) and not waiting():
     raise SystemExit(0)
 if os.environ.get('OH_CHILD_ATTEMPT'):raise SystemExit(0)
 entry=Path(__file__).resolve().with_name('oh')

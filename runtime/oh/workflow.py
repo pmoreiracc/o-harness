@@ -70,7 +70,12 @@ def active_file(root):
     return checkout_file(root, 'oh-active-run.json')
 
 
+NO_RUN=('No OH command is waiting in this checkout. Type /oh-propose <idea>, /oh-design <slug> or /oh-deliver '
+        '(in Codex: $oh-propose, $oh-design, $oh-deliver).')
+
+
 def load_run(root):
+    if not active_file(root).exists():raise Refused(NO_RUN)
     active=read_json(active_file(root))
     if active['checkout'] != checkout_id(root) or active['project'] != project(root)['id']:
         raise Refused('This run belongs to another checkout or project')
@@ -123,7 +128,14 @@ def reduce(records):
             if pending.get('resume'):
                 state.update(branch=pending['return_to'],incarnation=pending['return_incarnation'])
                 state.pop('moved_from',None)
-        elif kind=='proposal':state.setdefault('proposals',{})[d['attempt']]=d
+        elif kind=='proposal':
+            state.setdefault('proposals',{})[d['attempt']]=d
+            state.setdefault('proposal_answers',[]).append(d)
+        elif kind=='proposal.preview':state['preview']=d
+        elif kind=='subject.cleared':
+            state.pop('rendered',None)
+            for a in state['attempts']:
+                if a['id']==d['attempt']:a['tree']=d['tree']
         elif kind=='subject.prepared':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Rendered subject without one implementation attempt')
@@ -215,6 +227,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
 
 
 def _choose(root, choice, event):
+    from .runner import approved
     journal,state=load_run(root)
     events=[]
     def append(kind,data):events.append({'kind':kind,'data':data})
@@ -252,7 +265,12 @@ def _choose(root, choice, event):
     elif choice in ('approve','reconsider') or choice.startswith('refine:'):
         if state['status']!='approval_checkpoint':raise Refused('No proposal is waiting for approve, refine or reconsider')
         task=state['tasks'][0]['id'];last=[a for a in state['attempts'] if a['task']==task][-1]
-        if choice=='reconsider':
+        proposing=state.get('workflow')=='propose'
+        if choice=='reconsider' and proposing and not (state.get('rendered') or {}).get('files'):
+            # Nothing is written before approval: end this reading, and ask what the person meant (see `wait_for`).
+            append('decision',{'source':source,'choice':choice})
+            append('run.status',{'status':'stopped'})
+        elif choice=='reconsider':
             # Write nothing: undo what OH wrote and leave the branch it cut, when that branch holds no commit.
             from .plans import undo
             if git(root,'branch','--show-current')!=state['branch'] or git(root,'rev-parse','HEAD')!=state['base']:
@@ -268,7 +286,8 @@ def _choose(root, choice, event):
             words=choice[len('refine:'):].strip() if choice.startswith('refine:') else ''
             if choice.startswith('refine:') and not words:raise Refused('Say what to change: refine: <what to change>')
             decided='refine' if words else 'approve'
-            append('proposal',{'attempt':last['id'],'choice':decided,'feedback':words,'source':source})
+            append('proposal',{'attempt':last['id'],'choice':decided,'feedback':words,'source':source}
+                   |({'shown':approved(state['preview']['plan'])} if proposing else {}))
             append('decision',{'source':source,'choice':decided})
             append('run.status',{'status':'running'})
             if words:append('task.intervention',{'task':task})
@@ -330,6 +349,9 @@ def _choose(root, choice, event):
         if item['kind']=='run.status':best_effort('run.status',state['project'],state['id'],**item['data'])
     state=reduce(journal.records())
     if state.get('discard'):discard_proposal(root,journal,state)
+    if choice=='reconsider' and state.get('workflow')=='propose':
+        from .authority import wait_for
+        wait_for(root,state['human'],'propose','What did you mean?')
     return reduce(journal.records())
 
 
@@ -447,11 +469,22 @@ def checkpoint(root):
             {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}
                     |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
              if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
-            {'proposal':{k:v for k,v in state['rendered'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent')}
+            {'proposal':{k:v for k,v in state['preview']['plan'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent','writes')}
                         |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
-             if state.get('workflow')=='propose' and state.get('rendered',{}).get('route') else {})|(
+             if state.get('workflow')=='propose' and state.get('preview') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else
-            {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | private_diff | menu(root,journal,state)
+            {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | private_diff | menu(root,journal,state) | waiting(root,state)
+
+
+def waiting(root,state):
+    """The question the agent asks when OH waits for the person's next message (after Reconsider)."""
+    from .authority import waiting_for
+    found=waiting_for(root,state['human']['host'],state['human']['session'])
+    return {'waiting':found|{'next':WAIT_NEXT}} if found else {}
+
+
+WAIT_NEXT=('Ask the person exactly `ask` in plain chat and end your turn. Their next message is the argument of the '
+           'command: OH starts it when you run OH `run` after they answer. Another OH command replaces it; /oh-stop drops it.')
 
 
 def menu(root,journal,state):

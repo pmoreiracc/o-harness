@@ -22,7 +22,15 @@ def receive(root,host,payload):
     import os
     if os.environ.get('OH_CHILD_ATTEMPT'):return None
     parsed=command(payload.get('prompt'))
-    if not parsed:return None
+    from .authority import drop_waiting,stage,waiting_for
+    if not parsed:
+        # The one plain message OH reads: the answer to what it asked for (a bare command's argument). It uses the
+        # question up, so any later message is ordinary chat again.
+        if found:=waiting_for(root,host,payload.get('session_id')):
+            drop_waiting(payload.get('session_id'))
+            return stage(root,host,payload,idea=found['command'])
+        return None
+    drop_waiting(payload.get('session_id'))  # another OH command, or /oh-stop, replaces what OH waited for
     from .workflow import load_run
     name,args=parsed
     if name=='choice':
@@ -59,11 +67,10 @@ def receive(root,host,payload):
             design_request=selected['kind']=='design'
         from .plans import SLUG
         design=args.strip() if name=='design' else (re.fullmatch(r'design\s+(.*)',args,re.S) or [None,None])[1] if name=='oh-start' else None
-        if design is not None and not re.fullmatch(SLUG,design.strip()):
+        if design and not re.fullmatch(SLUG,design.strip()):
             return {'authorized':False,'next':'Name one roadmap initiative by its slug: /oh-design <slug>. New ideas start with /oh-propose.'}
-        planning=(name=='propose' and bool(args.strip())) or design is not None or (name=='oh-start' and re.fullmatch(r'propose\s+\S.*',args,re.S))
+        planning=name=='propose' or design is not None or (name=='oh-start' and re.fullmatch(r'propose\s+\S.*',args,re.S))
         binding=planning or (name in ('deliver','oh-start') and exact_request) or (name=='deliver' and design_request) or (name=='oh-resume' and not args)
         if not binding:
             return {'authorized':False,'prepare':True,'next':'Select propose/design with an explicit intent, or prepare agreed delivery scope and present its exact trigger. A fresh human invocation grants that prepared scope.'}
-    from .authority import stage
     return stage(root,host,payload)
