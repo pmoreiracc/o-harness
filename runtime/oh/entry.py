@@ -2,8 +2,8 @@
 import re
 from .storage import Refused
 
-CHOICES={'continue','pr','stop','resume','retry','grant review','fix concerns','fix scope',
-         'fix findings','accept concerns','route scope','accept concerns and route scope','approve','reconsider'}
+CHOICES={'continue','pr','stop','resume','retry','grant review','fix concerns','dismiss scope',
+         'fix concerns and route scope','fix concerns and dismiss scope','accept concerns and dismiss scope','accept concerns','route scope','accept concerns and route scope','approve','reconsider'}
 REFINE=r'refine:\s*\S.*'  # refine: <what to change>, the person's own words for the next proposal
 PREFIX=r'[$/](?:o-harness:)?'
 

@@ -18,6 +18,8 @@ def task_evidence(state,task,review,parent):
     # The first task a run commits was also reviewed with the commits OH didn't make before it: the person's own,
     # and merges of main resolved by hand.
     if (covers:=(state.get('delivery') or {}).get('covers')) and not state['summaries']:value['covers']=covers
+    scope={k:{name:v for name,v in record.items() if name!='render'} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
+    if scope:value['scope']=scope
     validate_evidence(value)
     return value
 
@@ -33,9 +35,12 @@ def validate_evidence(value):
     if final['outcome']=='clean' and not findings:return
     if final['outcome']!='needs_resolution' or not severities or not severities<={'concern','scope'}:raise Refused('Native final review is unresolved')
     resolution=value.get('resolutions',{}).get(final['id'],{})
-    expected={'accept concerns':{'concern'},'route scope':{'scope'},'accept concerns and route scope':{'concern','scope'}}
+    expected={'accept concerns':{'concern'},'route scope':{'scope'},'accept concerns and route scope':{'concern','scope'},
+              'dismiss scope':{'scope'},'accept concerns and dismiss scope':{'concern','scope'}}
     if expected.get(resolution.get('choice'))!=severities or resolution.get('tree')!=value['git_tree'] or not resolution.get('source'):raise Refused('Missing exact-tree human finding disposition')
-    if 'scope' in severities and not resolution.get('issue'):raise Refused('Scope routing is incomplete')
+    if 'scope' in severities and not resolution.get('issue'):
+        scope=resolution.get('scope',{})
+        if scope.get('attempt')!=final['id'] or scope.get('findings')!=[f for f in findings if f['severity']=='scope'] or scope.get('action')!='dismiss' or scope.get('destination')!={'pr':True}:raise Refused('Scope routing is incomplete')
 
 
 def trailer(root,commit,name):
@@ -118,7 +123,8 @@ def render(root,base='origin/main'):
         raise Refused('This branch holds commits that OH neither made nor reviewed, so OH cannot publish it as reviewed')
     value={'schema':1,'branch':branch,'head':git(root,'rev-parse','HEAD'),'records':records,'grants':grants}
     validate_grants(value)
-    body=START+'\n```json\n'+json.dumps(value,indent=2)+'\n```\n'+END
+    notes=''.join('\n\nFound along the way (task '+r['evidence']['task']+'):\n'+''.join('\n> '+line for f in record['findings'] for line in f['description'].splitlines()) for r in records for record in r['evidence'].get('scope',{}).values() if record['action']=='noted' and record['destination'].get('pr'))
+    body=notes+('\n\n' if notes else '')+START+'\n```json\n'+json.dumps(value,indent=2)+'\n```\n'+END
     if len(body.encode())>60000:raise Refused('Review evidence exceeds the PR body budget; publish a smaller reviewed batch')
     return body
 

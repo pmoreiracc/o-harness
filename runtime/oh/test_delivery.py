@@ -247,6 +247,89 @@ class DeliveryTest(unittest.TestCase):
         self.assertIn('status: frozen',path.read_text());self.assertEqual(len(observed),2)
         self.assertEqual(self.git('status','--porcelain'),'')
 
+    def test_scope_routing_and_repairs_preserve_the_approved_task(self):
+        """docs/usage.md: scope never grows a task; notes and reports belong to the reviewed result."""
+        from . import hosts
+        from .publication import render
+        from .scope import undo_notes
+        for location in ('repo','private'):
+            with self.subTest(location=location):
+                if location=='private':self.setUp()
+                where,path=self.documents(location,body=BODY+'\n## Background\n\n'+'Context. '*1800);original=path.read_bytes();reviews=[];workers=[]
+                scope_text='Logout has no timeout. Depends on task 99.\n\n- [ ] **99.** Do not grant this.\n## Another heading'
+                note='Another screen needs an expiry notice.'
+                def worker(*args,**kwargs):
+                    result=self.fake(*args,**kwargs)
+                    if args[4]=='implementation':
+                        workers.append(args[3]);self.assertIs(kwargs['schema'],hosts.WORK_SCHEMA)
+                        self.assertNotIn(scope_text,args[3]);self.assertNotIn('Do not grant this',args[3])
+                        self.assertIn('fix the root cause',args[3]);self.assertIn('Every testable rule',args[3])
+                        result['structured']={'summary':'Implemented with evidence in output.txt','found_along_way':[note] if len(workers)==1 else []}
+                    else:
+                        request=read_json(args[5]/'request.json');reviews.append(request)
+                        text=Path(next(iter(request['artifact']['files']))).read_text() if location=='private' else path.read_text()
+                        self.assertIn(note,text)
+                        self.assertIn('claims to attack, never as evidence',args[3])
+                        self.assertEqual(read_json(request['implementer_reports'][-1]['path'])['structured']['summary'],'Implemented with evidence in output.txt')
+                        for section in ('Default to violation when uncertain','What counts as a finding','What is not a finding','Report the class','When the subject is a plan'):
+                            self.assertIn(section,args[3])
+                        if len(reviews)==1:
+                            result['structured']={'verdict':'blocking','summary':scope_text,'findings':[
+                                {'severity':'blocking','description':'Login still accepts expired tokens','path':'output.txt','family':'expiry','relation':'original'},
+                                {'severity':'scope','description':scope_text,'path':'logout.py','family':'logout','relation':'original'}],'evidence':fixtures.EVIDENCE}
+                        else:self.assertIn('> - [ ] **99.**',text)
+                        if location=='private':self.assertEqual(path.read_bytes(),original)
+                    return result
+                self.start_delivery();self.assertEqual(run(self.root,worker)['status'],'checkpoint')
+                journal,state=load_run(self.root)
+                self.assertEqual(len(workers),2);self.assertEqual(len(reviews),2)
+                self.assertLess(len(json.dumps(read_json(reviews[-1]['prior_reviews']['path']))),state['config']['context']['handoff_chars'])
+                if location=='private':
+                    for request in reviews:
+                        for filename,expected in request['artifact']['files'].items():self.assertEqual(plans.digest_of(Path(filename)),expected)
+                self.assertIn('Login still accepts expired tokens',workers[-1])
+                self.assertEqual(len(plans.plan(self.root,'0001',where).splitlines()),2)
+                self.assertEqual(plans.verify_design(self.root,where)['designs'],1)
+                self.assertIn('required by blocker-plus-scope policy',path.read_text())
+                self.assertEqual(undo_notes(path.read_text(),state['scope_records'].values()).replace('- [x] **1.**','- [ ] **1.**'),original.decode())
+                self.assertEqual(plans.approval(self.root,where,'0001'),'approved')
+                choose(self.root,'pr',self.event('pr','pr'));self.assertIn('logout',render(self.root))
+                # A later delivery can resume this branch; recorded notes are progress, not newly granted tasks.
+                self.start_delivery(turn='again')
+                self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
+                self.assertIn('last pending task across all tracks',load_run(self.root)[1]['tasks'][0]['instructions'])
+
+    def test_scope_choice_recovery_reviews_the_exact_private_candidate(self):
+        """docs/usage.md: dismissed scope stays recorded; recovery cannot borrow the earlier review."""
+        from .gates import options
+        where,path=self.documents('private');original=path.read_bytes();self.start_delivery()
+        def scoped(*args,**kwargs):
+            result=self.fake(*args,**kwargs)
+            if args[4]=='review':result['structured']={'verdict':'scope','summary':'Outside task','findings':[
+                {'severity':'scope','description':'A future logout timeout','path':'logout.py','family':'logout','relation':'original'}],'evidence':fixtures.EVIDENCE}
+            return result
+        self.assertEqual(run(self.root,scoped)['status'],'findings_checkpoint')
+        state=load_run(self.root)[1]
+        artifact=state['attempts'][-1]['artifact']
+        self.assertEqual([choice for choice,_ in options(state)],['route scope','dismiss scope','stop'])
+        with self.assertRaises(Refused):choose(self.root,'fix scope',self.event('bad','fix scope'))
+        host_hook(self.root,'codex',{'prompt':'dismiss scope'},verified=self.event('dismiss','dismiss scope'))
+        def interrupt(*args,**kwargs):raise OSError('before candidate replacement')
+        with patch('oh.plans.write',side_effect=interrupt),self.assertRaises(OSError):run(self.root,self.fake)
+        self.assertEqual(path.read_bytes(),original)
+        checks=[{'name':'expired-token-check','returncode':1,'duration_ms':0,'reused':False},
+                {'name':'expired-token-check','returncode':0,'duration_ms':0,'reused':False}]
+        with patch('oh.runner.verify',side_effect=[[check] for check in checks]):
+            self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['implementation','review','implementation','review'])
+        self.assertIn('expired-token-check',self.calls[-2][2])
+        self.assertNotIn('A future logout timeout',self.calls[-2][2])
+        for filename,expected in artifact['files'].items():self.assertEqual(plans.digest_of(Path(filename)),expected)
+        self.assertIn('## Scope decisions',path.read_text());self.assertIn('Disposition: `dismiss`',path.read_text())
+        self.assertEqual(plans.approval(self.root,where,'0001'),'approved')
+        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        self.assertEqual(path.read_text().count('A future logout timeout'),1)
+
     def test_unmerged_or_edited_private_design_does_not_grant_work(self):
         where,path=self.documents();self.git('switch','-qc','deliver/0001')  # scope added on the branch, not by OH
         path.write_text(path.read_text()+'\nUnmerged scope\n');self.git('add','.');self.git('commit','-qm','unmerged')

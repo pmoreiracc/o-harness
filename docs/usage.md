@@ -91,6 +91,23 @@ fresh worker implements it, your project checks run, an independent reviewer che
 exact result, blockers get fixed, and the reviewed tree is committed. Workers can't write
 OH's state, your settings or Git internals.
 
+The approved scope never grows. For example, while fixing a login timeout, OH can record
+that logout needs a timeout, but does not build it in that task. A reviewer’s unrelated
+findings go under `## Open review scope` in the draft or approved design; **Dismiss scope**
+records them under `## Scope decisions`. With no mutable design, **Route scope** files a
+GitHub issue and **Dismiss scope** retains the finding in the PR evidence. A review with
+both bugs and scope records scope first, then sends only bugs and concerns to the fixing
+agent. The person's merge accepts the recorded future work; it does not add it to the run.
+Workers report unrelated observations separately. OH records them in the design before
+review, or under “Found along the way” in a quick-fix PR. Private designs use the same
+reviewed candidate and approval hash as task progress. A changed design candidate needs a
+fresh review before commit, within the existing review allowance.
+
+These rules are covered by `test_scope_routing_and_repairs_preserve_the_approved_task` and
+`test_scope_choice_recovery_reviews_the_exact_private_candidate` in `runtime/oh/test_delivery.py`,
+and `test_scope_without_a_mutable_design_routes_or_dismisses_but_never_grants_work` and
+`test_native_pr_evidence_binds_all_commits_and_refuses_tampering` in `runtime/oh/test_workflow.py`.
+
 A batch has 5 tasks and each task gets up to 3 review rounds by default; change that with
 `/oh-config` ([configuration](configuration.md)). If a task still has findings after its review rounds,
 OH pauses and shows the choices. At the end of a batch, choose **continue**, **pr** or

@@ -95,14 +95,17 @@ class InstallationTest(unittest.TestCase):
         from unittest.mock import patch
         from .config import HOME
         with tempfile.TemporaryDirectory() as tmp:
-            def launched(session):
-                stdin=io.TextIOWrapper(io.BytesIO(json.dumps({'prompt':'Search my notes','cwd':tmp,'session_id':session}).encode()))
+            def launched(session,prompt='Search my notes',recognized=False):
+                stdin=io.TextIOWrapper(io.BytesIO(json.dumps({'prompt':prompt,'cwd':tmp,'session_id':session}).encode()))
                 with patch.dict(os.environ,{'OH_DATA_HOME':tmp}),patch('sys.stdin',stdin),patch('sys.argv',['hook','claude']),\
                         patch('subprocess.run') as run:
                     run.return_value.returncode,run.return_value.stdout=0,''
-                    with self.assertRaises(SystemExit) if not (Path(tmp)/'waiting'/(session+'.json')).exists() else contextlib.nullcontext():
+                    with self.assertRaises(SystemExit) if not recognized and not (Path(tmp)/'waiting'/(session+'.json')).exists() else contextlib.nullcontext():
                         runpy.run_path(str(HOME/'plugins/o-harness/scripts/human-event.py'),run_name='__main__')
                     return run.called
             (Path(tmp)/'waiting').mkdir();(Path(tmp)/'waiting/s.json').write_text('{}')
             self.assertTrue(launched('s'))
             self.assertFalse(launched('other'))
+            from .entry import CHOICES
+            for choice in CHOICES:self.assertTrue(launched('other',choice,recognized=True),choice)
+            for removed in ('fix scope','fix findings'):self.assertFalse(launched('other',removed),removed)

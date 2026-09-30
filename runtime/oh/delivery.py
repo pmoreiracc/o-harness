@@ -76,15 +76,24 @@ def progress_only(root,fork,paths,doc):
     from .storage import Journal,project
     from .workflow import reduce
     if git(root,'diff','--name-only','HEAD','--',*paths):return False
-    branch=git(root,'branch','--show-current');completed=set()
+    branch=git(root,'branch','--show-current');completed=set();scope={}
     try:
-        for commit in git(root,'rev-list','--no-merges',fork+'..HEAD').splitlines():
+        for commit in git(root,'rev-list','--reverse','--no-merges',fork+'..HEAD').splitlines():
             try:state=reduce(Journal(project(root)['id'],trailer(root,commit,'OH-Run')).records())
             except Refused:continue
-            if state.get('design')==doc and state['branch']==branch:completed|={done['task'] for done in state['summaries']}
+            if state.get('design')==doc and state['branch']==branch:
+                completed|={done['task'] for done in state['summaries']}
+                scope.update({key:record for key,record in state.get('scope_records',{}).items() if record['task'] in completed})
         for path in git(root,'diff','--name-only','origin/main','HEAD','--',*paths).splitlines():
-            if unticked(git(root,'show','HEAD:'+path),completed)!=git(root,'show','origin/main:'+path):return False
-    except (CalledProcessError,KeyError,IndexError):return False
+            from .scope import undo_notes
+            import subprocess
+            text=subprocess.check_output(['git','-C',str(root),'show','HEAD:'+path]).decode()
+            records=[r for r in scope.values() if r.get('destination',{}).get('design')==str(Path(root)/path)]
+            # Notes already merged on main are part of its plan, not this branch's progress.
+            base_text=subprocess.check_output(['git','-C',str(root),'show','origin/main:'+path]).decode()
+            records=[r for r in records if r.get('change',{}).get('after','') not in base_text]
+            if unticked(undo_notes(text,records),completed)!=base_text:return False
+    except (CalledProcessError,KeyError,IndexError,Refused):return False
     return True
 
 
@@ -169,7 +178,8 @@ def forget_progress(root,where,doc,name,base):
     kept=max((index+1 for index,intent in enumerate(intents) if contained(root,base,intent['after']['delivery_commit'])),default=0)
     undo=intents[kept:]
     if not undo:return
-    text=unticked(path.read_bytes().decode(),{i['task'] for i in undo})  # bytes as saved: CRLF plans keep their hash
+    from .scope import undo_notes
+    text=unticked(undo_notes(path.read_bytes().decode(),[r for i in undo for r in i.get('scope',[])]),{i['task'] for i in undo})  # bytes as saved: CRLF plans keep their hash
     if hashlib.sha256(text.encode()).hexdigest()!=undo[0]['before'].get('sha256'):
         raise Refused(f'Design {doc} changed beyond this delivery\'s progress; OH cannot start it over safely')
     plans.write(path,text)
@@ -275,12 +285,14 @@ def selection(root,doc,track='',*,claim=True):
         freeze_render(root,doc,layout=where)
         tasks=[{'id':'finalize','title':'Finalize the completed design','instructions':'Verify the completed design and affected documentation.',
                 'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':'finalize'}}]
+    if not any(row[1]=='pending' and row[0] not in {t['id'] for t in tasks} for row in rows):
+        tasks[-1]['instructions']+='\nThis is the last pending task across all tracks. Update documentation this delivery made outdated, including delivery-status claims; do not rewrite unrelated docs.'
     freeze_render(root,doc,'' if tasks[0]['id']=='finalize' else tasks[0]['id'],where)
     from .branches import main_ref
     base=main_ref(root)
     covers=unreviewed(root,git(root,'merge-base','HEAD',base),base) if base else []
     return ({'workflow':'deliver','design':doc,'track':track,'tasks':tasks},
-            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'approvals':approvals}
+            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'status':status,'approvals':approvals}
                         |({'covers':covers} if covers else {})})
 
 
@@ -329,7 +341,7 @@ def render(root,journal,state,task):
     text=freeze_render(root,state['delivery']['doc'],'' if task['id']=='finalize' else task['id'],where)
     after=before|{str(path):hashlib.sha256(text.encode()).hexdigest()}
     value={'task':task['id'],'path':str(path),'text':text,'before_inputs':before,'after_inputs':after,
-           'before_identity':plans.file_identity(path)}
+           'before_identity':plans.file_identity(path),'write_before':plans.file_identity(path)}
     if where['location']=='private':value['candidate']=str(journal.path/'delivery'/f'{task["id"]}.md')
     journal.append('delivery.render',value)
     plans.write(Path(value.get('candidate',path)),text)
@@ -341,12 +353,14 @@ def recover(root,state):
     if render:
         where=plans.layout(root)
         if plans.layout_snapshot(where)!=state['delivery']['layout']:raise Refused('Restore the delivery plan paths before recovery')
+        actual=inputs(where);expected=render['after_inputs']
+        if {p:h for p,h in actual.items() if p!=render['path']}!={p:h for p,h in expected.items() if p!=render['path']}:
+            raise Refused('Plan documents changed outside this delivery run; preserve the edits and stop the run')
         if where['location']=='private':
             candidate=Path(render['candidate'])
-            if not candidate.exists():plans.write(candidate,render['text'])
+            if not candidate.exists() or plans.file_identity(candidate)==render.get('write_before'):plans.write(candidate,render['text'])
             if plans.digest_of(candidate)!=render['after_inputs'][render['path']]:raise Refused('Delivery candidate changed outside the runner')
-        elif inputs(where)==render['before_inputs']:
-            if plans.file_identity(Path(render['path']))!=render['before_identity']:raise Refused('Plan identity changed before delivery recovery')
+        elif plans.file_identity(Path(render['path']))==render.get('write_before',render['before_identity']):
             plans.write(Path(render['path']),render['text'])
     guard(root,state)
 
@@ -376,7 +390,8 @@ def finish(root,journal,state,review):
         after=old|{'sha256':render['after_inputs'][render['path']], 'delivery_commit':head,
                    'delivery_base':base,'delivery_baseline':old.get('delivery_baseline',state['base']),
                    'delivery_no_code':not bool(git(root,'diff','--name-only',base,head))}
-        intent={'task':render['task'],'before':old,'after':after}
+        intent={'task':render['task'],'before':old,'after':after,
+                'scope':[r for r in state.get('scope_records',{}).values() if r['task']==render['task'] and r.get('change')]}
         journal.append('delivery.approval.intent',intent)
     path=plans.approvals_file(root);records=read_json(path)
     if records.get(doc) not in (intent['before'],intent['after']):raise Refused('Private approval changed during delivery')

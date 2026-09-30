@@ -57,10 +57,9 @@ choices (`gate.choices`) stay valid everywhere, and are the fallback when no men
 Handle the returned status before offering publication:
 - `review_checkpoint`: explain the retained findings and offer **grant review** / **stop**.
 - `needs_attention`: show the failure and its concrete recovery step, then **retry** / **stop**.
-- `findings_checkpoint`: show every finding. Offer **fix concerns** for concerns, **fix scope**
-  for scope, or **fix findings** for both. The disposition choices are **accept concerns**,
-  **route scope**, or **accept concerns and route scope**, matching exactly the retained
-  severities, plus **stop**. Never treat prose or silence as a disposition.
+- `findings_checkpoint`: show every finding and exactly the returned menu. Concerns can be
+  fixed or accepted; scope can be routed or dismissed, never implemented. A combined menu
+  pairs those choices. Never treat prose or silence as a disposition.
 After a recovery choice, call `run` again. For `paused`, wait for **resume** or **stop**;
 for `pausing` or `stopping`, report the pending state. A stopped run offers no publication.
 
