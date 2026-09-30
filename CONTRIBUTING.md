@@ -38,40 +38,57 @@ Merging to `main` releases nothing unless the merge changes the version; see
 
 ## Try the local source in Claude Code and Codex
 
-From this checkout, define `oh-dev` once in Bash or Zsh:
+### One-time setup
+
+Use the OH checkout where you actually edit code. Its current branch and uncommitted files
+will power the development plugin, even when you use OH in another repository.
+The checkout must contain `integrations/oh_dev.py`.
+
+For Bash or Zsh, add this alias to your shell profile (`~/.bashrc` or `~/.zshrc`), replacing
+both paths with absolute paths. Find your Python path with
+`python3 -I -c 'import sys; print(sys.executable)'`:
 
 ```sh
-alias oh-dev="'$(python3 -I -c 'import sys; print(sys.executable)')' -I '$PWD/integrations/oh_dev.py'"
-oh-dev on
+alias oh-dev="'/absolute/path/to/python3' -I '/absolute/path/to/o-harness/integrations/oh_dev.py'"
 ```
 
-For PowerShell:
+For PowerShell, add this to `$PROFILE`, replacing both paths:
 
 ```powershell
-$ohDevPython = (Get-Command python).Source
-$ohDevScript = Join-Path $PWD 'integrations/oh_dev.py'
+$ohDevPython = 'C:\absolute\path\to\python.exe'
+$ohDevScript = 'C:\absolute\path\to\o-harness\integrations\oh_dev.py'
 function oh-dev { & $ohDevPython -I $ohDevScript @args }
-oh-dev on
 ```
 
-Save the definition with expanded absolute paths in your shell profile to keep it.
-Python 3.12+ and both host CLIs must be installed. No commit, push or version bump is needed.
+Reload your profile or open a new terminal. Python 3.12+ and both host CLIs must be installed.
+Once, from that OH checkout, register its checks in the separate development data:
+
+```sh
+oh-dev exec profile-import integrations/oh-profile.json
+```
+
+### Everyday use
+
+From any directory, run `oh-dev on` to switch or `oh-dev off` to switch back. No repeated
+alias setup, profile import, commit, push or version bump is needed.
 
 `oh-dev on` enables a separate local development plugin in **both hosts**, for fresh sessions
 in **any repository**. `oh-dev off` restores the previous released-plugin enablement;
 `oh-dev status` shows the current state. Add `--host codex` or `--host claude` to select one.
-Released plugin files are retained. Use `off` before switching to another source checkout.
+Released plugin files are retained. Changing your terminal's directory does not change the
+source checkout. To use another checkout, run `off` with the old definition first, then
+update the saved definition and reload your profile.
 
-The development plugin runs this checkout's runtime, workflows, prompts, config and dashboard.
-Skills and hook definitions refresh on each `on`. Start fresh host sessions after switching or
-refreshing; restart them after MCP changes. Finish active OH runs before changing source.
+The development plugin reads runtime, workflows, prompts, config and dashboard from the
+linked checkout, including uncommitted edits. New OH commands use those live files;
+skills and hook definitions refresh on each `on`. Start fresh host sessions after switching
+or refreshing; restart them after MCP changes. Finish active OH runs before changing source.
 Project-level plugin overrides take precedence; remove an OH override before testing there.
 
 State lives in `~/.local/share/oh-dev`, separate from normal OH data. No consumer files or
 services are installed. `oh-dev exec` runs source CLI commands with development data:
 
 ```sh
-oh-dev exec profile-import integrations/oh-profile.json
 oh-dev exec status
 oh-dev exec serve --port 4319
 ```
