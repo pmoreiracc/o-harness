@@ -56,3 +56,6 @@ jobs:
       - run: bash integrations/test.sh windows "$WINDOWS_TEST_BASE"
         env:
           WINDOWS_TEST_BASE: ${{ inputs.windows-base || 'origin/main' }}
+      - name: Show checkout changes after a test failure
+        if: failure()
+        run: git status --short --untracked-files=all
