@@ -35,6 +35,12 @@ def authorize(env):
             'Only Pedro may start or rerun Release, on main.')
 
 
+class GitHubError(RuntimeError):
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
 class GitHub:
     def __init__(self, repo):
         self.repo = repo
@@ -48,7 +54,9 @@ class GitHub:
         if result.returncode:
             if missing and '(HTTP 404)' in result.stderr:
                 return None
-            raise RuntimeError(f'GitHub {method} {path}: {result.stderr.strip()}')
+            status = re.search(r'\(HTTP (\d{3})\)', result.stderr)
+            raise GitHubError(f'GitHub {method} {path}: {result.stderr.strip()}',
+                              int(status[1]) if status else None)
         return json.loads(result.stdout) if result.stdout.strip() else None
 
 
@@ -107,12 +115,19 @@ def merge_pr(api, pr, sha, bot, pause=time.sleep, attempts=120):
         require(current['state'] == 'open', 'The release PR was closed without merging.')
         require(current.get('mergeable_state') != 'dirty',
                 'The release PR conflicts with main. Close it, delete its branch, and run Release again.')
-        if current.get('mergeable_state') == 'clean':
-            # The SHA prevents merging a changed PR. No admin/bypass option is used.
-            result = api('PUT', f'pulls/{pr["number"]}/merge',
-                         {'sha': sha, 'merge_method': 'merge'})
-            require(result.get('merged'), 'GitHub refused the protected release merge.')
-            return result['sha']
+        if current.get('mergeable') is True:
+            # The update restriction can report "blocked" even for an allowed App.
+            # GitHub's merge endpoint enforces required checks and the pinned SHA;
+            # 405 means not mergeable yet. Never bypass checks or retry other errors.
+            try:
+                result = api('PUT', f'pulls/{pr["number"]}/merge',
+                             {'sha': sha, 'merge_method': 'merge'})
+            except GitHubError as error:
+                if error.status != 405:
+                    raise
+            else:
+                require(result.get('merged'), 'GitHub refused the protected release merge.')
+                return result['sha']
         pause(15)
     raise RuntimeError('Release PR did not become mergeable in 30 minutes. Check its checks and repository rules, then rerun Release.')
 

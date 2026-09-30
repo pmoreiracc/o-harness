@@ -2,7 +2,7 @@
 import base64
 import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import release
 
@@ -19,7 +19,7 @@ def encoded(version):
 def pull(**changes):
     return {'number': 7, 'html_url': 'https://github.com/pmoreiracc/o-harness/pull/7',
             'user': {'login': BOT}, 'base': {'ref': 'main'}, 'head': {'sha': 'version', 'repo': {'full_name': 'pmoreiracc/o-harness'}},
-            'draft': False, 'state': 'open', 'merged': False, 'mergeable_state': 'clean', **changes}
+            'draft': False, 'state': 'open', 'merged': False, 'mergeable': True, 'mergeable_state': 'clean', **changes}
 
 
 class ReleaseTest(unittest.TestCase):
@@ -91,10 +91,27 @@ class ReleaseTest(unittest.TestCase):
             release.prepare(unverified, '1.1.0', BOT, lambda _: None)
 
     def test_merge_waits_and_refuses_changed_or_non_app_prs(self):
-        api = Mock(side_effect=[pull(mergeable_state='blocked'), pull(), {'merged': True, 'sha': 'merged'}])
+        def response(body, status=None):
+            return Mock(returncode=1 if status else 0, stdout=json.dumps(body),
+                        stderr=f'gh: Merge refused (HTTP {status})' if status else '')
+        # GitHub reports "blocked" for the update restriction even for an allowed
+        # publisher. The protected merge endpoint decides whether checks are ready.
+        responses = [response(pull(mergeable=None)), response(pull(mergeable_state='blocked')),
+                     response({}, 405), response(pull(mergeable_state='blocked')),
+                     response({'merged': True, 'sha': 'merged'})]
         pause = Mock()
-        self.assertEqual(release.merge_pr(api, pull(), 'version', BOT, pause), 'merged')
-        pause.assert_called_once_with(15)
+        with patch('release.subprocess.run', side_effect=responses) as command:
+            self.assertEqual(release.merge_pr(release.GitHub('pmoreiracc/o-harness'), pull(), 'version', BOT, pause), 'merged')
+            self.assertEqual(json.loads(command.call_args.kwargs['input']), {'sha': 'version', 'merge_method': 'merge'})
+        self.assertEqual(pause.call_count, 2)
+        for status in (403, 409, 429):
+            with self.subTest(status=status), patch('release.subprocess.run', side_effect=[response(pull()), response({}, status)]):
+                with self.assertRaises(release.GitHubError) as error:
+                    release.merge_pr(release.GitHub('pmoreiracc/o-harness'), pull(), 'version', BOT, lambda _: None)
+                self.assertEqual(error.exception.status, status)
+        with patch('release.subprocess.run', side_effect=[response(pull()), response({}, 405)]):
+            with self.assertRaisesRegex(RuntimeError, '30 minutes'):
+                release.merge_pr(release.GitHub('pmoreiracc/o-harness'), pull(), 'version', BOT, lambda _: None, attempts=1)
         mutations = [{'user': {'login': 'someone'}}, {'head': {'sha': 'changed', 'repo': {'full_name': 'pmoreiracc/o-harness'}}},
                      {'state': 'closed'}, {'mergeable_state': 'dirty'}, {'base': {'ref': 'other'}}]
         for changes in mutations:
