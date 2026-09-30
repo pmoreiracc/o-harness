@@ -97,13 +97,15 @@ def reduce(records):
         elif kind=='commit.intent':state['commit_intents'][d['task']]=d
         elif kind=='task.started':state['task_started'][d['task']]=record['at']
         elif kind=='task.completed':state['done'].append(d['task']);state['summaries'].append(d)
-        elif kind=='attempt.started':state['attempts'].append(d | {'finished':False})
+        elif kind=='attempt.started':state['attempts'].append(d | {'finished':False,'started_at':record['at']})
         elif kind=='attempt.finished':
             matches=[a for a in state['attempts'] if a['id']==d['id']]
             if len(matches)!=1:raise Refused('Completion without exactly one admitted attempt')
-            matches[0].update(d | {'finished':True})
+            matches[0].update(d | {'finished':True,'finished_at':record['at']})
+        elif kind=='verification':state.setdefault('verification',{})[d['task']]=d
         elif kind=='run.status':
             state['status']=d['status']
+            state.setdefault('status_history',[]).append(d|{'at':record['at']})
             if d['status']=='pausing':state['pause_return_status']=d['return_status']
             if d['status']=='paused':state['pause_snapshot']={'tree':d['tree'],'head':d['head']}
         elif kind=='task.intervention':state['interventions'][d['task']]=state['interventions'].get(d['task'],0)+1
@@ -111,6 +113,8 @@ def reduce(records):
         elif kind=='run.owner':state['human']=d['human']
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
+        elif kind=='preparation.activating':state['activation']=d
+        elif kind=='preparation.activated':state.update(branch=d['branch'],incarnation=d['incarnation'])
         elif kind=='subject.preparing':state['rendered']={'intent':d['intent']}|({'before':d['before']} if 'before' in d else {})
         elif kind=='subject.existing':state['rendered']=d['plan']
         elif kind=='private.approval.intent':state['private_approval']=d
@@ -154,7 +158,7 @@ def reduce(records):
     return state
 
 
-def _start(root, manifest, event, prepared=None, plan=None):
+def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
     tasks=validate_tasks(manifest['tasks']);p=project(root)
     workflow=manifest.get('workflow','deliver')
     if workflow not in ('propose','design','deliver'):raise Refused('Unknown workflow')
@@ -165,10 +169,13 @@ def _start(root, manifest, event, prepared=None, plan=None):
     if prepared is not None and (workflow!='deliver' or plan is not None):raise Refused('Prepared scope is delivery work only')
     if workflow!='deliver' and len(tasks)!=1:raise Refused('Planning workflows have one bounded artifact task')
     source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+    if waiting:source=digest({'human':source,'prepared':waiting})
     if active_file(root).exists():
         journal,state=load_run(root)
         if state['source']==source:return journal,state
-        if state['status'] not in ('stopped','pr','completed'):raise occupied(state)
+        if state['status']=='prepared_checkpoint' and waiting and state['human']['session']==event['session'] and state['host']==event['host']:
+            journal.append('run.status',{'status':'stopped','reason':'Replaced by a newer prepared scope; no work was granted.'})
+        elif state['status'] not in ('stopped','pr','completed'):raise occupied(state)
     config=prepared['snapshot'] if prepared else snapshot(root)
     from .config import project_checks
     required=prepared['project_checks'] if prepared else project_checks(root)
@@ -181,7 +188,7 @@ def _start(root, manifest, event, prepared=None, plan=None):
         label='designs' if workflow=='design' else 'proposals'
         raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
     try:
-        if workflow=='deliver' and git(root,'branch','--show-current') in ('main','master'):
+        if workflow=='deliver' and not waiting and git(root,'branch','--show-current') in ('main','master'):
             created='codex/oh-'+run[:8]  # design deliveries are already on their deliver/ branch
             git(root,'switch','-c',created)
         import re
@@ -205,10 +212,12 @@ def _start(root, manifest, event, prepared=None, plan=None):
               'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
               **(plan or {}),
               'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
+        if waiting:data['prepared_request']=waiting
         journal=Journal(p['id'],run)
         journal.append('run.started',data)
         ids=[t['id'] for t in tasks[:data['config']['tasks_per_batch']]]
-        journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
+        if waiting:journal.append('run.status',{'status':'prepared_checkpoint'})
+        else:journal.append('grant',{'tasks':ids,'source':source,'kind':'initial','config_hash':data['config_hash']})
         atomic_json(active_file(root),{'project':p['id'],'run':run,'checkout':checkout})
     except Exception:
         # A start that never published its active pointer must not strand the checkout
@@ -241,7 +250,14 @@ def _choose(root, choice, event):
     if source in state['decisions']:return state
     if event['host']!=state['host']:
         raise Refused('Resume through the host that owns this run')
-    if choice=='continue':
+    if state['status']=='prepared_checkpoint' and choice=='approve':
+        from .prepared import activate
+        activation=activate(root,journal,state,event)
+        append('preparation.activated',activation)
+        append('grant',{'tasks':[t['id'] for t in state['tasks'][:state['config']['tasks_per_batch']]],'source':source,'kind':'initial','config_hash':state['config_hash']})
+        append('decision',{'source':source,'choice':choice})
+        append('run.status',{'status':'running'})
+    elif choice=='continue':
         if state['status']!='checkpoint':raise Refused('Continue requires a task checkpoint')
         tasks=[t['id'] for t in state['tasks'] if t['id'] not in state['done']][:state['config']['tasks_per_batch']]
         if not tasks:raise Refused('No remaining tasks')
@@ -300,6 +316,8 @@ def _choose(root, choice, event):
             raise Refused('PR choice requires completed work at a checkpoint')
         decision={'source':source,'choice':choice}
         if choice=='pr':
+            from .delivery_verify import verify
+            verify(root,state)
             head=git(root,'rev-parse','HEAD');branch=git(root,'branch','--show-current')
             commits=[item['commit'] for item in state['summaries'] if 'commit' in item]
             if not commits:raise Refused('Nothing was committed, so there is nothing to publish')
@@ -351,6 +369,7 @@ def _choose(root, choice, event):
     for item in events:
         if item['kind']=='run.status':best_effort('run.status',state['project'],state['id'],**item['data'])
     state=reduce(journal.records())
+    if choice=='stop':checkout_file(root,'oh-preparation-owner.json').unlink(missing_ok=True)
     if state.get('discard'):discard_proposal(root,journal,state)
     if choice=='reconsider' and state.get('workflow')=='propose':
         from .authority import wait_for
@@ -493,9 +512,9 @@ WAIT_NEXT=('Ask the person exactly `ask` in plain chat and end your turn. Their 
 def menu(root,journal,state):
     """The current choice as a clickable menu, with how to show it on this run's host."""
     from .gates import ask,describe,how
-    gate=describe(journal,state)
+    gate=describe(journal,state,root)
     if not gate:return {}
-    return {'gate':{'id':gate['id'],'choices':[o['choice'] for o in gate['options']]}|({'ask':ask(gate)} if gate['host']=='claude' else {})|{'how':how(gate,root)}}
+    return {'gate':{'id':gate['id'],'summary':gate['summary'],'choices':[o['choice'] for o in gate['options']]}|({'ask':ask(gate)} if gate['host']=='claude' else {})|{'how':how(gate,root)}}
 
 
 def continue_limits(left,config):
@@ -506,9 +525,9 @@ def continue_limits(left,config):
 
 
 @state_writer
-def start(root,manifest,event,prepared=None,plan=None):
+def start(root,manifest,event,prepared=None,plan=None,waiting=None):
     with lock(checkout_file(root, 'oh-control.lock')):
-        return _start(root,manifest,event,prepared,plan)
+        return _start(root,manifest,event,prepared,plan,waiting)
 
 
 @state_writer

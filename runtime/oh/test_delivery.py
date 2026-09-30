@@ -47,9 +47,9 @@ class DeliveryTest(unittest.TestCase):
             with self.assertRaises(Refused):delivery.parse(invalid)
         from .entry import receive
         from .authority import pending_file
-        result=receive(self.root,'codex',{'prompt':'/oh-deliver fix X'})
-        self.assertTrue(result['prepare']);self.assertFalse(result['authorized'])
-        self.assertFalse(pending_file(self.root).exists())
+        result=receive(self.root,'codex',{'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'fix','prompt':'/oh-deliver fix X'})
+        self.assertTrue(result['pending'])  # preparation can now offer an owner-bound approval menu
+        self.assertTrue(pending_file(self.root).exists())
 
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
         where,path=self.documents();listed=delivery.listing(self.root)
@@ -60,12 +60,21 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertIn('- [x] **1.**',path.read_text())
+        # docs/usage.md: PR refuses an unmarked completed task, even before an agent commits the bad edit.
+        saved=path.read_bytes()
+        path.write_bytes(saved.replace(b'- [x] **1.**',b'- [ ] **1.**'))
+        with self.assertRaisesRegex(Refused,'task 1.*done'):
+            choose(self.root,'pr',self.event('bad-pr','pr'))
+        path.write_bytes(saved)
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
         self.assertEqual(run(self.root,self.fake)['completed'],1)
         choose(self.root,'continue',self.event('next','continue'))
         self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertIn('status: frozen',path.read_text())
         self.assertEqual(self.git('status','--porcelain'),'')
+        choose(self.root,'pr',self.event('good-pr','pr'))  # a correct two-task batch, including its dependency, passes
+        from .publication import render
+        self.assertIn('Task 2:',render(self.root))
 
     def test_a_delivery_resumes_on_its_branch_and_one_pr_publishes_both_runs(self):
         from .publication import render
@@ -348,9 +357,10 @@ class DeliveryTest(unittest.TestCase):
         body=BODY.replace('- [ ] **1.** Add the credential store.','- [ ] **1.** Add the credential store. Blocked on §3.')
         body+='\n### UI track\n\n- [ ] **3.** Add a sign-in placeholder.\n  Difficulty: simple — one static page.\n\n## 3. Open questions\n\nChoose the storage.\n'
         self.documents(body=body)
-        manifest,_=delivery.selection(self.root,'0001')
+        with self.assertRaisesRegex(Refused,'several tracks'):delivery.selection(self.root,'0001')
+        manifest,_=delivery.selection(self.root,'0001','ui')
         self.assertEqual([t['id'] for t in manifest['tasks']],['3'])
-        self.start_delivery()  # the run builds each task with the difficulty the design gave it
+        self.start_delivery('0001 ui')  # the run builds each task with the difficulty the design gave it
         self.assertEqual({k:load_run(self.root)[1]['tasks'][0][k] for k in ('difficulty','difficulty_reason')},
                          {'difficulty':'simple','difficulty_reason':'Set by the design: one static page.'})
         with self.assertRaisesRegex(Refused,'No ready'):delivery.selection(self.root,'0001','core')

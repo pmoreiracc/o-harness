@@ -114,7 +114,7 @@ def menu_waiting(root):
     from .workflow import active_file,load_run
     if not active_file(root).exists():return None
     journal,state=load_run(root)
-    gate=describe(journal,state) if state['host']=='claude' else None
+    gate=describe(journal,state,root) if state['host']=='claude' else None
     return (gate,state,journal.records()[-1]['at']) if gate else None
 
 
@@ -509,4 +509,3 @@ def desktop_pending(root):
     if (state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')).exists():return
     from .entry import receive
     receive(root,'codex',payload)
-

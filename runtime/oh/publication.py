@@ -103,11 +103,15 @@ def has_native_history(root,base):
 
 def render(root,base='origin/main'):
     if changes(root):raise Refused('Publish only from a clean reviewed checkout')
-    records=[];grants={};p=project(root);branch=git(root,'branch','--show-current')
+    records=[];grants={};states={};p=project(root);branch=git(root,'branch','--show-current')
     for commit in commits(root,base,reviewed=None):
         state=made(root,p['id'],commit)
         if not state:continue  # not OH's: it must be one a review covered, checked below
         run=state['id']
+        if run not in states:
+            from .delivery_verify import verify_run
+            verify_run(root,state,current=any(d.get('commit')==git(root,'rev-parse','HEAD') for d in state['summaries']))
+        states[run]=state
         # A stopped run's commits, or those of a completed run nobody chose to publish, are published by the PR
         # choice of the run that resumed its branch.
         if state['status'] not in ('pr','stopped','completed'):raise Refused('A recorded human PR choice is required before exporting native evidence')
@@ -124,9 +128,27 @@ def render(root,base='origin/main'):
     value={'schema':1,'branch':branch,'head':git(root,'rev-parse','HEAD'),'records':records,'grants':grants}
     validate_grants(value)
     notes=''.join('\n\nFound along the way (task '+r['evidence']['task']+'):\n'+''.join('\n> '+line for f in record['findings'] for line in f['description'].splitlines()) for r in records for record in r['evidence'].get('scope',{}).values() if record['action']=='noted' and record['destination'].get('pr'))
-    body=notes+('\n\n' if notes else '')+START+'\n```json\n'+json.dumps(value,indent=2)+'\n```\n'+END
+    body=readable(records,states)+notes+'\n\n'+START+'\n```json\n'+json.dumps(value,indent=2)+'\n```\n'+END
     if len(body.encode())>60000:raise Refused('Review evidence exceeds the PR body budget; publish a smaller reviewed batch')
     return body
+
+
+def readable(records,states):
+    """Human-readable history from retained events; model prose never supplies decisions or run state."""
+    from .gates import review_history,report_text
+    lines=[]
+    for record in records:
+        evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']
+        lines.append(f"Task {task}: {evidence['title']} ({record['commit'][:12]})")
+        worker=next((a for a in reversed(state['attempts']) if a['task']==task and a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
+        lines.append('Implementing report: '+(report_text(worker) or 'No report recorded.' if worker else 'No report recorded.'))
+        lines.extend(review_history(state,task))
+        lines.append('Task history: '+' → '.join(a['role']+': '+a.get('outcome','unfinished') for a in state['attempts'] if a['task']==task)+' → committed.')
+        lines.append('')
+    for state in states.values():
+        lines.append(f"Run {state['id'][:8]} ended at {state['status']}: "+('the person chose to open a PR.' if state['status']=='pr' else 'the person stopped it.' if state['status']=='stopped' else 'all selected tasks were completed.'))
+        lines.append('Run history: '+' → '.join(s['status'] for s in state.get('status_history',[]))+'.')
+    return '\n'.join(lines)
 
 
 def covered(records):

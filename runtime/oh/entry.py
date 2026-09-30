@@ -63,14 +63,14 @@ def receive(root,host,payload):
             from .delivery import parse,listing
             selected=parse(args)
             if selected['kind']=='list':return listing(root)
-            if selected['kind']=='quick_fix':return selected
+            if selected['kind']=='quick_fix':return stage(root,host,payload)
             design_request=selected['kind']=='design'
         from .plans import SLUG
         design=args.strip() if name=='design' else (re.fullmatch(r'design\s+(.*)',args,re.S) or [None,None])[1] if name=='oh-start' else None
         if design and not re.fullmatch(SLUG,design.strip()):
             return {'authorized':False,'next':'Name one roadmap initiative by its slug: /oh-design <slug>. New ideas start with /oh-propose.'}
         planning=name=='propose' or design is not None or (name=='oh-start' and re.fullmatch(r'propose\s+\S.*',args,re.S))
-        binding=planning or (name in ('deliver','oh-start') and exact_request) or (name=='deliver' and design_request) or (name=='oh-resume' and not args)
+        binding=planning or (name=='oh-start' and not args) or (name in ('deliver','oh-start') and exact_request) or (name=='deliver' and design_request) or (name=='oh-resume' and not args)
         if not binding:
             return {'authorized':False,'prepare':True,'next':'Select propose/design with an explicit intent, or prepare agreed delivery scope and present its exact trigger. A fresh human invocation grants that prepared scope.'}
     return stage(root,host,payload)

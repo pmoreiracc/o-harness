@@ -2,7 +2,7 @@
 from datetime import datetime
 from pathlib import Path
 from .config import project_checks, snapshot
-from .storage import Refused,atomic_json,checkout_id,digest,git,now,project,read_json,state_home,state_writer
+from .storage import Refused,atomic_json,checkout_file,checkout_id,digest,git,now,project,read_json,state_home,state_writer
 
 
 def directory(root):return state_home()/'projects'/project(root)['id']/'prepared'
@@ -29,8 +29,50 @@ def prepare(root,manifest=None,doc=None,track=''):
     key=digest(value);atomic_json(directory(root)/(key+'.json'),value,immutable=True)
     trigger=('$o-harness:oh-deliver request:'+key if manifest is not None else '$o-harness:oh-deliver '+doc+(' '+track if track else '')+' request:'+key)
     config=value['snapshot']['config']
-    return {'request':key,'trigger':trigger,'tasks_per_batch':config['tasks_per_batch'],'review_rounds':config['review_rounds'],
+    result={'request':key,'trigger':trigger,'tasks_per_batch':config['tasks_per_batch'],'review_rounds':config['review_rounds'],
             'limits':limits(len(data['tasks']),config)}
+    if manifest is not None:
+        from .authority import materialize,attest
+        materialize(root)
+        owner=checkout_file(root,'oh-preparation-owner.json')
+        if owner.exists():
+            human=read_json(owner)
+            # Recheck the original native turn, including whether the person has since moved on.
+            event=attest(human['host'],human['payload'],root)
+            from .workflow import start,checkpoint
+            start(root,data,event,prepared=value,waiting=key)
+            result|=checkpoint(root)
+    return result
+
+
+def remember(root,host,payload,event):
+    """A typed request may open an approval menu; it grants no implementation."""
+    atomic_json(checkout_file(root,'oh-preparation-owner.json'),{'host':host,'payload':payload,'event':event})
+
+
+def activate(root,journal,state,event):
+    """Only an approved, unchanged snapshot can become executable. Retain branch creation for crash recovery."""
+    from .branches import incarnation,run_git
+    from .config import version
+    from .storage import changes
+    if event['host']!=state['host'] or event['session']!=state['human']['session']:raise Refused('Approve in the conversation that prepared these tasks')
+    resolve(root,'request:'+state['prepared_request'],event,'tasks')
+    if version()!=state['harness_version']:raise Refused('OH changed after preparation; prepare the task list again')
+    if changes(root):raise Refused('Save the uncommitted changes before approving these tasks')
+    branch=git(root,'branch','--show-current');intent=state.get('activation')
+    if not intent:
+        if branch!=state['branch'] or incarnation(root,branch)!=state['incarnation']:raise Refused('Return to the checkout and branch where these tasks were prepared')
+        target='codex/oh-'+state['id'][:8] if branch in ('main','master') else branch
+        if target!=branch and run_git(root,'show-ref','--verify','--quiet','refs/heads/'+target).returncode==0:raise Refused('The prepared execution branch already exists; prepare again')
+        intent={'branch':target,'base':state['base']}
+        journal.append('preparation.activating',intent)
+    if branch!=intent['branch']:
+        if branch!=state['branch']:raise Refused('Return to the preparation branch before approving again')
+        if run_git(root,'show-ref','--verify','--quiet','refs/heads/'+intent['branch']).returncode==0:
+            if git(root,'rev-parse',intent['branch'])!=intent['base']:raise Refused('The execution branch changed; preserve it and prepare again')
+            git(root,'switch',intent['branch'])
+        else:git(root,'switch','-c',intent['branch'])
+    return {'branch':intent['branch'],'incarnation':incarnation(root,intent['branch'])}
 
 
 def limits(count,config):

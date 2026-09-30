@@ -326,7 +326,7 @@ class Server:
         if gate['words']:
             properties['changes'] = {'type': 'string', 'title': 'What to change (only for Refine)'}
         details = '\n'.join(f'- {o["label"]}: {o["description"]}' for o in gate['options'] if o['description'] != o['label'])
-        message = (f"{gate['question'].split(' [')[0]}\nProject {project_name(root)} · {root} · run {state['id'][:8]}"
+        message = (f"{gate['question'].removesuffix(' [OH gate '+gate['id']+']')}\nProject {project_name(root)} · {root} · run {state['id'][:8]}"
                    + ('\n' + details if details else ''))
         reply = self.elicit(message, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
         result = reply.get('result') or {}

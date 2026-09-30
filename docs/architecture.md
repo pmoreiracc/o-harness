@@ -21,8 +21,8 @@ data folder.
 
 ## Authority
 
-Only your own typed message approves work. The prompt hook records where to find it, and
-OH confirms it in the host's saved transcript before starting. Model output, elapsed time
+A native human message or menu click approves work. For typed commands, the prompt hook records
+where to find the message, and OH confirms it in the host's saved transcript before starting. Model output, elapsed time
 and restarts never approve anything. Approved scope is fixed when prepared.
 
 A choice can also be a click. In Claude, the agent shows OH's menu with Claude's own question
@@ -62,7 +62,13 @@ OH worker started it.
 The runner keeps a hash-chained journal per run. For each task it picks a model profile,
 starts a fresh worker, runs the checks, starts an independent reviewer on the exact tree
 and commits only the reviewed tree, with an `OH-Evidence` trailer. `oh pr-summary` checks
-that trailer against every commit on the branch.
+that trailer against every commit on the branch and renders task and review history from the journal.
+Design delivery also records its approved starting document and checks actual task transitions,
+dependency order, branch ownership and commit subjects before PR. Private designs use their
+human-approved hash and retained progress candidates. Prepared quick fixes wait in a journaled
+approval checkpoint without a task grant or execution branch; the host's Approve click activates
+only that immutable task list and its saved limits. See the behavior tests named in
+[usage](usage.md).
 
 Workers run through the checked host CLI with API-key variables removed. They can't write
 OH state or Git internals; reviewers are read-only. Pause and stop share a lock with commit,

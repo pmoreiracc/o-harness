@@ -86,7 +86,11 @@ class WorkflowTest(unittest.TestCase):
             value=self.fake(*args,**kw)
             if args[4]=='review':value['structured']={'verdict':'blocking','summary':'Fix it','findings':[{'severity':'blocking','description':'Wrong','path':'output.txt','family':'wrong-output','relation':'original'}],'evidence':EVIDENCE}
             return value
-        self.assertEqual(run(self.root,blocked)['status'],'review_checkpoint')
+        result=run(self.root,blocked)
+        self.assertEqual(result['status'],'review_checkpoint')
+        # docs/usage.md: spent review windows show findings and their complete retained history.
+        for detail in ('Round 3 of 3','Reviews used/granted: 3/3','Wrong','repeats an earlier finding','Open findings: blocking'):
+            self.assertIn(detail,result['gate']['summary'])
         reviews=sum(c[0]=='review' for c in self.calls);self.assertEqual(reviews,3)
         run(self.root,blocked);self.assertEqual(sum(c[0]=='review' for c in self.calls),3)
         choose(self.root,'grant review',self.event('2','grant review'))
@@ -244,7 +248,8 @@ class WorkflowTest(unittest.TestCase):
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         def report(*args,**kwargs):
             result=self.fake(*args,**kwargs)
-            if args[4]=='implementation':result['structured']={'summary':'Done','found_along_way':['Follow-up outside this quick fix']}
+            if args[4]=='implementation':result['structured']={'found_along_way':['Follow-up outside this quick fix '+('x'*4100)],'summary':'Implemented the timeout.'}
+            result['text']=json.dumps(result['structured'])  # actual Codex structured output, not the fixture's plain 'done'
             return result
         start(self.root,{'tasks':self.tasks[:2]},self.event());run(self.root,report)
         with self.assertRaises(Refused):render(self.root)
@@ -252,6 +257,11 @@ class WorkflowTest(unittest.TestCase):
         body=render(self.root)
         self.assertIn('Found along the way (task 1)',body)  # docs/usage.md: quick-fix observations reach the PR
         self.assertIn('Follow-up outside this quick fix',body)
+        prose=body.split(START)[0]  # docs/usage.md: readable PR history precedes portable JSON
+        for detail in ('Task 1:', 'Implementing report: Implemented the timeout.', 'Checked behavior', 'Review 1:', 'started ', 'clean', 'Task history:', 'the person chose to open a PR'):
+            self.assertIn(detail,prose)
+        self.assertNotIn('Implementing report: {',prose)
+        self.assertNotIn('\"verdict\":',prose)
         event={'pull_request':{'head':{'ref':'work','sha':self.git('rev-parse','HEAD')},'body':body}}
         self.assertEqual(validate_event(self.root,event,'origin/main')['commits'],2)
         packet=json.loads(body.split('```json\n')[1].split('\n```')[0]);packet['records'][0]['evidence']['attempts'][0]['duration_ms']=999

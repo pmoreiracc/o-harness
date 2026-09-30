@@ -248,6 +248,7 @@ def selection(root,doc,track='',*,claim=True):
         approvals[doc]=read_json(plans.approvals_file(root))[doc]
         delivered_base(root,approvals[doc],progressed=any(row[1]=='done' for row in rows))
     tracks={row[2] for row in rows}
+    if len(tracks)>1 and not track and any(row[1]=='pending' for row in rows):raise Refused('This design has several tracks; choose one: '+', '.join(sorted(tracks)))
     if track and track not in tracks:raise Refused('Unknown design track; choose '+', '.join(sorted(tracks)))
     roadmap=plans.initiatives(root,where)
     named=[row for row in roadmap if row[3]==doc]
@@ -266,7 +267,7 @@ def selection(root,doc,track='',*,claim=True):
                 approvals[number]=record
             freeze_render(root,number,layout=where)  # a frozen label with pending tasks is not delivery
     completed={row[0] for row in rows if row[1]=='done'}
-    available=set(completed);tasks=[];text=path.read_text()
+    available=set(completed);tasks=[];text=path.read_bytes().decode()
     pending=[row for row in rows if row[1]=='pending' and (not track or row[2]==track)]
     # A stable topological selection permits ready work despite an unrelated blocked task.
     while pending:
@@ -291,8 +292,10 @@ def selection(root,doc,track='',*,claim=True):
     from .branches import main_ref
     base=main_ref(root)
     covers=unreviewed(root,git(root,'merge-base','HEAD',base),base) if base else []
+    from .delivery_verify import authority
+    approved=authority(root,where,path,text,approvals.get(doc))
     return ({'workflow':'deliver','design':doc,'track':track,'tasks':tasks},
-            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'status':status,'approvals':approvals}
+            {'delivery':{'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),'doc':doc,'status':status,'approvals':approvals,'authority':approved}
                         |({'covers':covers} if covers else {})})
 
 
