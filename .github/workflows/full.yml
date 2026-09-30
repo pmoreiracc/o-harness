@@ -60,4 +60,4 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: bash integrations/test.sh ${{ inputs.suite == 'windows-pr-set' && 'windows origin/main' || 'native' }} ${{ inputs.only && format('-k "{0}"', inputs.only) || '' }}
+      - run: bash integrations/test.sh ${{ inputs.suite == 'windows-pr-set' && 'windows origin/main' || 'windows-full' }} ${{ inputs.only && format('-k "{0}"', inputs.only) || '' }}
