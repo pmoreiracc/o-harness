@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      windows-base:
+        description: Comparison ref for Windows test selection (use an older commit to validate a broad selection)
+        type: string
+        default: origin/main
 permissions:
   contents: read
 jobs:
@@ -48,4 +53,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18.0'
-      - run: bash integrations/test.sh windows
+      - run: bash integrations/test.sh windows "$WINDOWS_TEST_BASE"
+        env:
+          WINDOWS_TEST_BASE: ${{ inputs.windows-base || 'origin/main' }}
+      - name: Show checkout changes after a test failure
+        if: failure()
+        run: git status --short --untracked-files=all

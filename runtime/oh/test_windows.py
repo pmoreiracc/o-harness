@@ -297,8 +297,12 @@ class NativeWindowsTest(unittest.TestCase):
             system=os.environ['SystemRoot']
             env={'PATH':system+r'\System32','SystemRoot':system,'COMSPEC':os.environ['COMSPEC'],'USERPROFILE':tmp,
                  'OH_DATA_HOME':tmp,'OH_PYTHON_DOWNLOAD':'0'}
+            # With no LOCALAPPDATA, PowerShell can write its module cache relative to cwd.
+            # Keep that inside this fixture; other test processes fingerprint the source checkout.
+            status=['git','-C',str(HOME),'status','--porcelain','--untracked-files=all']
+            before=subprocess.check_output(status)
             server=subprocess.Popen([str(HOME/'plugins/o-harness/scripts/mcp-server.cmd')],stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env)
+                                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,cwd=tmp)
             server.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n');server.stdin.flush()
             try:server.wait(timeout=60)  # not communicate(): that would close the input
             except subprocess.TimeoutExpired:
@@ -307,6 +311,7 @@ class NativeWindowsTest(unittest.TestCase):
             out,err=server.stdout.read(),server.stderr.read();server.stdout.close();server.stderr.close()
             self.assertEqual((server.returncode,out),(2,b''))
             self.assertIn(b'OH_PYTHON_DOWNLOAD is 0',err)
+            self.assertEqual(subprocess.check_output(status),before)
 
     def test_simultaneous_python_bootstraps_keep_the_first_complete_interpreter(self):
         import time
