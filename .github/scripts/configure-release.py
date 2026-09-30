@@ -22,9 +22,11 @@ def upsert(api, collection, body, key='name'):
     return api('PUT' if match else 'POST', f'{collection}/{match["id"]}' if match else collection, body)
 
 
-def configure(app_id, publication=True):
+def configure(app_id, publication=True, client_id=None):
     user = json.loads(subprocess.check_output(['gh', 'api', 'user'], text=True))
     require(user['id'] == OWNER_ID, 'Run this setup as pmoreiracc.')
+    if publication:
+        require(app_id and client_id, 'Provide --app-id and --client-id from the release App settings.')
     api = GitHub(REPO)
     # Both Pedro and the release App must satisfy main's existing PR and checks.
     # Do not add a restrict-updates ruleset: it forces normal merges to use bypass.
@@ -47,11 +49,10 @@ def configure(app_id, publication=True):
     if not publication:
         print('Prepared release environment. Publication settings await the App and merged PR.')
         return
-    require(app_id, 'Provide --app-id after installing the release App.')
-    variable = 'environments/release/variables/RELEASE_APP_ID'
+    variable = 'environments/release/variables/RELEASE_APP_CLIENT_ID'
     existing = api('GET', variable, missing=True)
     api('PATCH' if existing else 'POST', variable if existing else 'environments/release/variables',
-        {'name': 'RELEASE_APP_ID', 'value': str(app_id)})
+        {'name': 'RELEASE_APP_CLIENT_ID', 'value': client_id})
     api('GET', 'environments/release/secrets/RELEASE_APP_PRIVATE_KEY')  # Metadata only, never the secret value.
     owners_only = ['.github/workflows/release.yml', '.github/workflows/prepare-release.yml',
                    '.github/workflows/full.yml', '.github/workflows/install-check.yml']
@@ -79,7 +80,9 @@ def configure(app_id, publication=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app-id', type=int)
+    parser.add_argument('--client-id')
     parser.add_argument('--prepare', action='store_true', help='Set up release environment without changing existing publication permissions')
     args = parser.parse_args()
-    require(args.prepare or args.app_id, 'Provide --app-id, or use --prepare before App setup.')
-    configure(args.app_id, publication=not args.prepare)
+    require(args.prepare or (args.app_id and args.client_id),
+            'Provide --app-id and --client-id, or use --prepare before App setup.')
+    configure(args.app_id, publication=not args.prepare, client_id=args.client_id)

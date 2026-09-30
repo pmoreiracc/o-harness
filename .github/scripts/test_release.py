@@ -159,23 +159,28 @@ class ReleaseTest(unittest.TestCase):
                 return {}
             if path == 'branches/main/protection': return protection
             if path == 'environments/release/deployment-branch-policies': return {'branch_policies': []}
-            if path == 'environments/release/variables/RELEASE_APP_ID': return None
+            if path == 'environments/release/variables/RELEASE_APP_CLIENT_ID': return None
             if path == 'environments/release/secrets/RELEASE_APP_PRIVATE_KEY': return {}
             if path == 'rulesets': return []
             if path == 'actions/policies': return {'policies': []}
             raise AssertionError((method, path))
         with patch.object(configure_release.subprocess, 'check_output', return_value='{"id":154069128}'), \
              patch.object(configure_release, 'GitHub', return_value=api):
-            configure_release.configure(12345)
+            configure_release.configure(12345, client_id='Iv1.example')
             self.assertTrue(writes)
+            self.assertIn(('POST', 'environments/release/variables',
+                           {'name': 'RELEASE_APP_CLIENT_ID', 'value': 'Iv1.example'}), writes)
             self.assertFalse(any(path.startswith('branches/') for _, path, _ in writes))
             rulesets = [data for _, path, data in writes if path == 'rulesets']
             self.assertTrue(rulesets)
             self.assertFalse(any('refs/heads/main' in data['conditions']['ref_name']['include'] for data in rulesets))
             writes.clear()
+            with self.assertRaisesRegex(RuntimeError, '--client-id'):
+                configure_release.configure(12345)
+            self.assertEqual(writes, [])
             protection['enforce_admins']['enabled'] = False
             with self.assertRaisesRegex(RuntimeError, 'Restore main PR/check protections'):
-                configure_release.configure(12345)
+                configure_release.configure(12345, client_id='Iv1.example')
             self.assertEqual(writes, [])
 
 
