@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "profile": {
+    "name": "o-harness",
+    "kind": "harness"
+  },
+  "config": {
+    "plans": {
+      "location": "repo"
+    }
+  },
+  "checks": [
+    {
+      "name": "affected",
+      "command": [
+        "bash",
+        "integrations/test.sh",
+        "affected",
+        "{base}"
+      ],
+      "inputs": [
+        "."
+      ],
+      "toolchain": [
+        [
+          "python3",
+          "--version"
+        ],
+        [
+          "git",
+          "--version"
+        ],
+        [
+          "bash",
+          "--version"
+        ]
+      ]
+    },
+    {
+      "name": "syntax",
+      "command": [
+        "bash",
+        "integrations/test.sh",
+        "syntax"
+      ],
+      "inputs": [
+        "."
+      ],
+      "toolchain": [
+        [
+          "python3",
+          "--version"
+        ],
+        [
+          "git",
+          "--version"
+        ],
+        [
+          "bash",
+          "--version"
+        ],
+        [
+          "node",
+          "--version"
+        ]
+      ]
+    }
+  ]
+}

@@ -114,6 +114,12 @@ class PluginTransitions(unittest.TestCase):
         subprocess.run([shutil.which('bash'),'checks.sh','main'],cwd=clone,check=True)
         with self.assertRaises(Refused):import_profile(clone,destination,'Fixture clone')
 
+    def test_this_repository_s_own_profile_imports(self):
+        # CONTRIBUTING tells contributors to import it; a check it names that import refuses would strand them.
+        from .config import HOME
+        from .profiles import validate_document
+        validate_document(read_json(HOME/'integrations/oh-profile.json'),HOME)
+
     def test_portable_checks_refuse_secret_arguments_and_invalid_supported_fields(self):
         from .profiles import export_profile,import_profile,validate_document
         from .registry import profile_path
