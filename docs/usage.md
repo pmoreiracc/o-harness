@@ -67,8 +67,8 @@ choose an option.
   Add a track name to select only that track. Repository designs must match their approved
   revision on `origin/main`; private designs must match their saved human approval.
 - `/oh-deliver fix the sign-in timeout` proposes a bounded task list. The agent prepares
-  it and shows the tasks, limits and a trigger such as `$o-harness:oh-deliver request:<id>`.
-  Type that trigger yourself to approve execution. The approved scope cannot grow afterwards.
+  it and shows the tasks and limits in an **Approve / Stop** menu. Approve grants exactly
+  that saved task list. The trigger `$o-harness:oh-deliver request:<id>` stays available as a typed fallback. The approved scope cannot grow afterwards.
 
 Ready tasks are selected in dependency order; blocked work stays pending. OH owns task
 checkboxes and freezes a design when its last task completes. For private plans, the reviewer
@@ -153,3 +153,30 @@ repository, such as `["./scripts/check.sh"]`.
 
 On macOS and Windows, `oh service-install` starts the dashboard at <http://localhost:4318> and keeps it
 running across logins. On Linux, run `oh serve`. See [dashboard and data](analytics.md).
+
+Every choice includes the branch, current task, completed and pending work, checks, findings,
+and a recommended option with its effect. When review rounds run out, OH shows each round,
+new or repeated findings, open findings and the allowance used. These are recorded facts;
+waiting or restarting grants nothing. Long menus show an explicit preview and a path to the complete,
+immutable report; read it before choosing. Approval covers the complete saved list, including tasks
+omitted from the preview. Covered by `test_large_menus_bound_the_handoff_and_preserve_complete_details`,
+`test_checkpoint_offers_its_choices_as_a_menu_that_expires_when_the_run_moves` and
+`test_review_budget_survives_failures_and_restart`.
+
+Quick-fix approval also works after `/oh-start`. Preparing creates no execution branch and
+runs no worker. An old menu or another conversation cannot approve the saved scope; editing
+the source task list or changing settings after preparation cannot widen its grant. Covered by
+`test_prepared_claude_menu_binds_scope_limits_and_expires` and
+`test_prepared_codex_menu_uses_native_click_and_can_stop`.
+
+Before publishing a design batch, OH checks that its completed tasks—and only those tasks—are
+marked done, that approval came from main (or the unchanged private approval), that dependencies
+were done before each task, and that the branch and task commits match the design and track.
+Dependencies completed earlier in the same batch count. A multi-track design must name a track;
+finalizing an already completed design remains separate. Quick fixes skip these design checks.
+Covered by `test_repository_design_starts_once_and_uses_existing_batch_runner` and
+`test_ready_selection_skips_blocked_tasks_and_orders_dependencies`.
+
+`oh pr-summary` puts readable task reports, every review's time and findings, recorded decisions,
+scope destinations, task history and the reason the run ended above the JSON evidence. It reads
+OH's journal. Covered by `test_native_pr_evidence_binds_all_commits_and_refuses_tampering`.

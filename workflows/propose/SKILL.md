@@ -56,7 +56,7 @@ When the returned status is `approval_checkpoint`, present `proposal` in this or
    again), or **reconsider** (nothing is written; OH asks what they meant: ask `waiting.ask` in plain chat, and
    their next message is the new idea). Never choose for them, and never treat silence as approval.
 
-When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
+When OH's output has a `gate`, show `gate.summary` unchanged, then its choices as a menu. In Claude, call the question tool (AskUserQuestion)
 with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool. Then run `run`,
 which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.

@@ -31,6 +31,7 @@ def request(root, action):
     if action == 'stop':
         from .authority import drop_waits
         drop_waits(root)
+        checkout_file(root,'oh-preparation-owner.json').unlink(missing_ok=True)
     with lock(checkout_file(root, 'oh-control.lock')):
         journal, state = load_run(root)
         if state['status'] in ('stopped', 'pr', 'completed'):

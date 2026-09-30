@@ -30,10 +30,15 @@ class PluginTransitions(unittest.TestCase):
         result=subprocess.run([sys.executable,str(hook),'codex'],input=json.dumps(payload),text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('onboarding',result.stdout)
-        self.assertFalse(receive(self.root,'codex',payload)['authorized'])
-        self.assertFalse(pending_file(self.root).exists())
-        self.assertFalse(receive(self.root,'codex',payload|{'prompt':'$o-harness:oh-start'})['authorized'])
-        self.assertTrue(receive(self.root,'codex',payload|{'turn_id':'2','prompt':'$o-harness:oh-deliver request:'+'a'*64})['pending'])
+        from .workflow import active_file
+        # Preparation is staged for native approval; neither entry point grants a run.
+        for prompt in (payload['prompt'],'$o-harness:oh-start'):
+            self.assertTrue(receive(self.root,'codex',payload|{'prompt':prompt})['pending'])
+            self.assertEqual(read_json(pending_file(self.root))['payload']['prompt'],prompt)
+            self.assertFalse(active_file(self.root).exists())
+        exact='$o-harness:oh-deliver request:'+'a'*64
+        self.assertTrue(receive(self.root,'codex',payload|{'turn_id':'2','prompt':exact})['pending'])
+        self.assertEqual(read_json(pending_file(self.root))['payload']['prompt'],exact)
         # The first command typed in a new checkout registers it, as init would, and carries on.
         fresh=Path(self.temp.name)/'fresh';fresh.mkdir();subprocess.run(['git','init','-q',str(fresh)],check=True)
         self.assertTrue(receive(fresh,'codex',payload|{'cwd':str(fresh),'prompt':'$o-harness:oh-propose an idea'})['pending'])

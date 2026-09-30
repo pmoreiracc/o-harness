@@ -46,8 +46,9 @@ argument. OH's parser selects the mode; do not infer a different workflow:
   Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
   Give each task `difficulty` (simple, standard or complex) and a short `difficulty_reason`: OH picks
   the model that builds it from them. Present the proposed
-  tasks, returned `limits` sentence and exact trigger once. Only a new genuine human
-  invocation approves that prepared scope; never echo the trigger as approval.
+  tasks and returned `limits` through the Approve / Stop menu in `gate`. The host records
+  the click; never answer for the person. The exact `request:` trigger remains a typed fallback
+  when a menu cannot be shown.
 - `request:<id>` verifies and runs the already prepared quick-fix scope. The older
   `0005 [track] request:<id>` consumer-profile spelling remains supported.
 
@@ -57,7 +58,7 @@ The runner owns automatic models, fresh workers, checks, review, final rendering
 and batch boundaries. Do not reproduce that loop in the parent conversation. At a batch
 checkpoint show continue / PR / stop with the returned `limits` sentence; at completion show PR / stop. Exact choices from the
 owning human session are verified by `run`; they never silently renew another allowance.
-When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
+When OH's output has a `gate`, show `gate.summary` unchanged, then its choices as a menu. In Claude, call the question tool (AskUserQuestion)
 with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool. Then run `run`,
 which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
@@ -72,3 +73,9 @@ OH records scope first and sends only bugs and concerns to the fixing worker. Ne
 OH records them before review or includes them in a quick-fix PR. The last pending task
 across all tracks also updates documentation the delivery made outdated.
 The behavior tests are named in `docs/usage.md` beside these rules.
+
+Before a design delivery publishes, OH checks the approved design, task marks, dependency order,
+track branch and task commits. On refusal, correct your own mistake using the named repair, obtain
+any required fresh review, then retry `pr`; ask only when the repair needs the person's decision.
+Use `pr-summary` verbatim as the PR body: it includes task reports, every review and disposition,
+and the run history above its saved JSON evidence.

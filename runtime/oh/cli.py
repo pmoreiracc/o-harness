@@ -55,7 +55,11 @@ def host_hook(root,host,payload,*,verified,idea=None):
     if delivery and delivery['kind']=='list':
         from .delivery import listing
         return listing(root)
-    if delivery and delivery['kind']=='quick_fix':return delivery
+    if delivery and delivery['kind']=='quick_fix' or parsed==('oh-start',''):
+        if unfinished(root,verified):raise occupied(load_run(root)[1])
+        from .prepared import remember
+        remember(root,host,payload,verified)
+        return delivery or {'prepare':True,'authorized':False,'next':'Prepare the agreed tasks and show the returned approval menu.'}
     if delivery and delivery['kind']=='design':
         from .workflow import carry_on,load_run,occupied,unfinished
         if unfinished(root,verified):
@@ -85,6 +89,11 @@ def host_hook(root,host,payload,*,verified,idea=None):
     if parsed and parsed[0] in ('oh-start','deliver') and parsed[1].startswith('request:'):
         from .prepared import resolve
         prepared=resolve(root,parsed[1],verified,'tasks')
+        if active_file(root).exists():
+            _,waiting=load_run(root)
+            if waiting['status']=='prepared_checkpoint' and waiting.get('prepared_request')==parsed[1].split(':')[1]:
+                choose(root,'approve',verified)
+                return checkpoint(root)
         start(root,prepared['manifest'],verified,prepared=prepared)
         return checkpoint(root)
     from .entry import CHOICES,REFINE
@@ -264,7 +273,7 @@ def main(argv=None):
             from .authority import materialize
             admitted=materialize(root)
             if admitted and admitted.get('note'):print(admitted['note'],flush=True)
-            if admitted and admitted.get('waiting'):print(json.dumps(admitted,indent=2));return  # nothing runs until they answer
+            if admitted and (admitted.get('waiting') or admitted.get('prepare')):print(json.dumps(admitted,indent=2));return  # nothing runs until they answer
             if args.command=='start' and args.request:
                 from .workflow import load_run
                 _,state=load_run(root)

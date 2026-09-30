@@ -252,6 +252,8 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     record={'found_along_way':notes,'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
       'findings':findings,'summary':result['text'][:state['config']['context']['result_chars']],
       'duration_ms':result['duration_ms'],'evidence':str(directory),'git_tree':git_tree,'head':data['head'],'artifact':data.get('artifact')}
+    if isinstance(answer,dict) and isinstance(answer.get('summary'),str):
+        record['human_summary']=answer['summary'][:state['config']['context']['result_chars']]
     journal.append('attempt.finished',record)
     from .observability import review_metadata
     metadata=review_metadata(result['text'],findings) if role=='review' else {}
@@ -297,6 +299,7 @@ def _run(root,invoke):
                 if not state['discard'].get('resume'):return
                 state=reduce(journal.records())
             if state['status'] in ('paused','pausing','stopped','stopping','completed','pr'):return
+            if state['status']=='prepared_checkpoint':return  # showing tasks has granted no branch or execution
             if state.get('branch_creation'):
                 create_proposal_branch(root,journal,state)
                 state=reduce(journal.records())

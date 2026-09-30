@@ -105,7 +105,7 @@ class AuthorityTest(unittest.TestCase):
               {'type':'event_msg','payload':{'type':'user_message','message':'$o-harness:oh-propose Describe the next change'}}]
             def save():path.write_text(''.join(json.dumps(x)+'\n' for x in records))
             records[-1]['payload']['message']='$o-harness:oh-deliver implement a new idea'
-            save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
+            save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()  # preparation may offer a menu, never grants work
             records[-1]['payload']['message']='$o-harness:oh-propose Describe the next change'
             save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()
             records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'two'}},{'type':'event_msg','payload':{'type':'user_message','message':'Discuss a different subject'}}]

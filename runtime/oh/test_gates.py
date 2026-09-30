@@ -87,7 +87,10 @@ class GateTest(unittest.TestCase):
         result = self.begin('claude', fresh=True)
         self.assertEqual(result['gate']['choices'], ['continue', 'pr', 'stop'])
         question = result['gate']['ask']['questions'][0]
-        self.assertEqual([o['label'] for o in question['options']], ['Continue', 'Open a PR', 'Stop'])
+        self.assertEqual([o['label'] for o in question['options']], ['Continue (Recommended)', 'Open a PR', 'Stop'])
+        self.assertIn('Branch work.',question['question'])  # docs/usage.md: every gate explains current work
+        self.assertIn('Completed: 1. Pending: 2:',question['question'])
+        self.assertIn('Checks:',question['question'])
         self.assertIn('Continue runs 1 of the 1 remaining task', question['options'][0]['description'])
         self.assertIn('AskUserQuestion', result['gate']['how'])
         choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))
@@ -95,6 +98,102 @@ class GateTest(unittest.TestCase):
         after = run(self.root, self.fake)
         self.assertEqual(after['gate']['choices'], ['pr', 'stop'])
         self.assertNotEqual(after['gate']['id'], result['gate']['id'])
+
+    def prepare_menu(self,host):
+        from .authority import stage
+        from .prepared import prepare,directory
+        from .storage import atomic_json,now
+        self.git('switch','main')
+        prompt='/oh-deliver fix the sign-in timeout'
+        if host=='claude':self.typed(prompt,'prepare')
+        else:
+            from .test_mcp_server import codex_session
+            codex_session(self.home,'s',self.root)
+            path=next((self.home/'.codex/sessions').rglob('*s.jsonl'))
+            with path.open('a') as stream:
+                stream.write(json.dumps({'type':'event_msg','payload':{'type':'task_started','turn_id':'prepare'}})+'\n')
+                stream.write(json.dumps({'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','message':prompt}})+'\n')
+            stage(self.root,host,{'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'prepare','prompt':prompt,'transcript_path':str(path)})
+        manifest=directory(self.root).parent/'tasks.json';atomic_json(manifest,{'tasks':self.tasks})
+        with patch.dict(os.environ,{'CODEX_HOME':str(self.home/'.codex')}):result=prepare(self.root,str(manifest))
+        return result,manifest
+
+    def test_prepared_claude_menu_binds_scope_limits_and_expires(self):
+        """docs/usage.md: prepared approval grants only the shown snapshot, in its owning conversation."""
+        from .prepared import prepare
+        from .storage import atomic_json
+        result,manifest=self.prepare_menu('claude')
+        question=result['gate']['ask']['questions'][0]
+        self.assertEqual(result['gate']['choices'],['approve','stop'])
+        self.assertIn('Implement behavior',question['question'])
+        self.assertEqual(run(self.root,self.fake)['status'],'prepared_checkpoint')
+        self.assertEqual(self.calls,[]);self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertIsNone(self.click(question,'Approve',session='other'))
+        newer=prepare(self.root,str(manifest))['gate']['ask']['questions'][0]
+        self.assertNotEqual(newer['question'],question['question'])
+        self.assertIsNone(self.click(question,'Approve',use='old-menu'))
+        atomic_json(manifest,{'tasks':self.tasks+[{'id':'extra','title':'Not shown','instructions':'Do not grant'}]})
+        fixtures.configure(self.root,tasks_per_batch=99,review_rounds=99)
+        self.assertEqual(self.click(newer,'Approve',use='current-menu')['status'],'running')
+        state=load_run(self.root)[1]
+        self.assertEqual([t['id'] for t in state['tasks']],['1','2']);self.assertEqual(state['granted'],['1'])
+        self.assertEqual(state['config']['review_rounds'],3)
+        self.assertTrue(state['branch'].startswith('codex/oh-'))
+        self.assertIsNone(materialize(self.root))  # the saved click cannot grant again
+
+    def test_prepared_codex_menu_uses_native_click_and_can_stop(self):
+        self.tasks[0]['title']='Sign-in [form]'
+        self.tasks[0]['instructions']='Update [the login form](login.tsx). Check [ ] timeout.'
+        result,_=self.prepare_menu('codex')
+        self.assertIn('Approve',result['gate']['summary'])
+        self.assertIn('conversation that started this run',self.server(self.root,{'action':'accept','content':{'choice':'approve'}},thread='other')[1])
+        sent,text=self.server(self.root,{'action':'accept','content':{'choice':'stop'}})
+        self.assertIn('nothing left to run',text)
+        message=next(m for m in sent if m.get('method')=='elicitation/create')['params']['message']
+        for detail in ('Sign-in [form]','[the login form](login.tsx)','[ ] timeout','Task 2:','Approve these tasks and limits?'):
+            self.assertIn(detail,message)
+        self.assertNotIn('[OH gate ',message)
+        self.assertEqual(load_run(self.root)[1]['granted'],[])
+        self.assertEqual(self.git('branch','--show-current'),'main')
+
+    def test_large_menus_bound_the_handoff_and_preserve_complete_details(self):
+        """docs/usage.md: long approval and recovery menus link complete retained reports."""
+        from .config import load
+        from .gates import describe,review_history,summary
+        from .storage import digest,read_json
+        from .workflow import validate_tasks
+        tasks=validate_tasks([{'id':str(i),'title':'Task '+str(i),'instructions':'x'*1000} for i in range(1000)])
+        journal=SimpleNamespace(path=Path(self.temp.name)/'menu-evidence',records=lambda:[{'hash':'head'}])
+        state={'id':'run','host':'claude','branch':'work','tasks':tasks,'done':[],
+               'attempts':[],'config':load(self.root),'status':'prepared_checkpoint'}
+        scope={'severity':'scope','description':'Future work','path':'','family':'future'}
+        bug={'severity':'blocking','description':'Fix timeout','path':'','family':'timeout'}
+        for status in ('prepared_checkpoint','checkpoint','review_checkpoint','findings_checkpoint','needs_attention'):
+            state['status']=status
+            bug['severity']='concern' if status=='findings_checkpoint' else 'blocking'
+            state['attempts']=[{'id':'r','task':'0','role':'review','outcome':'blocking','findings':[bug,scope],
+                                'summary':'raw protocol','human_summary':'Timeout remains'}]
+            state['scope_records']={'r':{'action':'route','destination':{'design':'design.md'},'findings':[scope]}}
+            state['granted']=['0'];state['summaries']=[]
+            gate=describe(journal,state)
+            self.assertLessEqual(len(summary(state)),8000)
+            self.assertLess(len(json.dumps(ask(gate)))+len(gate['summary']),state['config']['context']['handoff_chars'])
+            path=Path(gate['summary'].split('Complete details: ',1)[1].split('\n',1)[0])
+            saved=read_json(path)
+            self.assertEqual(path.stem,digest(saved))
+            self.assertIn('999: Task 999',saved['report'])
+            if status=='prepared_checkpoint':
+                self.assertIn('Approve covers all 1000 saved tasks',gate['summary'])
+                self.assertIn('Task 999: Task 999\n'+'x'*1000,saved['report'])
+            if status in ('review_checkpoint','findings_checkpoint','needs_attention'):
+                self.assertIn('Timeout remains',saved['report']);self.assertNotIn('raw protocol',saved['report'])
+            self.assertEqual(describe(journal,state),gate)  # an unchanged report keeps the same immutable reference
+        for action in ('route','dismiss'):
+            state['scope_records']['r']['action']=action
+            history='\n'.join(review_history(state,'0'))
+            self.assertIn('Scope: '+action+'; design: design.md',history)
+            self.assertIn('scope: Future work',history)
+            self.assertEqual(history.split('Open findings: ')[1],'blocking: Fix timeout')
 
     def test_a_click_on_claude_is_read_from_its_transcript_and_applied(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
