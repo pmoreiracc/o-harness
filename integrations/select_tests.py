@@ -7,6 +7,10 @@ A module counts as edited when its code differs before and after the change, com
 and comments change nothing. Edited modules run whole. Test ids come from unittest's own loader, so every id loads.
 
   python3 integrations/select_tests.py [base]   print the chosen test ids, one per line
+  python3 integrations/select_tests.py --run-selected [1|4]   run names from stdin (four processes by default)
+
+Windows PR tests run in four processes, keeping each module's selected tests together so class and module fixtures
+still run once. Selection is unchanged. `OH_TEST_WORKERS=1 bash integrations/test.sh windows` runs them serially.
 
 Locally (and as the check OH runs on this repository's deliveries, when its `checks` setting names
 `integrations/test.sh affected {base}`), `--affected <base>` runs only the test modules a change needs,
@@ -147,18 +151,29 @@ def affected(paths, sources):
     return sorted(tests)
 
 
-def run(modules):
-    """Run test modules, two processes at a time; True when every one passed."""
-    from concurrent.futures import ThreadPoolExecutor
+def run(names, workers=2, report=False):
+    """Run the exact selected names, grouped by module, in separate processes; True when every group passed."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
-    def one(module):
-        return module, subprocess.run([sys.executable, '-m', 'unittest', 'oh.' + module], cwd=ROOT, capture_output=True, text=True,
-                                      env=os.environ | {'PYTHONPATH': str(ROOT / 'runtime')})
+    groups = {}
+    for name in names:groups.setdefault('.'.join(name.split('.')[:2]), []).append(name)
+    if not groups:raise ValueError('No selected tests')
+    def one(names):
+        command = [sys.executable, '-m', 'unittest', '--durations', '15', *names]
+        try:
+            return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                  env=os.environ | {'PYTHONPATH': str(ROOT / 'runtime'), 'PYTHONUTF8': '1'})
+        except OSError as exc:
+            return subprocess.CompletedProcess(command, 1, '', str(exc))
+    if report:print(f'Running {sum(map(len, groups.values()))} selected names in {len(groups)} module groups with {workers} workers', flush=True)
     passed = True
-    with ThreadPoolExecutor(2) as pool:
-        for module, result in pool.map(one, modules):
+    with ThreadPoolExecutor(workers) as pool:
+        pending = {pool.submit(one, names): module for module, names in groups.items()}
+        for future in as_completed(pending):
+            module, result = pending[future], future.result()
             print(f"{'ok' if not result.returncode else 'FAILED'}  {module}", flush=True)
-            if result.returncode:passed = False;print(result.stderr[-20000:], flush=True)
+            if result.returncode:passed = False
+            if report or result.returncode:print(result.stdout + result.stderr, flush=True)
     return passed
 
 
@@ -169,7 +184,16 @@ if __name__ == '__main__' and sys.argv[1:2] == ['--affected']:
     if '--list' in sys.argv:print('\n'.join(modules));sys.exit()
     if not modules:print('No test module is affected by this change');sys.exit()
     print(f'Running {len(modules)} affected test modules: {" ".join(modules)}', flush=True)
-    sys.exit(0 if run(modules) else 1)
+    sys.exit(0 if run(['oh.' + module for module in modules]) else 1)
+elif __name__ == '__main__' and sys.argv[1:2] == ['--run-selected']:
+    import argparse
+    parser = argparse.ArgumentParser(description='Run selected Windows PR tests without changing their selection')
+    parser.add_argument('--run-selected', action='store_true')
+    parser.add_argument('workers', type=int, choices=(1, 4), nargs='?', default=4)
+    args = parser.parse_args()
+    names = sys.stdin.read().splitlines()
+    if not names:parser.error('No selected tests')
+    sys.exit(0 if run(names, workers=args.workers, report=True) else 1)
 elif __name__ == '__main__':
     # Bytes, so Windows never adds \r to the test names the shell passes on.
     sys.stdout.buffer.write(''.join(t + '\n' for t in select(sys.argv[1] if len(sys.argv) > 1 else None)).encode())

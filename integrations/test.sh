@@ -13,9 +13,7 @@ case "${1:-native}" in
     # unittest ignores -k for tests named one by one, so filter the names here.
     [ "${3:-}" != -k ] || tests=$(grep -F -- "${4:-}" <<<"$tests" || true)
     [ -n "$tests" ] || { echo 'No selected test matches' >&2;exit 1; }
-    echo "Running $(wc -l <<<"$tests" | tr -d ' ') selected tests"
-    # shellcheck disable=SC2086
-    PYTHONPATH=runtime python3 -m unittest --durations 15 $tests
+    python3 integrations/select_tests.py --run-selected "${OH_TEST_WORKERS:-4}" <<<"$tests"
     ;;
   # Only the test modules this change affects (see integrations/select_tests.py).
   affected) python3 integrations/select_tests.py --affected "${2:-origin/main}" ;;

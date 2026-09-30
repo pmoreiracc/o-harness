@@ -44,3 +44,31 @@ class SelectTestsTest(unittest.TestCase):
             git('add', '.');git('commit', '-qm', 'base');git('mv', 'runtime/oh/foo.py', 'runtime/oh/bar.py')
             with patch.object(selector, 'ROOT', Path(name)):
                 self.assertIn('runtime/oh/foo.py', selector.changed('HEAD'))
+
+    def test_parallel_execution_preserves_selection_and_reports_worker_failures(self):
+        # integrations/select_tests.py: keep each module's fixture together and retain every selected name.
+        import contextlib, io, subprocess, threading
+        from unittest.mock import patch
+        names = ['oh.test_a.C.test_one', 'oh.test_b', 'oh.test_c.C.test_one', 'oh.test_a.C.test_two', 'oh.test_d']
+        expected = [['oh.test_a.C.test_one', 'oh.test_a.C.test_two'], ['oh.test_b'], ['oh.test_c.C.test_one'], ['oh.test_d']]
+        for workers in (1, 4):
+            for failure in (None, 1, -9, 'launch'):
+                with self.subTest(workers=workers, failure=failure):
+                    together = threading.Barrier(workers, timeout=5)
+                    def child(command, **kwargs):
+                        together.wait()  # four workers must actually execute concurrently
+                        self.assertEqual(command[:5], [selector.sys.executable, '-m', 'unittest', '--durations', '15'])
+                        self.assertEqual(kwargs['cwd'], selector.ROOT)
+                        self.assertEqual(kwargs['env']['PYTHONPATH'], str(selector.ROOT / 'runtime'))
+                        if command[-1] == 'oh.test_d' and failure == 'launch':raise OSError('launch failed')
+                        code = failure if command[-1] == 'oh.test_d' and isinstance(failure, int) else 0
+                        return subprocess.CompletedProcess(command, code, 'worker output\n', 'Ran tests; skipped=1; Slowest test durations\n')
+                    output = io.StringIO()
+                    with patch.object(selector.subprocess, 'run', side_effect=child) as invoke, contextlib.redirect_stdout(output):
+                        self.assertEqual(selector.run(names, workers=workers, report=True), failure is None)
+                    self.assertCountEqual([call.args[0][5:] for call in invoke.call_args_list], expected)
+                    self.assertIn('worker output', output.getvalue())
+                    self.assertIn('skipped=1; Slowest test durations', output.getvalue())
+                    if failure is not None:self.assertIn('FAILED  oh.test_d', output.getvalue())
+                    if failure == 'launch':self.assertIn('launch failed', output.getvalue())
+        with self.assertRaisesRegex(ValueError, 'No selected tests'):selector.run([], workers=4)
