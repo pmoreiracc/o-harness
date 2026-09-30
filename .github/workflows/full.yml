@@ -45,6 +45,10 @@ jobs:
           node-version: '22.18.0'
       - run: bash integrations/test.sh syntax
   windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ inputs.suite == 'windows-pr-set' && fromJSON('[0]') || fromJSON('[0,1,2,3]') }}
     if: contains(fromJSON('["all","windows","windows-pr-set"]'), inputs.suite || 'all')
     runs-on: windows-latest
     timeout-minutes: 60
@@ -60,4 +64,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: bash integrations/test.sh ${{ inputs.suite == 'windows-pr-set' && 'windows origin/main' || 'windows-full' }} ${{ inputs.only && format('-k "{0}"', inputs.only) || '' }}
+      - env:
+          SUITE: ${{ inputs.suite }}
+          ONLY: ${{ inputs.only }}
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          args=()
+          [ -z "$ONLY" ] || args=(-k "$ONLY")
+          if [ "$SUITE" = windows-pr-set ]; then
+            bash integrations/test.sh windows origin/main "${args[@]}"
+          else
+            OH_TEST_WORKERS=1 bash integrations/test.sh windows-full --shards 4 --shard "$TEST_SHARD" "${args[@]}"
+          fi

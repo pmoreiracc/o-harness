@@ -58,6 +58,10 @@ jobs:
         run: python3 .github/scripts/release.py
   # Pull requests run only part of the Windows suite; a release waits for all of it.
   windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     needs: version
     if: needs.version.outputs.tag
     runs-on: windows-latest
@@ -77,7 +81,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: bash integrations/test.sh windows-full
+      - run: bash integrations/test.sh windows-full --shards 4 --shard "$TEST_SHARD"
+        env:
+          OH_TEST_WORKERS: '1'
+          TEST_SHARD: ${{ matrix.shard }}
   # Builds the package and checks it installs and starts in the real apps; the release publishes an identical build.
   install:
     needs: version

@@ -91,10 +91,30 @@ class SelectTestsTest(unittest.TestCase):
             with patch.object(full, 'run', return_value=passed) as run:
                 self.assertEqual(full.main(['--workers', '4']), 0 if passed else 1)
                 run.assert_called_once_with(expected, workers=4, report=True)
+        # Four separate runners must execute the complete suite exactly once, preserving module fixtures.
+        groups = []
+        for index in range(4):
+            with patch.object(full, 'run', return_value=True) as run, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(full.main(['--workers', '1', '--shards', '4', '--shard', str(index)]), 0)
+                groups.append(run.call_args.args[0])
+                self.assertEqual(run.call_args.kwargs, {'workers': 1, 'report': True})
+        self.assertCountEqual([name for group in groups for name in group], expected)
+        owners = {}
+        for index, group in enumerate(groups):
+            for name in group:
+                module = '.'.join(name.split('.')[:2])
+                self.assertEqual(owners.setdefault(module, index), index)
+        with patch.object(full, 'run') as run, contextlib.redirect_stdout(io.StringIO()):
+            # A narrow filter can leave three runners empty; the matching runner still executes the test.
+            for index in range(4):full.main(['--shards', '4', '--shard', str(index), '-k', 'test_a_renamed_module'])
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0], [name for name in expected if 'test_a_renamed_module' in name])
         with patch.object(full, 'run') as run, contextlib.redirect_stderr(io.StringIO()) as errors:
             with self.assertRaises(SystemExit) as empty:full.main(['-k', 'no_test_has_this_name'])
             self.assertEqual(empty.exception.code, 2)
             self.assertIn('No test matches', errors.getvalue())
+            with self.assertRaises(SystemExit) as invalid:full.main(['--shards', '4', '--shard', '4'])
+            self.assertEqual(invalid.exception.code, 2)
             def broken(loader_self, *args):
                 loader_self.errors.append('test module import failed')
                 return unittest.TestSuite()
