@@ -689,7 +689,7 @@ def validate_outputs(root, rendered, base=None):
         if (not identity or identity['kind']!='file' or not path.resolve().is_relative_to(base)
                 or any(p.is_symlink() for p in (path,*path.parents) if p!=base and base in p.parents)
                 or identity!=rendered.get('identities',{}).get(name)):
-            raise Blocked(f'A check changed {name} after OH wrote it (file type, mode or content); preserve the change and stop this run')
+            raise Blocked(f'{name} changed after OH wrote it (file type, mode or content); preserve the change and stop this run')
 
 
 def undo(root, previous, check_only=False):
@@ -834,7 +834,10 @@ def propose_manifest(root, idea):
         try:verify_roadmap(root, where)
         except Refused as exc:raise Refused(f'Fix the roadmap first. {exc}') from None
     return ({'workflow': 'propose', 'tasks': [{'id': 'propose', 'title': 'Propose: ' + idea.splitlines()[0][:60],
-                                               'instructions': instructions, 'transition': {'profile': 'intake'}}]},
+                                               'instructions': instructions, 'transition': {'profile': 'intake'},
+                                               'difficulty': 'complex',
+                                               'difficulty_reason': 'A wrong placement or a missed duplicate is not caught later: '
+                                                                    'the design and delivery build on it.'}]},
             {'workflow': 'propose', 'plans': layout_snapshot(where), 'private_inputs': private_inputs(where)})
 
 
@@ -873,12 +876,13 @@ def proposal(value):
     return value
 
 
-def add_task(root, where, design, track, text, depends):
-    """Append one pending task to an approved design's track, numbered after the doc's last task."""
+def add_task(root, where, design, track, text, depends, status=None):
+    """Append one pending task to an approved design's track, numbered after the doc's last task. `status` is the
+    design's approval when `where` is a scratch copy, whose paths no approval names."""
     path = design_file(root, design, where)
     if not path:raise Refused(f'There is no design doc {design}')
     ordinary_outputs(path)
-    status = approval(root, where, design)
+    status = status or approval(root, where, design)
     if status != 'approved':
         raise Refused(f"Design doc {design} is {status or 'missing a status'}: only an approved design takes new tasks"
                       + ('; a frozen design has shipped, so new work is a roadmap row or an improvement' if status == 'frozen' else ''))
@@ -915,26 +919,14 @@ def render_proposal(root, value, record, move):
     """Write the proposal's route where the plans live: nothing for an improvement or an unclear idea.
     For repository plans `move` puts the work on its own branch before anything is written; `record` saves the
     paths (and, for private plans, their bytes) first."""
-    from .storage import project
     where = blocked(lambda: layout(root))
     private = where['location'] == 'private'
     with editing(root):
         if not private and (changed := changes(root)):
             raise Blocked(f"The checkout has changes OH didn't write ({', '.join(changed[:5])}); a proposal commit holds only its plan files")
-        value = proposal(value)
-        if Path(where['roadmap']).is_file():blocked(lambda: verify_roadmap(root, where))
-        shown = {k: value[k] for k in ('route', 'understanding', 'reason', 'evidence', 'text', 'summary')}
-        if value['route'] in ('improvement', 'unclear'):return shown | {'intent': [], 'files': {}, 'lines': []}
-        if value['route'] == 'roadmap':
-            paths, topic = [Path(where['roadmap'])], value['slug']
-            if value['decision_title'].strip():
-                number = blocked(lambda: next_number(where['decisions']))
-                paths += [Path(where['decisions']) / f'{number}-{decision_slug(value["decision_title"])}.md', Path(where['decisions']) / 'README.md']
-        else:
-            path = design_file(root, value['design'], where)
-            if not path:raise Refused(f"There is no design doc {value['design']}")
-            paths, topic = [Path(path)], f"design-{value['design']}"
-        ordinary_outputs(*paths)
+        value, shown = routed(root, where, value)
+        if value['route'] in ('improvement', 'unclear'):return shown | {'intent': [], 'files': {}, 'lines': [], 'writes': {}}
+        paths, topic = route_paths(root, where, value)
         intent = [located(root, where, p) for p in paths]
         if not private:
             if (skipped := ignored(root, intent)):raise Blocked(f'Git ignores {", ".join(skipped)}; plans in the repository must be committed')
@@ -943,27 +935,87 @@ def render_proposal(root, value, record, move):
         before = snapshot(paths) if private else None
         if private:record(intent, before)
         else:record(intent)
-        lines = []
-        with all_or_nothing(*paths):
-            if value['route'] == 'roadmap':
-                if not Path(where['roadmap']).exists():blocked(lambda: start_roadmap(where, project(root)['name']))
-                if value['milestone'] not in dict(milestones(where)):
-                    milestone = 'M' + str(max([int(m[1:]) for m, _ in milestones(where)] + [0]) + 1)
-                    add_milestone(root, where, milestone, value['milestone_title'], value['milestone_done_when'])
-                    lines.append(f"### {milestone} — {value['milestone_title'].strip()}")
-                else:milestone = value['milestone']
-                add_initiative(root, where, milestone, value['slug'], value['text'], value['depends'])
-                lines.append(next(line for _, line in outside(rows_of(where['roadmap'])[0]) if line.startswith(f"| `{value['slug']}` |")))
-                if value['decision_title'].strip():
-                    number, _ = blocked(lambda: write_decision(root, where, value['decision_title'], value['decision_context'],
-                                               value['decision_alternatives'], value['decision_consequences'], recommendation=value['summary']))
-                    lines.append(f"Decision record {number} (proposed): {value['decision_title'].strip()}")
-            else:
-                _, task = add_task(root, where, value['design'], value['track'], value['text'], value['depends'])
-                lines.append(task);shown['design'] = value['design']
+        with all_or_nothing(*paths):lines, writes = write_route(root, where, value)
         files = {key: digest_of(resolved(root, key)) for key in intent}
-    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines, 'before_identities':before_identities,
+    return shown | {'path': intent[0], 'intent': intent, 'files': files, 'lines': lines, 'writes': writes, 'before_identities':before_identities,
                     'identities':{p:file_identity(resolved(root,p)) for p in intent}} | ({'before': before} if private else {})
+
+
+def preview_proposal(root, value):
+    """Exactly what render_proposal would write for this answer, worked out on a scratch copy of the plans so the
+    person can approve it first: no plan file changes and no branch is cut. The same rules apply, so an answer OH
+    could not write is refused here, before the person sees it."""
+    import shutil
+    import tempfile
+    where = blocked(lambda: layout(root))
+    with editing(root):
+        value, shown = routed(root, where, value)
+        if value['route'] in ('improvement', 'unclear'):return shown | {'intent': [], 'lines': [], 'writes': {}}
+        paths, _ = route_paths(root, where, value)
+        status = approval(root, where, value['design']) if value['route'] == 'task' else None
+        with tempfile.TemporaryDirectory(prefix='oh-preview-') as scratch:
+            copy = {}
+            for key in ('roadmap', 'designs', 'decisions'):
+                source = Path(where[key]);copy[key] = target = Path(scratch) / source.relative_to(where['base'])
+                if source.is_dir():shutil.copytree(source, target)
+                elif source.is_file():target.parent.mkdir(parents=True, exist_ok=True);shutil.copyfile(source, target)
+            lines, writes = write_route(root, where | copy | {'base': Path(scratch)}, value, status)
+    return shown | {'intent': [located(root, where, p) for p in paths], 'lines': lines, 'writes': writes}
+
+
+def routed(root, where, value):
+    """The checked answer, and what of it the person sees."""
+    value = proposal(value)
+    if Path(where['roadmap']).is_file():blocked(lambda: verify_roadmap(root, where))
+    return value, {k: value[k] for k in ('route', 'understanding', 'reason', 'evidence', 'text', 'summary')} | (
+        {'design': value['design']} if value['route'] == 'task' else {})
+
+
+def route_paths(root, where, value):
+    """The files a roadmap or task route writes, and the topic its branch is named after."""
+    if value['route'] == 'roadmap':
+        paths, topic = [Path(where['roadmap'])], value['slug']
+        if value['decision_title'].strip():
+            number = blocked(lambda: next_number(where['decisions']))
+            paths += [Path(where['decisions']) / f'{number}-{decision_slug(value["decision_title"])}.md', Path(where['decisions']) / 'README.md']
+    else:
+        path = design_file(root, value['design'], where)
+        if not path:raise Refused(f"There is no design doc {value['design']}")
+        paths, topic = [Path(path)], f"design-{value['design']}"
+    ordinary_outputs(*paths)
+    return paths, topic
+
+
+def write_route(root, where, value, status=None):
+    """Write a roadmap or task route into `where`. Returns the lines it added and everything it wrote that those
+    lines don't say (the milestone a row joins, a new milestone's "Done when", a task's track, a decision record's
+    text): the person approves all of it. `status` is the target design's approval, when `where` is a copy that
+    can't tell it."""
+    from .storage import project
+    lines = []
+    if value['route'] == 'roadmap':
+        if not Path(where['roadmap']).exists():blocked(lambda: start_roadmap(where, project(root)['name']))
+        if value['milestone'] not in dict(milestones(where)):
+            milestone = 'M' + str(max([int(m[1:]) for m, _ in milestones(where)] + [0]) + 1)
+            add_milestone(root, where, milestone, value['milestone_title'], value['milestone_done_when'])
+            lines.append(f"### {milestone} — {value['milestone_title'].strip()}")
+        else:milestone = value['milestone']
+        add_initiative(root, where, milestone, value['slug'], value['text'], value['depends'])
+        lines.append(next(line for _, line in outside(rows_of(where['roadmap'])[0]) if line.startswith(f"| `{value['slug']}` |")))
+        if value['decision_title'].strip():
+            number, _ = blocked(lambda: write_decision(root, where, value['decision_title'], value['decision_context'],
+                                       value['decision_alternatives'], value['decision_consequences'], recommendation=value['summary']))
+            lines.append(f"Decision record {number} (proposed): {value['decision_title'].strip()}")
+        writes = {'milestone': milestone, 'slug': value['slug'], 'depends': value['depends']} | (
+            {'milestone_title': value['milestone_title'].strip(), 'done_when': value['milestone_done_when'].strip()}
+            if lines[0].startswith('### ') else {}) | (
+            {'decision': {k: value['decision_' + k].strip() for k in ('title', 'context', 'alternatives', 'consequences')}
+                         | {'recommendation': value['summary'].strip()}} if value['decision_title'].strip() else {})
+    else:
+        _, task = add_task(root, where, value['design'], value['track'], value['text'], value['depends'], status)
+        lines.append(task)
+        writes = {'design': value['design'], 'track': value['track'].strip(), 'depends': value['depends']}
+    return lines, writes
 
 
 def approvals_file(root):

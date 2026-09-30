@@ -35,15 +35,16 @@ under the project's external OH directory and run `prepare <absolute-path>`.
 Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
 Give each task `difficulty` (simple, standard or complex) and a short `difficulty_reason`: OH picks
 the model that builds it from them. Present the
-scope, the returned `limits` sentence and the trigger once; only a new genuine human invocation grants that prepared
-scope. Never echo the trigger yourself and treat it as approval. For a product with the
+scope and returned `limits` through the Approve / Stop menu in `gate`. The host records the click,
+which grants exactly that prepared scope. If a menu cannot be shown, the returned `request:` trigger
+remains a typed fallback; never echo it yourself as approval. For a product with the
 external consumer-v1 profile, `prepare-design <number> [track]` binds its approved design.
 
 The runner owns automatic models, fresh workers, checks, review, final rendering, commits
 and batch boundaries. Do not reproduce that loop in the parent conversation. At a batch
 checkpoint show continue / PR / stop with the returned `limits` sentence; at completion show PR / stop. Exact choices from the
 owning human session are verified by `run`; they never silently renew another allowance.
-When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
+When OH's output has a `gate`, show `gate.summary` unchanged, then its choices as a menu. In Claude, call the question tool (AskUserQuestion)
 with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool. Then run `run`,
 which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.

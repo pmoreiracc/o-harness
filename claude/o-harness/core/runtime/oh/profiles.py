@@ -50,7 +50,7 @@ def validate_document(value,root):
 # environment assignments, URLs and flags cannot cross this export boundary.
 # Local checks remain unrestricted. Projects can wrap complex checks in a script
 # that reads credentials from their usual local environment/credential store.
-PORTABLE_MODES={'{base}','{mode}','review','pre-push','ci','native','syntax','guards','adapters','delivery'}
+PORTABLE_MODES={'{base}','{mode}','review','pre-push','ci','native','syntax','affected','guards','adapters','delivery'}
 PROBE_TOOLS={'python3','node','git','bash','sh','jq','pnpm','npm'}
 
 

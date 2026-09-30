@@ -22,12 +22,13 @@ discard their changes unless they pick that, and never switch, pull or create br
 itself. After opening a pull request, give its link; don't wait for or watch its checks.
 
 Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
-ambiguous, ask the user which name to use and run `init --name <name>`. Existing project checks run when
-configured; design can proceed without checks. No OH files, hooks or settings belong in the product.
+ambiguous, ask the user which name to use and run `init --name <name>`. Designing runs no project checks: OH
+checks every plan file it writes against the plan rules itself. No OH files, hooks or settings belong in the product.
 
-The argument is one roadmap slug, such as `/oh-design auth`. Without one, read the roadmap
-that `plans path` names and list the initiatives that have no design yet, or say new work
-starts with `/oh-propose`; never pick one yourself.
+The argument is one roadmap slug, such as `/oh-design auth`. Without one, run `run` anyway: OH answers with
+`waiting` and the roadmap rows that have no design yet (`initiatives`), or says new work starts with
+`/oh-propose`. List those rows, ask `waiting.ask` in plain chat and end your turn; the person's next message
+(a slug) is the argument, then run `run`. Never pick one yourself.
 
 Run `plans path`. If it says to choose where plans live, ask the user once:
 in the repository (recommended: the design is reviewed and approved through a pull request)
@@ -49,17 +50,16 @@ file contents; editing an approved design invalidates that approval. Run `run` a
 human choice. An edited existing private design goes directly to review, preserving the
 person's text. A proposed decision remains undecided after approval of the document.
 Only drafts and designs edited since approval can be reapproved; frozen and abandoned designs stay closed.
-When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
+When OH's output has a `gate`, show `gate.summary` unchanged, then its choices as a menu. In Claude, call the question tool (AskUserQuestion)
 with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool. Then run `run`,
 which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 Handle the returned status before offering publication:
 - `review_checkpoint`: explain the retained findings and offer **grant review** / **stop**.
 - `needs_attention`: show the failure and its concrete recovery step, then **retry** / **stop**.
-- `findings_checkpoint`: show every finding. Offer **fix concerns** for concerns, **fix scope**
-  for scope, or **fix findings** for both. The disposition choices are **accept concerns**,
-  **route scope**, or **accept concerns and route scope**, matching exactly the retained
-  severities, plus **stop**. Never treat prose or silence as a disposition.
+- `findings_checkpoint`: show every finding and exactly the returned menu. Concerns can be
+  fixed or accepted; scope can be routed or dismissed, never implemented. A combined menu
+  pairs those choices. Never treat prose or silence as a disposition.
 After a recovery choice, call `run` again. For `paused`, wait for **resume** or **stop**;
 for `pausing` or `stopping`, report the pending state. A stopped run offers no publication.
 

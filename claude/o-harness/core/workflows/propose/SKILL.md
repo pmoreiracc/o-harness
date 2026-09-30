@@ -22,11 +22,13 @@ discard their changes unless they pick that, and never switch, pull or create br
 itself. After opening a pull request, give its link; don't wait for or watch its checks.
 
 Resolve the selected Git checkout; the typed command registers it with OH. If OH says the name is taken or
-ambiguous, ask the user which name to use and run `init --name <name>`. Existing checks run for repository
-changes when configured; proposing can proceed without checks. No OH files, hooks or settings belong in the product.
+ambiguous, ask the user which name to use and run `init --name <name>`. Proposing runs no project checks: OH
+checks every plan file it writes against the plan rules itself. No OH files, hooks or settings belong in the product.
 
-The argument is the idea in the user's words. Without one, ask what they want to add; never
-propose something on their behalf.
+The argument is the idea in the user's words. Without one, run `run` anyway: OH answers with `waiting`. Ask
+`waiting.ask` in plain chat and end your turn; the person's next message is the idea (OH reads it through its
+prompt hook, so it is their own words), then run `run`. This is the one question asked in plain chat instead of a
+menu. Never propose something on their behalf.
 
 Run `plans path`. If it says to choose where plans live, ask the user once:
 in the repository (recommended: plans are reviewed and approved through pull requests) or
@@ -34,28 +36,33 @@ private (OH's folder, nothing in the repository). Save the answer with
 `config set plans.location repo` or `private`. Private plans default to `~/oh-plans/<project name>/`; show `plans path` and allow `plans.private_folder` to choose another parent.
 
 Run `run`. It verifies the native human invocation; a fresh worker reads the
-roadmap, designs, decisions and code and routes the idea; OH writes the change (for repository plans, on a
-new `propose/<topic>` branch from `main`, which OH brings up to date and switches to itself; private plans need
-no branch), runs the checks and has it reviewed independently. Never write or edit plan files yourself, and
-never run your own worker or review loop. Repository plans need the checkout that has `main`: when OH says another worktree holds it, tell the
+roadmap, designs, decisions and code and routes the idea; OH works out exactly what it would write, writes
+nothing yet, and stops for the person's answer. After **approve**, OH writes it (for repository plans, on a new
+`propose/<topic>` branch from `main`, which OH brings up to date and switches to itself; private plans need no
+branch), checks the plan rules and has the written change reviewed independently, then commits repository
+plans. If the review changes where the idea goes or what is written, OH asks the person again with the new
+lines. An improvement or an unclear idea writes nothing and has no review. Never write or edit plan files
+yourself, and never run your own worker or review loop. Repository plans need the checkout that has `main`: when OH says another worktree holds it, tell the
 person to type the command there.
 
 When the returned status is `approval_checkpoint`, present `proposal` in this order:
 1. what OH understood the idea to be (`understanding`);
 2. the route and its one-line `reason`, with the `evidence`;
-3. exactly what was written (`lines`, and the returned `private_diff` for private plans or
-   `git diff` of the files in `intent` for repository plans if the user wants the full change);
-   for an improvement or an unclear idea, the `text` instead;
-4. the choices, as the menu in `gate` (see below) or typed: **approve** (commit repository plans or approve the exact private files), **refine: <what to
-   change>** (in their own words; OH asks the worker again), or **reconsider** (undo it and
-   write nothing). Never choose for them, and never treat silence as approval.
+3. exactly what OH will write: `lines`, into the files in `intent`, and `writes`, what those lines don't say (the
+   milestone a row joins, a new milestone's "Done when", a task's track, a proposed decision record's full text
+   and recommendation); for an improvement or an unclear idea, the `text` instead;
+4. the choices, as the menu in `gate` (see below) or typed: **approve** (OH writes exactly these lines, has them
+   reviewed and commits repository plans), **refine: <what to change>** (in their own words; OH asks the worker
+   again), or **reconsider** (nothing is written; OH asks what they meant: ask `waiting.ask` in plain chat, and
+   their next message is the new idea). Never choose for them, and never treat silence as approval.
 
-When OH's output has a `gate`, show its choices as a menu. In Claude, call the question tool (AskUserQuestion)
+When OH's output has a `gate`, show `gate.summary` unchanged, then its choices as a menu. In Claude, call the question tool (AskUserQuestion)
 with exactly `gate.ask` and no `answers` field. In Codex, call the o-harness `choose` tool. Then run `run`,
 which carries out the answer, unless `choose` says nothing is left to run. Never answer for the person. Typed
 choices (`gate.choices`) stay valid everywhere, and are the fallback when no menu can be shown.
 
-After **approve**, run `run` again. Then show **pr** / **stop** when something was committed;
+After **approve**, run `run` again. If it stops at `approval_checkpoint` again, the review moved the idea: present
+it the same way. Then show **pr** / **stop** when something was committed;
 after **pr**, push the branch and open one pull request whose body ends with the output of
 `pr-summary`, saying plainly what was added and where. Never merge it. For an approved
 improvement, say it can be delivered directly; nothing was written.

@@ -28,6 +28,10 @@ def request(root, action):
         raise Refused('Workers cannot control their parent run')
     if action not in ('pause', 'stop'):
         raise Refused('This direct control only reduces authority; resume requires a human grant')
+    if action == 'stop':
+        from .authority import drop_waits
+        drop_waits(root)
+        checkout_file(root,'oh-preparation-owner.json').unlink(missing_ok=True)
     with lock(checkout_file(root, 'oh-control.lock')):
         journal, state = load_run(root)
         if state['status'] in ('stopped', 'pr', 'completed'):

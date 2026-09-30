@@ -16,12 +16,14 @@ class Expired(Refused):
     """The person typed something newer in the conversation, so this command is no longer what they asked for."""
 
 
-def stage(root,host,payload):
+def stage(root,host,payload,idea=None):
+    """Keep a typed command until OH verifies it. `idea`: the command ('propose' or 'design') whose argument the
+    text is, because OH asked for it (see `wait_for`)."""
     if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Delegated agent prompts cannot grant authority')
     from .workflow import human_event
     event=human_event(payload,host)  # shape only; no grant is issued here
     if not re.fullmatch(r'[a-zA-Z0-9_-]+',event['session']):raise Refused('Invalid native session identifier')
-    locator={'host':host,'payload':payload,'event':event}
+    locator={'host':host,'payload':payload,'event':event}|({'idea':idea} if idea else {})
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
         # The newest typed command or choice replaces one OH hasn't carried out yet: the person moved on.
@@ -112,7 +114,7 @@ def menu_waiting(root):
     from .workflow import active_file,load_run
     if not active_file(root).exists():return None
     journal,state=load_run(root)
-    gate=describe(journal,state) if state['host']=='claude' else None
+    gate=describe(journal,state,root) if state['host']=='claude' else None
     return (gate,state,journal.records()[-1]['at']) if gate else None
 
 
@@ -313,7 +315,7 @@ def materialize(root):
             return record['result']
         from .cli import host_hook
         try:
-            result=host_hook(root,locator['host'],locator['payload'],verified=event)
+            result=host_hook(root,locator['host'],locator['payload'],verified=event,idea=locator.get('idea'))
             if result is None:raise Refused('This input is not a supported native OH transition')
         except Exception as exc:
             # A refused command that starts work stays pending and is spent only once carried out, so `oh run`
@@ -340,7 +342,52 @@ def starts_work(locator):
     """A typed command that starts work (propose, design, deliver, a prepared request), which OH keeps until done."""
     from .entry import command
     parsed=command((locator.get('event') or {}).get('prompt'))
-    return bool(parsed) and parsed[0] in ('propose','design','deliver','oh-start')
+    return bool(locator.get('idea')) or bool(parsed) and parsed[0] in ('propose','design','deliver','oh-start')
+
+
+def waiting_file(session):
+    """Where OH notes that it waits for this conversation's next message; the prompt hook looks for it by name."""
+    if not isinstance(session,str) or not re.fullmatch(r'[a-zA-Z0-9_-]+',session):raise Refused('Invalid native session identifier')
+    return state_home()/'waiting'/(session+'.json')
+
+
+def wait_for(root,human,command,ask):
+    """Make the person's next message in this conversation and checkout the argument of `command` (they typed it
+    bare, or chose Reconsider). Nothing runs until they answer; their answer is verified like a typed command."""
+    from .storage import checkout_id
+    atomic_json(waiting_file(human['session']),{'host':human['host'],'session':human['session'],'checkout':checkout_id(root),
+        'command':command,'ask':ask,'at':now()})
+
+
+def waiting_for(root,host,session):
+    """What OH waits for from this conversation in this checkout: the command and the question asked, or None."""
+    from .storage import checkout_id
+    try:
+        found=read_json(waiting_file(session))
+        if found.get('host')!=host or found.get('checkout')!=checkout_id(root):return None
+    except (OSError,ValueError,Refused):return None
+    return {'command':found['command'],'ask':found['ask'],'at':found.get('at')}
+
+
+def drop_waiting(session):
+    try:waiting_file(session).unlink(missing_ok=True)
+    except Refused:pass
+
+
+def waits(root):
+    """What OH waits for in this checkout, from any conversation: {session: record}."""
+    from .storage import checkout_id
+    found={}
+    for path in sorted((state_home()/'waiting').glob('*.json')):
+        try:record=read_json(path)
+        except (OSError,ValueError):continue
+        if record.get('checkout')==checkout_id(root):found[path.stem]=record
+    return found
+
+
+def drop_waits(root):
+    """Stop and cancel take away what OH waits for in this checkout, whichever way they were given."""
+    for session in waits(root):drop_waiting(session)
 
 
 def waiting_work(root):
@@ -417,6 +464,7 @@ def cancel(root):
     but a worker never decides for the person."""
     if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Delegated agents cannot cancel the person\'s command')
     path=pending_file(root)
+    drop_waits(root)
     with lock(path.with_suffix('.lock')):
         try:locator=read_json(path)
         except FileNotFoundError:return {'cancelled':None,'message':'No typed command is waiting in this checkout.'}
@@ -450,12 +498,14 @@ def desktop_pending(root):
     if not turn or not isinstance(prompt,str):return
     from .entry import command
     text=prompt.strip()
-    if not command(text):return
+    asked=None if command(text) else waiting_for(root,'codex',session)
+    if not command(text) and not asked:return
     payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':text,'transcript_path':str(path)}
-    attest('codex',payload,root)
+    event=attest('codex',payload,root)
+    # Only a message typed after OH asked answers it; an older one is the conversation before the question.
+    if asked and not newer(event.get('at'),asked['at']):return
     source=digest({'host':'codex','session':session,'turn':turn,'prompt':text})
     from .storage import project
     if (state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')).exists():return
     from .entry import receive
     receive(root,'codex',payload)
-
