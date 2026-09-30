@@ -4,12 +4,6 @@ on:
     branches: [main]
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      windows-base:
-        description: Comparison ref for Windows test selection (use an older commit to validate a broad selection)
-        type: string
-        default: origin/main
 permissions:
   contents: read
 jobs:
@@ -31,6 +25,9 @@ jobs:
         with:
           node-version: '22.18.0'
       - run: bash integrations/test.sh "${{ matrix.suite }}"
+      - name: Test release authorization and recovery
+        if: matrix.suite == 'syntax'
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
   # The full Windows suite is slow: a pull request runs the tests that can break on Windows,
   # and the full suite (full.yml) runs all of them nightly and on demand, as a release does.
   windows:
@@ -55,7 +52,7 @@ jobs:
           node-version: '22.18.0'
       - run: bash integrations/test.sh windows "$WINDOWS_TEST_BASE"
         env:
-          WINDOWS_TEST_BASE: ${{ inputs.windows-base || 'origin/main' }}
+          WINDOWS_TEST_BASE: origin/main
       - name: Show checkout changes after a test failure
         if: failure()
         run: git status --short --untracked-files=all

@@ -122,27 +122,7 @@ oh service-uninstall                          # only if you installed the dashbo
 This keeps your OH data: projects, review evidence and analytics. To remove everything,
 delete `~/.local/share/o-harness` after uninstalling from both hosts.
 
-## Releasing (maintainers)
-
-1. On GitHub, open **Actions → prepare release → Run workflow**, type the new version (such as
-   `0.4.0`, higher than the current one) and run it. It opens a pull request that sets the
-   version, listing the pull requests merged since the last release.
-2. On that pull request, click **Approve and run** (GitHub asks before running checks on a pull
-   request a workflow opened), then merge it once the checks pass.
-
-Merging it starts the release workflow once main's own checks pass on that commit. It runs the
-full Windows suite (pull requests run only part of it), then installs the package in the real
-Claude Code and Codex on Windows, macOS and Linux and checks that OH sets up and its tools
-start (`integrations/install-check.py`, no AI login needed). Only when all of that passes does
-it create the `vX.Y.Z` tag, publish that package to the `dist` branch and create the GitHub
-release, whose notes list the merged pull requests. If a test or the install check fails,
-nothing is published: merge the fix to `main`, and the release runs again once its checks
-pass. If a later step fails, running it again (**Actions → release → Run workflow**) finishes
-the same version from the same tagged commit, so users never get two different builds of one
-version; if it keeps failing there, release the fix as a new version.
-
-Once, in the repository's **Settings → Actions → General**, allow GitHub Actions to create pull
-requests, so the prepare step can open one.
+## Local build
 
 To try a build locally without releasing, run `integrations/package.sh <empty-folder>`
 and add that folder as a local marketplace. OH only switches automatically to a higher
