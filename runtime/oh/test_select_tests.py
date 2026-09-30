@@ -72,3 +72,34 @@ class SelectTestsTest(unittest.TestCase):
                     if failure is not None:self.assertIn('FAILED  oh.test_d', output.getvalue())
                     if failure == 'launch':self.assertIn('launch failed', output.getvalue())
         with self.assertRaisesRegex(ValueError, 'No selected tests'):selector.run([], workers=4)
+
+    def test_full_parallel_discovery_keeps_every_test_and_fails_closed(self):
+        import contextlib, io, sys
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location('full_tests', HOME / 'integrations/full_tests.py')
+        full = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, select_tests=selector):spec.loader.exec_module(full)
+        loader = unittest.TestLoader()
+        expected = [case.id() for case in selector.cases(loader.discover(str(HOME / 'runtime'), 'test_*.py'))]
+        self.assertFalse(loader.errors)
+        self.assertEqual(full.discover(), expected)  # same discovery as the native full suite, including duplicates
+        patterns = ['*SelectTestsTest.test_full*', 'test_a_renamed_module']
+        from fnmatch import fnmatchcase
+        matching = [name for name in expected if fnmatchcase(name, patterns[0]) or patterns[1] in name]
+        self.assertEqual(full.discover(patterns), matching)
+        for passed in (True, False):
+            with patch.object(full, 'run', return_value=passed) as run:
+                self.assertEqual(full.main([]), 0 if passed else 1)
+                run.assert_called_once_with(expected, workers=4, report=True)
+        with patch.object(full, 'run') as run, contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as empty:full.main(['-k', 'no_test_has_this_name'])
+            self.assertEqual(empty.exception.code, 2)
+            self.assertIn('No test matches', errors.getvalue())
+            def broken(loader_self, *args):
+                loader_self.errors.append('test module import failed')
+                return unittest.TestSuite()
+            with patch.object(full.unittest.TestLoader, 'discover', broken):
+                with self.assertRaises(SystemExit) as failed:full.main([])
+            self.assertEqual(failed.exception.code, 2)
+            self.assertIn('test module import failed', errors.getvalue())
+            run.assert_not_called()

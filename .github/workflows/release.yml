@@ -77,7 +77,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - run: bash integrations/test.sh native
+      - run: bash integrations/test.sh windows-full
   # Builds the package and checks it installs and starts in the real apps; the release publishes an identical build.
   install:
     needs: version
