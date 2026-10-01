@@ -296,7 +296,7 @@ class DesignRunTest(unittest.TestCase):
     def test_a_refused_command_never_blocks_the_next_one(self):
         from .authority import materialize, pending_file, stage
         payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
-        with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
+        with unittest.mock.patch('oh.authority._attest', side_effect=lambda host, p, root=None, **kwargs: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
                 unittest.mock.patch('oh.transcripts.register'):
             stage(self.root, 'codex', payload('1', '/oh-design login'))
             with self.assertRaisesRegex(Refused, "no initiative 'login'"):materialize(self.root)
@@ -355,7 +355,7 @@ class DesignRunTest(unittest.TestCase):
     def test_a_refused_start_is_carried_out_once_its_reason_is_fixed(self):
         from .authority import materialize, pending_file, stage
         payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
-        with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
+        with unittest.mock.patch('oh.authority._attest', side_effect=lambda host, p, root=None, **kwargs: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
                 unittest.mock.patch('oh.transcripts.register'):
             (self.root / 'notes.txt').write_text('dirty')
             stage(self.root, 'codex', payload('1', '/oh-design auth'))
@@ -368,13 +368,13 @@ class DesignRunTest(unittest.TestCase):
         from .authority import materialize, pending_file, stage
         self.git('branch', 'design/auth/v2')  # Git can't add design/auth beside it
         payload = lambda turn, prompt: {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': turn, 'prompt': prompt}
-        with unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
+        with unittest.mock.patch('oh.authority._attest', side_effect=lambda host, p, root=None, **kwargs: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}), \
                 unittest.mock.patch('oh.transcripts.register'):
             stage(self.root, 'codex', payload('1', '/oh-design auth'))
             self.assertEqual(materialize(self.root)['status'], 'running')
         self.assertRegex(self.git('branch', '--show-current'), r'^design/auth-[0-9a-f]{8}$')
         with unittest.mock.patch('oh.cli.host_hook', side_effect=RuntimeError('boom')), \
-                unittest.mock.patch('oh.authority.attest', side_effect=lambda host, p, root=None: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}):
+                unittest.mock.patch('oh.authority._attest', side_effect=lambda host, p, root=None, **kwargs: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}):
             stage(self.root, 'codex', payload('2', 'stop'))
             with self.assertRaisesRegex(Refused, 'RuntimeError: boom'):materialize(self.root)
             stage(self.root, 'codex', payload('3', 'continue'))  # the newest typed choice replaces it

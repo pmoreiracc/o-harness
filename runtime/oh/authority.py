@@ -6,14 +6,74 @@ import json
 import os
 from pathlib import Path
 import re
+from time import sleep
 from .storage import Refused,atomic_json,digest,git,lock,now,read_json,state_home
 
 
 def pending_file(root):return checkout_file(root, 'oh-pending-human.json')
 
 
+def pending_locators(locator):
+    return [{k:v for k,v in locator.items() if k!='prior'},*locator.get('prior',[])]
+
+
+def retain_pending(path,locators):
+    if locators:atomic_json(path,locators[0]|{'prior':locators[1:]})
+    else:path.unlink(missing_ok=True)
+
+
 class Expired(Refused):
     """The person typed something newer in the conversation, so this command is no longer what they asked for."""
+
+
+class Saving(Refused):
+    """The host has not finished writing the native evidence yet; the same read may succeed shortly."""
+
+
+def saved(read):
+    """Retry only incomplete host evidence, for at most 1.5 seconds. Never retry a workflow mutation."""
+    for delay in (0,0.1,0.2,0.4,0.8):
+        if delay:sleep(delay)
+        try:return read()
+        except Saving:
+            if delay==0.8:raise
+
+
+def codex_history(path,session):
+    """Stream native human messages and their context; large tool output must not hide a checkout change."""
+    messages=[];turn=None
+    with path.open('rb') as stream:
+        try:first=stream.readline();record=json.loads(first)
+        except ValueError:raise Saving('Codex is still saving this conversation; retry the same OH operation.')
+        if not isinstance(record,dict):raise Refused('Invalid Codex session record')
+        meta=record.get('payload',{})
+        if record.get('type')!='session_meta' or meta.get('id')!=session:
+            raise Refused('The saved Codex conversation does not match this invocation')
+        if isinstance(meta.get('source'),dict) or meta.get('source') in ('exec','subagent'):
+            raise Refused('Delegated agent prompts cannot grant authority')
+        cwd=meta.get('cwd')
+        for line in stream:
+            try:x=json.loads(line)
+            except ValueError:
+                if not line.endswith(b'\n'):raise Saving('Codex is still saving this conversation; retry the same OH operation.')
+                continue
+            if not isinstance(x,dict):continue
+            p=x.get('payload',{})
+            if x.get('type')=='turn_context':cwd=p.get('cwd') or cwd
+            if x.get('type')!='event_msg':continue
+            if p.get('type')=='task_started':turn=p.get('turn_id')
+            if p.get('thread_id',session)!=session:continue
+            if p.get('type')=='user_message':
+                message_turn=p.get('turn_id') or turn;text=p.get('message')
+            elif p.get('type')=='item_completed' and (p.get('item') or {}).get('type')=='UserMessage':
+                item=p['item'];message_turn=p.get('turn_id');content=item.get('content')
+                if not isinstance(item.get('id'),str) or not item['id']:continue
+                text=content if isinstance(content,str) else '\n'.join(c['text'] for c in content
+                    if isinstance(c,dict) and c.get('type')=='text' and isinstance(c.get('text'),str)) if isinstance(content,list) else None
+            else:continue
+            if isinstance(message_turn,str) and message_turn and isinstance(text,str):
+                messages.append({'turn':message_turn,'prompt':text.strip(),'cwd':cwd,'at':x.get('timestamp'),'record_hashes':[digest(x)]})
+    return meta,turn,messages,cwd
 
 
 def stage(root,host,payload,idea=None):
@@ -26,7 +86,14 @@ def stage(root,host,payload,idea=None):
     locator={'host':host,'payload':payload,'event':event}|({'idea':idea} if idea else {})
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        # The newest typed command or choice replaces one OH hasn't carried out yet: the person moved on.
+        # Hooks can arrive before the host saves the message, or out of order. Keep the locators;
+        # only materialization may decide which native human request supersedes another.
+        if path.exists():
+            previous=pending_locators(read_json(path))
+            for item in previous:
+                if item['event']==event and item.get('superseded_before'):
+                    locator['superseded_before']=item['superseded_before']
+            locator['prior']=[item for item in previous if item['event']!=event]
         atomic_json(path,locator)
     return {'pending':True,'message':'Run OH to verify and apply this native human choice'}
 
@@ -147,7 +214,7 @@ def answer(root,hint=None,after=None):
         raise
     atomic_json(used,{'source':found,'result':result},immutable=True)
     answered(root,'claude',found['session'],str(path))
-    return noted(result,supersede(root,'claude',locked=True))
+    return noted(result,supersede(root,'claude',found,locked=True))
 
 
 def noted(result,dropped):
@@ -211,53 +278,56 @@ def prompted(x,session):
 
 
 def attest(host,payload,root=None):
+    return saved(lambda: _attest(host,payload,root))
+
+
+def _attest(host,payload,root=None,*,caller=True):
     from .workflow import human_event
     event=human_event(payload,host)
+    if caller and os.environ.get('CODEX_THREAD_ID') and (host!='codex' or event['session']!=os.environ['CODEX_THREAD_ID']):
+        raise Refused('This command belongs to another conversation; continue it there.')
     from .hosts import codex_home
     allowed=(codex_home()/'sessions' if host=='codex' else Path.home()/'.claude/projects').resolve()
     if payload.get('transcript_path'):
         paths=[Path(payload['transcript_path']).expanduser().resolve()]
     else:paths=list(allowed.rglob('*'+event['session']+'*.jsonl'))
     if len(paths)!=1 or not paths[0].is_relative_to(allowed) or not paths[0].is_file():
-        raise Refused('The native human transcript is not available yet; retry OH after the host finishes saving this turn')
-    path=paths[0];matches=[];times=[];turn=None;session=None;source=None;tagged=[];expanded={};latest=None
+        raise Saving('The native human transcript is not available yet; retry the same OH operation after the host saves it')
+    if host=='codex':
+        path=paths[0];_,_,messages,_=codex_history(path,event['session'])
+        matches=[m for m in messages if (m['turn'],m['prompt'])==(event['turn'],event['prompt'])]
+        if root is not None and any(not within(m['cwd'],root) for m in matches):raise Refused('Human turn belongs to another project checkout')
+        if matches and messages[-1] not in matches:raise Expired('The person typed something newer in this conversation')
+        if not matches:
+            if messages and messages[-1]['turn']==event['turn']:
+                raise Refused('The requested command does not match the native human message; nothing was applied')
+            raise Saving('Codex has not saved this human message yet; retry the same OH operation.')
+        return event|{'at':min(m['at'] for m in matches if m['at']) if any(m['at'] for m in matches) else None,
+            'record_hashes':sorted({h for m in matches for h in m['record_hashes']}),'transcript_path':str(path)}
+    path=paths[0];matches=[];times=[];tagged=[];expanded={};latest=None
     with path.open('rb') as stream:
         first=stream.readline()
         stream.seek(max(len(first),path.stat().st_size-8*1024*1024))
         import itertools
         for line in itertools.chain([first],stream):
             try:x=json.loads(line)
-            except ValueError:continue
-            p=x.get('payload',{})
-            if host=='codex':
-                if x.get('type')=='session_meta':
-                    session=p.get('id');source=p.get('source')
-                    if root is not None and not within(p.get('cwd'),root):raise Refused('Human turn belongs to another project checkout')
-                if p.get('type')=='task_started':turn=p.get('turn_id')
-                # exec/subagent input is model-delegated work, not a new human grant.
-                if isinstance(source,dict) or source in ('exec','subagent'):continue
-                # Only what the person typed moves Codex on: it may add user-role items of its own within a turn.
-                if session==event['session'] and x.get('type')=='event_msg' and p.get('type')=='user_message':latest=turn
-                if session!=event['session'] or turn!=event['turn']:continue
-                if x.get('type')=='event_msg' and p.get('type')=='user_message':
-                    text=p.get('message')
-                elif x.get('type')=='response_item' and p.get('role')=='user':
-                    text='\n'.join(c.get('text','') for c in p.get('content',[]) if c.get('type') in ('input_text','text'))
-                else:continue
-            else:
-                if prompted(x,event['session']):latest=x['promptId']
-                if x.get('type')!='user' or x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
-                if x.get('isMeta') and not x.get('isSidechain'):
-                    # The model's own Skill tool call saves the same text; only a typed command's expansion
-                    # follows the command's record directly and names no tool call.
-                    if not x.get('sourceToolUseID') and x.get('parentUuid'):expanded.setdefault(x['parentUuid'],set()).add(expanded_skill(x))
-                    continue
-                if not human(x):continue
-                if root is not None and not within(x.get('cwd'),root):raise Refused('Human turn belongs to another project checkout')
-                message=x.get('message',{})
-                if message.get('role')!='user':continue
-                text=message.get('content')
-                if isinstance(text,list):text='\n'.join(c.get('text','') for c in text if c.get('type')=='text')
+            except ValueError:
+                if not line.endswith(b'\n'):raise Saving('Claude is still saving this conversation; retry the same OH operation.')
+                continue
+            if not isinstance(x,dict):continue
+            if prompted(x,event['session']):latest=x['promptId']
+            if x.get('type')!='user' or x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
+            if x.get('isMeta') and not x.get('isSidechain'):
+                # The model's own Skill tool call saves the same text; only a typed command's expansion
+                # follows the command's record directly and names no tool call.
+                if not x.get('sourceToolUseID') and x.get('parentUuid'):expanded.setdefault(x['parentUuid'],set()).add(expanded_skill(x))
+                continue
+            if not human(x):continue
+            if root is not None and not within(x.get('cwd'),root):raise Refused('Human turn belongs to another project checkout')
+            message=x.get('message',{})
+            if message.get('role')!='user':continue
+            text=message.get('content')
+            if isinstance(text,list):text='\n'.join(c.get('text','') for c in text if c.get('type')=='text')
             if isinstance(text,str) and text.strip()==event['prompt']:
                 matches.append(digest(x))
                 if x.get('timestamp'):times.append(x['timestamp'])
@@ -273,28 +343,82 @@ def attest(host,payload,root=None):
             # recorded as the same prompt, so a respelled replay finds the turn already spent.
             name,args=typed_command(event['prompt'])
             event=event|{'prompt':'/o-harness:'+name+(' '+args if args else '')}
-    if not matches:raise Refused('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
+    if not matches:
+        error=Saving if latest!=event['turn'] or tagged and not expanded else Refused
+        raise error('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
     if latest not in (None,event['turn']):raise Expired('The person typed something newer in this conversation')
-    # Codex can retain the same turn as both event_msg and response_item; the native turn ID
-    # and exact text collapse them into one source, with both evidence hashes retained.
     return event|{'at':min(times) if times else None,'record_hashes':sorted(set(matches)),'transcript_path':str(path)}
+
+
+def pending_choice(root,locator):
+    """Resolve staged locators from native evidence; arrival order cannot withdraw a human request."""
+    candidates=pending_locators(locator)
+    def read():
+        verified=[];deferred=[];revoked=[]
+        for candidate in candidates:
+            try:
+                # Inspect other conversations only to order their requests. The winner must still pass
+                # caller-bound attestation before anything is applied or marked spent.
+                event=_attest(candidate['host'],candidate['payload'],root,caller=False)
+                if newer(candidate.get('superseded_before'),event.get('at')):revoked.append((candidate,event))
+                else:verified.append((candidate,event))
+            except Saving:
+                if candidate.get('superseded_before'):deferred.append(candidate)
+                else:raise
+            except Refused:continue
+        if verified and deferred:raise Saving('A pending command is still being saved; retry the same OH operation.')
+        return verified,deferred,revoked
+    verified,deferred,revoked=saved(read)  # one bounded wait; no request is lost while evidence is incomplete
+    for candidate,event in revoked:
+        if starts_work(candidate):remember_request(root,event)
+        spent(root,event|{'prompt':candidate['event']['prompt']},'Superseded by a later answer on the menu.')
+    if not verified:
+        if deferred or revoked:
+            retain_pending(pending_file(root),deferred)
+            return None  # no new authority; an already approved run may continue
+        return locator  # the ordinary path reports/clears an expired command once
+    selected,event=verified[0]
+    for candidate,proof in verified[1:]:
+        if newer(proof.get('at'),event.get('at')):selected,event=candidate,proof
+    attest(selected['host'],selected['payload'],root)
+    for candidate,proof in verified:
+        if used_file(root,proof)!=used_file(root,event) and newer(event.get('at'),proof.get('at')):
+            spent(root,proof|{'prompt':candidate['event']['prompt']},'Superseded by a newer command in this checkout.')
+    return selected
+
+
+def remember_request(root,event):
+    """Keep verified request/menu chronology after the pending slot is consumed, under its same lock."""
+    if not event.get('at'):return event  # older hosts cannot establish cross-chat order
+    path=checkout_file(root,'oh-latest-request.json')
+    latest=read_json(path) if path.exists() else {}
+    if newer(latest.get('at'),event['at']):return latest
+    if not latest or newer(event['at'],latest.get('at')):atomic_json(path,event)
+    return event
 
 
 @state_writer
 def materialize(root):
     from .workflow import active_file
+    # A fresh native invocation may replace a pending request, including one from another conversation.
+    discovered=desktop_pending(root)
     path=pending_file(root)
-    if not path.exists():desktop_pending(root)  # stages under the same lock, so before taking it
     with lock(path.with_suffix('.lock')):
+        if path.exists() and ((locator:=read_json(path)).get('prior') or locator.get('superseded_before')):
+            selected=pending_choice(root,locator)
+            if selected is None:return discovered if discovered is not None else answer(root)
+            atomic_json(path,selected)
         if path.exists() and bare_choice(read_json(path)) and menu_waiting(root):
             # A menu answer typed in Claude is read from the transcript like a click, so the person's latest
             # answer wins whichever way they gave it; the hook's locator only said that one was typed. Wait
             # while Claude may still be saving that turn, so an older click never wins over it.
             locator=read_json(path)
-            if not settled(root,locator,path):
-                raise Refused('Your typed choice is not saved in the conversation yet; run OH again in a moment')
+            def ready():
+                if not settled(root,locator,path):
+                    raise Saving('Your typed choice is not saved in the conversation yet; retry the same OH operation.')
+            saved(ready)
             path.unlink();return answer(root,hint=locator['event']['turn'])
-        if not path.exists():return answer(root)
+        if not path.exists():return discovered if discovered is not None else answer(root)
         locator=read_json(path)
         try:event=attest(locator['host'],locator['payload'],root)
         except Expired:
@@ -315,6 +439,9 @@ def materialize(root):
             return record['result']
         from .cli import host_hook
         try:
+            if starts_work(locator) and newer(remember_request(root,event).get('at'),event.get('at')):
+                from .storage import Final
+                raise Final('Superseded by a later command or menu answer in this checkout.')
             result=host_hook(root,locator['host'],locator['payload'],verified=event,idea=locator.get('idea'))
             if result is None:raise Refused('This input is not a supported native OH transition')
         except Exception as exc:
@@ -429,23 +556,38 @@ def typed_choice(root,host):
     return locator if bare_choice(locator,host) else None
 
 
-def supersede(root,host,locked=False):
+def supersede(root,host,event,locked=False):
     """A menu answer applied after something was typed wins over it: the person's latest act counts. A typed
     menu word is spent; a typed command waits only when the answer ended the run, which makes room for it.
     Returns the command it set aside, if any. `locked` when the caller already holds the pending lock (the lock
     is per open file, so never take it twice)."""
     path=pending_file(root)
     if not locked:
-        with lock(path.with_suffix('.lock')):return supersede(root,host,locked=True)
+        with lock(path.with_suffix('.lock')):return supersede(root,host,event,locked=True)
+    from .workflow import active_file,load_run
+    ended=not active_file(root).exists() or load_run(root)[1]['status'] in ('stopped','pr','completed')
+    # A hook may arrive after cleanup, even when nothing was queued at the time of the click.
+    if not ended:remember_request(root,event)
     try:locator=read_json(path)
     except FileNotFoundError:return
-    if locator.get('host')!=host:return
-    if not bare_choice(locator,host):
-        from .workflow import active_file,load_run
-        if not active_file(root).exists() or load_run(root)[1]['status'] in ('stopped','pr','completed'):return
-    spent(root,locator['event'],'Superseded by a later answer on the menu.')
-    path.unlink(missing_ok=True)
-    return None if bare_choice(locator,host) else locator['event']['prompt']
+    retained=[];dropped=None
+    for candidate in pending_locators(locator):
+        words=bare_choice(candidate,host)
+        if ended and not words:
+            retained.append(candidate);continue
+        try:proof=_attest(candidate['host'],candidate['payload'],root,caller=False)
+        except Saving:
+            cutoff=candidate.get('superseded_before')
+            if not cutoff or newer(event.get('at'),cutoff):candidate=candidate|{'superseded_before':event.get('at')}
+            retained.append(candidate);continue
+        except Refused:continue  # invalid/expired locators grant nothing; do not spend an unattested source
+        if newer(event.get('at'),proof.get('at')):
+            if starts_work(candidate):remember_request(root,proof)
+            spent(root,proof|{'prompt':candidate['event']['prompt']},'Superseded by a later answer on the menu.')
+            if not words:dropped=dropped or candidate['event']['prompt']
+        else:retained.append(candidate)
+    retain_pending(path,retained)
+    return dropped
 
 
 def spent(root,event,refused):
@@ -468,44 +610,67 @@ def cancel(root):
     with lock(path.with_suffix('.lock')):
         try:locator=read_json(path)
         except FileNotFoundError:return {'cancelled':None,'message':'No typed command is waiting in this checkout.'}
-        spent(root,locator['event'],'Cancelled by the person.');path.unlink()
+        for candidate in pending_locators(locator):spent(root,candidate['event'],'Cancelled by the person.')
+        path.unlink()
     return {'cancelled':locator['event']['prompt'],'message':'The waiting command was cancelled; nothing of it ran.'}
 
 
 def desktop_pending(root):
-    """No-argument fallback: use only the latest native Desktop human turn."""
+    return saved(lambda: _desktop_pending(root))
+
+
+def _desktop_pending(root):
+    """No-argument fallback: recover the latest human command from this Codex conversation."""
     if os.environ.get('OH_CHILD_ATTEMPT'):return
     session=os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID')
     if not session or not re.fullmatch(r'[a-zA-Z0-9_-]+',session):return
     from .hosts import codex_home
     files=list((codex_home()/'sessions').rglob('*'+session+'*.jsonl'))
-    if len(files)!=1:return
-    path=files[0];meta=None;turn=None;prompt=None
-    # The first record establishes origin; a bounded tail locates the current turn.
-    with path.open('rb') as stream:
-        first=stream.readline()
-        try:meta=json.loads(first).get('payload',{})
-        except ValueError:return
-        if meta.get('id')!=session or meta.get('source')!='vscode' or meta.get('originator')!='Codex Desktop':return
-        if Path(meta.get('cwd','')).resolve()!=Path(root).resolve():return
-        stream.seek(max(0,path.stat().st_size-4*1024*1024))
-        for line in stream:
-            try:item=json.loads(line)
-            except ValueError:continue
-            payload=item.get('payload',{})
-            if item.get('type')=='event_msg' and payload.get('type')=='task_started':turn=payload.get('turn_id');prompt=None
-            if item.get('type')=='event_msg' and payload.get('type')=='user_message':prompt=payload.get('message')
-    if not turn or not isinstance(prompt,str):return
+    expected=os.environ.get('OH_CODEX_TURN_ID')  # supplied by MCP, never a tool argument
+    if len(files)!=1:
+        if expected:raise Saving('Codex has not saved this conversation yet; retry the same OH operation.')
+        return
+    path=files[0]
+    try:meta,turn,messages,_=codex_history(path,session)
+    except Saving:raise
+    except Refused:
+        if expected:raise
+        return  # a shell without this checkout's host context is not a Desktop invocation
+    if meta.get('source')!='cli' and (meta.get('source')!='vscode' or meta.get('originator') not in ('Codex Desktop','codex_work_desktop')):return
+    if not messages or messages[-1]['turn']!=(expected or turn):
+        if expected:raise Saving('Codex has not saved the calling human turn yet; retry the same OH operation.')
+        return
+    message=messages[-1];text=message['prompt']
+    if not within(message['cwd'],root):
+        if expected:raise Refused('Human turn belongs to another project checkout')
+        return
     from .entry import command
-    text=prompt.strip()
     asked=None if command(text) else waiting_for(root,'codex',session)
     if not command(text) and not asked:return
-    payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':text,'transcript_path':str(path)}
-    event=attest('codex',payload,root)
-    # Only a message typed after OH asked answers it; an older one is the conversation before the question.
+    payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':message['turn'],'prompt':text,'transcript_path':str(path)}
+    event=_attest('codex',payload,root)
     if asked and not newer(event.get('at'),asked['at']):return
-    source=digest({'host':'codex','session':session,'turn':turn,'prompt':text})
-    from .storage import project
-    if (state_home()/'projects'/project(root)['id']/'human-events'/(source+'.json')).exists():return
+    # Re-reading a consumed command returns its result; it never grants work again. This also lets a retry
+    # report its own completed run instead of mistaking the absence of new authority for a failure.
+    from .registry import lookup
+    try:lookup(root)
+    except Refused:pass  # receive registers a fresh checkout after a verified explicit invocation
+    else:
+        used=used_file(root,event)
+        if used.exists():
+            record=read_json(used)
+            if 'refused' in record:
+                # A later native menu click can authorize this conversation's current run without
+                # adding another UserMessage. Do not make an older, withdrawn typed choice block it.
+                from .workflow import active_file,load_run
+                if active_file(root).exists():
+                    journal,state=load_run(root)
+                    if state['host']=='codex' and state['human']['session']==session:
+                        sources=[state['human'],*[r['data']['source'] for r in journal.records() if r['kind']=='transition']]
+                        if any(s.get('session')==session and newer(s.get('at'),event.get('at')) for s in sources):
+                            return {'run':state['id'],'status':state['status']}
+                raise Refused(record['refused'])
+            return record['result']
     from .entry import receive
-    receive(root,'codex',payload)
+    result=receive(root,'codex',payload)
+    return None if result and result.get('pending') else result

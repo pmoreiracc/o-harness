@@ -16,7 +16,8 @@ from .workflow import active_file, checkpoint, choose, human_event, start
 def host_hook(root,host,payload,*,verified,idea=None):
     """Carry out a verified typed command. `idea`: the command whose argument the text is, because OH asked for it
     (see authority.wait_for)."""
-    prompt=payload.get('prompt','').strip()
+    from .entry import invocation
+    prompt=invocation(payload.get('prompt','')) if not idea else payload.get('prompt','').strip()
     import re
     prompt=re.sub(r'^[$/](?:o-harness:)?(oh-(?:pause|resume|stop))$',lambda m:m[1],prompt)
     prompt={'oh-pause':'pause','oh-stop':'stop','oh-resume':'resume'}.get(prompt,prompt)
@@ -130,6 +131,19 @@ def git_branch(root):
     return git(root,'branch','--show-current')
 
 
+def executable_run(root,admitted):
+    """An authorized continuation may have no new event; a different terminal run is not a command result."""
+    from .workflow import load_run
+    _,state=load_run(root)
+    if admitted and admitted.get('run') and admitted['run']!=state['id']:
+        raise Refused('That command belongs to an earlier run. Use status to inspect the current run; no work was started.')
+    if admitted is None and state['status'] in ('stopped','completed','pr'):
+        raise Refused('No new OH command was recognized. The previous run is '+state['status']+
+                      '; use status to inspect it, or invoke the intended OH skill in this checkout.')
+    if os.environ.get('CODEX_THREAD_ID') and (state['host']!='codex' or state['human']['session']!=os.environ['CODEX_THREAD_ID']):
+        raise Refused('This run belongs to another conversation; continue it there, or stop it before starting new work here.')
+
+
 class Tolerant:
     """An output whose reader may go away, such as a host that ended a tool call: OH's notes, progress and result
     are then lost, but the run they describe goes on."""
@@ -240,6 +254,10 @@ def main(argv=None):
                 if value and value.startswith('@') and len(value)>1:value=(invocation/Path(value[1:]).expanduser()).read_text(encoding='utf-8-sig')
                 result=change(root,args.key,value if args.action=='set' else None,scope='global' if args.everywhere else None)
         elif args.command=='plans':
+            if args.action=='path':
+                from .registry import index_path
+                from .authority import desktop_pending
+                if not index_path(root).is_file():desktop_pending(root)
             from .plans import check,layout,listing
             where=layout(root)
             result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
@@ -260,7 +278,8 @@ def main(argv=None):
             result=cancel(root)
         elif args.command=='resume':
             from .authority import materialize
-            materialize(root)
+            admitted=materialize(root)
+            executable_run(root,admitted)
             from .workflow import load_run
             _,state=load_run(root)
             if state['status']=='paused':raise Refused('Submit /oh-resume (Codex: $oh-resume) in the owning host conversation, then run oh resume')
@@ -273,7 +292,9 @@ def main(argv=None):
             from .authority import materialize
             admitted=materialize(root)
             if admitted and admitted.get('note'):print(admitted['note'],flush=True)
-            if admitted and (admitted.get('waiting') or admitted.get('prepare')):print(json.dumps(admitted,indent=2));return  # nothing runs until they answer
+            if admitted and (admitted.get('waiting') or admitted.get('prepare') or admitted.get('kind')=='quick_fix' or admitted.get('authorized') is False):
+                print(json.dumps(admitted,indent=2));return  # preparation/waiting cannot run an older batch
+            executable_run(root,admitted)
             if args.command=='start' and args.request:
                 from .workflow import load_run
                 _,state=load_run(root)
@@ -307,6 +328,7 @@ def main(argv=None):
             else:
                 from .authority import materialize
                 admitted=materialize(root)
+                executable_run(root,admitted)
                 if admitted and admitted.get('limits'):print(admitted['limits'],flush=True)
                 if admitted and admitted.get('note'):
                     # A menu answer set the typed command aside: say so, and carry on with nothing else.

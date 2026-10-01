@@ -100,7 +100,6 @@ class GateTest(unittest.TestCase):
         self.assertNotEqual(after['gate']['id'], result['gate']['id'])
 
     def prepare_menu(self,host):
-        from .authority import stage
         from .prepared import prepare,directory
         from .storage import atomic_json,now
         self.git('switch','main')
@@ -110,12 +109,15 @@ class GateTest(unittest.TestCase):
             from .test_mcp_server import codex_session
             codex_session(self.home,'s',self.root)
             path=next((self.home/'.codex/sessions').rglob('*s.jsonl'))
-            with path.open('a') as stream:
-                stream.write(json.dumps({'type':'event_msg','payload':{'type':'task_started','turn_id':'prepare'}})+'\n')
-                stream.write(json.dumps({'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','message':prompt}})+'\n')
-            stage(self.root,host,{'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'prepare','prompt':prompt,'transcript_path':str(path)})
+            # Codex's MCP path has no prompt hook: discover the current UserMessage itself.
+            records=[{'type':'session_meta','payload':{'id':'s','cwd':str(self.root),'source':'vscode','originator':'Codex Desktop'}},
+                {'type':'event_msg','payload':{'type':'task_started','turn_id':'prepare'}},
+                {'type':'event_msg','timestamp':now(),'payload':{'type':'item_completed','thread_id':'s','turn_id':'prepare',
+                    'item':{'type':'UserMessage','id':'prepare-message','content':[{'type':'text',
+                        'text':'[$o-harness:oh-deliver](/plugins/oh-deliver/SKILL.md) fix the sign-in timeout'}]}}}]
+            path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
         manifest=directory(self.root).parent/'tasks.json';atomic_json(manifest,{'tasks':self.tasks})
-        with patch.dict(os.environ,{'CODEX_HOME':str(self.home/'.codex')}):result=prepare(self.root,str(manifest))
+        with patch.dict(os.environ,{'CODEX_HOME':str(self.home/'.codex'),'CODEX_THREAD_ID':'s' if host=='codex' else ''}):result=prepare(self.root,str(manifest))
         return result,manifest
 
     def test_prepared_claude_menu_binds_scope_limits_and_expires(self):
@@ -200,6 +202,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.click(question, 'Continue')['status'], 'running')
         _, state = load_run(self.root)
         self.assertEqual(state['granted'][-1], '2')
+        self.delayed_menu_commands(superseded=True)
 
     def test_model_written_or_altered_or_foreign_answers_choose_nothing(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
@@ -223,6 +226,7 @@ class GateTest(unittest.TestCase):
         question = run(self.root, self.fake)['gate']['ask']['questions'][0]
         after = self.click(question, 'Stop', use='toolu_stop')
         self.assertEqual((after['status'], after.get('gate')), ('stopped', None))
+        self.delayed_menu_commands(superseded=False)
 
     def test_only_the_latest_click_on_the_current_menu_counts(self):
         question = self.begin('claude', fresh=True)['gate']['ask']['questions'][0]
@@ -330,9 +334,10 @@ class GateTest(unittest.TestCase):
 
     def test_a_refused_command_never_holds_up_the_open_menu(self):
         from .authority import pending_file, stage
+        from .storage import now
         question = self.begin('claude')['gate']['ask']['questions'][0]
         # While the run waits at its menu, the person types another delivery: refused, and kept for later.
-        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'message': {'role': 'user', 'content': '/oh-deliver 0006'}})
+        self.records.append({'type': 'user', 'sessionId': 's', 'promptId': 'p2', 'cwd': str(self.root), 'timestamp':now(), 'message': {'role': 'user', 'content': '/oh-deliver 0006'}})
         self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
         stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': '/oh-deliver 0006'})
         with self.assertRaisesRegex(Refused, 'still working on'):materialize(self.root)
@@ -361,7 +366,11 @@ class GateTest(unittest.TestCase):
     def test_cancelling_the_waiting_command_keeps_the_open_run(self):
         from .authority import cancel, pending_file, stage
         from .controls import request
+        from .storage import now
         self.waiting_command(tagged=True)
+        pending=[self.staged_conversation('claude',session,at=now())[0] for session in ('cancel-a','cancel-b')]
+        original={'hook_event_name':'UserPromptSubmit','session_id':'s','prompt_id':'p2','prompt':'/oh-deliver 0006'}
+        stage(self.root,'claude',original)  # delayed older delivery must not hide the other waiting requests
         with patch.dict(os.environ, {'OH_CHILD_ATTEMPT': 'a'}), self.assertRaises(Refused):cancel(self.root)  # never a worker's call
         self.assertEqual(cancel(self.root)['cancelled'], '/oh-deliver 0006')
         self.assertFalse(pending_file(self.root).exists())
@@ -369,8 +378,9 @@ class GateTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         # The cancelled turn never comes back, however it is spelled: here Claude saved it as command tags.
         request(self.root, 'stop')
-        stage(self.root, 'claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'prompt_id': 'p2', 'prompt': '/oh-deliver 0006'})
-        with self.assertRaisesRegex(Refused, 'Cancelled by the person'):materialize(self.root)
+        for payload in [original,*pending]:
+            stage(self.root,'claude',payload)
+            with self.assertRaisesRegex(Refused,'Cancelled by the person'):materialize(self.root)
 
     def test_stopping_the_open_run_starts_the_waiting_command(self):
         from .authority import pending_file
@@ -382,7 +392,8 @@ class GateTest(unittest.TestCase):
         self.assertTrue(pending_file(self.root).exists())
 
     def test_a_menu_answer_counts_over_a_waiting_command_only_when_given_after_it(self):
-        from .authority import pending_file
+        from .authority import pending_file,used_file
+        from .storage import now,read_json
         # Clicked before typing the command (the agent never ran OH after the click): the command is the latest act.
         self.waiting_command(first=lambda question: self.click(question, 'Continue', apply=False))
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
@@ -392,12 +403,14 @@ class GateTest(unittest.TestCase):
         from contextlib import redirect_stdout
         from .cli import main
         question = self.waiting_command()
+        other=self.staged_conversation('codex','other-host',at=now())[0]
         self.click(question, 'Continue', use='toolu_2', apply=False)
         out = io.StringIO()
         with redirect_stdout(out):main(['--root', str(self.root), 'deliver', '0006'])
         self.assertIn('so OH set that command aside', out.getvalue())
         self.assertEqual(load_run(self.root)[1]['status'], 'running')
         self.assertFalse(pending_file(self.root).exists())
+        self.assertIn('Superseded',read_json(used_file(self.root,human_event(other,'codex')))['refused'])
 
     def test_a_refused_choice_is_said_once_and_never_holds_up_the_run(self):
         from .authority import pending_file
@@ -470,8 +483,29 @@ class GateTest(unittest.TestCase):
                          {'id': 2, 'method': 'tools/call', 'params': {'name': 'choose', 'arguments': {'root': str(root)}} | calling(thread)}], respond)
         return sent, next(m for m in sent if m.get('id') == 2)['result']['content'][0]['text']
 
+    def staged_conversation(self,host,session,at='2020-01-01T00:00:00Z',partial=False):
+        """A competing native command, in its own conversation, while the current menu is open."""
+        from .authority import stage
+        prompt=('$' if host=='codex' else '/')+'oh-propose '+session
+        path=self.home/('.codex/sessions' if host=='codex' else '.claude/projects')/(session+'.jsonl')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        records=([{'type':'session_meta','payload':{'id':session,'cwd':str(self.root),'source':'cli'}},
+                  {'type':'event_msg','payload':{'type':'task_started','turn_id':'1'}},
+                  {'type':'event_msg','timestamp':at,'payload':{'type':'user_message','message':prompt}}] if host=='codex' else
+                 [{'type':'user','timestamp':at,'sessionId':session,'promptId':'1','cwd':str(self.root),
+                   'message':{'role':'user','content':prompt}}])
+        text=''.join(json.dumps(r)+'\n' for r in records)
+        path.write_text(text[:-8] if partial else text,newline='\n')
+        payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':'1','prompt':prompt,'transcript_path':str(path)}
+        stage(self.root,host,payload)
+        return payload,path,text
+
     def test_codex_menu_records_the_click_itself(self):
+        from .authority import used_file
+        from .storage import read_json
         self.begin('codex')
+        pending=[(host,self.staged_conversation(host,session)[0]) for host,session in
+                 (('codex','a'),('claude','other-host'),('codex','b'))]
         sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
         self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
@@ -480,25 +514,72 @@ class GateTest(unittest.TestCase):
         self.assertIn('Continue runs 1 of the 1 remaining task', asked['params']['message'])
         _, state = load_run(self.root)
         self.assertEqual((state['status'], state['granted'][-1]), ('running', '2'))
+        for host,payload in pending:
+            self.assertIn('Superseded',read_json(used_file(self.root,human_event(payload,host)))['refused'])
+        self.delayed_menu_commands(superseded=True)
+
+    def delayed_menu_commands(self,superseded):
+        """A native command predates the menu click, but reaches OH only after its cleanup finished."""
+        for host in ('codex','claude'):
+            with self.subTest(delayed_host=host):
+                self.staged_conversation(host,'delayed-'+host)
+                with patch('oh.cli.host_hook',return_value={'waiting':{'command':'propose'}}) as apply:
+                    if superseded:
+                        with self.assertRaisesRegex(Refused,'Superseded'):materialize(self.root)
+                        apply.assert_not_called()
+                    else:
+                        materialize(self.root)
+                        apply.assert_called_once()
 
     def test_codex_stop_needs_no_further_run(self):
         self.begin('codex')
         text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'stop'}})[1]
         self.assertIn('nothing left to run', text);self.assertNotIn('`run`', text)
         self.assertEqual(load_run(self.root)[1]['status'], 'stopped')
+        self.delayed_menu_commands(superseded=False)
 
     def test_codex_latest_answer_wins_between_typing_and_the_menu(self):
-        from .authority import pending_file, stage
+        from .authority import Saving,desktop_pending,pending_file,stage,supersede,used_file
+        from .storage import read_json
         self.begin('codex')
         typed = {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': 't1', 'prompt': 'stop'}
         stage(self.root, 'codex', typed)
         self.assertIn('already typed a choice', self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})[1])
         pending_file(self.root).unlink()
-        sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}},
-                                 while_open=lambda: stage(self.root, 'codex', typed | {'turn_id': 't2'}))
+        def typing():
+            path=next((self.home/'.codex/sessions').rglob('*s.jsonl'))
+            with path.open('a',newline='\n') as stream:
+                for record in ({'type':'event_msg','payload':{'type':'task_started','turn_id':'t2'}},
+                               {'type':'event_msg','timestamp':'2020-01-01T00:00:00Z','payload':{'type':'user_message','message':'stop'}}):
+                    stream.write(json.dumps(record)+'\n')
+            stage(self.root,'codex',typed|{'turn_id':'t2'})
+        sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}},while_open=typing)
         self.assertIn('Recorded', text)  # typed while the menu was open, so older than the click
         self.assertFalse(pending_file(self.root).exists())
         self.assertEqual(load_run(self.root)[1]['status'], 'running')
+        # The click is newer than the still-current UserMessage; no repeated command is needed to continue.
+        with patch.dict(os.environ,{'CODEX_THREAD_ID':'s','CODEX_HOME':str(self.home/'.codex')}):
+            self.assertEqual(desktop_pending(self.root)['run'],load_run(self.root)[1]['id'])
+        # A newer request arriving during menu application stays; a still-saving older one is retained
+        # with the menu's cutoff, then retired when its native evidence becomes readable.
+        from datetime import datetime,timedelta
+        journal,_=load_run(self.root)
+        click=[r['data']['source'] for r in journal.records() if r['kind']=='transition'][-1]
+        later=(datetime.fromisoformat(click['at'])+timedelta(seconds=1)).isoformat()
+        for host in ('codex','claude'):
+            saving,path,complete=self.staged_conversation(host,'saving-'+host,partial=True)
+            newer,_,_=self.staged_conversation(host,'newer-'+host,at=later)
+            supersede(self.root,'codex',click)
+            with patch('oh.authority.sleep'),patch('oh.cli.host_hook') as apply:
+                with self.assertRaises(Saving):materialize(self.root)
+                apply.assert_not_called()
+            self.assertFalse(used_file(self.root,human_event(saving,host)).exists())
+            self.assertFalse(used_file(self.root,human_event(newer,host)).exists())
+            path.write_text(complete,newline='\n')
+            with patch('oh.cli.host_hook',return_value={'waiting':{'command':'propose'}}) as apply:
+                materialize(self.root)
+                self.assertEqual(apply.call_args.kwargs['verified']['prompt'],newer['prompt'])
+            self.assertIn('Superseded',read_json(used_file(self.root,human_event(saving,host)))['refused'])
 
     def test_codex_menu_falls_back_to_typing_when_it_cannot_be_shown(self):
         self.begin('codex')
