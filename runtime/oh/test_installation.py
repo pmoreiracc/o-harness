@@ -1,4 +1,5 @@
 import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,170 @@ RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class InstallationTest(unittest.TestCase):
+    @staticmethod
+    def development():
+        import importlib.util
+        from .config import HOME
+        spec = importlib.util.spec_from_file_location('oh_dev', HOME / 'integrations/oh_dev.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_development_switch_restores_both_hosts_after_refresh_and_failure(self):
+        """CONTRIBUTING: switching keeps releases installed and preserves their enabled state."""
+        dev = self.development()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)), patch.dict(os.environ, {'OH_DEV_NORMAL_DATA_HOME': '',
+                'CODEX_HOME': str(Path(tmp) / 'codex'), 'CLAUDE_CONFIG_DIR': str(Path(tmp) / 'claude')}):
+            os.environ.pop('OH_DATA_HOME', None)
+            original = {'o-harness@released': True, 'o-harness@disabled': False}
+            plugins = {host: dict(original) for host in dev.HOSTS}
+            marketplaces = {}
+            failed = []
+            race = []
+            protocol = []
+            bad_response = []
+            parse_installed, parse_marketplace = dev.installed, dev.marketplace
+            def inventory(host):
+                if bad_response:
+                    with patch.object(dev, 'call', return_value=bad_response.pop()):return parse_installed(host)
+                return dict(plugins[host])
+            def command(host, *args):
+                if args[1] == 'marketplace':
+                    if args[2] == 'remove':
+                        if host not in marketplaces:raise RuntimeError('marketplace not registered')
+                        del marketplaces[host]
+                    elif args[2] == 'add':
+                        if 'register' in failed:raise RuntimeError('registration failed')
+                        marketplaces[host] = str(args[3])
+                        if 'register-after' in failed:raise RuntimeError('registration failed after applying')
+                if args[1] in ('add', 'install'):
+                    if 'install' in failed:raise RuntimeError('install failed')
+                    plugins[host][dev.PLUGIN] = True
+                    plugins[host].setdefault('o-harness@during-install', True)
+                    if protocol:bad_response.append(protocol[0])
+            def enabled(host, plugin, value):
+                plugins[host][plugin] = value
+                if 'on' in race and plugin == dev.PLUGIN and value:plugins[host]['o-harness@during-enable'] = True
+                if 'off' in race and plugin == 'o-harness@released':plugins[host]['o-harness@disabled'] = True
+            with patch.object(dev, 'installed', side_effect=inventory), \
+                    patch.object(dev, 'call', side_effect=command), patch.object(dev, 'enable', side_effect=enabled), \
+                    patch.object(dev, 'marketplace', side_effect=lambda host: marketplaces.get(host)), \
+                    patch.object(dev, 'build'), contextlib.redirect_stdout(io.StringIO()):
+                dev.switch('on', dev.HOSTS)
+                original['o-harness@during-install'] = True
+                for host in dev.HOSTS:
+                    self.assertFalse(plugins[host]['o-harness@during-install'])
+                original['o-harness@later'] = True
+                for host in dev.HOSTS:plugins[host]['o-harness@later'] = True
+                with contextlib.redirect_stdout(io.StringIO()) as status:
+                    dev.main(['status'])
+                self.assertIn('o-harness@later', status.getvalue())
+                dev.switch('on', dev.HOSTS)
+                for host in dev.HOSTS:
+                    self.assertTrue(plugins[host][dev.PLUGIN])
+                    for plugin in original:self.assertFalse(plugins[host][plugin])
+                dev.switch('off', ('codex',))
+                self.assertTrue(plugins['claude'][dev.PLUGIN])
+                dev.switch('off', dev.HOSTS)
+                for host in dev.HOSTS:self.assertEqual(plugins[host], original | {dev.PLUGIN: False})
+                dev.switch('on', ('codex',))
+                failed.append('install')
+                with self.assertRaisesRegex(RuntimeError, 'install failed'):dev.switch('on', ('codex',))
+                self.assertEqual(plugins['codex'], original | {dev.PLUGIN: False})
+                self.assertEqual(dev.read(dev.home() / 'switch.json')['codex']['phase'], 'off')
+                for boundary in ('register', 'register-after'):
+                    failed[:] = [boundary]
+                    with self.assertRaisesRegex(RuntimeError, 'registration failed'):dev.switch('on', ('codex',))
+                    self.assertEqual('codex' in marketplaces, boundary == 'register-after')
+                    failed.clear()
+                    dev.switch('on', ('codex',))
+                    self.assertTrue(plugins['codex'][dev.PLUGIN])
+                race.append('on')
+                with self.assertRaisesRegex(RuntimeError, 'settings changed during'):dev.switch('on', ('codex',))
+                self.assertFalse(plugins['codex'][dev.PLUGIN])
+                original['o-harness@during-enable'] = True
+                self.assertEqual(plugins['codex'], original | {dev.PLUGIN: False})
+                race.clear()
+                dev.switch('on', ('codex',))
+                dev.switch('off', ('codex',))
+                self.assertEqual(plugins['codex'], original | {dev.PLUGIN: False})
+                baseline = {host: dict(flags) for host, flags in plugins.items()}
+                dev.switch('on', dev.HOSTS)
+                race.append('off')
+                with self.assertRaisesRegex(RuntimeError, 'settings changed during restoration'):dev.switch('off', dev.HOSTS)
+                for record in dev.read(dev.home() / 'switch.json').values():self.assertEqual(record['phase'], 'needs recovery')
+                race.clear()
+                dev.switch('off', dev.HOSTS)
+                self.assertEqual(plugins, baseline)
+                for host, response in (('codex', '{'), ('claude', '{}')):
+                    protocol[:] = [response]
+                    with contextlib.redirect_stderr(io.StringIO()) as error:
+                        with self.assertRaises(SystemExit) as stopped:dev.main(['on', '--host', host])
+                    self.assertEqual(stopped.exception.code, 1)
+                    self.assertIn('invalid plugin protocol', error.getvalue())
+                    self.assertIn(f'oh-dev off --host {host}', error.getvalue())
+                    self.assertEqual(dev.read(dev.home() / 'switch.json')[host]['phase'], 'off')
+                    self.assertEqual(plugins[host], baseline[host])
+                normal = Path(tmp) / '.local/share/o-harness'
+                self.assertFalse(normal.exists())
+                self.assertEqual(list(normal.parent.glob('.oh-snapshot-*.lock')), [])
+                self.assertNotIn('OH_DATA_HOME', os.environ)
+
+    def test_development_bridges_use_live_source_and_isolated_data(self):
+        """CONTRIBUTING: every host entry routes to source without activating the installed core."""
+        from .config import HOME
+        dev = self.development()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)), patch.dict(os.environ, {'OH_DEV_NORMAL_DATA_HOME': '',
+                'CODEX_HOME': str(Path(tmp) / 'codex'), 'CLAUDE_CONFIG_DIR': str(Path(tmp) / 'claude'), 'HOME': tmp, 'USERPROFILE': tmp}):
+            os.environ.pop('OH_DATA_HOME', None)
+            base = dev.home();base.mkdir(parents=True)
+            plugin = dev.build('codex', base / 'build')
+            normal = Path(tmp) / '.local/share/o-harness'
+            self.assertFalse(normal.exists())
+            self.assertEqual(list(normal.parent.glob('.oh-snapshot-*.lock')), [])
+            self.assertNotIn('OH_DATA_HOME', os.environ)
+            # The production package remains intact; only the generated entry points differ.
+            verify_package(plugin / 'core')
+            consumer = base / 'consumer';consumer.mkdir()
+            launcher = plugin / 'scripts/oh'
+            def run(*args, **options):
+                return subprocess.run([sys.executable, '-I', str(launcher), *args], cwd=consumer,
+                                      capture_output=True, text=True, **options)
+            result = run('resource', 'workflows/propose/SKILL.md')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn((HOME / 'workflows/propose/SKILL.md').read_text().strip(), result.stdout)
+            self.assertFalse((base / 'data/runtime/active.json').exists())
+            self.assertEqual(list(consumer.iterdir()), [])
+            # Change the generated package's resource: the bridge must still read the source checkout.
+            (plugin / 'core/workflows/propose/SKILL.md').write_text('wrong packaged workflow')
+            self.assertEqual(run('resource', 'workflows/propose/SKILL.md').stdout, result.stdout)
+            # Execute a source hook via its development sibling launcher. An ordinary prompt is inert.
+            hook = subprocess.run([sys.executable, '-I', str(plugin / 'scripts/human-event.py'), 'codex'],
+                                  input=json.dumps({'prompt': 'hello', 'cwd': str(consumer)}), capture_output=True, text=True)
+            self.assertEqual(hook.returncode, 0, hook.stderr)
+            self.assertEqual(hook.stdout, '')
+            self.assertNotEqual(run('service-install').returncode, 0)
+            # Check argument boundaries without ever dispatching a real service/setup command.
+            for command in ('setup', 'service-install', 'service-uninstall'):
+                for prefix in ([], ['--'], ['--root', str(consumer), '--'], ['--ro=' + str(consumer)]):
+                    with patch('sys.argv', ['oh', *prefix, command]), patch.object(dev.runpy, 'run_path') as dispatch:
+                        with self.assertRaisesRegex(SystemExit, 'Development uses the checkout directly'):
+                            dev.launch(HOME, base / 'data', 'cli', launcher)
+                        dispatch.assert_not_called()
+            self.assertEqual(list(consumer.iterdir()), [])
+            subprocess.run(['git', 'init', '-q', str(consumer)], check=True)
+            registered = run('init', env=os.environ | {'OH_DATA_HOME': str(Path(tmp) / 'released-data')})
+            self.assertEqual(registered.returncode, 0, registered.stderr)
+            self.assertTrue(list((base / 'data/registry/checkouts').glob('*.json')))
+            self.assertFalse((Path(tmp) / 'released-data').exists())
+            self.assertEqual([p.name for p in consumer.iterdir()], ['.git'])
+            # A hook passes its intentionally isolated data to the generated sibling CLI.
+            hooked = subprocess.run([sys.executable, '-I', str(plugin / 'scripts/human-event.py'), 'codex'],
+                input=json.dumps({'prompt': '/oh-propose', 'cwd': str(consumer), 'session_id': 'dev-test',
+                                  'hook_event_name': 'UserPromptSubmit', 'turn_id': 'fixture'}), capture_output=True, text=True)
+            self.assertEqual(hooked.returncode, 0, hooked.stderr)
+            self.assertIn('OH:', hooked.stdout)
+
     def test_both_hosts_share_one_core_and_setup_is_explicit_and_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp);consumer=base/'product';consumer.mkdir()

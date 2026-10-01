@@ -99,6 +99,7 @@ OWNERS = [
     ('CLAUDE.md', ()), ('.github/*', ()), ('.gitignore', ()), ('.claude/*', ()), ('.codex/*', ()), ('config/invariants.json', ()),
     ('.gitattributes', ('test_windows',)),
     ('integrations/select_tests.py', ('test_select_tests',)), ('integrations/test.sh', ('test_select_tests',)),
+    ('integrations/oh_dev.py', ('test_installation',)),
     ('integrations/windows-*.ps1', ('test_windows',)), ('integrations/*', ()),  # the rest run only in CI
     ('prompts/*', ('runner',)), ('workflows/*', ('installation', 'mcp_server')), ('config/*', ('config',)),
     ('plugins/*', ('installation', 'test_gates', 'test_plugin_transitions', 'test_windows')),
