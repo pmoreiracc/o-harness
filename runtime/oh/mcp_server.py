@@ -124,20 +124,13 @@ def conversation(meta):
 
 def folder(thread):
     """The folder the conversation works in, from Codex's own saved session."""
+    from .authority import saved, Saving, codex_history
     from .hosts import codex_home
-    files = list((codex_home() / 'sessions').rglob('*' + thread + '.jsonl'))
-    if len(files) != 1:raise Refused('OH could not find this Codex conversation\'s saved session.')
-    cwd = None
-    with files[0].open('rb') as stream:
-        first = json.loads(stream.readline() or b'{}')
-        if first.get('type') != 'session_meta' or (first.get('payload') or {}).get('id') != thread:
-            raise Refused('OH could not read this Codex conversation\'s saved session.')
-        cwd = first['payload'].get('cwd')
-        stream.seek(max(0, files[0].stat().st_size - 4 * 1024 * 1024))
-        for line in stream:
-            try:item = json.loads(line)
-            except ValueError:continue
-            if isinstance(item, dict) and item.get('type') == 'turn_context':cwd = (item.get('payload') or {}).get('cwd') or cwd
+    def read():
+        files = list((codex_home() / 'sessions').rglob('*' + thread + '.jsonl'))
+        if len(files) != 1:raise Saving('OH could not find this Codex conversation\'s saved session; retry the same OH operation.')
+        return codex_history(files[0], thread)[3]
+    cwd = saved(read)
     if not isinstance(cwd, str) or not cwd:raise Refused('OH could not tell which folder this Codex conversation works in.')
     return Path(cwd).resolve()
 
@@ -230,21 +223,26 @@ class Server:
         root = checkout(arguments, thread)
         if name == 'choose':return self.choose(root, thread, ident)
         if name == 'confirm':return self.confirm(arguments, ident)
-        return self.oh(root, command(name, arguments, root), thread, meta.get('progressToken'))
+        native=meta.get('x-codex-turn-metadata')
+        turn=native.get('turn_id') if isinstance(native,dict) else None
+        return self.oh(root, command(name, arguments, root), thread, meta.get('progressToken'), turn)
 
-    def environment(self, thread):
+    def environment(self, thread, turn=None):
         """What an OH command gets in Codex's shell: the person's own shell setup (PATH additions, JAVA_HOME, proxies...),
         which Codex does not give this server, with Codex's forwarded values on top."""
         with self.reading:  # its own lock: replies to the host never wait for the shell
             if self.shell is None:self.shell = shell_environment()
         # OH's and the hosts' own settings come only from Codex, exactly as this server sees them, so a command
         # and the server always use the same OH state and Codex folder.
-        return dict(os.environ) | {k: v for k, v in self.shell.items() if k not in FORWARDED} | {'CODEX_THREAD_ID': thread}
+        environment=dict(os.environ) | {k: v for k, v in self.shell.items() if k not in FORWARDED} | {'CODEX_THREAD_ID': thread}
+        environment.pop('OH_CODEX_TURN_ID',None)
+        if isinstance(turn,str) and re.fullmatch(r'[a-zA-Z0-9_-]+',turn):environment['OH_CODEX_TURN_ID']=turn
+        return environment
 
-    def oh(self, root, argv, thread, token):
+    def oh(self, root, argv, thread, token, turn=None):
         """Run one OH command through the plugin's launcher, as the shell would, in the calling conversation.
         OH's progress lines become progress notifications when the host asked for them."""
-        environment = self.environment(thread)
+        environment = self.environment(thread,turn)
         output, lines = [], []
         # OH keeps working if Codex ends this server: its own session on POSIX, its own process group on Windows.
         detached = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
@@ -274,6 +272,15 @@ class Server:
                     if call not in self.cancelled or self.cancelled[call].is_set():return {'result': {'action': 'cancel'}}
         finally:self.replies.pop(ident, None)
 
+    def text_answer(self, message, title, call):
+        """Ask for words only after the person chose Other or Refine, never beside the choice menu."""
+        reply = self.elicit(message, {'type': 'object', 'required': ['answer'],
+            'properties': {'answer': {'type': 'string', 'title': title, 'minLength': 1}}}, call)
+        result = reply.get('result') or {}
+        if result.get('action') != 'accept':return None
+        answer = (result.get('content') or {}).get('answer')
+        return answer if isinstance(answer, str) and answer.strip() else None
+
     def confirm(self, arguments, call):
         """Asks the person a question OH's instructions need answered and waits for the click: the call stays open
         until they answer or close the menu, so the conversation can't move on without them."""
@@ -289,7 +296,6 @@ class Server:
         properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': options}}
         if typed:
             properties['choice']['enum'] = options + ['Other']
-            properties['answer'] = {'type': 'string', 'title': 'Your answer (only for Other)'}
         reply = self.elicit(question, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
         result = reply.get('result') or {}
         if result.get('action') != 'accept':return 'The menu was closed. ' + fallback
@@ -297,9 +303,9 @@ class Server:
         choice = content.get('choice')
         if choice not in properties['choice']['enum']:return 'The menu came back without a valid choice. ' + fallback
         if choice == 'Other' and typed:
-            answer = content.get('answer')
-            if not isinstance(answer, str) or not answer.strip():return 'Other needs an answer, and none was typed. ' + fallback
-            return 'The person answered: ' + ' '.join(answer.split())
+            answer = self.text_answer(question, 'Your answer', call)
+            if answer is None:return 'Other needs an answer, and none was typed. ' + fallback
+            return 'The person answered: ' + answer
         return 'The person chose: ' + choice
 
     def choose(self, root, thread, call):
@@ -323,8 +329,6 @@ class Server:
         menu = gate['options'] + ([{'choice': 'refine', 'label': 'Refine', 'description': ''}] if gate['words'] else [])
         properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': [o['choice'] for o in menu],
                                  'enumNames': [o['label'] for o in menu]}}
-        if gate['words']:
-            properties['changes'] = {'type': 'string', 'title': 'What to change (only for Refine)'}
         details = '\n'.join(f'- {o["label"]}: {o["description"]}' for o in gate['options'] if o['description'] != o['label'])
         message = (f"{gate['question'].removesuffix(' [OH gate '+gate['id']+']')}\nProject {project_name(root)} · {root} · run {state['id'][:8]}"
                    + ('\n' + details if details else ''))
@@ -336,13 +340,13 @@ class Server:
         choice = content.get('choice')
         if choice not in [o['choice'] for o in menu]:return 'The menu came back without a valid choice. ' + fallback
         if choice == 'refine':
-            words = content.get('changes')
-            if not isinstance(words, str) or not words.strip():
+            words = self.text_answer(message, 'What should OH change?', call)
+            if words is None:
                 return 'Refine needs what to change; nothing was recorded. Ask the person to type: refine: <what to change>.'
-            choice = 'refine: ' + ' '.join(words.split())
+            choice = 'refine: ' + words
         event = {'host': 'codex', 'session': thread, 'turn': 'menu-' + identifier(), 'prompt': choice, 'via': 'elicitation', 'at': now()}
         after = apply(root, event, gate['id'])
-        dropped = supersede(root, 'codex')  # anything typed while the menu was open is older than this click
+        dropped = supersede(root, 'codex', event)
         answered(root, 'codex', thread, state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
         if dropped:label += f' (this set aside {dropped}, which the person typed earlier; they type it again to run it)'

@@ -96,7 +96,9 @@ class CodexToolsTest(unittest.TestCase):
         codex_session(self.home, 't1', self.root)
         def ask(arguments, reply, capabilities=None):
             asked = []
-            def respond(message):asked.append(message['params']);return reply
+            def respond(message):
+                asked.append(message['params'])
+                return reply[len(asked)-1] if isinstance(reply,list) else reply
             with patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex')}):
                 sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18',
                               'capabilities': {'elicitation': {}} if capabilities is None else capabilities}},
@@ -108,9 +110,18 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual((text, error), ('The person chose: This project', False))
         self.assertEqual(asked[0]['message'], 'Apply these settings?')
         self.assertEqual(asked[0]['requestedSchema']['properties']['choice']['enum'], question['options'])
-        text, _, asked = ask(question | {'typed': True}, {'action': 'accept', 'content': {'choice': 'Other', 'answer': ' My  Name '}})
-        self.assertEqual(text, 'The person answered: My Name')
-        self.assertIn('answer', asked[0]['requestedSchema']['properties'])
+        # docs/usage.md: every form asks one question; normal choices never show an unused text field.
+        text, _, asked = ask(question | {'typed': True}, {'action': 'accept', 'content': {'choice': 'Keep them'}})
+        self.assertEqual(text, 'The person chose: Keep them');self.assertEqual(len(asked),1)
+        self.assertEqual(set(asked[0]['requestedSchema']['properties']),{'choice'})
+        other={'action':'accept','content':{'choice':'Other','answer':'ignore unrequested words'}}
+        words=' Keep  these\n  indented lines '
+        text, _, asked = ask(question | {'typed': True}, [other,{'action':'accept','content':{'answer':words}}])
+        self.assertEqual(text, 'The person answered: '+words)
+        self.assertEqual([set(q['requestedSchema']['properties']) for q in asked],[{'choice'},{'answer'}])
+        for response in ({'action':'cancel'},{'action':'decline'},{'action':'accept','content':{'answer':'  '}}):
+            text,error,asked=ask(question | {'typed':True},[other,response])
+            self.assertIn('No answer was given',text);self.assertFalse(error);self.assertEqual(len(asked),2)
         for reply, capabilities in (({'action': 'decline'}, None), ({'action': 'cancel'}, None), ({'action': 'accept', 'content': {'choice': 'Yes'}}, None),
                                     ({'action': 'accept', 'content': {'choice': 'Other'}}, None), ({}, {})):
             text, error, asked = ask(question | {'typed': reply.get('content', {}).get('choice') == 'Other'}, reply, capabilities)
@@ -130,6 +141,64 @@ class CodexToolsTest(unittest.TestCase):
         text, error = self.call('config', {'root': str(self.root)}, launcher=HOME / 'oh')
         self.assertFalse(error, text)
         self.assertEqual(json.loads(text)['checks'][0]['name'], 'fixture')
+        # The real launcher must recover a selected skill from the current Desktop event, even with an
+        # unrelated stopped run in this checkout. A bare proposal stops before any worker or branch work.
+        from .workflow import start
+        from .controls import request
+        start(self.root,{'tasks':self.tasks[:1]},fixtures.WorkflowTest.event(self))
+        from .cli import executable_run
+        from .storage import Refused
+        # Old Codex clients supply the owning thread without a turn ID; both must enforce ownership.
+        for turn in ('','turn-1'):
+            with patch.dict(os.environ,{'CODEX_THREAD_ID':'s','OH_CODEX_TURN_ID':turn}):
+                executable_run(self.root,None)
+            with patch.dict(os.environ,{'CODEX_THREAD_ID':'other','OH_CODEX_TURN_ID':turn}),self.assertRaisesRegex(Refused,'another conversation'):
+                executable_run(self.root,None)
+        request(self.root,'stop')
+        with self.assertRaisesRegex(Refused,'earlier run'):
+            executable_run(self.root,{'run':'an-earlier-run','status':'running'})
+        path=next((self.home/'.codex/sessions').rglob('*t1.jsonl'))
+        prompt='[$o-harness:oh-propose](/plugins/oh-propose/SKILL.md)'
+        records=[{'type':'session_meta','payload':{'id':'t1','cwd':str(self.root),'source':'vscode','originator':'Codex Desktop'}},
+            {'type':'event_msg','payload':{'type':'task_started','turn_id':'turn-1'}},
+            {'type':'event_msg','timestamp':'2026-09-30T12:01:00Z','payload':{'type':'item_completed','thread_id':'t1','turn_id':'turn-1',
+                'item':{'type':'UserMessage','id':'message-one','content':[{'type':'text','text':prompt}]}}},
+            {'type':'response_item','payload':{'role':'user','content':[{'type':'input_text','text':'<skill>instructions</skill>'}]}}]
+        path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
+        # A previous chat may have left its proposal pending on dirty files. The new invocation wins;
+        # merely checking that the old chat owns that locator would wedge every later conversation.
+        from .authority import stage,used_file
+        from .workflow import human_event
+        from .storage import read_json
+        older={'hook_event_name':'UserPromptSubmit','session_id':'older','turn_id':'older-turn','prompt':'$oh-propose old idea'}
+        codex_session(self.home,'older',self.root)
+        old_path=next((self.home/'.codex/sessions').rglob('*older.jsonl'))
+        with old_path.open('a',newline='\n') as stream:
+            for record in ({'type':'event_msg','payload':{'type':'task_started','turn_id':'older-turn'}},
+                           {'type':'event_msg','timestamp':'2026-09-30T12:00:00Z','payload':{'type':'user_message','message':older['prompt']}}):
+                stream.write(json.dumps(record)+'\n')
+        # Deliver the locators backwards: native time, not hook arrival, decides which command wins.
+        newer={'hook_event_name':'UserPromptSubmit','session_id':'t1','turn_id':'turn-1','prompt':prompt}
+        stage(self.root,'codex',newer)
+        stage(self.root,'codex',older)
+        self.assertFalse(used_file(self.root,human_event(newer,'codex')).exists())
+        old_meta=calling('older');old_meta['_meta']['x-codex-turn-metadata']['turn_id']='older-turn'
+        text,error=self.call('run',{'root':str(self.root)},meta=old_meta,launcher=HOME/'oh')
+        self.assertTrue(error);self.assertIn('another conversation',text)
+        self.assertFalse(used_file(self.root,human_event(newer,'codex')).exists())
+        for _ in range(2):
+            text,error=self.call('run',{'root':str(self.root)},launcher=HOME/'oh')
+            self.assertFalse(error,text)
+            self.assertEqual(json.loads(text)['waiting']['command'],'propose')
+        self.assertIn('Superseded',read_json(used_file(self.root,human_event(older,'codex')))['refused'])
+        text,error=self.call('run',{'root':str(self.root)},meta=old_meta,launcher=HOME/'oh')
+        self.assertTrue(error);self.assertIn('Superseded',text)  # retrying the old chat cannot take the request back
+        from .authority import drop_waiting
+        drop_waiting('t1')
+        records[2]['payload']['item']['content'][0]['text']='Discuss something else'
+        path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
+        text,error=self.call('run',{'root':str(self.root)},launcher=HOME/'oh')
+        self.assertTrue(error);self.assertIn('No new OH command was recognized',text)
 
     def test_tools_act_only_on_the_checkout_of_the_conversation_that_calls(self):
         other = Path(self.temp.name) / 'other';other.mkdir()
@@ -145,6 +214,35 @@ class CodexToolsTest(unittest.TestCase):
         self.assertIn('absolute path', self.call('status', {'root': 'project'})[0])
         with patch.dict(os.environ, {'OH_CHILD_ATTEMPT': '1'}):
             self.assertIn('workers cannot', self.call('status', {'root': str(self.root)})[0])
+        # docs/architecture.md: every tool follows the current checkout, including while Codex saves
+        # that move and when a large tool response separates the context from the next human message.
+        from .mcp_server import checkout
+        from .authority import attest
+        from .storage import Refused
+        import subprocess
+        subprocess.run(['git','init','-q',str(other)],check=True)
+        path=next((self.home/'.codex/sessions').rglob('*t1.jsonl'))
+        initial=path.read_text()
+        context=initial+json.dumps({'type':'turn_context','payload':{'cwd':str(other)}})+'\n'
+        for partial in ('',initial[:20],context[:-8]):
+            for root in (other,self.root):
+                path.write_text(partial,newline='\n')
+                with patch('oh.authority.sleep',side_effect=lambda _:path.write_text(context,newline='\n')) as pause:
+                    if root==other:self.assertEqual(checkout({'root':str(root)},'t1'),other.resolve())
+                    else:
+                        with self.assertRaisesRegex(Refused,'does not work in'):
+                            checkout({'root':str(root)},'t1')
+                    pause.assert_called_once()
+        history=[{'type':'event_msg','payload':{'type':'task_started','turn_id':'later'}},
+                 {'type':'response_item','payload':{'type':'function_call_output','output':'x'*(8*1024*1024)}},
+                 {'type':'event_msg','payload':{'type':'user_message','message':'$oh-propose long chat'}}]
+        path.write_text(context+''.join(json.dumps(x)+'\n' for x in history),newline='\n')
+        self.assertEqual(checkout({'root':str(other)},'t1'),other.resolve())
+        with self.assertRaisesRegex(Refused,'does not work in'):
+            checkout({'root':str(self.root)},'t1')
+        payload={'hook_event_name':'UserPromptSubmit','session_id':'t1','turn_id':'later',
+                 'prompt':'$oh-propose long chat','transcript_path':str(path)}
+        self.assertEqual(attest('codex',payload,other)['turn'],'later')
 
     def test_prepare_saves_the_task_list_where_the_model_cannot_write(self):
         from .storage import project, read_json, state_home
@@ -238,7 +336,7 @@ class CodexToolsTest(unittest.TestCase):
         path = home / 'sessions/rollout-x-t9.jsonl';path.parent.mkdir(parents=True)
         records = [{'type': 'session_meta', 'payload': {'id': 't9', 'cwd': str(self.root), 'source': 'cli'}},
                    {'type': 'event_msg', 'payload': {'type': 'task_started', 'turn_id': 'turn'}},
-                   {'type': 'response_item', 'payload': {'role': 'user', 'content': [{'type': 'input_text', 'text': 'continue'}]}}]
+                   {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': 'continue'}}]
         path.write_text(''.join(json.dumps(r) + '\n' for r in records), newline='\n')
         payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 't9', 'turn_id': 'turn', 'prompt': 'continue', 'transcript_path': str(path)}
         with patch.dict(os.environ, {'CODEX_HOME': str(home)}):

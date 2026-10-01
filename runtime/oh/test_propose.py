@@ -201,14 +201,38 @@ class ProposeTest(unittest.TestCase):
                 self.say('stop')
 
     def test_refine_asks_again_with_the_person_s_words(self):
+        """docs/usage.md: Refine asks for words only after selection; closing it applies nothing."""
+        import io
+        from .mcp_server import Server
         self.propose()
         run(self.root, self.worker([idea()]))
         with self.assertRaisesRegex(Refused, 'Say what to change'):self.say('refine:  ')
-        self.say('refine: put it in a new milestone M2 called Find things')
+        server=Server(io.StringIO(),io.StringIO());server.client={'capabilities':{'elicitation':{}}}
+        def refine(answer, before_answer=None):
+            forms=[]
+            def respond(message,schema,call):
+                forms.append(schema)
+                if len(forms)==1:return {'result':{'action':'accept','content':{'choice':'refine','changes':'ignore unrequested words'}}}
+                if before_answer:before_answer()
+                return {'result':answer}
+            with patch.object(server,'elicit',side_effect=respond):result=server.choose(self.root,'s','call')
+            self.assertEqual([set(f['properties']) for f in forms],[{'choice'},{'answer'}])
+            return result
+        for answer in ({'action':'cancel'},{'action':'accept','content':{'answer':' '}}):
+            self.assertIn('nothing was recorded',refine(answer))
+            self.assertEqual(load_run(self.root)[1]['status'],'approval_checkpoint')
+        words='put it in a new milestone M2 called Find things\nKeep  this spacing.'
+        self.assertIn('Recorded',refine({'action':'accept','content':{'answer':words}}))
+        self.assertEqual(load_run(self.root)[1]['proposal_answers'][-1]['feedback'],words)
         result = run(self.root, self.worker([idea(milestone='M2', milestone_title='Find things', milestone_done_when='Found')]))
         prompts = [c[1] for c in self.calls if c[0] == 'analysis']
-        self.assertIn('put it in a new milestone M2 called Find things', prompts[1])
+        self.assertIn('Keep  this spacing.', prompts[1])
+        self.assertNotIn('ignore unrequested words',prompts[1])
         self.assertEqual(result['proposal']['lines'][0], '### M2 — Find things')
+        # A run may be stopped while the second question is open: the original gate still must match.
+        with self.assertRaisesRegex(Refused,'out of date'):
+            refine({'action':'accept','content':{'answer':'Too late'}},before_answer=lambda:self.say('reconsider'))
+        self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
 
     def test_new_milestone_number_is_assigned_by_code(self):

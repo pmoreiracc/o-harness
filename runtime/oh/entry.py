@@ -8,9 +8,17 @@ REFINE=r'refine:\s*\S.*'  # refine: <what to change>, the person's own words for
 PREFIX=r'[$/](?:o-harness:)?'
 
 
+def invocation(prompt):
+    """Unwrap only a leading Codex skill mention. The link is syntax, never a file to open."""
+    if not isinstance(prompt,str):return ''
+    prompt=prompt.strip()
+    linked=re.fullmatch(r'\[(\$(?:o-harness:)?oh-[a-z]+)\]\([^\r\n]+?[/\\]SKILL\.md\)(?=\s|$)(.*)',prompt,re.S)
+    return linked[1]+linked[2] if linked else prompt
+
+
 def command(prompt):
     if not isinstance(prompt,str):return None
-    prompt=prompt.strip()
+    prompt=invocation(prompt)
     match=re.fullmatch(PREFIX+r'oh-(start|pause|resume|stop|propose|design|deliver)(?:\s+(.*))?',prompt,re.S)
     # Workflow skills are invoked as oh-propose/oh-design/oh-deliver; internally they keep their workflow names.
     if match:return (match[1] if match[1] in ('propose','design','deliver') else 'oh-'+match[1]),match[2] or ''

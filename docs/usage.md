@@ -10,6 +10,16 @@ menu: for example, what to do with your own uncommitted changes, or whether to s
 is still open. Answer in the menu: if you type something else instead, OH sets the command
 aside and tells you so. A new command replaces one that hasn't run yet.
 
+In Codex you can select an OH skill or type its command. OH reads the native human message;
+the skill instructions added by the host do not count as another request. If either host is
+still saving the evidence, OH retries the read briefly without asking you to repeat yourself.
+A newer human message supersedes an older pending command, and retrying an already consumed
+command does not grant work twice. An unrecognized invocation cannot stand in for a stopped
+run: use `status` to inspect that run. These paths are covered by
+`test_native_transcript_binds_host_turn_text_and_checkout`,
+`test_desktop_fallback_uses_only_current_native_human_turn`, and
+`test_a_real_command_runs_through_the_launcher`.
+
 ## Plan: oh-propose and oh-design
 
 `/oh-propose <idea>` finds where the idea belongs, such as
@@ -117,6 +127,11 @@ question menu, or a Codex pop-up. Menus were checked in the Claude CLI, desktop 
 and is the way to choose where no menu can be shown, such as `codex exec`. At an approval, pick **Other** in Claude,
 or **Refine** in Codex, to say what to change. **pr** lets the agent push the branch and open a pull request with the
 review summary; you merge it.
+
+Codex sends one question per form. Choosing **Other** in a confirmation or **Refine** at
+an approval opens the text question afterward; closing it applies nothing. Covered by
+`test_confirm_waits_for_the_person_and_never_answers_for_them` and
+`test_refine_asks_again_with_the_person_s_words`.
 
 You can still code, commit and open PRs without OH at any time.
 

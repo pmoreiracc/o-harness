@@ -37,7 +37,8 @@ class WorkflowTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)/'project';self.root.mkdir()
-        self.env=patch.dict(os.environ,{'OH_DATA_HOME':str(Path(self.temp.name)/'state')});self.env.start();self.addCleanup(self.env.stop)
+        self.env=patch.dict(os.environ,{'OH_DATA_HOME':str(Path(self.temp.name)/'state'),
+            'CODEX_THREAD_ID':'','CODEX_SESSION_ID':'','OH_CODEX_TURN_ID':''});self.env.start();self.addCleanup(self.env.stop)
         self.git('init','-q','-b','main');self.git('config','user.name','OH Test');self.git('config','user.email','test@example.invalid')
         self.project_id=identifier()
         register(self.root,'Fixture',imported={'id':self.project_id})
