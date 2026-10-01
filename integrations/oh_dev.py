@@ -1,4 +1,4 @@
-"""Use this OH checkout in Claude Code and Codex without replacing the released plugin.
+"""Use an OH snapshot (or --live checkout) in both hosts without replacing the released plugin.
 
 Only this contributor tool and its generated launchers know about development mode.
 Host CLIs install a separate local marketplace; their enablement settings select it.
@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import runpy
 import shutil
 import subprocess
@@ -24,7 +25,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(SOURCE / 'runtime'))
 from oh.storage import atomic_json, lock
 from oh import system
-from oh.installation import build as package
+from oh.config import version
+from oh.installation import build as package, inventory, verify_package
 
 
 def home():
@@ -193,25 +195,42 @@ def host_home(host):
     return str(Path(os.environ.get(variable, Path.home() / fallback)).expanduser().resolve())
 
 
-def build(host, folder, source=SOURCE):
+def build(host, folder, source=SOURCE, snapshot_version=None):
     """Use the real packager, replacing entry points only in the generated development copy."""
     plugin = folder / 'plugins/o-harness'
     with development_data():package(plugin, host)
     data = home() / 'data'
+    core = plugin / 'core'
+    if snapshot_version:
+        # Freeze the adapter and original hooks too: no entry point may import the live checkout.
+        (core / 'integrations').mkdir()
+        shutil.copy2(source / 'integrations/oh_dev.py', core / 'integrations/oh_dev.py')
+        hooks = core / 'plugins/o-harness/scripts';hooks.mkdir(parents=True)
+        for name in ('human-event.py', 'gate-hook.py'):
+            shutil.copy2(plugin / 'scripts' / name, hooks / name)
+        revision = read(core / 'revision.json')
+        revision['source_revision'] = revision['revision']
+        revision['revision'] += '.snapshot.' + snapshot_version.split('-SNAPSHOT.', 1)[1]
+        revision['version'] = snapshot_version
+        write(core / 'revision.json', revision)
+        write(core / 'package.json', {'schema_version': 1, 'revision': revision['revision'], 'files': inventory(core)})
     # Keep the production shell/Windows interpreter helpers. Every Python entry below imports
-    # live source; human-event's sibling launcher must be the generated development launcher.
+    # selected source; human-event's sibling launcher must be the generated development launcher.
     preamble = (plugin / 'scripts/oh').read_text(encoding='utf-8').split('import json', 1)[0]
     for name, kind in (('oh', 'cli'), ('mcp-server', 'mcp'), ('human-event.py', 'human-event'), ('gate-hook.py', 'gate-hook')):
+        selected = "Path(__file__).resolve().parents[1] / 'core'" if snapshot_version else f'Path({str(source)!r})'
         script = (preamble if name in ('oh', 'mcp-server') else '') + (
             'import sys\nfrom pathlib import Path\n'
-            f'sys.path.insert(0, {str(source / "integrations")!r})\n'
+            f'source = {selected}\n'
+            'sys.path.insert(0, str(source / "integrations"))\n'
             'from oh_dev import launch\n'
-            f'launch(Path({str(source)!r}), Path({str(data)!r}), {kind!r}, Path(__file__))\n')
+            f'launch(source, Path({str(data)!r}), {kind!r}, Path(__file__))\n')
         (plugin / 'scripts' / name).write_text(script, encoding='utf-8', newline='\n')
-    manifest = plugin / ('.codex-plugin/plugin.json' if host == 'codex' else '.claude-plugin/plugin.json')
-    metadata = read(manifest)
-    metadata['version'] = metadata['version'].split('+')[0] + '+codex.' + folder.name
-    write(manifest, metadata)
+    for kind in HOSTS:
+        manifest = plugin / ('.' + kind + '-plugin/plugin.json')
+        metadata = read(manifest)
+        metadata['version'] = snapshot_version or metadata['version'].split('+')[0] + '-SNAPSHOT.live.' + folder.name
+        write(manifest, metadata)
     if host == 'codex':
         catalog = {'name': MARKETPLACE, 'interface': {'displayName': 'OH development'}, 'plugins': [{
             'name': 'o-harness', 'source': {'source': 'local', 'path': './plugins/o-harness'},
@@ -223,6 +242,65 @@ def build(host, folder, source=SOURCE):
     return plugin
 
 
+def create_snapshot():
+    """Package both hosts once; publish the selection record only after both packages are complete."""
+    for retry in range(2):
+        manifests = [read(SOURCE / f'plugins/o-harness/.{host}-plugin/plugin.json')['version'] for host in HOSTS]
+        if len(set(manifests)) != 1 or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', manifests[0]):
+            raise RuntimeError('Source plugin versions must match as X.Y.Z before building a snapshot.')
+        revision = version()
+        label = manifests[0] + '-SNAPSHOT.' + str(time.time_ns())
+        folder = home() / 'builds' / label
+        folder.mkdir(parents=True)
+        try:
+            for host in HOSTS:build(host, folder / host, source=SOURCE, snapshot_version=label)
+            if version() != revision or any(read(folder / host / 'plugins/o-harness/core/revision.json')['source_revision'] != revision for host in HOSTS):
+                if retry == 0:continue  # an editor saved during copying: rebuild from its completed changes
+                raise RuntimeError('The checkout kept changing during packaging. Finish saving, then retry oh-dev build.')
+            metadata = {'version': label, 'source': str(SOURCE), 'source_revision': revision}
+            write(folder / 'snapshot.json', metadata)
+            return folder, metadata
+        finally:
+            if not (folder / 'snapshot.json').exists():shutil.rmtree(folder)  # windows-ok: packaged files only, no Git metadata
+
+
+def read_snapshot(path):
+    folder = Path(path).expanduser().resolve()
+    validate_storage(folder, home() / 'data')
+    metadata = read(folder / 'snapshot.json')
+    if (not isinstance(metadata, dict) or any(not isinstance(metadata.get(key), str) for key in ('version', 'source', 'source_revision'))
+            or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-SNAPSHOT\.[0-9]+', metadata['version'])):
+        raise RuntimeError('Select the build folder printed by oh-dev build; its snapshot.json is missing or invalid.')
+    for host in HOSTS:
+        plugin = folder / host / 'plugins/o-harness'
+        verify_package(plugin / 'core')
+        revision = read(plugin / 'core/revision.json')
+        if revision.get('version') != metadata['version'] or revision.get('source_revision') != metadata.get('source_revision'):
+            raise RuntimeError('Snapshot metadata does not match its packaged engine. Rebuild with oh-dev build.')
+        for kind in HOSTS:
+            if read(plugin / f'.{kind}-plugin/plugin.json').get('version') != metadata['version']:
+                raise RuntimeError('Snapshot plugin versions do not match its engine. Rebuild with oh-dev build.')
+    return folder, metadata
+
+
+def selected_entry(host=None):
+    """Select the active development runtime; different host builds require an explicit host."""
+    state = read(home() / 'switch.json', {})
+    for name, record in state.items():
+        if (host is None or name == host) and record['phase'] not in ('on', 'off'):
+            raise RuntimeError(f'An interrupted switch needs recovery. Run oh-dev off --host {name}, then retry.')
+    selected = [(h, r) for h, r in state.items() if (host is None or h == host) and r['phase'] == 'on']
+    if not selected:return None  # initial profile setup, before either host is enabled
+    if len({(r.get('mode', 'live'), r.get('build'), r['source']) for _, r in selected}) > 1:
+        raise RuntimeError('The hosts use different builds. Select oh-dev exec --host codex or --host claude.')
+    chosen, record = selected[0]
+    if record['host_home'] != host_home(chosen):
+        raise RuntimeError(f'{chosen} settings folder changed. Use {record["host_home"]} or turn development off there first.')
+    entry = Path(record['marketplace']) / 'plugins/o-harness/scripts/oh'
+    if not entry.is_file():raise RuntimeError(f'The selected build is missing. Run oh-dev on --host {chosen} to rebuild it.')
+    return entry
+
+
 def launch(source, data, kind, entry):
     """Development-only routing; execution and approval behavior remain owned by OH."""
     parser = argparse.ArgumentParser(add_help=False)
@@ -231,7 +309,7 @@ def launch(source, data, kind, entry):
     selected, _ = parser.parse_known_args(sys.argv[1:] if kind == 'cli' else [])
     # Both releases use the same service name. Parse the command after global options/--.
     if kind == 'cli' and selected.command in ('setup', 'service-install', 'service-uninstall'):
-        raise SystemExit('Development uses the checkout directly. Refresh with oh-dev on; run the dashboard with oh-dev exec serve --port 4319.')
+        raise SystemExit('Development is isolated. Select a build with oh-dev on; run the dashboard with oh-dev exec serve --port 4319.')
     validate_storage(data.parent, data)
     os.environ['OH_DEV_NORMAL_DATA_HOME'] = str(normal_data())
     os.environ['OH_DATA_HOME'] = str(data)
@@ -261,7 +339,7 @@ def restore(host, record):
         raise RuntimeError('OH plugin settings changed during restoration. Finish the other host operation, then retry off.')
 
 
-def switch(action, hosts):
+def switch(action, hosts, *, build_path=None, live=False):
     location = home()
     location.mkdir(parents=True, exist_ok=True)
     with lock(location / 'switch.lock'):
@@ -280,6 +358,9 @@ def switch(action, hosts):
             record = state.get(host, {})
             if registered and registered not in (record.get('marketplace'), record.get('pending_marketplace')):
                 raise RuntimeError(f'{host} has a different oh-dev marketplace at {registered}. Remove the conflicting oh-dev marketplace before switching.')
+        selected = None
+        if action == 'on' and not live:
+            selected = read_snapshot(build_path) if build_path else create_snapshot()
         failures = []
         for host in hosts:
             if action == 'off' and host not in state:
@@ -296,8 +377,16 @@ def switch(action, hosts):
                     if plugin != PLUGIN:record['previous'].setdefault(plugin, enabled)
             try:
                 if action == 'on':
-                    folder = location / 'builds' / host / str(time.time_ns())
-                    build(host, folder)
+                    if selected:
+                        folder = selected[0] / host
+                        record.update(mode='snapshot', build=str(selected[0]), version=selected[1]['version'],
+                                      source_revision=selected[1]['source_revision'], build_source=selected[1]['source'])
+                    else:
+                        folder = location / 'builds' / host / str(time.time_ns())
+                        build(host, folder)
+                        base_version = read(SOURCE / f'plugins/o-harness/.{host}-plugin/plugin.json')['version']
+                        record.update(mode='live', build=None, version=base_version + '-SNAPSHOT.live.' + folder.name,
+                                      source_revision=version(), build_source=str(SOURCE))
                     record['phase'] = 'switching'
                     state[host] = record
                     write(path, state)  # Recovery exists before the first host mutation.
@@ -328,7 +417,8 @@ def switch(action, hosts):
                         raise RuntimeError('OH plugin settings changed during the switch. Finish the other host operation, then retry.')
                     record['phase'] = 'on'
                     write(path, state)
-                    print(f'{host}: development on — {SOURCE}')
+                    print(f'{host}: {record["mode"]} on — {record.get("version") or SOURCE}')
+                    if selected:print(f'Build: {selected[0]}')
                 else:
                     restore(host, record)
                     record['phase'] = 'off'
@@ -355,15 +445,27 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='action', required=True)
     for action in ('on', 'off', 'status'):
         sub.add_parser(action).add_argument('--host', choices=HOSTS, help='default: both hosts')
-    execute = sub.add_parser('exec', help='run a source OH command using development data')
+    mode = sub.choices['on'].add_mutually_exclusive_group()
+    mode.add_argument('--build', metavar='PATH', help='activate a snapshot previously made by oh-dev build')
+    mode.add_argument('--live', action='store_true', help='read the changing checkout instead of a fixed snapshot')
+    sub.add_parser('build', help='package both hosts without changing installed plugins')
+    execute = sub.add_parser('exec', help='run an OH command with the selected development runtime')
+    execute.add_argument('--host', choices=HOSTS, help='required when hosts use different builds')
     execute.add_argument('arguments', nargs=argparse.REMAINDER)
-    args = parser.parse_args(['exec'] if argv[:1] == ['exec'] else argv)
+    # Everything after exec belongs to OH, except an optional leading development-host selector.
+    prefix = 3 if argv[:2] == ['exec', '--host'] else 2 if len(argv) > 1 and argv[0] == 'exec' and argv[1].startswith('--host=') else 1
+    args = parser.parse_args(argv[:prefix] if argv[:1] == ['exec'] else argv)
     try:
         if args.action == 'exec':
-            arguments = argv[1:]
+            arguments = argv[prefix:]
             if arguments[:1] == ['--']:arguments = arguments[1:]
+            if entry := selected_entry(args.host):
+                raise SystemExit(subprocess.run([sys.executable, '-I', str(entry), *arguments]).returncode)
             sys.argv = [str(SOURCE / 'oh'), *arguments]
             launch(SOURCE, home() / 'data', 'cli', SOURCE / 'oh')
+        elif args.action == 'build':
+            folder, metadata = create_snapshot()
+            print(f'Built {metadata["version"]}\n{folder}\nActivate: oh-dev on --build "{folder}"')
         elif args.action == 'status':
             state = read(home() / 'switch.json', {})
             for host in (args.host,) if args.host else HOSTS:
@@ -372,11 +474,17 @@ def main(argv=None):
                 if record:
                     if record['host_home'] != host_home(host):
                         raise RuntimeError(f'{host} settings folder changed. Use {record["host_home"]} to inspect this switch.')
-                print(json.dumps({'host': host, 'source': record['source'] if record else None,
+                print(json.dumps({'host': host, 'source': record.get('build_source', record['source']) if record else None,
+                                  'mode': record.get('mode', 'live') if record else None,
+                                  'phase': record['phase'] if record else 'off',
+                                  'version': record.get('version') if record else None,
+                                  'source_revision': record.get('source_revision') if record else None,
+                                  'build': record.get('build') if record else None,
                                   'plugins': actual, 'marketplace': marketplace(host)}))
             print(f'Development data: {home() / "data"}')
-        else:switch(args.action, (args.host,) if args.host else HOSTS)
-    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        else:switch(args.action, (args.host,) if args.host else HOSTS,
+                    build_path=getattr(args, 'build', None), live=getattr(args, 'live', False))
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         parser.exit(1, f'oh-dev: {exc}\n')
 
 

@@ -41,7 +41,7 @@ Maintainers decide when to publish releases. For local testing, see
 ### One-time setup
 
 Use the OH checkout where you actually edit code. Its current branch and uncommitted files
-will power the development plugin, even when you use OH in another repository.
+will be packaged for the development plugin, even when you use OH in another repository.
 The checkout must contain `integrations/oh_dev.py`.
 
 For Bash or Zsh, add this alias to your shell profile (`~/.bashrc` or `~/.zshrc`), replacing
@@ -72,28 +72,58 @@ oh-dev exec profile-import integrations/oh-profile.json
 From any directory, run `oh-dev on` to switch or `oh-dev off` to switch back. No repeated
 alias setup, profile import, commit, push or version bump is needed.
 
-`oh-dev on` enables a separate local development plugin in **both hosts**, for fresh sessions
-in **any repository**. `oh-dev off` restores the previous released-plugin enablement;
-`oh-dev status` shows the current state. Add `--host codex` or `--host claude` to select one.
+`oh-dev on` builds a fixed snapshot and enables it as a separate development plugin in
+**both hosts**, for fresh sessions in **any repository**. Each build gets a unique version
+such as `0.5.0-SNAPSHOT.1790853731453599000`, shared by both plugins and their packaged engine.
+It prints its version and folder under `~/.local/share/oh-dev/builds/`. Uncommitted edits are
+included; later edits and commits do not change the snapshot. This is the default for testing
+OH while OH itself changes. Run `on` again when you want a new build.
+
+`oh-dev off` restores the previous released-plugin enablement. `oh-dev status` shows each
+host's mode, snapshot version, source revision and build path. Add `--host codex` or
+`--host claude` to `on`, `off` or `status` to select one host.
 Released plugin files are retained. Changing your terminal's directory does not change the
 source checkout. To use another checkout, run `off` with the old definition first, then
 update the saved definition and reload your profile.
 
-The development plugin reads runtime, workflows, prompts, config and dashboard from the
-linked checkout, including uncommitted edits. New OH commands use those live files;
-skills and hook definitions refresh on each `on`. Start fresh host sessions after switching
-or refreshing; restart them after MCP changes. Finish active OH runs before changing source.
+To build without changing either host, or reuse an earlier build:
+
+```sh
+oh-dev build
+oh-dev on --build /absolute/path/printed/by/build
+```
+
+The folder must be a complete `oh-dev build` snapshot. Both hosts are packaged even when
+only one is selected for activation. Keep build folders while their sessions or runs are in use.
+Snapshots use the existing packager, including the platform launchers, and retain their own
+runtime, workflows, hooks and development adapter; release manifests and release version
+ordering are not changed.
+
+For rapid iteration against another repository, `oh-dev on --live` keeps the old behavior:
+runtime, workflows, prompts, config and dashboard come directly from the linked checkout.
+Skills and hook definitions refresh on each `on`. Live plugin versions are marked
+`-SNAPSHOT.live.<build-id>`. Finish active live runs before editing OH's source.
+
+Start fresh host sessions after switching or refreshing. Finish active OH runs before
+selecting a different build; `off` restores plugin enablement but does not stop a run.
 Project-level plugin overrides take precedence; remove an OH override before testing there.
 
 State lives in `~/.local/share/oh-dev`, separate from normal OH data. No consumer files or
-services are installed. `oh-dev exec` runs source CLI commands with development data:
+services are installed. `oh-dev exec` uses the selected development runtime and data:
 
 ```sh
 oh-dev exec status
 oh-dev exec serve --port 4319
 ```
 
+If the hosts use different builds, select `oh-dev exec --host codex <command>` or
+`oh-dev exec --host claude <command>`. Before development is enabled, `exec` uses the source
+checkout so the one-time profile import still works.
+
 Development launchers refuse `setup` and service installation/removal. If switching fails,
 run `oh-dev off --host <reported-host>`, fix the reported cause, and retry.
-The helper, these instructions and two installation regression cases are committed;
-generated plugins, host settings and development data are not.
+The installation tests `test_development_switch_restores_both_hosts_after_refresh_and_failure`,
+`test_development_bridges_use_live_source_and_isolated_data` and
+`test_development_snapshot_freezes_all_entries_and_exec_selects_it` cover switching,
+restoration, source isolation and selecting the packaged runtime. Generated plugins,
+host settings and development data are not committed.

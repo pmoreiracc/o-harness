@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,11 +61,16 @@ class InstallationTest(unittest.TestCase):
                 plugins[host][plugin] = value
                 if 'on' in race and plugin == dev.PLUGIN and value:plugins[host]['o-harness@during-enable'] = True
                 if 'off' in race and plugin == 'o-harness@released':plugins[host]['o-harness@disabled'] = True
+            snapshot = (dev.home() / 'builds/snapshot', {'version': '0.5.0-SNAPSHOT.1',
+                        'source': str(dev.SOURCE), 'source_revision': 'revision'})
             with patch.object(dev, 'installed', side_effect=inventory), \
                     patch.object(dev, 'call', side_effect=command), patch.object(dev, 'enable', side_effect=enabled), \
                     patch.object(dev, 'marketplace', side_effect=lambda host: marketplaces.get(host)), \
-                    patch.object(dev, 'build'), contextlib.redirect_stdout(io.StringIO()):
+                    patch.object(dev, 'build'), patch.object(dev, 'create_snapshot', return_value=snapshot) as packaged, \
+                    contextlib.redirect_stdout(io.StringIO()):
                 dev.switch('on', dev.HOSTS)
+                packaged.assert_called_once()  # the same snapshot powers both hosts
+                self.assertEqual({r['build'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(snapshot[0])})
                 original['o-harness@during-install'] = True
                 for host in dev.HOSTS:
                     self.assertFalse(plugins[host]['o-harness@during-install'])
@@ -81,6 +87,14 @@ class InstallationTest(unittest.TestCase):
                 self.assertTrue(plugins['claude'][dev.PLUGIN])
                 dev.switch('off', dev.HOSTS)
                 for host in dev.HOSTS:self.assertEqual(plugins[host], original | {dev.PLUGIN: False})
+                packaged.reset_mock()
+                with patch.object(dev, 'read_snapshot', return_value=snapshot):
+                    dev.main(['on', '--build', str(snapshot[0])])
+                packaged.assert_not_called()  # selecting an existing snapshot must not silently rebuild it
+                dev.switch('off', dev.HOSTS)
+                dev.switch('on', dev.HOSTS, live=True)
+                self.assertEqual({r['mode'] for r in dev.read(dev.home() / 'switch.json').values()}, {'live'})
+                dev.switch('off', dev.HOSTS)
                 dev.switch('on', ('codex',))
                 failed.append('install')
                 with self.assertRaisesRegex(RuntimeError, 'install failed'):dev.switch('on', ('codex',))
@@ -162,7 +176,7 @@ class InstallationTest(unittest.TestCase):
             for command in ('setup', 'service-install', 'service-uninstall'):
                 for prefix in ([], ['--'], ['--root', str(consumer), '--'], ['--ro=' + str(consumer)]):
                     with patch('sys.argv', ['oh', *prefix, command]), patch.object(dev.runpy, 'run_path') as dispatch:
-                        with self.assertRaisesRegex(SystemExit, 'Development uses the checkout directly'):
+                        with self.assertRaisesRegex(SystemExit, 'Development is isolated'):
                             dev.launch(HOME, base / 'data', 'cli', launcher)
                         dispatch.assert_not_called()
             self.assertEqual(list(consumer.iterdir()), [])
@@ -178,6 +192,74 @@ class InstallationTest(unittest.TestCase):
                                   'hook_event_name': 'UserPromptSubmit', 'turn_id': 'fixture'}), capture_output=True, text=True)
             self.assertEqual(hooked.returncode, 0, hooked.stderr)
             self.assertIn('OH:', hooked.stdout)
+
+    def test_development_snapshot_freezes_all_entries_and_exec_selects_it(self):
+        """CONTRIBUTING: snapshots survive source edits/removal and never activate the released core."""
+        from . import config, installation
+        from .config import HOME
+        dev = self.development()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)), \
+                patch.dict(os.environ, {'OH_DEV_NORMAL_DATA_HOME': '', 'HOME': tmp, 'USERPROFILE': tmp,
+                                       'CODEX_HOME': str(Path(tmp) / 'codex'), 'CLAUDE_CONFIG_DIR': str(Path(tmp) / 'claude')}):
+            os.environ.pop('OH_DATA_HOME', None)
+            # A small source fixture using the real packager, without a second Git repository or run.
+            template = Path(tmp) / 'source/o-harness'
+            with dev.development_data():build(template, 'claude')
+            source = template / 'core'
+            shutil.copytree(HOME / 'plugins', source / 'plugins')
+            (source / 'integrations').mkdir()
+            shutil.copy2(HOME / 'integrations/oh_dev.py', source / 'integrations/oh_dev.py')
+            workflow = source / 'workflows/propose/SKILL.md'
+            workflow.write_text('uncommitted fixture workflow', encoding='utf-8')
+            with patch.object(dev, 'SOURCE', source), patch.object(installation, 'HOME', source), patch.object(config, 'HOME', source):
+                revision = config.version()
+                with patch.object(dev, 'version', side_effect=[revision, 'editor saved', revision, revision]):
+                    first, metadata = dev.create_snapshot()
+                self.assertEqual(list((dev.home() / 'builds').iterdir()), [first])  # discarded partial copy was removed
+                workflow.write_text('later fixture workflow', encoding='utf-8')
+                second, other = dev.create_snapshot()
+            self.assertNotEqual(metadata['version'], other['version'])
+            self.assertRegex(metadata['version'], r'^\d+\.\d+\.\d+-SNAPSHOT\.\d+$')
+            self.assertFalse((dev.home() / 'switch.json').exists())  # build alone changes no host selection
+            self.assertEqual(dev.read_snapshot(first), (first, metadata))
+            shutil.rmtree(template)  # windows-ok: packager fixture has no Git metadata; all entries must survive source removal
+            state = {}
+            for host in dev.HOSTS:
+                plugin = first / host / 'plugins/o-harness'
+                revision = json.loads((plugin / 'core/revision.json').read_text())
+                self.assertEqual(revision['version'], metadata['version'])
+                verify_package(plugin / 'core')
+                command = [sys.executable, '-I', str(plugin / 'scripts/oh')]
+                result = subprocess.run([*command, 'resource', 'workflows/propose/SKILL.md'], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('uncommitted fixture workflow', result.stdout)
+                for script, args, payload in (('human-event.py', [host], {'prompt': 'hello'}),
+                                              ('gate-hook.py', ['pre'], {}),
+                                              ('mcp-server', [], {'id': 1, 'method': 'initialize', 'params': {}})):
+                    invoked = subprocess.run([sys.executable, '-I', str(plugin / 'scripts' / script), *args],
+                        input=json.dumps(payload)+'\n', capture_output=True, text=True)
+                    self.assertEqual(invoked.returncode, 0, invoked.stderr)
+                    if script == 'mcp-server':self.assertIn('protocolVersion', invoked.stdout)
+                state[host] = {'phase': 'on', 'mode': 'snapshot', 'source': str(source), 'build': str(first),
+                               'marketplace': str(first / host), 'host_home': dev.host_home(host)}
+            dev.write(dev.home() / 'switch.json', state)
+            self.assertIn(dev.selected_entry(), [first / host / 'plugins/o-harness/scripts/oh' for host in dev.HOSTS])
+            with patch.object(dev.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as execute:
+                with self.assertRaises(SystemExit) as done:dev.main(['exec', '--root', tmp, 'status'])
+                self.assertEqual(done.exception.code, 0)
+                self.assertEqual(execute.call_args.args[0][2:], [str(dev.selected_entry()), '--root', tmp, 'status'])
+            state['claude'].update(build=str(second), marketplace=str(second / 'claude'))
+            dev.write(dev.home() / 'switch.json', state)
+            with self.assertRaisesRegex(RuntimeError, 'different builds'):dev.selected_entry()
+            self.assertEqual(dev.selected_entry('claude'), second / 'claude/plugins/o-harness/scripts/oh')
+            with patch.object(dev.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as execute:
+                with self.assertRaises(SystemExit):dev.main(['exec', '--host', 'claude', 'status'])
+                self.assertEqual(execute.call_args.args[0][2:], [str(dev.selected_entry('claude')), 'status'])
+            # A corrupt build is refused before installation, without touching the released installation.
+            (first / 'claude/plugins/o-harness/core/workflows/propose/SKILL.md').write_text('changed')
+            with self.assertRaisesRegex(Refused, 'changed or is incomplete'):dev.read_snapshot(first)
+            self.assertFalse((Path(tmp) / '.local/share/o-harness').exists())
+            self.assertFalse((dev.home() / 'data/runtime/active.json').exists())
 
     def test_both_hosts_share_one_core_and_setup_is_explicit_and_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
