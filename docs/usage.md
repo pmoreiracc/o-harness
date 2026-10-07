@@ -243,7 +243,7 @@ On macOS and Windows, `oh service-install` starts the dashboard at <http://local
 running across logins. On Linux, run `oh serve`. See [dashboard and data](analytics.md).
 
 Execution and recovery checkpoints include the branch, current task, completed and pending
-work, checks, findings, and a recommended option with its effect. Proposal, design and quick-fix
+work, checks, findings, and the available options with their effects. Proposal, design and quick-fix
 approvals instead explain the complete subject in their Markdown review copy. When review rounds run out, OH shows each round,
 new or repeated findings, open findings and the allowance used. These are recorded facts;
 waiting or restarting grants nothing. Approval menus show the complete Markdown review copy beside a

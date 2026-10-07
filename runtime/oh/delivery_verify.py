@@ -69,7 +69,9 @@ def verify_run(root,state,*,current=False):
     for done in state['summaries']:
         task=done['task'];commit=done['commit'];evidence=state['commit_intents'][task]['publication']
         verify_record(root,commit,evidence)
-        if git(root,'show','-s','--format=%s',commit)!=f"task {task}: {evidence['title']}":raise Refused(f'Commit {commit[:12]} needs the recorded task {task}: title and OH trailers; repair its message before PR')
+        # Portable evidence redacts local paths; commits retain the approved run's title.
+        title=next(t['title'] for t in state['tasks'] if t['id']==task)
+        if git(root,'show','-s','--format=%s',commit)!=f"task {task}: {title}":raise Refused(f'Commit {commit[:12]} needs the recorded task {task}: title and OH trailers; repair its message before PR')
         if task!='finalize':
             row=approved.get(task)
             if not row or row[1]!='pending' or row[4] or (state.get('track') and row[2]!=state['track']):raise Refused(f'Task {task} was not approved and ready on this delivery track; restore its approved scope before PR')

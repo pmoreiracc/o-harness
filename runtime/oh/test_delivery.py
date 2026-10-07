@@ -61,7 +61,8 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.calls,[])
 
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
-        where,path=self.documents();listed=delivery.listing(self.root)
+        title=f'Add {self.root}/credential.py.'
+        where,path=self.documents(body=BODY.replace('Add the credential store.',title));listed=delivery.listing(self.root)
         self.assertEqual(len(listed['ready']),1);self.assertEqual(len(self.calls),0)
         original=self.git('rev-parse','HEAD')
         self.git('commit','--allow-empty','-qm','merged elsewhere')
@@ -93,7 +94,9 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.git('status','--porcelain'),'')
         choose(self.root,'pr',self.event('good-pr','pr'))  # a correct two-task batch, including its dependency, passes
         from .publication import render
-        self.assertIn('Task 2:',render(self.root))
+        public=render(self.root)
+        self.assertIn('Task 2:',public)
+        self.assertNotIn(str(self.root.parent),public)  # display redaction must not invalidate the original commit title
 
     def test_a_delivery_resumes_on_its_branch_and_one_pr_publishes_both_runs(self):
         from .publication import render
@@ -260,7 +263,8 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.git('-C',str(side),'branch','--show-current'),'deliver/0001')
 
     def test_private_progress_is_reviewed_then_published_after_code_commit(self):
-        where,path=self.documents('private');original=path.read_bytes();observed=[]
+        title=f'Add {self.root}/credential.py.'
+        where,path=self.documents('private',body=BODY.replace('Add the credential store.',title));original=path.read_bytes();observed=[]
         def worker(*args,**kwargs):
             if args[4]=='review':
                 admission=read_json(args[5]/'request.json');candidate=Path(next(iter(admission['artifact']['files'])))
@@ -274,6 +278,9 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,worker)['status'],'completed')
         self.assertIn('status: frozen',path.read_text());self.assertEqual(len(observed),2)
         self.assertEqual(self.git('status','--porcelain'),'')
+        choose(self.root,'pr',self.event('private-pr','pr'))
+        from .publication import render
+        self.assertNotIn(str(self.root.parent),render(self.root))
 
     def test_scope_routing_and_repairs_preserve_the_approved_task(self):
         """docs/usage.md: scope never grows a task; notes and reports belong to the reviewed result."""
