@@ -455,6 +455,7 @@ def absorb(data, folder, files):
         except (OSError, ValueError) as exc:raise Refused(f'Cannot move {path} into {settings_file()}: {exc}') from None
         if not isinstance(value, kind):
             raise Refused(f'Cannot move {path} into {settings_file()}: it must contain a JSON {"object" if kind is dict else "list"}')
+        if isinstance(value,dict):rename_keys(value)
         return value
     if folder is None:values = prune(read(files[0], dict), defaults())
     else:
@@ -548,6 +549,7 @@ def upgrade(*, creating=False):
         try:done = set(read_json(record))
         except (OSError, ValueError, TypeError, Refused):done = set()
         before, moved, unused, stuck, registered, present = deepcopy(data), {}, [], {}, registrations(), present_projects()
+        rename_keys(data)
         for folder, files in legacy_groups():
             key = folder.name if folder else ''
             if key in done:moved[key] = files;continue
@@ -564,7 +566,6 @@ def upgrade(*, creating=False):
             except Refused as exc:
                 stuck[key] = str(exc)
                 if folder is None:break  # projects are compared with the shared settings, so they wait for them
-        rename_keys(data)
         if data != before:
             if settings_file().exists():shutil.copy2(settings_file(), backup_folder('settings') / 'settings.json')
             write_file(data)

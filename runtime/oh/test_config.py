@@ -107,19 +107,41 @@ class ConfigTest(unittest.TestCase):
 
     def test_settings_from_older_versions_move_into_the_file_once_with_backups(self):
         home=state_home();project=self.legacy()
-        (home/'settings').mkdir();(home/'settings/defaults.json').write_text('{"max_escalations": 2, "review_rounds": 3, "tasks_per_batch": 15}')
+        shared={'max_escalations':2,'review_rounds':3,'tasks_per_batch':15,'models':{
+            'codex':{'orchestrator':{'model':'global-codex','effort':'low'}},
+            'claude':{'orchestrator':{'model':'global-claude','effort':'medium'}}}}
+        # Already-saved aliases must compare with the same normalized legacy values.
+        self.write({'models':{'codex':{'orchestrator':{'model':'global-codex','effort':'low'}}}})
+        (home/'settings').mkdir();(home/'settings/defaults.json').write_text(json.dumps(shared))
         # An import copied every default: a project value equal to OH's default still beats the shared value.
-        (project/'config.json').write_text(json.dumps(config.defaults()|{'tasks_per_batch':9}))
-        (project/'config.local.json').write_text('{"tasks_per_batch": 11}')
+        copied=config.defaults()|{'tasks_per_batch':9}
+        for host in ('codex','claude'):
+            copied['models'][host].pop('insights')
+            copied['models'][host]['orchestrator']={'model':'project-'+host,'effort':'medium'}
+        copied['models']['claude']['insights']={'model':'shared-claude'}
+        (project/'config.json').write_text(json.dumps(copied))
+        (project/'config.local.json').write_text(json.dumps({'tasks_per_batch':11,'models':{
+            'codex':{'orchestrator':{'model':'ignored-old-name','effort':'low'},
+                     'insights':{'model':'local-codex','effort':'high'}},
+            'claude':{'orchestrator':{'model':'local-claude','effort':'max'}}}}))
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
         for path in project.glob('c*.json'):path.chmod(0o444)
         value=load(self.root)
         self.assertEqual((value['max_escalations'],value['tasks_per_batch'],value['review_rounds']),(1,11,3))  # as before the move
-        self.assertEqual({k:v for k,v in self.read().items() if k!='projects'},{'$schema':'./settings.schema.json','max_escalations':2,'tasks_per_batch':15})
-        self.assertEqual(self.read()['projects']['Fixture'],{'max_escalations':1,'tasks_per_batch':11,'checks':[{'name':'tests','command':['true']}]})
+        self.assertEqual({k:v for k,v in self.read().items() if k!='projects'},
+            {'$schema':'./settings.schema.json','max_escalations':2,'tasks_per_batch':15,'models':{
+                'codex':{'insights':{'model':'global-codex','effort':'low'}},
+                'claude':{'insights':{'model':'global-claude','effort':'medium'}}}})
+        expected={'codex':{'insights':{'model':'local-codex','effort':'high'}},
+                  'claude':{'insights':{'model':'local-claude','effort':'max'}}}
+        self.assertEqual(self.read()['projects']['Fixture'],{'max_escalations':1,'tasks_per_batch':11,
+            'models':expected,'checks':[{'name':'tests','command':['true']}]})
+        for host in ('codex','claude'):self.assertEqual(value['models'][host]['insights'],expected[host]['insights'])
         self.assertFalse(config.legacy_files())
         moved=list((config_home()/'backups').glob('*-moved-into-settings/projects/*/checks.json'))
         self.assertEqual(len(moved),1)
+        backup=next((config_home()/'backups').glob('*-moved-into-settings/settings/defaults.json'))
+        self.assertEqual(json.loads(backup.read_text()),shared)
         # A file an interrupted move left behind is already in settings.json: it only moves to backups.
         (project/'checks.json').write_text('[{"name": "other", "command": ["false"]}]')
         (home/'settings-moved.json').write_text(json.dumps([project.name]))
@@ -127,8 +149,17 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.legacy_files());self.assertFalse((home/'settings-moved.json').exists())
         # Any other older file must match the section every project with this name shares.
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
-        with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.max_escalations, projects.Fixture.tasks_per_batch'):load(self.root)
+        with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.max_escalations') as conflict:load(self.root)
+        self.assertIn('projects.Fixture.tasks_per_batch',str(conflict.exception))
         self.assertTrue((project/'checks.json').exists())
+        (project/'checks.json').unlink()
+        # Renamed aliases must not hide a real conflict with already-saved settings.
+        saved=self.read();saved['models']['codex']={'orchestrator':{'model':'global-codex','effort':'low'}}
+        self.write(saved)
+        (home/'settings/defaults.json').write_text(json.dumps({'models':{'codex':{'orchestrator':{'model':'different-codex'}}}}))
+        with self.assertRaisesRegex(Refused,'already sets models.codex.insights.model differently'):load(self.root)
+        self.assertEqual(self.read()['models']['codex']['insights']['model'],'global-codex')
+        self.assertTrue((home/'settings/defaults.json').exists())
 
     def test_one_project_per_name_so_a_section_is_never_shared(self):
         home=state_home();clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
