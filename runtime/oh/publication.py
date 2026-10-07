@@ -33,7 +33,7 @@ def public_value(root,state,value):
     return clean(value)
 
 
-def task_evidence(state,task,review,parent):
+def task_evidence(root,state,task,review,parent):
     attempts=[a for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
     history=[{k:a.get(k) for k in ('id','outcome','duration_ms','profile','findings','git_tree','head')} for a in attempts]
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
@@ -46,7 +46,7 @@ def task_evidence(state,task,review,parent):
     if (covers:=(state.get('delivery') or {}).get('covers')) and not state['summaries']:value['covers']=covers
     scope={k:{name:v for name,v in record.items() if name not in ('render','change')} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
     if scope:value['scope']=scope
-    value=public_value(review.get('root'),state,value)
+    value=public_value(root,state,value)
     validate_evidence(value)
     return value
 

@@ -298,7 +298,7 @@ class WorkflowTest(unittest.TestCase):
 
 
     def test_native_pr_evidence_binds_all_commits_and_refuses_tampering(self):
-        from .publication import render,validate_event,START,END
+        from .publication import render,validate_event,public_value,START,END
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         def report(*args,**kwargs):
             result=self.fake(*args,**kwargs)
@@ -306,7 +306,14 @@ class WorkflowTest(unittest.TestCase):
                 'summary':f'Implemented the timeout. See [output.txt]({self.root}/output.txt).'}
             result['text']=json.dumps(result['structured'])  # actual Codex structured output, not the fixture's plain 'done'
             return result
-        start(self.root,{'tasks':self.tasks[:2]},self.event());run(self.root,report)
+        def checkout_redaction(root,state,value):
+            # Model a checkout outside home/temp: those incidental prefixes must not
+            # mask a missing checkout root in the real completion -> sealing path.
+            with patch('pathlib.Path.home',return_value=self.root.parent/'other-home'), \
+                    patch('tempfile.gettempdir',return_value=str(self.root.parent/'other-temp')):
+                return public_value(root,state,value)
+        with patch('oh.publication.public_value',side_effect=checkout_redaction):
+            start(self.root,{'tasks':self.tasks[:2]},self.event());run(self.root,report)
         with self.assertRaises(Refused):render(self.root)
         choose(self.root,'pr',self.event('2','pr'))
         from .workflow import checkpoint
@@ -334,7 +341,9 @@ class WorkflowTest(unittest.TestCase):
         event={'pull_request':{'head':{'ref':'work','sha':self.git('rev-parse','HEAD')},'body':body}}
         self.assertEqual(validate_event(self.root,event,'origin/main')['commits'],2)
         packet=json.loads(body.split('```json\n')[1].split('\n```')[0])
-        self.assertIn('--> <tag> &',next(iter(packet['records'][0]['evidence']['scope'].values()))['findings'][0]['description'])
+        published_note=next(iter(packet['records'][0]['evidence']['scope'].values()))['findings'][0]['description']
+        self.assertIn('--> <tag> &',published_note)
+        self.assertNotIn(str(self.root),published_note)  # decoded Windows paths cannot hide behind JSON escaping
         legacy=START+'\n```json\n'+json.dumps(packet)+'\n```\n'+END
         self.assertEqual(validate_event(self.root,{'pull_request':event['pull_request']|{'body':legacy}},'origin/main')['commits'],2)
         packet['records'][0]['evidence']['attempts'][0]['duration_ms']=999

@@ -724,7 +724,7 @@ def complete_reviewed(root,journal,state,task,review):
             if git(root,'write-tree')!=expected:raise Refused('The staged tree differs from the reviewed Git tree')
             if not intent:
                 from .publication import task_evidence
-                publication=task_evidence(state,task,review,head)
+                publication=task_evidence(root,state,task,review,head)
                 intent={'task':task_id,'review':review['id'],'git_tree':expected,'parent':head,'publication':publication}
                 journal.append('commit.intent',intent)
             if not intent.get('publication'):raise Refused('This older commit intent needs fresh portable review evidence before publication')
