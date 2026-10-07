@@ -181,7 +181,8 @@ def oh_plugins():
     return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
 
 
-def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
+def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None,*,standalone=False):
+    if standalone and role!='analysis':raise Refused('Standalone execution is only for read-only insights analysis')
     if host=='codex':
         args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
           '--config','features.multi_agent=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
@@ -189,17 +190,18 @@ def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
           '--config',f'model_auto_compact_token_limit={compact_tokens}',
           '--sandbox','read-only' if role in ('review','analysis') else 'workspace-write',
           '--cd',str(root)]
+        if standalone:args+=['--skip-git-repo-check']
         # Workers never load OH itself: its menu server would run outside their sandbox.
         for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
         if schema_path:args+=['--output-schema',str(schema_path)]
         return args+['-']
     from .storage import state_home
     from .storage import git
-    git_paths=[git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
+    git_paths=[] if standalone else [git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
     from .config import protected_paths
     protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
     if role in ('review','analysis'):protected.append(str(root))
-    private=private_plans(root)
+    private=None if standalone else private_plans(root)
     if private:protected.append(str(private))  # workers read private plans; only OH writes them
     deny=['Agent','Task']+[f'Edit({rule_path(p)}/**)' for p in protected]
     if WINDOWS:
@@ -267,7 +269,8 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
     schema_path=None
     if schema:
         schema_path=attempt_dir/'output-schema.json';atomic_json(schema_path,schema,immutable=True)
-    args=command(host,profile,root,role,schema_path,context['compact_tokens'],attempt_dir.parent.parent)
+    args=command(host,profile,root,role,schema_path,context['compact_tokens'],attempt_dir.parent.parent,
+                 standalone=context.get('standalone',False))
     started=time.monotonic();final='';usage_seen=False;structured=None;failed=False
     with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
         from .processes import launch

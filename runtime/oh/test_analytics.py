@@ -30,6 +30,37 @@ class AnalyticsTest(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         env=patch.dict(os.environ,{'OH_DATA_HOME':self.tmp.name});env.start();self.addCleanup(env.stop)
+
+    def test_requested_insights_uses_global_profile_without_registering_the_engine(self):
+        # docs/analytics.md: global insights uses a native read-only launch outside Git.
+        from .config import HOME,write_file
+        from .suggestions import generate
+        write_file({'models':{'codex':{'insights':{'model':'gpt-6.1-sol','effort':'medium'}}}})
+        with connect() as db:
+            fixture(db,days=12)
+            db.execute('UPDATE tasks SET expected_reviews=2')  # observed rework supplies a real supported candidate
+        answer={'failed':False,'duration_ms':1,'structured':{'priority':['review-rework']}}
+        with patch('oh.suggestions.invoke',return_value=answer) as invoke, \
+                patch('oh.suggestions.project',side_effect=AssertionError('The engine is not a consumer project')):
+            result=generate()
+            self.assertEqual(result,{'status':'saved','saved':1})
+            self.assertEqual(invoke.call_args.args[:3],('codex',HOME,{'model':'gpt-6.1-sol','effort':'medium'}))
+            self.assertTrue(invoke.call_args.args[6]['standalone'])
+            self.assertEqual(generate()['status'],'unchanged')
+            invoke.assert_called_once()
+        # Native host arguments support the packaged engine outside Git, with read-only permissions.
+        from .hosts import command
+        with patch('oh.hosts.executable',side_effect=lambda host,root:host), \
+                patch('oh.storage.git',side_effect=AssertionError('Standalone analysis must not require Git')):
+            for windows in (False,True):
+                with patch('oh.hosts.WINDOWS',windows):
+                    codex=command('codex',{'model':'gpt-6.1-sol','effort':'medium'},Path(self.tmp.name),'analysis',None,60000,standalone=True)
+                    claude=command('claude',{'model':'opus','effort':'high'},Path(self.tmp.name),'analysis',None,60000,standalone=True)
+                self.assertIn('--skip-git-repo-check',codex)
+                self.assertEqual(codex[codex.index('--sandbox')+1],'read-only')
+                self.assertEqual(claude[claude.index('--permission-mode')+1],'plan')
+                self.assertNotIn('Edit',claude[claude.index('--tools')+1])
+
     def test_invalid_event_does_not_block_valid_events(self):
         emit('usage','p',attempt='bad',response_id='bad',source='fixture',input=2,cached=3)
         emit('usage','p',attempt='good',response_id='good',source='fixture',input=10,output=2)

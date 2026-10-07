@@ -107,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from .suggestions import generate
                 self.server.analysis_error=None
-                self.server.analysis_result=generate(HOME,'codex')
+                self.server.analysis_result=generate(host='codex')
             except Exception as exc:
                 self.server.analysis_error=str(exc)
             finally:self.server.analysis_lock.release()
