@@ -581,9 +581,10 @@ def main(argv=None):
             folder, metadata = create_snapshot()
             print(f'Built {metadata["version"]}\n{folder}\nActivate: oh-dev on --build "{folder}"')
         elif args.action == 'dashboard':
-            state = read(home() / 'switch.json', {})
-            active = state.get(args.host, {}).get('phase') == 'on' if args.host else any(r['phase'] == 'on' for r in state.values())
-            show_dashboard(state, (args.host,) if args.host else (), 'on' if active else 'off')
+            with lock(home() / 'switch.lock'):
+                state = read(home() / 'switch.json', {})
+                active = state.get(args.host, {}).get('phase') == 'on' if args.host else any(r['phase'] == 'on' for r in state.values())
+                show_dashboard(state, (args.host,) if args.host else (), 'on' if active else 'off')
         elif args.action == 'status':
             state = read(home() / 'switch.json', {})
             for host in (args.host,) if args.host else HOSTS:

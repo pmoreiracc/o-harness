@@ -320,6 +320,36 @@ class InstallationTest(unittest.TestCase):
                 child=background(*args,**kwargs);children.append(child);return child
             def local_health(value):
                 return {'ok':True,'collector_error':None,'mode':'release'} if value==dev.RELEASE_PORT else health(value)
+            def retry_during_switch(before, after, arguments):
+                # Hold the real switch lock while an overlapping dashboard command arrives.
+                # An unlocked reader captures the old state; a locked reader sees the completed switch.
+                import threading
+                entered=threading.Event();proceed=threading.Event();errors=[]
+                read,locked=dev.read,dev.lock
+                switch_path=dev.home()/'switch.json';switch_lock=dev.home()/'switch.lock'
+                def reading(path,default=None):
+                    value=read(path,default)
+                    if path==switch_path:
+                        entered.set()
+                        if not proceed.wait(3):raise RuntimeError('The fixture switch did not finish')
+                    return value
+                @contextlib.contextmanager
+                def locking(path,**kwargs):
+                    if path==switch_lock:entered.set()
+                    with locked(path,**kwargs):yield
+                def retry():
+                    try:dev.main(arguments)
+                    except BaseException as exc:errors.append(exc)
+                worker=threading.Thread(target=retry)
+                with patch.object(dev,'read',side_effect=reading),patch.object(dev,'lock',side_effect=locking):
+                    try:
+                        with locked(switch_lock):
+                            dev.write(switch_path,before);worker.start()
+                            self.assertTrue(entered.wait(2))
+                            dev.write(switch_path,after)
+                    finally:proceed.set();worker.join(timeout=3)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(errors,[])
             with patch.object(dev,'DEV_PORT',port), patch.object(dev,'dashboard_health',side_effect=local_health), \
                     patch.object(dev,'background_dashboard',side_effect=start), patch.object(dev.webbrowser,'open',return_value=True) as browser, \
                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -332,14 +362,23 @@ class InstallationTest(unittest.TestCase):
                     dev.show_dashboard(state,('codex',),'on')
                     self.assertEqual(len(children),1)
                     self.assertEqual(health(port)['instance'],current['instance'])
+                    browser.reset_mock()
+                    retry_during_switch({h:r|{'phase':'off'} for h,r in state.items()},state,['dashboard','--host','codex'])
+                    self.assertEqual(dev.read(dev.home()/'dashboard.json').get('instance'),current['instance'])
+                    self.assertEqual(len(children),1)
+                    browser.assert_called_once_with(f'http://localhost:{port}')
                     state['codex']['phase']='off';dev.write(dev.home()/'switch.json',state)
                     dev.show_dashboard(state,('codex',),'off')
                     self.assertEqual(health(port)['version'],other['version'])
                     self.assertEqual(len(children),2)
                     children[0].wait(timeout=2)
                     browser.assert_called_with('http://localhost:4318')
-                    state['claude']['phase']='off';dev.write(dev.home()/'switch.json',state)
-                    dev.show_dashboard(state,dev.HOSTS,'off')
+                    before={h:dict(r) for h,r in state.items()}
+                    state['claude']['phase']='off'
+                    browser.reset_mock()
+                    retry_during_switch(before,state,['dashboard'])
+                    self.assertEqual(dev.read(dev.home()/'dashboard.json'),{})
+                    browser.assert_called_once_with('http://localhost:4318')
                     children[1].wait(timeout=2)
                     self.assertIsNone(health(port))
                     # A healthy listener with another identity is never stopped or replaced.
