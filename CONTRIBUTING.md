@@ -78,10 +78,19 @@ such as `0.5.0-SNAPSHOT.1790853731453599000`, shared by both plugins and their p
 It prints its version and folder under `~/.local/share/oh-dev/builds/`. Uncommitted edits are
 included; later edits and commits do not change the snapshot. This is the default for testing
 OH while OH itself changes. Run `on` again when you want a new build.
+It also starts or refreshes a background development dashboard/collector at
+<http://localhost:4319> and opens it in your browser. No extra terminal is required.
+
+Codex development builds show **OH DEV** with the amber beetle icon; releases show **OH**
+with the violet icon. Bundled skills use the matching icon, including in live development builds.
 
 `oh-dev off` restores the previous released-plugin enablement. `oh-dev status` shows each
 host's mode, snapshot version, source revision and build path. Add `--host codex` or
 `--host claude` to `on`, `off` or `status` to select one host.
+`off` opens the release dashboard at <http://localhost:4318>, keeping the existing release
+service intact. The managed dev dashboard stops when the last host leaves development;
+otherwise it follows a remaining host’s selected build. Dashboard/browser failures produce
+a short recovery instruction and never undo a successful plugin switch.
 Released plugin files are retained. Changing your terminal's directory does not change the
 source checkout. To use another checkout, run `off` with the old definition first, then
 update the saved definition and reload your profile.
@@ -109,11 +118,12 @@ selecting a different build; `off` restores plugin enablement but does not stop 
 Project-level plugin overrides take precedence; remove an OH override before testing there.
 
 State lives in `~/.local/share/oh-dev`, separate from normal OH data. No consumer files or
-services are installed. `oh-dev exec` uses the selected development runtime and data:
+OS services are installed. `oh-dev exec` uses the selected development runtime and data:
 
 ```sh
 oh-dev exec status
-oh-dev exec serve --port 4319
+oh-dev dashboard --host codex   # reopen/retry without rebuilding
+oh-dev exec serve             # foreground fallback; defaults to 4319
 ```
 
 If the hosts use different builds, select `oh-dev exec --host codex <command>` or

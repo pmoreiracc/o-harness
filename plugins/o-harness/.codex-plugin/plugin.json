@@ -13,7 +13,9 @@
     "category": "Productivity",
     "longDescription": "OH runs explicit workflows with independent reviews, external state and measurable subscription usage.",
     "defaultPrompt": "Help me set up OH for this project.",
-    "capabilities": []
+    "capabilities": [],
+    "composerIcon": "./assets/prod.png",
+    "logo": "./assets/prod.png"
   },
   "homepage": "https://github.com/pmoreiracc/o-harness",
   "repository": "https://github.com/pmoreiracc/o-harness",

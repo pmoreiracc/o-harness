@@ -1,5 +1,7 @@
 interface:
   display_name: "oh-pause"
   short_description: "Explicit OH workflow or run control"
+  icon_small: "./assets/icon.png"
+  icon_large: "./assets/icon.png"
 policy:
   allow_implicit_invocation: false

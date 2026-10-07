@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
                     from .observability import details
                     detail=details(db,query['run'][0],query['task'][0])
                 self.send(200,detail)
-            elif url.path=='/api/health':self.send(200,{'ok':True,'collector_error':self.server.collector_error,'analysis_error':self.server.analysis_error,'analysis_running':self.server.analysis_lock.locked(),'analysis_result':self.server.analysis_result})
+            elif url.path=='/api/health':self.send(200,{'ok':True,'collector_error':self.server.collector_error,'analysis_error':self.server.analysis_error,'analysis_running':self.server.analysis_lock.locked(),'analysis_result':self.server.analysis_result}|self.server.identity)
             elif url.path=='/api/session':self.send(200,{'token':self.server.token})
             elif url.path in ('/','/app.js','/style.css'):
                 name={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}[url.path]
@@ -122,11 +122,29 @@ class LocalServer(ThreadingHTTPServer):
         self.server_name='localhost';self.server_port=self.server_address[1]
 
 
+def dashboard_identity():
+    from .config import version
+    from .storage import read_json
+    metadata=read_json(HOME/'revision.json') if (HOME/'revision.json').is_file() else {}
+    return {'mode':os.environ.get('OH_DASHBOARD_MODE','release'),
+            'version':os.environ.get('OH_DASHBOARD_VERSION') or metadata.get('version') or version(),
+            'instance':os.environ.get('OH_DASHBOARD_INSTANCE')}
+
+
+def dashboard_current():
+    """Only a process started with an explicit managed lease can exit on a switch."""
+    lease=os.environ.get('OH_DASHBOARD_LEASE');instance=os.environ.get('OH_DASHBOARD_INSTANCE')
+    if not lease or not instance:return True
+    try:return json.loads(Path(lease).read_text(encoding='utf-8')).get('instance')==instance
+    except (OSError,ValueError,AttributeError):return False
+
+
 def serve(port=4318):
     with connect():pass
     server=LocalServer(('127.0.0.1',port),Handler)
     server.token=secrets.token_urlsafe(32);server.collector_error=None
     server.analysis_lock=threading.Lock();server.analysis_error=None;server.analysis_result=None
+    server.identity=dashboard_identity()
     stop=threading.Event()
     from .storage import state_home
     # Only the service started through bin/oh can restart onto a newer core; an older
@@ -137,6 +155,7 @@ def serve(port=4318):
         except (OSError,ValueError,KeyError):return HOME.name
     def collector():
         while not stop.is_set():
+            if not dashboard_current() and not server.analysis_lock.locked():server.shutdown();return
             try:collect();server.collector_error=None
             except Exception as exc:server.collector_error=str(exc)
             # After an upgrade the service exits; launchd restarts it through bin/oh on the active core.

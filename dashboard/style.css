@@ -195,3 +195,7 @@ dialog::backdrop { background: #191a2d70; backdrop-filter: blur(3px); }
   .model-row { grid-template-columns: minmax(0, 1fr) minmax(60px, 95px); gap: 12px; }
   .model-row > :last-child { overflow-wrap: anywhere; }
 }
+
+.dashboard-heading { min-width: 0; }
+.environment { margin-top: 6px; color: var(--muted); font-size: .875rem; overflow-wrap: anywhere; }
+.environment[data-mode="development"] { color: #7355ac; font-weight: 550; }

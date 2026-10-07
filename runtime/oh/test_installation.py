@@ -25,9 +25,26 @@ class InstallationTest(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def assert_plugin_branding(self, plugin, development=False):
+        from .config import HOME
+        expected = (HOME / 'plugins/o-harness/assets' / ('dev.png' if development else 'prod.png')).read_bytes()
+        interface = json.loads((plugin / '.codex-plugin/plugin.json').read_text())['interface']
+        self.assertEqual(interface['displayName'], 'OH DEV' if development else 'OH')
+        for field in ('composerIcon', 'logo'):
+            self.assertEqual((plugin / interface[field]).read_bytes(), expected)
+        for skill in (plugin / 'skills').iterdir():
+            icons = {}
+            for line in (skill / 'agents/openai.yaml').read_text().splitlines():
+                key, _, value = line.strip().partition(': ')
+                if key in ('icon_small', 'icon_large'):icons[key] = json.loads(value)
+            self.assertEqual(set(icons), {'icon_small', 'icon_large'})
+            for relative in icons.values():
+                self.assertEqual((skill / relative).read_bytes(), expected)
+
     def test_development_switch_restores_both_hosts_after_refresh_and_failure(self):
         """CONTRIBUTING: switching keeps releases installed and preserves their enabled state."""
         dev = self.development()
+        show_dashboard = dev.show_dashboard
         with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)), patch.dict(os.environ, {'OH_DEV_NORMAL_DATA_HOME': '',
                 'CODEX_HOME': str(Path(tmp) / 'codex'), 'CLAUDE_CONFIG_DIR': str(Path(tmp) / 'claude')}):
             os.environ.pop('OH_DATA_HOME', None)
@@ -67,8 +84,10 @@ class InstallationTest(unittest.TestCase):
                     patch.object(dev, 'call', side_effect=command), patch.object(dev, 'enable', side_effect=enabled), \
                     patch.object(dev, 'marketplace', side_effect=lambda host: marketplaces.get(host)), \
                     patch.object(dev, 'build'), patch.object(dev, 'create_snapshot', return_value=snapshot) as packaged, \
+                    patch.object(dev, 'show_dashboard') as dashboard, \
                     contextlib.redirect_stdout(io.StringIO()):
                 dev.switch('on', dev.HOSTS)
+                self.assertEqual(dashboard.call_args.args[2], 'on')
                 packaged.assert_called_once()  # the same snapshot powers both hosts
                 self.assertEqual({r['build'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(snapshot[0])})
                 original['o-harness@during-install'] = True
@@ -84,6 +103,8 @@ class InstallationTest(unittest.TestCase):
                     self.assertTrue(plugins[host][dev.PLUGIN])
                     for plugin in original:self.assertFalse(plugins[host][plugin])
                 dev.switch('off', ('codex',))
+                self.assertEqual(dashboard.call_args.args[2], 'off')
+                self.assertEqual(dashboard.call_args.args[0]['claude']['phase'], 'on')
                 self.assertTrue(plugins['claude'][dev.PLUGIN])
                 dev.switch('off', dev.HOSTS)
                 for host in dev.HOSTS:self.assertEqual(plugins[host], original | {dev.PLUGIN: False})
@@ -133,6 +154,30 @@ class InstallationTest(unittest.TestCase):
                     self.assertIn(f'oh-dev off --host {host}', error.getvalue())
                     self.assertEqual(dev.read(dev.home() / 'switch.json')[host]['phase'], 'off')
                     self.assertEqual(plugins[host], baseline[host])
+                # A dashboard failure is reported after a successful switch, never a plugin rollback.
+                protocol.clear();bad_response.clear()
+                with patch.object(dev, 'sync_dashboard', side_effect=OSError('dashboard unavailable')), \
+                        patch.object(dev.webbrowser, 'open', return_value=True), contextlib.redirect_stderr(io.StringIO()) as error:
+                    dashboard.side_effect = show_dashboard
+                    dev.switch('on', ('codex',))
+                    self.assertEqual(dev.read(dev.home() / 'switch.json')['codex']['phase'], 'on')
+                    self.assertTrue(plugins['codex'][dev.PLUGIN])
+                    self.assertIn('Retry with oh-dev dashboard --host codex', error.getvalue())
+                dashboard.side_effect = None
+                dev.switch('off', dev.HOSTS)
+                # A stalled browser launcher cannot hold the switch's final dashboard step open.
+                import threading
+                release=threading.Event();entered=threading.Event();finished=threading.Event()
+                def stalled_browser(url):entered.set();release.wait(5);return True
+                def show():
+                    try:show_dashboard(dev.read(dev.home()/'switch.json'),('codex',),'on')
+                    finally:finished.set()
+                with patch.object(dev,'sync_dashboard'), patch.object(dev.webbrowser,'open',side_effect=stalled_browser):
+                    worker=threading.Thread(target=show);worker.start()
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        self.assertTrue(finished.wait(3))
+                    finally:release.set();worker.join(timeout=2)
                 normal = Path(tmp) / '.local/share/o-harness'
                 self.assertFalse(normal.exists())
                 self.assertEqual(list(normal.parent.glob('.oh-snapshot-*.lock')), [])
@@ -147,11 +192,12 @@ class InstallationTest(unittest.TestCase):
             os.environ.pop('OH_DATA_HOME', None)
             base = dev.home();base.mkdir(parents=True)
             plugin = dev.build('codex', base / 'build')
+            self.assert_plugin_branding(plugin, development=True)
             normal = Path(tmp) / '.local/share/o-harness'
             self.assertFalse(normal.exists())
             self.assertEqual(list(normal.parent.glob('.oh-snapshot-*.lock')), [])
             self.assertNotIn('OH_DATA_HOME', os.environ)
-            # The production package remains intact; only the generated entry points differ.
+            # The packaged core remains intact; development changes its entry points and branding.
             verify_package(plugin / 'core')
             consumer = base / 'consumer';consumer.mkdir()
             launcher = plugin / 'scripts/oh'
@@ -179,6 +225,14 @@ class InstallationTest(unittest.TestCase):
                         with self.assertRaisesRegex(SystemExit, 'Development is isolated'):
                             dev.launch(HOME, base / 'data', 'cli', launcher)
                         dispatch.assert_not_called()
+            from .cli import main as cli_main
+            for arguments, port in ((['serve'],4319), (['serve','--port','8123'],8123)):
+                with patch.dict(os.environ), patch('sys.argv',['oh',*arguments]), \
+                        patch.object(dev.runpy,'run_path',side_effect=lambda *a,**k:cli_main()), patch('oh.server.serve') as serve:
+                    dev.launch(HOME,base/'data','cli',launcher)
+                    serve.assert_called_once_with(port)
+            with patch.dict(os.environ,{'OH_DASHBOARD_MODE':'release'}), patch('oh.server.serve') as serve:
+                cli_main(['serve']);serve.assert_called_once_with(4318)
             self.assertEqual(list(consumer.iterdir()), [])
             subprocess.run(['git', 'init', '-q', str(consumer)], check=True)
             registered = run('init', env=os.environ | {'OH_DATA_HOME': str(Path(tmp) / 'released-data')})
@@ -226,6 +280,7 @@ class InstallationTest(unittest.TestCase):
             state = {}
             for host in dev.HOSTS:
                 plugin = first / host / 'plugins/o-harness'
+                self.assert_plugin_branding(plugin, development=True)
                 revision = json.loads((plugin / 'core/revision.json').read_text())
                 self.assertEqual(revision['version'], metadata['version'])
                 verify_package(plugin / 'core')
@@ -255,6 +310,89 @@ class InstallationTest(unittest.TestCase):
             with patch.object(dev.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as execute:
                 with self.assertRaises(SystemExit):dev.main(['exec', '--host', 'claude', 'status'])
                 self.assertEqual(execute.call_args.args[0][2:], [str(dev.selected_entry('claude')), 'status'])
+            # Real packaged servers exercise lease replacement, reuse and both host selections.
+            import socket
+            with socket.socket() as available:
+                available.bind(('127.0.0.1',0));port=available.getsockname()[1]
+            health,background=dev.dashboard_health,dev.background_dashboard
+            children=[]
+            def start(*args,**kwargs):
+                child=background(*args,**kwargs);children.append(child);return child
+            def local_health(value):
+                return {'ok':True,'collector_error':None,'mode':'release'} if value==dev.RELEASE_PORT else health(value)
+            def retry_during_switch(before, after, arguments):
+                # Hold the real switch lock while an overlapping dashboard command arrives.
+                # An unlocked reader captures the old state; a locked reader sees the completed switch.
+                import threading
+                entered=threading.Event();proceed=threading.Event();errors=[]
+                read,locked=dev.read,dev.lock
+                switch_path=dev.home()/'switch.json';switch_lock=dev.home()/'switch.lock'
+                def reading(path,default=None):
+                    value=read(path,default)
+                    if path==switch_path:
+                        entered.set()
+                        if not proceed.wait(3):raise RuntimeError('The fixture switch did not finish')
+                    return value
+                @contextlib.contextmanager
+                def locking(path,**kwargs):
+                    if path==switch_lock:entered.set()
+                    with locked(path,**kwargs):yield
+                def retry():
+                    try:dev.main(arguments)
+                    except BaseException as exc:errors.append(exc)
+                worker=threading.Thread(target=retry)
+                with patch.object(dev,'read',side_effect=reading),patch.object(dev,'lock',side_effect=locking):
+                    try:
+                        with locked(switch_lock):
+                            dev.write(switch_path,before);worker.start()
+                            self.assertTrue(entered.wait(2))
+                            dev.write(switch_path,after)
+                    finally:proceed.set();worker.join(timeout=3)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(errors,[])
+            with patch.object(dev,'DEV_PORT',port), patch.object(dev,'dashboard_health',side_effect=local_health), \
+                    patch.object(dev,'background_dashboard',side_effect=start), patch.object(dev.webbrowser,'open',return_value=True) as browser, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    dev.show_dashboard(state,('codex',),'on')
+                    current=health(port)
+                    self.assertIsNotNone(current)
+                    self.assertEqual((current['mode'],current['version']),('development',metadata['version']))
+                    self.assertTrue((dev.home()/'data/analytics.sqlite3').is_file())
+                    dev.show_dashboard(state,('codex',),'on')
+                    self.assertEqual(len(children),1)
+                    self.assertEqual(health(port)['instance'],current['instance'])
+                    browser.reset_mock()
+                    retry_during_switch({h:r|{'phase':'off'} for h,r in state.items()},state,['dashboard','--host','codex'])
+                    self.assertEqual(dev.read(dev.home()/'dashboard.json').get('instance'),current['instance'])
+                    self.assertEqual(len(children),1)
+                    browser.assert_called_once_with(f'http://localhost:{port}')
+                    state['codex']['phase']='off';dev.write(dev.home()/'switch.json',state)
+                    dev.show_dashboard(state,('codex',),'off')
+                    self.assertEqual(health(port)['version'],other['version'])
+                    self.assertEqual(len(children),2)
+                    children[0].wait(timeout=2)
+                    browser.assert_called_with('http://localhost:4318')
+                    before={h:dict(r) for h,r in state.items()}
+                    state['claude']['phase']='off'
+                    browser.reset_mock()
+                    retry_during_switch(before,state,['dashboard'])
+                    self.assertEqual(dev.read(dev.home()/'dashboard.json'),{})
+                    browser.assert_called_once_with('http://localhost:4318')
+                    children[1].wait(timeout=2)
+                    self.assertIsNone(health(port))
+                    # A healthy listener with another identity is never stopped or replaced.
+                    state['codex']['phase']='on';dev.write(dev.home()/'switch.json',state)
+                    browser.reset_mock()
+                    with patch.object(dev,'dashboard_health',return_value={'ok':True,'collector_error':None,'instance':'someone-else'}):
+                        dev.show_dashboard(state,('codex',),'on')
+                    self.assertEqual(len(children),2)
+                    browser.assert_not_called()
+                finally:
+                    dev.write(dev.home()/'dashboard.json',{})
+                    for child in children:
+                        try:child.wait(timeout=3)
+                        except subprocess.TimeoutExpired:child.kill();child.wait(timeout=2)
             # A corrupt build is refused before installation, without touching the released installation.
             (first / 'claude/plugins/o-harness/core/workflows/propose/SKILL.md').write_text('changed')
             with self.assertRaisesRegex(Refused, 'changed or is incomplete'):dev.read_snapshot(first)
@@ -267,6 +405,7 @@ class InstallationTest(unittest.TestCase):
             (consumer/'manual.txt').write_text('unchanged')
             first=base/'codex/o-harness';second=base/'claude/o-harness'
             a=build(first,'codex');b=build(second,'claude')
+            for plugin in (first, second):self.assert_plugin_branding(plugin)
             self.assertEqual(a['revision'],b['revision'])
             self.assertNotIn('disable-model-invocation: true',(first/'skills/oh-deliver/SKILL.md').read_text())
             self.assertIn('allow_implicit_invocation: false',(first/'skills/oh-deliver/agents/openai.yaml').read_text())

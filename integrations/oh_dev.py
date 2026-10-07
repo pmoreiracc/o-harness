@@ -16,11 +16,17 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+import webbrowser
+from urllib.error import URLError
+from urllib.request import ProxyHandler, build_opener
 
 SOURCE = Path(__file__).resolve().parents[1]
 PLUGIN = 'o-harness@oh-dev'
 MARKETPLACE = 'oh-dev'
 HOSTS = ('codex', 'claude')
+DEV_PORT = 4319
+RELEASE_PORT = 4318
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(SOURCE / 'runtime'))
 from oh.storage import atomic_json, lock
@@ -230,7 +236,11 @@ def build(host, folder, source=SOURCE, snapshot_version=None):
         manifest = plugin / ('.' + kind + '-plugin/plugin.json')
         metadata = read(manifest)
         metadata['version'] = snapshot_version or metadata['version'].split('+')[0] + '-SNAPSHOT.live.' + folder.name
+        if kind == 'codex':
+            metadata['interface'].update(displayName='OH DEV', composerIcon='./assets/dev.png', logo='./assets/dev.png')
         write(manifest, metadata)
+    for skill in (plugin / 'skills').iterdir():
+        shutil.copyfile(plugin / 'assets/dev.png', skill / 'assets/icon.png')
     if host == 'codex':
         catalog = {'name': MARKETPLACE, 'interface': {'displayName': 'OH development'}, 'plugins': [{
             'name': 'o-harness', 'source': {'source': 'local', 'path': './plugins/o-harness'},
@@ -313,6 +323,9 @@ def launch(source, data, kind, entry):
     validate_storage(data.parent, data)
     os.environ['OH_DEV_NORMAL_DATA_HOME'] = str(normal_data())
     os.environ['OH_DATA_HOME'] = str(data)
+    os.environ['OH_DASHBOARD_MODE'] = 'development'
+    manifest = read(entry.parents[1] / '.codex-plugin/plugin.json', {})
+    if manifest.get('version'):os.environ['OH_DASHBOARD_VERSION'] = manifest['version']
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(source / 'runtime'))
     if kind == 'mcp':
@@ -337,6 +350,106 @@ def restore(host, record):
     current = installed(host)
     if current.get(PLUGIN, False) or any(current.get(plugin) != value for plugin, value in record['previous'].items()):
         raise RuntimeError('OH plugin settings changed during restoration. Finish the other host operation, then retry off.')
+
+
+def dashboard_health(port):
+    """A bounded localhost read, independent of proxy settings."""
+    try:
+        with build_opener(ProxyHandler({})).open(f'http://127.0.0.1:{port}/api/health', timeout=.3) as response:
+            value = json.loads(response.read(65536))
+        return value if isinstance(value, dict) and value.get('ok') is True and 'collector_error' in value else None
+    except (OSError, URLError, ValueError):return None
+
+
+def background_dashboard(entry, data, port, *, instance=None):
+    environment = {k:v for k,v in os.environ.items() if not k.startswith('OH_DASHBOARD_')
+                   and k not in ('OH_CHILD_ATTEMPT', 'OH_SERVICE_FOLLOWS_ACTIVE', 'OH_STATE_ROOT')}
+    environment.update(OH_DEV_NORMAL_DATA_HOME=str(normal_data()), OH_DATA_HOME=str(data))
+    if instance:
+        environment.update(OH_DASHBOARD_INSTANCE=instance, OH_DASHBOARD_LEASE=str(home() / 'dashboard.json'))
+    options = ({'creationflags': subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+               if os.name == 'nt' else {'start_new_session': True})
+    logs = home() / 'logs';logs.mkdir(parents=True, exist_ok=True)
+    with (logs / f'dashboard-{port}.log').open('ab') as output:
+        return subprocess.Popen([sys.executable, '-I', str(entry), 'serve', '--port', str(port)],
+            cwd=home(), env=environment, stdin=subprocess.DEVNULL, stdout=output,
+            stderr=subprocess.STDOUT, close_fds=True, **options)
+
+
+def wait_dashboard(port, instance, child):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        value = dashboard_health(port)
+        if value and (instance is None or value.get('instance') == instance):return
+        if child.poll() is not None:break
+        time.sleep(.1)
+    # This process was just created by us, not found by an unverified PID/port.
+    child.terminate()
+    try:child.wait(timeout=1)
+    except subprocess.TimeoutExpired:child.kill();child.wait(timeout=1)
+    raise RuntimeError(f'Dashboard did not start on port {port}; see {home() / "logs" / f"dashboard-{port}.log"}.')
+
+
+def sync_dashboard(state, preferred):
+    """Refresh only the dashboard whose lease OH owns; never touch a release service."""
+    with lock(home() / 'dashboard.lock'):
+        active = [h for h in (*preferred, *HOSTS) if state.get(h, {}).get('phase') == 'on']
+        lease_path = home() / 'dashboard.json'
+        previous = read(lease_path, {})
+        current = dashboard_health(DEV_PORT)
+        if active:
+            entry = selected_entry(active[0])
+            if current and previous.get('instance') and previous.get('entry') == str(entry) and current.get('instance') == previous['instance']:
+                return
+            instance = str(uuid.uuid4())
+            write(lease_path, {'entry': str(entry), 'instance': instance})
+        else:
+            instance = None;write(lease_path, {})
+        # A managed server observes its replaced lease and shuts itself down.
+        if current and previous.get('instance') and current.get('instance') == previous['instance']:
+            deadline = time.monotonic() + 3
+            while dashboard_health(DEV_PORT) and time.monotonic() < deadline:time.sleep(.1)
+            current = dashboard_health(DEV_PORT)
+        if active:
+            if current:raise RuntimeError(f'Port {DEV_PORT} is still occupied; finish or stop that dashboard before retrying.')
+            child = background_dashboard(entry, home() / 'data', DEV_PORT, instance=instance)
+            try:wait_dashboard(DEV_PORT, instance, child)
+            except BaseException:
+                write(lease_path, {});raise
+
+
+def show_dashboard(state, preferred=(), action='on'):
+    """Dashboard/browser failures never undo a completed plugin switch."""
+    port = RELEASE_PORT if action == 'off' else DEV_PORT
+    available = True
+    try:sync_dashboard(state, preferred)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        selector = f' --host {preferred[0]}' if len(preferred) == 1 else ''
+        print(f'Dashboard: {exc} Retry with oh-dev dashboard{selector}.', file=sys.stderr)
+        if action == 'on':available = False
+    if action == 'off':
+        try:
+            current = dashboard_health(RELEASE_PORT)
+            if current and current.get('mode') == 'development':
+                raise RuntimeError(f'Port {RELEASE_PORT} is serving development data; stop that listener and run oh-dev dashboard again.')
+            if not current:
+                entry = normal_data() / 'bin/oh'
+                if not entry.is_file():raise RuntimeError('Released dashboard is not installed; start it with oh serve.')
+                wait_dashboard(RELEASE_PORT, None, background_dashboard(entry, normal_data(), RELEASE_PORT))
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(f'Dashboard: {exc}', file=sys.stderr)
+            available = False
+    url = f'http://localhost:{port}'
+    print(f'{"Release" if action == "off" else "Development"} dashboard: {url}{" (unavailable)" if not available else ""}')
+    if not available:return
+    opened = queue.Queue()
+    def open_page():
+        try:opened.put(webbrowser.open(url))
+        except (OSError, webbrowser.Error):opened.put(False)
+    threading.Thread(target=open_page, daemon=True).start()
+    try:success = opened.get(timeout=1)
+    except queue.Empty:success = False
+    if not success:print(f'Open {url} in your browser.')
 
 
 def switch(action, hosts, *, build_path=None, live=False):
@@ -437,13 +550,14 @@ def switch(action, hosts, *, build_path=None, live=False):
                 failures.append(f'{host}: {exc}\nRecover with oh-dev off --host {host}, then retry.')
         print('Start fresh sessions in the selected hosts. Existing sessions keep their loaded plugins.')
         if failures:raise RuntimeError('\n'.join(failures))
+        show_dashboard(state, hosts, action)
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
-    for action in ('on', 'off', 'status'):
+    for action in ('on', 'off', 'status', 'dashboard'):
         sub.add_parser(action).add_argument('--host', choices=HOSTS, help='default: both hosts')
     mode = sub.choices['on'].add_mutually_exclusive_group()
     mode.add_argument('--build', metavar='PATH', help='activate a snapshot previously made by oh-dev build')
@@ -466,6 +580,11 @@ def main(argv=None):
         elif args.action == 'build':
             folder, metadata = create_snapshot()
             print(f'Built {metadata["version"]}\n{folder}\nActivate: oh-dev on --build "{folder}"')
+        elif args.action == 'dashboard':
+            with lock(home() / 'switch.lock'):
+                state = read(home() / 'switch.json', {})
+                active = state.get(args.host, {}).get('phase') == 'on' if args.host else any(r['phase'] == 'on' for r in state.values())
+                show_dashboard(state, (args.host,) if args.host else (), 'on' if active else 'off')
         elif args.action == 'status':
             state = read(home() / 'switch.json', {})
             for host in (args.host,) if args.host else HOSTS:

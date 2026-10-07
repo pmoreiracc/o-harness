@@ -184,7 +184,7 @@ def main(argv=None):
     settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
     planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check','list'])
     hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
-    serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4318)
+    serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4319 if os.environ.get('OH_DASHBOARD_MODE')=='development' else 4318)
     sub.add_parser('service-install');sub.add_parser('service-uninstall')
     suggest=sub.add_parser('suggest');suggest.add_argument('--host',choices=['codex','claude'],default='codex')
     deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*')

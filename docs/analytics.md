@@ -4,6 +4,18 @@ The dashboard at <http://localhost:4318> shows how OH runs are going. It reads a
 SQLite database and never calls a model. It only counts work done through OH; history
 from before you installed OH is not imported.
 
+Development snapshots use separate data under `~/.local/share/oh-dev/data`; their runs do
+not appear in the normal dashboard. `oh-dev on` starts or refreshes the development dashboard
+at <http://localhost:4319> using the selected snapshot and opens it in your browser. Its
+collector indexes queued development events. `oh-dev off` returns to the release dashboard
+at <http://localhost:4318>; development stays running if another host still uses it.
+The dashboard identifies its environment and serving version. Existing released dashboards
+gain this label when upgraded. No development OS service is installed.
+
+`oh-dev dashboard --host codex` reopens or retries the dashboard for that host without
+rebuilding or switching plugins. Dashboard/browser failures do not undo a plugin switch.
+`oh-dev exec serve` defaults to development port 4319; an explicit `--port` still works.
+
 ## The numbers
 
 | Measure | What it means |
@@ -35,7 +47,7 @@ own. It needs at least ten tasks with good usage coverage and saves up to three
 suggestions. Savings shown are estimates from your data, not promises. Python computes
 the candidates, explanations and estimates; the requested model ranks the candidates.
 The dashboard uses `models.codex.insights`; `oh suggest --host claude` uses
-`models.claude.insights`. Viewing the dashboard never requests model analysis.
+`models.claude.insights`. Viewing or switching dashboards never requests model analysis.
 Global profile selection and standalone host launches are covered by
 `test_requested_insights_uses_global_profile_without_registering_the_engine`.
 
