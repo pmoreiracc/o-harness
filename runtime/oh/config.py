@@ -9,7 +9,7 @@ from pathlib import Path
 from .storage import Refused, digest, git, read_json
 
 HOME = Path(__file__).resolve().parents[2]
-ROLES = ('simple', 'standard', 'complex', 'review', 'orchestrator')
+ROLES = ('simple', 'standard', 'complex', 'review', 'insights')
 EFFORTS = {'codex': {'low', 'medium', 'high', 'xhigh', 'max', 'ultra'},
            'claude': {'low', 'medium', 'high', 'xhigh', 'max'}}
 
@@ -19,12 +19,13 @@ FOLDER = r'^(~(?:[/\\].*)?|/.*|[A-Za-z]:[\\/].*)'  # absolute, or in your home f
 PLAN_PATH = r'^(?!.*(^|/)\.\.?(/|$))[A-Za-z0-9_-][A-Za-z0-9._/-]*'  # relative, no . or .. parts
 ROLE_MEANING = {'simple': 'small, bounded tasks', 'standard': 'ordinary tasks',
                 'complex': 'cross-cutting or safety-sensitive tasks, and retries after a failure',
-                'review': 'independent reviews', 'orchestrator': 'the session you talk to (a recommendation only)'}
+                'review': 'independent reviews', 'insights': 'ranking computed dashboard improvements on request; does not select the model of your chat'}
 SCHEMA_NAME = 'settings.schema.json'
 MODES = ('review', 'pre-push', 'ci')
 # Settings a release renamed or removed, as {old key: new key, or None}. OH rewrites settings.json
 # once, after keeping a copy in backups/, so an update never breaks a setting or drops it silently.
-RENAMED = {}
+RENAMED = {f'models.{host}.orchestrator.{field}':f'models.{host}.insights.{field}'
+           for host in ('codex','claude') for field in ('model','effort')}
 
 
 def rules():
@@ -251,10 +252,13 @@ def check_location(*, creating=False):
 
 
 def read_file(root=None, *, upgrade_first=True, creating=False):
-    """settings.json exactly as written, or {} before it exists. Older settings files that couldn't be
-    moved into it stop only the projects they belong to, or every project for the shared one."""
+    """Read settings.json, normalizing renamed keys unless upgrade_first=False requests raw data.
+    Older settings files that couldn't be moved into it stop only their own project/layer."""
     if upgrade_first:
-        stuck = upgrade(creating=creating)
+        try:stuck = upgrade(creating=creating)
+        except OSError:
+            if legacy_groups():raise
+            stuck = {}  # a read-only renamed settings file is still usable in memory
         for key in ('', project_id(root)):
             if key in stuck:raise Refused(stuck[key])
     check_location(creating=creating)
@@ -264,6 +268,7 @@ def read_file(root=None, *, upgrade_first=True, creating=False):
     except ValueError as exc:raise Refused(f'{path} is not valid JSON: {exc}') from None
     except OSError as exc:raise Refused(f'Cannot read {path}: {exc.strerror}') from None
     if not isinstance(value, dict):raise Refused(f'{path} must contain a JSON object')
+    if upgrade_first:rename_keys(value)
     return value
 
 
@@ -450,6 +455,7 @@ def absorb(data, folder, files):
         except (OSError, ValueError) as exc:raise Refused(f'Cannot move {path} into {settings_file()}: {exc}') from None
         if not isinstance(value, kind):
             raise Refused(f'Cannot move {path} into {settings_file()}: it must contain a JSON {"object" if kind is dict else "list"}')
+        if isinstance(value,dict):rename_keys(value)
         return value
     if folder is None:values = prune(read(files[0], dict), defaults())
     else:
@@ -517,6 +523,10 @@ def rename_keys(data):
             if not present(layer, parts):continue
             value = get(layer, parts);remove(layer, parts);changed = True
             if new and not present(layer, new.split('.')):put(layer, new.split('.'), value)
+        for host in ('codex','claude'):
+            parts=['models',host,'orchestrator']
+            if present(layer,parts) and get(layer,parts)=={}:
+                remove(layer,parts);changed=True
     return changed
 
 
@@ -539,6 +549,7 @@ def upgrade(*, creating=False):
         try:done = set(read_json(record))
         except (OSError, ValueError, TypeError, Refused):done = set()
         before, moved, unused, stuck, registered, present = deepcopy(data), {}, [], {}, registrations(), present_projects()
+        rename_keys(data)
         for folder, files in legacy_groups():
             key = folder.name if folder else ''
             if key in done:moved[key] = files;continue
@@ -555,7 +566,6 @@ def upgrade(*, creating=False):
             except Refused as exc:
                 stuck[key] = str(exc)
                 if folder is None:break  # projects are compared with the shared settings, so they wait for them
-        rename_keys(data)
         if data != before:
             if settings_file().exists():shutil.copy2(settings_file(), backup_folder('settings') / 'settings.json')
             write_file(data)
@@ -654,6 +664,7 @@ def parse(key, raw):
 
 def change(root, key, raw=None, *, scope=None):
     """The only writer: an unknown key or invalid value never reaches settings.json."""
+    key=RENAMED.get(key) or key
     scope = scope or 'project'
     if scope == 'global':
         try:name = project_name(root, required=False)

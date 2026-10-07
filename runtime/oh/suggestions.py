@@ -4,7 +4,7 @@ from .storage import state_writer
 
 from datetime import datetime,timedelta,timezone
 import json
-from .config import load,version
+from .config import HOME,load,load_global,version
 from .hosts import invoke
 from .storage import atomic_json,digest,identifier,now,project,state_home
 from .telemetry import analytics,best_effort,connect,rows
@@ -44,7 +44,7 @@ def candidates(db):
 
 
 @state_writer
-def generate(root,host='codex'):
+def generate(root=None,host='codex'):
     with connect() as db:
         items,data=candidates(db)
         evidence={'summary':data['summary'],'difficulty':data['difficulty'],'candidates':items,
@@ -53,19 +53,22 @@ def generate(root,host='codex'):
         previous=rows(db,'SELECT id FROM recommendations WHERE evidence_hash=?',(evidence_hash,))
         if previous:return {'status':'unchanged','saved':len(previous)}
     if not items:return {'status':'insufficient_evidence','message':'At least ten tasks and 80% usage coverage are required, with a supported improvement signal.'}
-    p=project(root);attempt=identifier();analysis_run=identifier();directory=state_home()/'analysis'/attempt
-    config=load(root);profile=config['models'][host]['orchestrator']
+    # Dashboard analysis covers the data store, not the engine directory as a product checkout.
+    p=project(root) if root is not None else {'id':'insights','name':'OH insights'}
+    attempt=identifier();analysis_run=identifier();directory=state_home()/'analysis'/attempt
+    config=load(root) if root is not None else load_global()
+    profile=config['models'][host]['insights']
     best_effort('run.started',p['id'],analysis_run,name=p['name'],work_kind='harness',host=host,version=version(),config_hash=digest(config))
     best_effort('attempt.started',p['id'],analysis_run,None,attempt,role='analysis',phase='analysis',host=host,**profile)
     keys=[i['key'] for i in items]
     schema={'type':'object','additionalProperties':False,'required':['priority'], 'properties':{
       'priority':{'type':'array','items':{'type':'string','enum':keys},'minItems':len(keys),'maxItems':len(keys)}}}
     try:
-        result=invoke(host,root,profile,
+        result=invoke(host,root if root is not None else HOME,profile,
           'Rank these supplied improvement hypotheses by expected usefulness. Return each supplied key exactly once. '
           'Do not use tools. Measurements and explanations are calculated by OH.\n'+json.dumps(evidence),
           'analysis',directory,{'project':p['id'],'run':analysis_run,'task':None,'attempt':attempt,
-                               'compact_tokens':config['context']['compact_at_tokens']},schema=schema,timeout=120)
+                               'compact_tokens':config['context']['compact_at_tokens'],'standalone':root is None},schema=schema,timeout=120)
     except Exception as exc:
         result={'failed':True,'error':str(exc),'duration_ms':None,'structured':None}
     best_effort('attempt.finished',p['id'],analysis_run,None,attempt,outcome='failed' if result['failed'] else 'completed',

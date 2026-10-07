@@ -116,19 +116,37 @@ not the external `~/oh-plans` folder: include your visible plan folder in your r
 ## Models
 
 OH labels each task **simple**, **standard** or **complex** before it starts, then picks
-that profile's model. Reviews and the coordinating session have their own profiles.
+that profile's model. Reviews have a separate profile. The `insights` profile controls
+the optional `oh suggest` analysis, not the coordinating chat session.
 
 | Profile | Claude | Codex |
 |---|---|---|
-| simple | haiku / high | gpt-5.6-luna / high |
-| standard | sonnet / medium | gpt-5.6-sol / medium |
+| simple | haiku / high | gpt-6-luna / high |
+| standard | sonnet / medium | gpt-6.1-sol / medium |
 | complex | opus / high | gpt-6-astra / high |
-| review | opus / high | gpt-5.6-sol / high |
-| orchestrator | opus / high | gpt-6-astra / high |
+| review | opus / high | gpt-6.1-sol / high |
+| insights | opus / high | gpt-6-astra / high |
 
 If your subscription doesn't offer a model or effort, the task fails with a clear error;
 OH never switches to paid API calls. OH doesn't change the model of the session you are
-talking to; the orchestrator profile is only a recommendation for it.
+talking to: you select that in your host app or CLI, and OH records the observed model in
+telemetry. `insights` is used for a separate agent call that ranks
+dashboard improvement suggestions when you run `oh suggest` and sufficient evidence exists.
+The dashboard’s **Analyze my data** button uses global Codex insights settings;
+`oh suggest --host claude` uses Claude, with project overrides when run in a registered project.
+Python computes the candidates and estimates; the model only ranks their priority.
+
+Older `models.<host>.orchestrator` settings migrate to `models.<host>.insights` with a backup,
+preserving model and effort overrides. Old leaf names remain accepted by `config set/unset`,
+and old exported profiles remain importable; `oh-config` and new exports show only `insights`.
+If saved settings are read-only, OH interprets the old names in memory without rewriting them.
+Existing runs retain their frozen settings. An older executable may require restoring the
+settings backup after a downgrade; development and release settings remain separate.
+
+Compatibility coverage: `test_renamed_settings_are_moved_once_with_a_backup`,
+`test_a_read_only_settings_folder_never_stops_oh`,
+`test_an_imported_profile_keeps_only_what_differs_from_your_settings` and
+`test_editors_get_a_schema_for_the_running_version`.
 
 ## Checks
 

@@ -32,7 +32,12 @@ runs `oh observe-ci` after the PR checks finish.
 
 **Analyze my data** runs one subscription-backed analysis when you click it, never on its
 own. It needs at least ten tasks with good usage coverage and saves up to three
-suggestions. Savings shown are estimates from your data, not promises.
+suggestions. Savings shown are estimates from your data, not promises. Python computes
+the candidates, explanations and estimates; the requested model ranks the candidates.
+The dashboard uses `models.codex.insights`; `oh suggest --host claude` uses
+`models.claude.insights`. Viewing the dashboard never requests model analysis.
+Global profile selection and standalone host launches are covered by
+`test_requested_insights_uses_global_profile_without_registering_the_engine`.
 
 ## Privacy
 

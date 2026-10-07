@@ -40,6 +40,10 @@ class ConfigTest(unittest.TestCase):
                     'projects':{'Fixture':{'review_rounds':7,'checks':[{'name':'tests','command':['true']}]},'Other':{'review_rounds':9}}})
         value=load(self.root)
         self.assertEqual((value['tasks_per_batch'],value['review_rounds'],value['models']['claude']['review']['effort']),(12,7,'max'))
+        for role,profile in {'simple':{'model':'gpt-6-luna','effort':'high'},
+                             'standard':{'model':'gpt-6.1-sol','effort':'medium'},
+                             'review':{'model':'gpt-6.1-sol','effort':'high'}}.items():
+            self.assertEqual(value['models']['codex'][role],profile)
         self.assertEqual(project_checks(self.root),[{'name':'tests','command':['true']}])
         listed={item['key']:item for item in describe(self.root)['settings']}
         self.assertEqual([listed[k]['source'] for k in ('tasks_per_batch','review_rounds','max_escalations')],['global','project','default'])
@@ -103,19 +107,41 @@ class ConfigTest(unittest.TestCase):
 
     def test_settings_from_older_versions_move_into_the_file_once_with_backups(self):
         home=state_home();project=self.legacy()
-        (home/'settings').mkdir();(home/'settings/defaults.json').write_text('{"max_escalations": 2, "review_rounds": 3, "tasks_per_batch": 15}')
+        shared={'max_escalations':2,'review_rounds':3,'tasks_per_batch':15,'models':{
+            'codex':{'orchestrator':{'model':'global-codex','effort':'low'}},
+            'claude':{'orchestrator':{'model':'global-claude','effort':'medium'}}}}
+        # Already-saved aliases must compare with the same normalized legacy values.
+        self.write({'models':{'codex':{'orchestrator':{'model':'global-codex','effort':'low'}}}})
+        (home/'settings').mkdir();(home/'settings/defaults.json').write_text(json.dumps(shared))
         # An import copied every default: a project value equal to OH's default still beats the shared value.
-        (project/'config.json').write_text(json.dumps(config.defaults()|{'tasks_per_batch':9}))
-        (project/'config.local.json').write_text('{"tasks_per_batch": 11}')
+        copied=config.defaults()|{'tasks_per_batch':9}
+        for host in ('codex','claude'):
+            copied['models'][host].pop('insights')
+            copied['models'][host]['orchestrator']={'model':'project-'+host,'effort':'medium'}
+        copied['models']['claude']['insights']={'model':'shared-claude'}
+        (project/'config.json').write_text(json.dumps(copied))
+        (project/'config.local.json').write_text(json.dumps({'tasks_per_batch':11,'models':{
+            'codex':{'orchestrator':{'model':'ignored-old-name','effort':'low'},
+                     'insights':{'model':'local-codex','effort':'high'}},
+            'claude':{'orchestrator':{'model':'local-claude','effort':'max'}}}}))
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
         for path in project.glob('c*.json'):path.chmod(0o444)
         value=load(self.root)
         self.assertEqual((value['max_escalations'],value['tasks_per_batch'],value['review_rounds']),(1,11,3))  # as before the move
-        self.assertEqual({k:v for k,v in self.read().items() if k!='projects'},{'$schema':'./settings.schema.json','max_escalations':2,'tasks_per_batch':15})
-        self.assertEqual(self.read()['projects']['Fixture'],{'max_escalations':1,'tasks_per_batch':11,'checks':[{'name':'tests','command':['true']}]})
+        self.assertEqual({k:v for k,v in self.read().items() if k!='projects'},
+            {'$schema':'./settings.schema.json','max_escalations':2,'tasks_per_batch':15,'models':{
+                'codex':{'insights':{'model':'global-codex','effort':'low'}},
+                'claude':{'insights':{'model':'global-claude','effort':'medium'}}}})
+        expected={'codex':{'insights':{'model':'local-codex','effort':'high'}},
+                  'claude':{'insights':{'model':'local-claude','effort':'max'}}}
+        self.assertEqual(self.read()['projects']['Fixture'],{'max_escalations':1,'tasks_per_batch':11,
+            'models':expected,'checks':[{'name':'tests','command':['true']}]})
+        for host in ('codex','claude'):self.assertEqual(value['models'][host]['insights'],expected[host]['insights'])
         self.assertFalse(config.legacy_files())
         moved=list((config_home()/'backups').glob('*-moved-into-settings/projects/*/checks.json'))
         self.assertEqual(len(moved),1)
+        backup=next((config_home()/'backups').glob('*-moved-into-settings/settings/defaults.json'))
+        self.assertEqual(json.loads(backup.read_text()),shared)
         # A file an interrupted move left behind is already in settings.json: it only moves to backups.
         (project/'checks.json').write_text('[{"name": "other", "command": ["false"]}]')
         (home/'settings-moved.json').write_text(json.dumps([project.name]))
@@ -123,8 +149,17 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.legacy_files());self.assertFalse((home/'settings-moved.json').exists())
         # Any other older file must match the section every project with this name shares.
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
-        with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.max_escalations, projects.Fixture.tasks_per_batch'):load(self.root)
+        with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.max_escalations') as conflict:load(self.root)
+        self.assertIn('projects.Fixture.tasks_per_batch',str(conflict.exception))
         self.assertTrue((project/'checks.json').exists())
+        (project/'checks.json').unlink()
+        # Renamed aliases must not hide a real conflict with already-saved settings.
+        saved=self.read();saved['models']['codex']={'orchestrator':{'model':'global-codex','effort':'low'}}
+        self.write(saved)
+        (home/'settings/defaults.json').write_text(json.dumps({'models':{'codex':{'orchestrator':{'model':'different-codex'}}}}))
+        with self.assertRaisesRegex(Refused,'already sets models.codex.insights.model differently'):load(self.root)
+        self.assertEqual(self.read()['models']['codex']['insights']['model'],'global-codex')
+        self.assertTrue((home/'settings/defaults.json').exists())
 
     def test_one_project_per_name_so_a_section_is_never_shared(self):
         home=state_home();clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
@@ -227,12 +262,27 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'must contain a JSON object'):load(other)
 
     def test_renamed_settings_are_moved_once_with_a_backup(self):
-        self.write({'review_rounds':4,'projects':{'Fixture':{'review_rounds':6}}})
+        # docs/configuration.md: migrate/alias old names without losing either override layer.
+        legacy={'review_rounds':4,'models':{'codex':{'orchestrator':{'model':'old-model','effort':'low'},
+            'insights':{'model':'gpt-6.1-sol'}},'claude':{'orchestrator':{'model':'sonnet','effort':'medium'}}},
+            'projects':{'Fixture':{'review_rounds':6,'models':{'codex':{'orchestrator':{'effort':'high'}},'claude':{'orchestrator':{}}}}}}
+        self.write(legacy)
         with patch.dict(config.RENAMED,{'review_rounds':'tasks_per_batch'}):
             self.assertEqual(load(self.root)['tasks_per_batch'],6)
-        self.assertEqual(self.read(),{'$schema':'./settings.schema.json','tasks_per_batch':4,'projects':{'Fixture':{'tasks_per_batch':6}}})
+            self.assertEqual(load(self.root)['models']['codex']['insights'],{'model':'gpt-6.1-sol','effort':'high'})
+        self.assertEqual(self.read()['models'],{'codex':{'insights':{'model':'gpt-6.1-sol','effort':'low'}},
+            'claude':{'insights':{'model':'sonnet','effort':'medium'}}})
+        self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':6,'models':{'codex':{'insights':{'effort':'high'}}}})
         backup,=(config_home()/'backups').glob('*-settings/settings.json')
-        self.assertEqual(json.loads(backup.read_text())['review_rounds'],4)
+        self.assertEqual(json.loads(backup.read_text()),legacy)
+        for host in ('codex','claude'):
+            changed=change(self.root,f'models.{host}.orchestrator.model','replacement-model')
+            self.assertEqual(changed['setting'],f'models.{host}.insights.model')
+            change(self.root,f'models.{host}.orchestrator.effort','high')
+            self.assertEqual(load(self.root)['models'][host]['insights'],{'model':'replacement-model','effort':'high'})
+            change(self.root,f'models.{host}.orchestrator.effort')
+            self.assertEqual(load(self.root)['models'][host]['insights']['effort'],'low' if host=='codex' else 'medium')
+        self.assertFalse(any('.orchestrator.' in s['key'] for s in describe(self.root)['settings']))
 
     def test_editors_get_a_schema_for_the_running_version(self):
         change(self.root,'review_rounds','4')
@@ -240,6 +290,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(written,schema())
         project=written['properties']['projects']['additionalProperties']['properties']
         self.assertIn('checks',project);self.assertNotIn('checks',written['properties'])
+        for host in ('codex','claude'):
+            self.assertIn('insights',project['models']['properties'][host]['properties'])
+            self.assertNotIn('orchestrator',project['models']['properties'][host]['properties'])
         for key,_,_ in config.rules():
             node=written
             for part in key.split('.'):node=node['properties'][part]
@@ -283,8 +336,14 @@ class ConfigTest(unittest.TestCase):
     @unittest.skipIf(os.name=='nt','Read-only folders work differently on Windows')
     def test_a_read_only_settings_folder_never_stops_oh(self):
         change(self.root,'review_rounds','4');(config_home()/'settings.schema.json').write_text('{}')
+        self.write({'review_rounds':4,'models':{'codex':{'orchestrator':{'model':'gpt-6.1-sol','effort':'medium'}}}})
+        original=settings_file().read_bytes()
         config_home().chmod(0o555);self.addCleanup(config_home().chmod,0o755)
-        self.assertEqual(load(self.root)['review_rounds'],4)
+        with patch('oh.config.backup_folder',side_effect=PermissionError('Read-only settings')):
+            value=load(self.root)
+        self.assertEqual(value['review_rounds'],4)
+        self.assertEqual(value['models']['codex']['insights'],{'model':'gpt-6.1-sol','effort':'medium'})
+        self.assertEqual(settings_file().read_bytes(),original)
 
     def test_open_creates_the_file_and_asks_the_system_to_open_it(self):
         with patch('oh.config.launch') as opener:result=config.open_settings(self.root)
@@ -327,11 +386,18 @@ class ConfigTest(unittest.TestCase):
         from .profiles import export_profile,import_profile
         change(self.root,'review_rounds','4',scope='global');change(self.root,'tasks_per_batch','9');change(self.root,'review_rounds','4')
         exported=self.temp/'profile.json';export_profile(self.root,exported)
+        portable=json.loads(exported.read_text())
+        for host in ('codex','claude'):
+            self.assertIn('insights',portable['config']['models'][host])
+            portable['config']['models'][host]['orchestrator']=portable['config']['models'][host].pop('insights')
+        exported.write_text(json.dumps(portable))  # old exported profiles stay importable, without rewriting the source
+        original=exported.read_bytes()
         clone=self.temp/'clone';subprocess.run(['git','clone','-q',str(self.root),str(clone)],check=True,capture_output=True)
         with self.assertRaisesRegex(Refused,'already named Fixture'):import_profile(clone,exported)
         change(self.root,'review_rounds','6',scope='global')
         import_profile(clone,exported,'Fixture clone')
         self.assertEqual(self.read()['projects']['Fixture clone'],{'tasks_per_batch':9,'review_rounds':4})
+        self.assertEqual(exported.read_bytes(),original)
         # A section left by an earlier project of that name is reused only when it holds the same settings.
         self.write(self.read()|{'projects':self.read()['projects']|{'Old':{'tasks_per_batch':9,'review_rounds':4,'checks':[]}}})
         for name,root in (('Old','old'),('Other','other')):subprocess.run(['git','init','-q',str(self.temp/root)],check=True)
