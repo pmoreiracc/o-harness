@@ -289,6 +289,70 @@ class AuthorityTest(unittest.TestCase):
                         materialize(root)
                     self.assertFalse(pending_file(root).exists())
 
+    def test_conversational_intake_needs_no_waiting_state(self):
+        import subprocess
+        from .authority import materialize,pending_file,stage,used_file,waits
+        from .entry import receive
+        from .storage import read_json
+        from .workflow import human_event
+        with tempfile.TemporaryDirectory() as name,patch('pathlib.Path.home',return_value=Path(name)),patch.dict(os.environ,{'OH_DATA_HOME':name+'/state'}):
+            home=Path(name);root=home/'project';root.mkdir();subprocess.run(['git','init','-q',str(root)],check=True)
+            case=0
+            for host in ('codex','claude'):
+                if host=='claude':
+                    from .config import change
+                    change(root,'plans.location','private')
+                for kind,args,replies,expected in (
+                        ('propose','',['Add a tiny smoke script'],'Add a tiny smoke script'),
+                        ('design','',['smoke'],'smoke'),
+                        ('deliver','',['0001'],'0001'),
+                        ('deliver','',['0001','ui'],'0001 ui'),
+                        ('deliver','0001',['ui'],'0001 ui'),
+                        ('deliver','',['Fix the smoke message'],'Fix the smoke message'),
+                        ('deliver','Fix the smoke message',['Use exactly OK'],'Fix the smoke message\nUse exactly OK')):
+                    with self.subTest(host=host,kind=kind,args=args,replies=replies):
+                        case+=1;session=host+'-'+str(case)
+                        path=home/('.codex/sessions' if host=='codex' else '.claude/projects')/(session+'.jsonl')
+                        path.parent.mkdir(parents=True,exist_ok=True)
+                        records=[{'type':'session_meta','payload':{'id':session,'cwd':str(root),'source':'cli'}}] if host=='codex' else []
+                        def message(turn,text):
+                            payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':text,'transcript_path':str(path)}
+                            at=f'2026-10-01T12:{case:02d}:0{turn}Z'
+                            if host=='codex':
+                                records.extend([{'type':'event_msg','payload':{'type':'task_started','turn_id':turn}},
+                                    {'type':'event_msg','timestamp':at,'payload':{'type':'user_message','turn_id':turn,'message':text}}])
+                            else:records.append({'type':'user','sessionId':session,'promptId':turn,'cwd':str(root),
+                                'timestamp':at,'message':{'role':'user','content':text}})
+                            path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
+                            return payload
+                        original=message('1',('$' if host=='codex' else '/')+'oh-'+kind+(' '+args if args else ''))
+                        # Claude has a prompt hook. Codex Desktop can first reach OH only after the answer.
+                        if host=='claude':receive(root,host,original)
+                        with patch.dict(os.environ,{'CODEX_THREAD_ID':session if host=='codex' else ''}),\
+                                patch('oh.delivery.track_question',return_value={'waiting':{'tracks':['core','ui']}}):
+                            for index,reply in enumerate(replies,2):
+                                payload=message(str(index),reply)
+                                if host=='claude':receive(root,host,payload)
+                                missing=original|{'session_id':'missing','turn_id':'old','transcript_path':str(path.with_name('missing.jsonl'))}
+                                from .registry import index_path
+                                if index_path(root).exists():stage(root,host,missing)
+                                # No waiting record exists, even between design-number and track answers.
+                                self.assertEqual(waits(root),{})
+                                final=index==len(replies)+1
+                                result={'kind':'quick_fix','prepare':True} if final and 'smoke message' in expected else (
+                                    {'run':'fixture','status':'running'} if final else {'waiting':{'tracks':['core','ui']}})
+                                with patch('oh.cli.host_hook',return_value=result) as apply:
+                                    self.assertEqual(materialize(root),result)
+                                    self.assertEqual(apply.call_args.kwargs['request'],(kind,expected if final else reply))
+                                    self.assertEqual(apply.call_args.args[2]['prompt'],reply)  # real source, never a synthesized command
+                                # A missing old chat cannot block either the initial request or its retry.
+                                stage(root,host,missing)
+                                if host=='claude':stage(root,host,payload,idea='conversation')
+                                with patch('oh.cli.host_hook') as apply:
+                                    self.assertEqual(materialize(root),result);apply.assert_not_called()
+                                self.assertFalse(used_file(root,human_event(missing,host)).exists())
+                        pending_file(root).unlink(missing_ok=True)
+
     def test_prepared_scope_cannot_be_widened_after_human_trigger(self):
         import os,subprocess
         from datetime import datetime,timedelta,timezone

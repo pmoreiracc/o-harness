@@ -25,6 +25,11 @@ decision, missing authority or an external action OH cannot perform. Keep existi
 and review guarantees; recovery never invents approval, broadens scope or renews allowances.
 An unavoidable blocker must explain what happened and give a concrete next step.
 
+For OH host-interaction fixes, implement and verify locally, then let the developer rebuild
+with `oh-dev on` and test the snapshot before independent review or publication. Use short,
+concrete host scenarios and fix the observed behavior before requesting review. This ordering
+is for developing OH, not an extra gate in a consumer's delivery workflow.
+
 A fresh `invariant-reviewer` must review each change through the shared prompt and a
 bound immutable admission before publication. Use the configured review profile. Apply
 all lenses in one round, preserve every finding, and fix blockers. Reviews are read-only.

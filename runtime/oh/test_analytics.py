@@ -41,10 +41,14 @@ class AnalyticsTest(unittest.TestCase):
             db.execute('UPDATE tasks SET expected_reviews=2')  # observed rework supplies a real supported candidate
         answer={'failed':False,'duration_ms':1,'structured':{'priority':['review-rework']}}
         with patch('oh.suggestions.invoke',return_value=answer) as invoke, \
+                patch('oh.hosts.invoke',invoke), \
+                patch('oh.capabilities.codex_models',return_value={'gpt-6-sol':{'medium'}}), \
                 patch('oh.suggestions.project',side_effect=AssertionError('The engine is not a consumer project')):
             result=generate()
-            self.assertEqual(result,{'status':'saved','saved':1})
-            self.assertEqual(invoke.call_args.args[:3],('codex',HOME,{'model':'gpt-6.1-sol','effort':'medium'}))
+            self.assertEqual((result['status'],result['saved']),('saved',1))
+            self.assertIn('Continuing with gpt-6-sol / medium',result['message'])
+            self.assertEqual(result['model_notices'],[result['message']])
+            self.assertEqual(invoke.call_args.args[:3],('codex',HOME,{'model':'gpt-6-sol','effort':'medium'}))
             self.assertTrue(invoke.call_args.args[6]['standalone'])
             self.assertEqual(generate()['status'],'unchanged')
             invoke.assert_called_once()

@@ -30,6 +30,10 @@ class Saving(Refused):
     """The host has not finished writing the native evidence yet; the same read may succeed shortly."""
 
 
+class Unavailable(Saving):
+    """A locator has no readable native source; it cannot hold another verified request hostage."""
+
+
 def saved(read):
     """Retry only incomplete host evidence, for at most 1.5 seconds. Never retry a workflow mutation."""
     for delay in (0,0.1,0.2,0.4,0.8):
@@ -181,8 +185,9 @@ def menu_waiting(root):
     from .workflow import active_file,load_run
     if not active_file(root).exists():return None
     journal,state=load_run(root)
-    gate=describe(journal,state,root) if state['host']=='claude' else None
-    return (gate,state,journal.records()[-1]['at']) if gate else None
+    gate=describe(journal,state,root) if state['host']=='claude' and not state.get('refinement') else None
+    from .gates import menu_record
+    return (gate,state,menu_record(journal,state)['at']) if gate else None
 
 
 def answer(root,hint=None,after=None):
@@ -281,7 +286,7 @@ def attest(host,payload,root=None):
     return saved(lambda: _attest(host,payload,root))
 
 
-def _attest(host,payload,root=None,*,caller=True):
+def _attest(host,payload,root=None,*,caller=True,latest=True):
     from .workflow import human_event
     event=human_event(payload,host)
     if caller and os.environ.get('CODEX_THREAD_ID') and (host!='codex' or event['session']!=os.environ['CODEX_THREAD_ID']):
@@ -292,19 +297,19 @@ def _attest(host,payload,root=None,*,caller=True):
         paths=[Path(payload['transcript_path']).expanduser().resolve()]
     else:paths=list(allowed.rglob('*'+event['session']+'*.jsonl'))
     if len(paths)!=1 or not paths[0].is_relative_to(allowed) or not paths[0].is_file():
-        raise Saving('The native human transcript is not available yet; retry the same OH operation after the host saves it')
+        raise Unavailable('The native human transcript is not available yet; retry the same OH operation after the host saves it')
     if host=='codex':
         path=paths[0];_,_,messages,_=codex_history(path,event['session'])
         matches=[m for m in messages if (m['turn'],m['prompt'])==(event['turn'],event['prompt'])]
         if root is not None and any(not within(m['cwd'],root) for m in matches):raise Refused('Human turn belongs to another project checkout')
-        if matches and messages[-1] not in matches:raise Expired('The person typed something newer in this conversation')
+        if latest and matches and messages[-1] not in matches:raise Expired('The person typed something newer in this conversation')
         if not matches:
             if messages and messages[-1]['turn']==event['turn']:
                 raise Refused('The requested command does not match the native human message; nothing was applied')
             raise Saving('Codex has not saved this human message yet; retry the same OH operation.')
         return event|{'at':min(m['at'] for m in matches if m['at']) if any(m['at'] for m in matches) else None,
             'record_hashes':sorted({h for m in matches for h in m['record_hashes']}),'transcript_path':str(path)}
-    path=paths[0];matches=[];times=[];tagged=[];expanded={};latest=None
+    path=paths[0];matches=[];times=[];tagged=[];expanded={};latest_turn=None
     with path.open('rb') as stream:
         first=stream.readline()
         stream.seek(max(len(first),path.stat().st_size-8*1024*1024))
@@ -315,7 +320,7 @@ def _attest(host,payload,root=None,*,caller=True):
                 if not line.endswith(b'\n'):raise Saving('Claude is still saving this conversation; retry the same OH operation.')
                 continue
             if not isinstance(x,dict):continue
-            if prompted(x,event['session']):latest=x['promptId']
+            if prompted(x,event['session']):latest_turn=x['promptId']
             if x.get('type')!='user' or x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
             if x.get('isMeta') and not x.get('isSidechain'):
                 # The model's own Skill tool call saves the same text; only a typed command's expansion
@@ -344,17 +349,108 @@ def _attest(host,payload,root=None,*,caller=True):
             name,args=typed_command(event['prompt'])
             event=event|{'prompt':'/o-harness:'+name+(' '+args if args else '')}
     if not matches:
-        error=Saving if latest!=event['turn'] or tagged and not expanded else Refused
+        error=Saving if latest_turn!=event['turn'] or tagged and not expanded else Refused
         raise error('No matching native human turn is saved yet; no authority was granted. Retry OH after the host saves it.')
-    if latest not in (None,event['turn']):raise Expired('The person typed something newer in this conversation')
+    if latest and latest_turn not in (None,event['turn']):raise Expired('The person typed something newer in this conversation')
     return event|{'at':min(times) if times else None,'record_hashes':sorted(set(matches)),'transcript_path':str(path)}
+
+
+def claude_history(path,session):
+    """Native human prompts used for conversational input; tool and agent text do not count."""
+    messages=[]
+    with path.open('rb') as stream:
+        for line in stream:
+            try:record=json.loads(line)
+            except ValueError:
+                if not line.endswith(b'\n'):raise Saving('Claude is still saving this conversation; retry the same OH operation.')
+                continue
+            if not isinstance(record,dict) or not prompted(record,session):continue
+            content=(record.get('message') or {}).get('content')
+            text=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
+            if tagged:=saved_command(text):text='/'+tagged[0]+(' '+tagged[1] if tagged[1] else '')
+            messages.append({'turn':record['promptId'],'prompt':text.strip(),'cwd':record.get('cwd'),'at':record.get('timestamp')})
+    return messages
+
+
+def claude_refinement(root):
+    """Read the expected chat reply even when Claude's narrow prompt hook did not launch OH."""
+    from .registry import index_path
+    from .workflow import active_file,load_run
+    if os.environ.get('OH_CHILD_ATTEMPT') or not index_path(root).is_file() or not active_file(root).exists():return
+    _,state=load_run(root)
+    if state['host']!='claude' or not (pending:=state.get('refinement')):return
+    session=state['human']['session'];path=owner_transcript(state['human'])
+    if not path:return
+    messages=saved(lambda:claude_history(path,session))
+    if not messages:return
+    message=messages[-1]
+    from .entry import command
+    if command(message['prompt']) or not within(message['cwd'],root) or not newer(message['at'],pending['source'].get('at')):return
+    payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':message['turn'],
+             'prompt':message['prompt'],'transcript_path':str(path)}
+    event=attest('claude',payload,root)
+    if not used_file(root,event).exists():stage(root,'claude',payload,idea='refine')
+
+
+def conversation_input(root,host,payload,event):
+    """Join a bare native invocation to its answer. Asking needs no durable waiting record.
+
+    Only consecutive human inputs in this checkout count; model/tool text cannot supply either half.
+    Delivery can collect a design number and then a track. This collects data, never menu approvals.
+    """
+    from .entry import command
+    if command(event['prompt']):return None
+    path=Path(event['transcript_path']);session=event['session']
+    if host=='codex':messages=codex_history(path,session)[2]
+    else:messages=claude_history(path,session)
+    # A host may save two representations of the same human message.
+    distinct=[]
+    for message in messages:
+        if not distinct or (message['turn'],message['prompt'])!=(distinct[-1]['turn'],distinct[-1]['prompt']):distinct.append(message)
+    if not distinct or (distinct[-1]['turn'],distinct[-1]['prompt'])!=(event['turn'],event['prompt']):return None
+    origin_index=next((i for i in range(len(distinct)-2,-1,-1) if command(distinct[i]['prompt'])),None)
+    if origin_index is None:return None
+    context=distinct[origin_index:];kind,args=command(context[0]['prompt'])
+    if kind not in ('propose','design','deliver') or any(not within(m['cwd'],root) for m in context):return None
+    from .registry import index_path
+    from .cli import started
+    # A consumed or cancelled input closes this conversation's intake. A read-only question or quick-fix
+    # preview may collect another answer, but cannot reopen a run after preparation/execution started.
+    for message in context[:-1]:
+        proof=_attest(host,payload|{'turn_id':message['turn'],'prompt':message['prompt']},root,latest=False)
+        used=used_file(root,proof) if index_path(root).is_file() else None
+        if used and used.exists():
+            record=read_json(used);result=record.get('result') or {}
+            if ('refused' in record or started(root,proof) or
+                    not (result.get('waiting') or result.get('kind') in ('list','quick_fix'))):return None
+    replies=[m['prompt'] for m in context[1:]]
+    if kind in ('propose','design'):
+        return (kind,'\n'.join(replies) if kind=='propose' else replies[-1]) if not args else None
+    from .delivery import parse,track_question
+    if not args:args=replies.pop(0)
+    selection=parse(args)
+    if selection['kind']=='quick_fix':return kind,'\n'.join([args,*replies])
+    if not replies:return kind,args
+    if (selection['kind']=='design' and not selection['track'] and not selection['request']
+            and track_question(root,selection['doc'])):
+        return kind,args+' '+replies[-1]
+    return None
+
+
+def defer_missing(root,locator):
+    """Keep missing work non-executable behind verified chronology; never infer its age from hook arrival."""
+    path=checkout_file(root,'oh-latest-request.json')
+    latest=read_json(path) if path.exists() else {}
+    if newer(latest.get('at'),locator.get('superseded_before')) or latest.get('at') and not locator.get('superseded_before'):
+        return locator|{'superseded_before':latest['at']}
+    return locator
 
 
 def pending_choice(root,locator):
     """Resolve staged locators from native evidence; arrival order cannot withdraw a human request."""
     candidates=pending_locators(locator)
     def read():
-        verified=[];deferred=[];revoked=[]
+        verified=[];deferred=[];revoked=[];saving=False
         for candidate in candidates:
             try:
                 # Inspect other conversations only to order their requests. The winner must still pass
@@ -362,11 +458,15 @@ def pending_choice(root,locator):
                 event=_attest(candidate['host'],candidate['payload'],root,caller=False)
                 if newer(candidate.get('superseded_before'),event.get('at')):revoked.append((candidate,event))
                 else:verified.append((candidate,event))
+            except Unavailable:
+                if not starts_work(candidate):raise
+                deferred.append(defer_missing(root,candidate))
             except Saving:
                 if candidate.get('superseded_before'):deferred.append(candidate)
                 else:raise
+                saving=True
             except Refused:continue
-        if verified and deferred:raise Saving('A pending command is still being saved; retry the same OH operation.')
+        if verified and saving:raise Saving('A pending command is still being saved; retry the same OH operation.')
         return verified,deferred,revoked
     verified,deferred,revoked=saved(read)  # one bounded wait; no request is lost while evidence is incomplete
     for candidate,event in revoked:
@@ -374,17 +474,21 @@ def pending_choice(root,locator):
         spent(root,event|{'prompt':candidate['event']['prompt']},'Superseded by a later answer on the menu.')
     if not verified:
         if deferred or revoked:
+            if any(not c.get('superseded_before') for c in deferred):
+                raise Unavailable('The native human transcript is not available yet; retry the same OH operation after the host saves it')
             retain_pending(pending_file(root),deferred)
             return None  # no new authority; an already approved run may continue
-        return locator  # the ordinary path reports/clears an expired command once
+        return {k:v for k,v in locator.items() if k!='prior'}  # report/clear an expired command once
     selected,event=verified[0]
     for candidate,proof in verified[1:]:
         if newer(proof.get('at'),event.get('at')):selected,event=candidate,proof
     attest(selected['host'],selected['payload'],root)
+    if event.get('at'):
+        deferred=[c|{'superseded_before':event['at']} if newer(event['at'],c.get('superseded_before')) or not c.get('superseded_before') else c for c in deferred]
     for candidate,proof in verified:
         if used_file(root,proof)!=used_file(root,event) and newer(event.get('at'),proof.get('at')):
             spent(root,proof|{'prompt':candidate['event']['prompt']},'Superseded by a newer command in this checkout.')
-    return selected
+    return selected|({'prior':deferred} if deferred else {})
 
 
 def remember_request(root,event):
@@ -400,11 +504,13 @@ def remember_request(root,event):
 @state_writer
 def materialize(root):
     from .workflow import active_file
+    if (result:=desktop_answer(root)) is not None:return result
     # A fresh native invocation may replace a pending request, including one from another conversation.
     discovered=desktop_pending(root)
+    claude_refinement(root)
     path=pending_file(root)
     with lock(path.with_suffix('.lock')):
-        if path.exists() and ((locator:=read_json(path)).get('prior') or locator.get('superseded_before')):
+        if path.exists() and ((locator:=read_json(path)).get('prior') or locator.get('superseded_before') or not bare_choice(locator)):
             selected=pending_choice(root,locator)
             if selected is None:return discovered if discovered is not None else answer(root)
             atomic_json(path,selected)
@@ -417,14 +523,20 @@ def materialize(root):
                 if not settled(root,locator,path):
                     raise Saving('Your typed choice is not saved in the conversation yet; retry the same OH operation.')
             saved(ready)
-            path.unlink();return answer(root,hint=locator['event']['turn'])
+            retain_pending(path,locator.get('prior',[]));return answer(root,hint=locator['event']['turn'])
         if not path.exists():return discovered if discovered is not None else answer(root)
         locator=read_json(path)
+        def consumed():retain_pending(path,locator.get('prior',[]))
         try:event=attest(locator['host'],locator['payload'],root)
+        except Unavailable:
+            deferred=defer_missing(root,locator)
+            if not starts_work(locator) or not deferred.get('superseded_before'):raise
+            atomic_json(path,deferred)
+            return discovered if discovered is not None else answer(root)
         except Expired:
             # Said once: the person moved on, so this command is spent and never carried out behind their back.
             message=f"You typed something after {locator['event']['prompt']}, so OH set it aside; type it again to run it."
-            spent(root,locator['event'],message);path.unlink()
+            spent(root,locator['event'],message);consumed()
             raise Refused(message)
         except Refused:
             # A command that can't be verified never holds up the open menu.
@@ -434,7 +546,7 @@ def materialize(root):
         if menu_waiting(root) and (result:=answer(root,after=event.get('at'))) is not None:return result
         used=used_file(root,event)
         if used.exists():
-            path.unlink();record=read_json(used)
+            consumed();record=read_json(used)
             if 'refused' in record:raise Refused(record['refused'])
             return record['result']
         from .cli import host_hook
@@ -442,7 +554,11 @@ def materialize(root):
             if starts_work(locator) and newer(remember_request(root,event).get('at'),event.get('at')):
                 from .storage import Final
                 raise Final('Superseded by a later command or menu answer in this checkout.')
-            result=host_hook(root,locator['host'],locator['payload'],verified=event,idea=locator.get('idea'))
+            idea=locator.get('idea')
+            request=None if idea=='refine' else conversation_input(root,locator['host'],locator['payload'],event)
+            if idea=='conversation' and request is None:raise Refused('No incomplete OH invocation precedes this reply; nothing was started. Invoke the intended OH skill.')
+            result=host_hook(root,locator['host'],locator['payload'],verified=event,
+                             idea=None if request else idea,**({'request':request} if request else {}))
             if result is None:raise Refused('This input is not a supported native OH transition')
         except Exception as exc:
             # A refused command that starts work stays pending and is spent only once carried out, so `oh run`
@@ -453,7 +569,7 @@ def materialize(root):
             refused=exc if isinstance(exc,Refused) else Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})')
             from .storage import Final
             if not starts_work(locator) or not isinstance(exc,Refused) or isinstance(exc,Final):
-                atomic_json(used,{'source':event,'refused':str(refused)},immutable=True);path.unlink()
+                atomic_json(used,{'source':event,'refused':str(refused)},immutable=True);consumed()
             raise refused from exc
         atomic_json(used,{'source':event,'result':result},immutable=True)
         from .transcripts import register
@@ -461,7 +577,7 @@ def materialize(root):
         if active_file(root).exists():
             _,run=load_run(root)
             if run['status']=='running':register(root,locator['host'],locator['payload']|{'transcript_path':event['transcript_path']},run['id'],run['project'])
-        path.unlink()
+        consumed()
         return result
 
 
@@ -480,7 +596,7 @@ def waiting_file(session):
 
 def wait_for(root,human,command,ask):
     """Make the person's next message in this conversation and checkout the argument of `command` (they typed it
-    bare, or chose Reconsider). Nothing runs until they answer; their answer is verified like a typed command."""
+    bare). Nothing runs until they answer; their answer is verified like a typed command."""
     from .storage import checkout_id
     atomic_json(waiting_file(human['session']),{'host':human['host'],'session':human['session'],'checkout':checkout_id(root),
         'command':command,'ask':ask,'at':now()})
@@ -619,6 +735,99 @@ def desktop_pending(root):
     return saved(lambda: _desktop_pending(root))
 
 
+def desktop_answer(root):
+    """Verify a Desktop native question and its actual human reply, against the current preview/menu.
+
+    The displayed question and actual human reply are bound to the current checkpoint by the host
+    proof and its timestamp. The agent never submits an answer argument; injected user-role messages,
+    altered questions and old previews grant nothing.
+    """
+    if os.environ.get('OH_CHILD_ATTEMPT'):return None
+    session=os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID')
+    if not session or not re.fullmatch(r'[a-zA-Z0-9_-]+',session):return None
+    from .registry import index_path
+    from .workflow import active_file,load_run
+    if not index_path(root).is_file() or not active_file(root).exists():return None
+    journal,state=load_run(root)
+    if state['host']!='codex' or state['human']['session']!=session:return None
+    from .hosts import codex_home
+    paths=list((codex_home()/'sessions').rglob('*'+session+'*.jsonl'))
+    if len(paths)!=1:return None  # ordinary entry reports a current source that is still saving
+    path=paths[0]
+    _,_,messages,_=saved(lambda:codex_history(path,session))
+    if not messages:return None
+    message=messages[-1]
+    wrapped=re.fullmatch(r'<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>',message['prompt'],re.S)
+    if not wrapped:return None
+    from .config import version
+    if state['harness_version']!=version():
+        raise Refused('This run uses an older OH snapshot. Finish or stop it with that snapshot before starting a new one.')
+    expected=os.environ.get('OH_CODEX_TURN_ID')
+    if expected and message['turn']!=expected:raise Saving('Codex has not saved the calling human turn yet; retry the same OH operation.')
+    payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':message['turn'],
+             'prompt':message['prompt'],'transcript_path':str(path)}
+    event=attest('codex',payload,root)
+    used=used_file(root,event)
+    if used.exists():return None
+    # A crash after the transition but before its receipt cannot lose the click or grant it twice.
+    applied=next((r['data']['source'] for r in reversed(journal.records())
+                  if r['kind']=='transition' and r['data']['source'].get('native_reply')==used.stem),None)
+    if applied:
+        from .workflow import checkpoint
+        result=checkpoint(root)
+        atomic_json(used,{'source':applied,'result':result},immutable=True)
+        answered(root,'codex',session,str(path))
+        return noted(result,supersede(root,'codex',applied))
+    from .gates import current,native_ask,pick,apply
+    try:gate=current(root)
+    except Refused as exc:
+        atomic_json(used,{'source':event,'refused':str(exc)},immutable=True)
+        raise
+    if not gate:return None
+    try:
+        answers=json.loads(wrapped[1])
+        if not isinstance(answers,list) or len(answers)!=1:return None
+        reply=answers[0];tool,call,index=json.loads(reply['questionItemId'])
+        if tool!='request_user_input_async' or not isinstance(call,str) or index!=0:return None
+    except (ValueError,TypeError,KeyError):return None
+    question=native_ask(gate)['questions'][0]
+    if reply.get('question')!=question['title']:return None
+    # Verify the actual question displayed by the host, not a model-written description of one.
+    proof=None
+    from .gates import menu_record
+    gate_at=menu_record(journal,state)['at']
+    with path.open('rb') as stream:
+        for line in stream:
+            try:record=json.loads(line)
+            except ValueError:continue  # codex_history already checked the current save
+            if not isinstance(record,dict):continue
+            p=record.get('payload',{});item=p.get('item') or {}
+            if not newer(event.get('at'),record.get('timestamp')):continue
+            if not newer(record.get('timestamp'),gate_at):continue  # an older identical menu cannot renew a later window
+            if (record.get('type')=='event_msg' and p.get('type')=='item_completed' and p.get('thread_id')==session
+                    and item.get('type')=='AgentMessage' and item.get('id')==call and item.get('delivery')=='async'
+                    and item.get('questions')==[question]):
+                proof=digest(record)
+            elif (record.get('type')=='response_item' and p.get('type')=='function_call'
+                  and p.get('name') in ('request_user_input_async','functions.request_user_input_async') and p.get('call_id')==call):
+                try:arguments=json.loads(p.get('arguments',''))
+                except (ValueError,TypeError):continue
+                if arguments=={'questions':[question]}:proof=digest(record)
+    if not proof:raise Refused('OH could not verify the displayed question. Run status and reopen the current menu.')
+    answer=reply.get('answer')
+    for option in gate['options']:
+        if answer==option['label']+' — '+option['description']:answer=option['choice'];break
+    choice=pick(gate,answer)
+    source=event|{'prompt':choice,'via':'question','native_reply':used.stem,'record_hashes':sorted({*event['record_hashes'],proof})}
+    try:result=apply(root,source,gate['id'])
+    except Refused as exc:
+        atomic_json(used,{'source':source,'refused':str(exc)},immutable=True)
+        raise
+    atomic_json(used,{'source':source,'result':result},immutable=True)
+    answered(root,'codex',session,str(path))
+    return noted(result,supersede(root,'codex',source))
+
+
 def _desktop_pending(root):
     """No-argument fallback: recover the latest human command from this Codex conversation."""
     if os.environ.get('OH_CHILD_ATTEMPT'):return
@@ -641,14 +850,19 @@ def _desktop_pending(root):
         if expected:raise Saving('Codex has not saved the calling human turn yet; retry the same OH operation.')
         return
     message=messages[-1];text=message['prompt']
+    if text.startswith('<send_user_message_question_reply>'):return None  # only desktop_answer interprets native question replies
     if not within(message['cwd'],root):
         if expected:raise Refused('Human turn belongs to another project checkout')
         return
     from .entry import command
+    from .workflow import refinement_for
+    refinement=None if command(text) else refinement_for(root,'codex',session)
     asked=None if command(text) else waiting_for(root,'codex',session)
-    if not command(text) and not asked:return
     payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':message['turn'],'prompt':text,'transcript_path':str(path)}
     event=_attest('codex',payload,root)
+    request=None if command(text) or asked or refinement else conversation_input(root,'codex',payload,event)
+    if not command(text) and not asked and not request and not refinement:return
+    if refinement and not newer(event.get('at'),refinement['source'].get('at')):return
     if asked and not newer(event.get('at'),asked['at']):return
     # Re-reading a consumed command returns its result; it never grants work again. This also lets a retry
     # report its own completed run instead of mistaking the absence of new authority for a failure.
@@ -672,5 +886,10 @@ def _desktop_pending(root):
                 raise Refused(record['refused'])
             return record['result']
     from .entry import receive
+    if request:
+        from .entry import enroll
+        if result:=enroll(root):return result
+        stage(root,'codex',payload,idea='conversation')
+        return None
     result=receive(root,'codex',payload)
     return None if result and result.get('pending') else result

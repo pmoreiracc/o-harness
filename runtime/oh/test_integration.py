@@ -12,6 +12,31 @@ class IntegrationTest(unittest.TestCase):
     @staticmethod
     def git(root,*args):return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.DEVNULL,text=True).strip()
 
+    def test_missing_codex_model_uses_only_an_earlier_compatible_family(self):
+        from .capabilities import select_profile
+        requested={'model':'gpt-6.11-sol','effort':'high'}
+        catalog={'gpt-6.2-sol':{'high'},'gpt-6.10-sol':{'high'},'gpt-6.12-sol':{'high'},
+                 'gpt-6.10-astra':{'high'},'gpt-6.10-sol-special':{'high'},'gpt-6.10.1-sol':{'low'}}
+        with patch('oh.capabilities.codex_models',return_value=catalog) as discover:
+            actual,fallback=select_profile('codex',requested,Path('/project'))
+            self.assertEqual(actual,{'model':'gpt-6.10-sol','effort':'high'})
+            self.assertEqual(requested,{'model':'gpt-6.11-sol','effort':'high'})
+            self.assertEqual((fallback['requested'],fallback['actual']),(requested,actual))
+            self.assertIn('Continuing with gpt-6.10-sol / high',fallback['notice'])
+            self.assertIn('npm install -g @openai/codex@latest',fallback['notice'])
+            self.assertIn('$oh-config',fallback['notice'])
+            self.assertEqual(select_profile('codex',actual,Path('/project')),(actual,None))
+            # Present models never silently change effort; other families, newer versions and
+            # unversioned names do not create a compatible predecessor.
+            for profile in ({'model':'gpt-6.10-sol','effort':'ultra'},
+                            {'model':'gpt-6-sol','effort':'high'},
+                            {'model':'custom-sol','effort':'high'}):
+                with self.subTest(profile=profile),self.assertRaises(Refused):select_profile('codex',profile,Path('/project'))
+            discover.reset_mock()
+            claude={'model':'opus','effort':'high'}
+            self.assertEqual(select_profile('claude',claude,Path('/project')),(claude,None))
+            discover.assert_not_called()
+
     def test_path_spoof_cannot_select_host_executable(self):
         from .hosts import executable,trust
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp,'PATH':tmp}):

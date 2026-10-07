@@ -11,8 +11,6 @@ def directory(root):return state_home()/'projects'/project(root)['id']/'prepared
 @state_writer
 def prepare(root,manifest=None,doc=None,track=''):
     if (manifest is None)==(doc is None):raise Refused('Prepare either tasks or one design')
-    value={'created':now(),'project':project(root)['id'],'checkout':checkout_id(root),'base':git(root,'rev-parse','HEAD'),
-           'snapshot':snapshot(root),'project_checks':project_checks(root)}
     if manifest is not None:
         from .workflow import validate_tasks
         path=(Path(root)/manifest).resolve()
@@ -20,28 +18,42 @@ def prepare(root,manifest=None,doc=None,track=''):
         data=read_json(path)
         if not isinstance(data,dict) or 'tasks' not in data:raise Refused('A prepared task list is a JSON object with tasks')
         validate_tasks(data['tasks']);delivery_only(data)
-        value.update(kind='tasks',manifest=data)
+        kind={'kind':'tasks','manifest':data}
     else:
         if project(root).get('design_profile')!='consumer-v1':raise Refused('Design preparation requires a consumer-owned profile')
+    # Snapshot only after recovering the real command and refreshing the preparation context.
+    # This also handles a refinement made after the previous delivery merged.
+    from .authority import materialize,attest
+    materialize(root)
+    event=None
+    if manifest is not None:
+        owner=checkout_file(root,'oh-preparation-owner.json')
+        if owner.exists():
+            human=read_json(owner)
+            event=attest(human['host'],human['payload'],root)
+    from .workflow import active_file,load_run,occupied
+    if active_file(root).exists():
+        _,state=load_run(root)
+        if state['status'] not in ('stopped','pr','completed','prepared_checkpoint'):raise occupied(state)
+        if state['status']=='prepared_checkpoint' and (not event or
+                (event['host'],event['session'])!=(state['host'],state['human']['session'])):raise occupied(state)
+    from .branches import from_main
+    from_main(root)
+    if manifest is None:
         from .design_adapter import manifest as project_design
         data=project_design(root,doc,track)
-        value.update(kind='design',doc=doc,track=track,manifest=data)
+        kind={'kind':'design','doc':doc,'track':track,'manifest':data}
+    value={'created':now(),'project':project(root)['id'],'checkout':checkout_id(root),'base':git(root,'rev-parse','HEAD'),
+           'snapshot':snapshot(root),'project_checks':project_checks(root)}|kind
     key=digest(value);atomic_json(directory(root)/(key+'.json'),value,immutable=True)
     trigger=('$o-harness:oh-deliver request:'+key if manifest is not None else '$o-harness:oh-deliver '+doc+(' '+track if track else '')+' request:'+key)
     config=value['snapshot']['config']
     result={'request':key,'trigger':trigger,'tasks_per_batch':config['tasks_per_batch'],'review_rounds':config['review_rounds'],
             'limits':limits(len(data['tasks']),config)}
-    if manifest is not None:
-        from .authority import materialize,attest
-        materialize(root)
-        owner=checkout_file(root,'oh-preparation-owner.json')
-        if owner.exists():
-            human=read_json(owner)
-            # Recheck the original native turn, including whether the person has since moved on.
-            event=attest(human['host'],human['payload'],root)
-            from .workflow import start,checkpoint
-            start(root,data,event,prepared=value,waiting=key)
-            result|=checkpoint(root)
+    if event:
+        from .workflow import start,checkpoint
+        start(root,data,event,prepared=value,waiting=key)
+        result|=checkpoint(root)
     return result
 
 
@@ -52,7 +64,7 @@ def remember(root,host,payload,event):
 
 def activate(root,journal,state,event):
     """Only an approved, unchanged snapshot can become executable. Retain branch creation for crash recovery."""
-    from .branches import incarnation,run_git
+    from .branches import execution_branch,incarnation,run_git
     from .config import version
     from .storage import changes
     if event['host']!=state['host'] or event['session']!=state['human']['session']:raise Refused('Approve in the conversation that prepared these tasks')
@@ -62,10 +74,19 @@ def activate(root,journal,state,event):
     branch=git(root,'branch','--show-current');intent=state.get('activation')
     if not intent:
         if branch!=state['branch'] or incarnation(root,branch)!=state['incarnation']:raise Refused('Return to the checkout and branch where these tasks were prepared')
-        target='codex/oh-'+state['id'][:8] if branch in ('main','master') else branch
+        target=execution_branch(root,state['tasks'][0]['title'],state['id']) if branch in ('main','master') else branch
         if target!=branch and run_git(root,'show-ref','--verify','--quiet','refs/heads/'+target).returncode==0:raise Refused('The prepared execution branch already exists; prepare again')
-        intent={'branch':target,'base':state['base']}
+        record=journal.records()[-1]
+        intent={'branch':target,'base':state['base'],'gate_record':{k:record[k] for k in ('hash','at')}}
+        if target!=branch:intent['reflog']='branch: Created for delivery '+state['id']
         journal.append('preparation.activating',intent)
+    if intent.get('reflog'):
+        ref='refs/heads/'+intent['branch']
+        if run_git(root,'show-ref','--verify','--quiet',ref).returncode:
+            git(root,'update-ref','--create-reflog','-m',intent['reflog'],ref,intent['base'],'0'*len(intent['base']))
+        if (git(root,'rev-parse',ref)!=intent['base'] or
+                git(root,'reflog','show','-1','--format=%gs',ref)!=intent['reflog']):
+            raise Refused('The execution branch changed outside OH; preserve it and inspect it before continuing.')
     if branch!=intent['branch']:
         if branch!=state['branch']:raise Refused('Return to the preparation branch before approving again')
         if run_git(root,'show-ref','--verify','--quiet','refs/heads/'+intent['branch']).returncode==0:

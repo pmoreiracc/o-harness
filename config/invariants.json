@@ -5,7 +5,7 @@
     "A reviewer is independent of the author, starts with a fresh context, and reviews the exact tree completed by the runner. Blockers require fixes and a new review.",
     "Durable workflow evidence is authoritative. Analytics, model prose, elapsed time, retries, and restarts never create approval.",
     "Every attempt, including failed launches, is retained. Recovery is idempotent and never replenishes a grant.",
-    "Only subscription-authenticated first-party host execution is allowed. Unsupported model or effort settings fail visibly, without API fallback.",
+    "Only subscription-authenticated first-party host execution is allowed, without API fallback. A Codex model missing from the CLI catalog may use the newest available earlier version in the same family at the requested effort, with a clear notice and the actual profile recorded before admission. Unsupported effort or no compatible earlier model fails visibly. Fallback never changes scope, configured settings or allowances.",
     "Task contexts and coordinator handoffs stay bounded. Full worker transcripts do not accumulate in the parent conversation.",
     "Observed usage is deduplicated and subset counters are not added twice. Missing observations remain unknown; estimates are labeled.",
     "Telemetry collection has no model calls and does not control delivery authority. Dashboard reads use indexed stored data.",

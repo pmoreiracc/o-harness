@@ -296,7 +296,8 @@ class CodexToolsTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             run(self.root, lambda *a, **k: fixtures.WorkflowTest.fake(self, *a, **k))
-        self.assertIn('OH task 1: implementation', err.getvalue());self.assertNotIn('OH task', out.getvalue())
+        self.assertIn('task 1: One',err.getvalue())
+        self.assertEqual(out.getvalue(),'')  # progress stays off the machine-readable result stream
 
     def test_a_cancelled_call_gets_no_reply_and_an_unexpected_error_gets_one(self):
         with patch.dict(os.environ, {'FAKE_WAIT': '0.5'}):

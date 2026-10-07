@@ -573,15 +573,21 @@ def design_manifest(root, slug):
 
 
 def branch_for(root, slug, run, kind='design'):
-    """<kind>/<slug>; <kind>-<slug> when a branch named <kind> exists (Git can't have both); a run-specific
-    name when that is taken too."""
-    import subprocess
-    def exists(name):
-        return subprocess.run(['git', '-C', str(root), 'rev-parse', '--verify', '--quiet', 'refs/heads/' + name], capture_output=True).returncode == 0
-    def nested(name):  # design/auth can't exist beside design/auth/v2
-        return bool(subprocess.run(['git', '-C', str(root), 'for-each-ref', '--format=%(refname)', f'refs/heads/{name}/'], capture_output=True, text=True).stdout.strip())
-    name = f'{kind}-{slug}' if exists(kind) else f'{kind}/{slug}'
-    return f'{name}-{run[:8]}' if exists(name) or nested(name) else name
+    """Fixed workflow prefix and topic, with numeric collision suffixes; retain existing branches."""
+    from .storage import git
+    if re.fullmatch(r'con|prn|aux|nul|com[1-9]|lpt[1-9]',slug,re.I):slug+='-work'
+    refs=git(root,'for-each-ref','--format=%(refname)','refs/heads','refs/remotes/origin').splitlines()
+    names={ref.removeprefix('refs/heads/').removeprefix('refs/remotes/origin/').casefold()
+           for ref in refs if ref!='refs/remotes/origin/HEAD'}
+    occupied=set(names)
+    for name in names:
+        parts=name.split('/')
+        occupied.update('/'.join(parts[:i]) for i in range(1,len(parts)))
+    name=f'{kind}-{slug}' if kind in names else f'{kind}/{slug}'
+    candidate=name;number=2
+    while candidate.casefold() in occupied:
+        candidate=f'{name}-{number}';number+=1
+    return candidate
 
 
 TITLE_CHARS, SUMMARY_CHARS = 150, 1000

@@ -127,8 +127,18 @@ the optional `oh suggest` analysis, not the coordinating chat session.
 | review | opus / high | gpt-6.1-sol / high |
 | insights | opus / high | gpt-6-astra / high |
 
-If your subscription doesn't offer a model or effort, the task fails with a clear error;
-OH never switches to paid API calls. OH doesn't change the model of the session you are
+If Codex's CLI catalog omits the requested model, OH continues with the newest listed earlier
+version in the same family that supports the requested effort. For example, `gpt-6.1-sol / high`
+can use `gpt-6-sol / high`. OH gives a short notice with the update command and `$oh-config`,
+and records the actual model before admitting the attempt; saved settings, scope and review
+allowances stay unchanged. This works during an existing run. A changed CLI executable refreshes
+capability discovery. `$oh-config` changes apply to new OH runs, including in the same chat.
+No compatible earlier model, unsupported effort, discovery failure or a rejected native request
+still fails visibly with a recovery step; OH never switches to another family or paid API calls.
+The regression coverage is `test_missing_codex_model_uses_only_an_earlier_compatible_family`,
+`test_failed_review_does_not_repeat_successful_implementation` and
+`test_requested_insights_uses_global_profile_without_registering_the_engine`.
+OH doesn't change the model of the session you are
 talking to: you select that in your host app or CLI, and OH records the observed model in
 telemetry. `insights` is used for a separate agent call that ranks
 dashboard improvement suggestions when you run `oh suggest` and sufficient evidence exists.

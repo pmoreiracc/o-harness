@@ -1,6 +1,7 @@
 """Portable PR evidence for native runs; local journals remain the authority."""
 import json
 import re
+from pathlib import Path
 from .storage import Refused,Journal,changes,digest,git,project
 from .workflow import reduce
 
@@ -8,18 +9,44 @@ START='<!-- oh-review:start -->'
 END='<!-- oh-review:end -->'
 
 
+def public_value(root,state,value):
+    """Prepare public text before sealing evidence; local journals keep original paths and reports."""
+    from .storage import state_home
+    from tempfile import gettempdir
+    prefixes=[(str(Path.home()),'local'),(str(state_home()),'OH evidence'),(gettempdir(),'local temp')]
+    if root:prefixes.append((str(root),'repository'))
+    for layout in (state.get('plans',{}),state.get('delivery',{}).get('layout',{})):
+        if layout.get('location')=='private' and layout.get('base'):prefixes.append((str(layout['base']),'private plans'))
+    prefixes += [(str(Path(prefix).resolve()),label) for prefix,label in prefixes]
+    prefixes=sorted(prefixes,key=lambda pair:len(pair[0]),reverse=True)
+    def clean(item):
+        if isinstance(item,dict):return {k:clean(v) for k,v in item.items()}
+        if isinstance(item,list):return [clean(v) for v in item]
+        if not isinstance(item,str):return item
+        for prefix,label in prefixes:
+            for spelling in {prefix.replace('\\','/'),prefix.replace('/','\\')}:
+                # Both path spellings occur in host reports; Windows paths are case-insensitive.
+                flags=re.I if re.match(r'^[A-Za-z]:',spelling) else 0
+                item=re.sub(re.escape(spelling.rstrip('/\\'))+r'[/\\]',lambda _:'' if label=='repository' else label+'/',item,flags=flags)
+                item=re.sub(re.escape(spelling.rstrip('/\\'))+r'(?![\w.-])',lambda _:label,item,flags=flags)
+        return item
+    return clean(value)
+
+
 def task_evidence(state,task,review,parent):
     attempts=[a for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
     history=[{k:a.get(k) for k in ('id','outcome','duration_ms','profile','findings','git_tree','head')} for a in attempts]
-    resolutions={a['id']:state['resolutions'][a['id']] for a in attempts if a['id'] in state['resolutions']}
+    resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
+                 for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
         'host':state['host'],'version':state['harness_version'],'config_hash':state['config_hash'],'branch':state['branch'],
         'parent':parent,'git_tree':review['git_tree'],'review':review['id'],'attempts':history,'resolutions':resolutions}
     # The first task a run commits was also reviewed with the commits OH didn't make before it: the person's own,
     # and merges of main resolved by hand.
     if (covers:=(state.get('delivery') or {}).get('covers')) and not state['summaries']:value['covers']=covers
-    scope={k:{name:v for name,v in record.items() if name!='render'} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
+    scope={k:{name:v for name,v in record.items() if name not in ('render','change')} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
     if scope:value['scope']=scope
+    value=public_value(review.get('root'),state,value)
     validate_evidence(value)
     return value
 
@@ -128,27 +155,49 @@ def render(root,base='origin/main'):
     value={'schema':1,'branch':branch,'head':git(root,'rev-parse','HEAD'),'records':records,'grants':grants}
     validate_grants(value)
     notes=''.join('\n\nFound along the way (task '+r['evidence']['task']+'):\n'+''.join('\n> '+line for f in record['findings'] for line in f['description'].splitlines()) for r in records for record in r['evidence'].get('scope',{}).values() if record['action']=='noted' and record['destination'].get('pr'))
-    body=readable(records,states)+notes+'\n\n'+START+'\n```json\n'+json.dumps(value,indent=2)+'\n```\n'+END
+    notes=public_value(root,{},notes)
+    # Keep portable evidence in the PR source, not its rendered description. Escape HTML so
+    # finding text containing a comment terminator cannot expose the machine packet.
+    packet=json.dumps(value,separators=(',',':')).replace('&',r'\u0026').replace('<',r'\u003c').replace('>',r'\u003e')
+    body=readable(records,states,root)+notes+'\n\n'+START+'\n<!--\n```json\n'+packet+'\n```\n-->\n'+END
     if len(body.encode())>60000:raise Refused('Review evidence exceeds the PR body budget; publish a smaller reviewed batch')
     return body
 
 
-def readable(records,states):
-    """Human-readable history from retained events; model prose never supplies decisions or run state."""
-    from .gates import review_history,report_text
+def readable(records,states,root=None):
+    """Work, verification and review decisions; full execution history remains in the journal."""
+    from .gates import finding_text,report_text
     lines=[]
     for record in records:
         evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']
-        lines.append(f"Task {task}: {evidence['title']} ({record['commit'][:12]})")
+        lines.append(f"### Task {task}: {evidence['title']}")
         worker=next((a for a in reversed(state['attempts']) if a['task']==task and a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
-        lines.append('Implementing report: '+(report_text(worker) or 'No report recorded.' if worker else 'No report recorded.'))
-        lines.extend(review_history(state,task))
-        lines.append('Task history: '+' → '.join(a['role']+': '+a.get('outcome','unfinished') for a in state['attempts'] if a['task']==task)+' → committed.')
+        lines.extend(['',report_text(worker) or 'No implementing report recorded.' if worker else 'No implementing report recorded.',''])
+        verification=state.get('verification',{}).get(task)
+        checks=verification.get('checks',[]) if verification else []
+        lines.append('Verification: '+('; '.join(c['name']+' ('+('passed' if c['returncode']==0 else 'failed')+')' for c in checks) if checks else
+                     'document validation passed' if state.get('workflow') in ('design','propose') else
+                     'no project checks applied' if verification else 'no check results recorded')+'.')
+        reviews=evidence['attempts'];final=reviews[-1]
+        outcome='clean' if final['outcome']=='clean' else 'completed with recorded finding decisions'
+        lines.append(f"Independent invariant review: {outcome}; {len(reviews)} round"+('s' if len(reviews)!=1 else '')+'.')
+        for number,attempt in enumerate(reviews,1):
+            if not attempt.get('findings'):continue
+            lines.extend(['',f'Review {number} findings:'])
+            lines.extend('- '+finding_text(f) for f in attempt['findings'])
+            resolution=evidence['resolutions'].get(attempt['id'])
+            if resolution:
+                lines.append('Decision: '+resolution['choice']+'.')
+            scope=evidence.get('scope',{}).get(attempt['id'])
+            if scope:
+                from pathlib import Path
+                destination=scope['destination']
+                where=(destination['issue']['url'] if destination.get('issue') else
+                       Path(destination['design']).name+' '+destination['section'] if destination.get('design') else 'this PR')
+                lines.append('Scope: '+scope['action']+'; recorded in '+where+'.')
+            elif resolution and resolution.get('issue'):lines.append('Destination: '+resolution['issue']['url']+'.')
         lines.append('')
-    for state in states.values():
-        lines.append(f"Run {state['id'][:8]} ended at {state['status']}: "+('the person chose to open a PR.' if state['status']=='pr' else 'the person stopped it.' if state['status']=='stopped' else 'all selected tasks were completed.'))
-        lines.append('Run history: '+' → '.join(s['status'] for s in state.get('status_history',[]))+'.')
-    return '\n'.join(lines)
+    return public_value(root,{},'\n'.join(lines))
 
 
 def covered(records):
@@ -176,6 +225,7 @@ def validate_event(root,event,base):
     pr=event['pull_request'];body=pr.get('body') or ''
     if body.count(START)!=1 or body.count(END)!=1:raise Refused('PR must retain one complete native OH review summary')
     block=body.split(START,1)[1].split(END,1)[0].strip()
+    if block.startswith('<!--\n') and block.endswith('\n-->'):block=block[5:-4].strip()
     if not block.startswith('```json\n') or not block.endswith('\n```'):raise Refused('Malformed native review summary')
     value=json.loads(block[8:-4])
     if value.get('schema')!=1 or value['head']!=git(root,'rev-parse','HEAD') or value['head']!=pr['head']['sha'] or value['branch']!=pr['head']['ref']:raise Refused('Native PR summary is stale or belongs to another branch')
