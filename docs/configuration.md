@@ -119,6 +119,11 @@ OH labels each task **simple**, **standard** or **complex** before it starts, th
 that profile's model. Reviews have a separate profile. The `insights` profile controls
 the optional `oh suggest` analysis, not the coordinating chat session.
 
+If analysis fails, the dashboard and `oh suggest` show the error and a retry step. A model
+fallback notice remains separate from that failure; it cannot replace the error message.
+`test_requested_insights_uses_global_profile_without_registering_the_engine` covers these
+failures for both hosts and successful Codex fallback analysis.
+
 | Profile | Claude | Codex |
 |---|---|---|
 | simple | haiku / high | gpt-6-luna / high |

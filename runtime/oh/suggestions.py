@@ -78,14 +78,19 @@ def generate(root=None,host='codex'):
                                'compact_tokens':config['context']['compact_at_tokens'],'standalone':root is None},schema=schema,timeout=120)
     except Exception as exc:
         result={'failed':True,'error':str(exc),'duration_ms':None,'structured':None}
+    structured=result.get('structured')
+    order=structured.get('priority') if isinstance(structured,dict) else None
+    if not result['failed'] and (not isinstance(order,list) or any(not isinstance(key,str) for key in order) or sorted(order)!=sorted(keys)):
+        result=result|{'failed':True,'error':'The analysis agent returned an invalid ranking.'}
     if fallback:result=result|{'model_fallback':fallback}
     best_effort('attempt.finished',p['id'],analysis_run,None,attempt,outcome='failed' if result['failed'] else 'completed',
                 duration_ms=result['duration_ms'],substantive=True)
     best_effort('run.status',p['id'],analysis_run,status='failed' if result['failed'] else 'completed')
     atomic_json(directory/'result.json',result,immutable=True)
-    order=(result.get('structured') or {}).get('priority',[])
-    if result['failed'] or not isinstance(order,list) or sorted(order)!=sorted(keys):
-        return {'status':'failed','evidence':str(directory)}|({'model_notices':[fallback['notice']],'message':fallback['notice']} if fallback else {})
+    if result['failed']:
+        error=result.get('error') or result.get('text') or 'The analysis agent did not finish successfully.'
+        return {'status':'failed','evidence':str(directory),
+                'message':f'Analysis failed: {error} Retry Analyze my data (or `oh suggest`) after resolving the error.'}|({'model_notices':[fallback['notice']]} if fallback else {})
     items=sorted(items,key=lambda item:order.index(item['key']))
     with connect() as db:
         for item in items:

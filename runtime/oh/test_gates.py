@@ -255,7 +255,7 @@ class GateTest(unittest.TestCase):
     def test_codex_native_question_binds_preview_and_preserves_the_human_answer(self):
         """docs/usage.md: a side-panel review and a native question share one approval subject."""
         from .authority import desktop_answer
-        result,_=self.prepare_menu('codex');gate=result['gate'];question=gate['native_ask']['questions'][0]
+        result,manifest=self.prepare_menu('codex');gate=result['gate'];question=gate['native_ask']['questions'][0]
         path=next((self.home/'.codex/sessions').rglob('*s.jsonl'))
         records=[json.loads(line) for line in path.read_text().splitlines()]
         def reply(answer,displayed=None,title=None,injected=False,cwd=None,legacy=False):
@@ -265,6 +265,15 @@ class GateTest(unittest.TestCase):
             path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
             return desktop_answer(self.root)
         with patch.dict(os.environ,{'CODEX_THREAD_ID':'s','CODEX_HOME':str(self.home/'.codex'),'OH_CODEX_TURN_ID':''}):
+            # The previous payload can reach the UI only after a replacement was prepared.
+            # Its late display timestamp must not let it approve the replacement scope.
+            from .prepared import prepare
+            from .storage import atomic_json
+            old_question=question
+            atomic_json(manifest,{'tasks':[self.tasks[0]|{'instructions':'Fix the replacement timeout.'},self.tasks[1]]})
+            gate=prepare(self.root,str(manifest))['gate'];question=gate['native_ask']['questions'][0]
+            self.assertIsNone(reply(old_question['options'][0],displayed=old_question,title=old_question['title']))
+            self.assertEqual(load_run(self.root)[1]['granted'],[])
             approve=question['options'][0]
             self.assertIsNone(reply(approve,injected=True))
             with self.assertRaisesRegex(Refused,'displayed question'):

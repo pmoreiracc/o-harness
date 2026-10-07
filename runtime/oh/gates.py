@@ -89,7 +89,9 @@ def preview(journal,state,ident):
 def native_ask(gate):
     """Codex Desktop's small, persistent question; its native answer is verified by authority."""
     choices=[o['label'] for o in gate['options']]
-    return {'questions':[{'title':gate['question'].removesuffix(' ['+MARK+gate['id']+']'), 'options':choices}]}
+    # The host supplies no hidden checkpoint field: retain the existing marker so a
+    # delayed old payload cannot be displayed later and approve a replacement scope.
+    return {'questions':[{'title':gate['question'], 'options':choices}]}
 
 
 def finding_text(finding):
