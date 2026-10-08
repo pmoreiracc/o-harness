@@ -53,11 +53,11 @@ updates brief and tied to actual progress; the supported `status` output supplie
 Run `run`. It verifies the native human invocation; a fresh worker reads the
 roadmap, designs, decisions and code and routes the idea; OH works out exactly what it would write, writes
 nothing yet, and stops for the person's answer. After **approve**, OH writes it (for repository plans, on a new
-`propose/<topic>` branch from `main`, which OH brings up to date and switches to itself; private plans need no
+`propose/<topic>` branch from the configured base branch, which OH brings up to date and switches to itself; private plans need no
 branch), checks the plan rules and has the written change reviewed independently, then commits repository
 plans. If the review changes where the idea goes or what is written, OH asks the person again with the new
 lines. An improvement or an unclear idea writes nothing and has no review. Never write or edit plan files
-yourself, and never run your own worker or review loop. Repository plans need the checkout that has `main`: when OH says another worktree holds it, tell the
+yourself, and never run your own worker or review loop. Repository plans need the checkout that has the base branch: when OH says another worktree holds it, tell the
 person to type the command there.
 
 When the returned status is `approval_checkpoint` and a `gate` is present, explain the proposal
@@ -143,7 +143,8 @@ published. Do not call `run` again or repeat implementation/review.
 Use `pr_summary` (Claude: `pr-summary`), preserve the generated body including its hidden review
 metadata, and save it to an external temporary file. Do not paste machine JSON into the visible
 PR description. Push the
-approved branch to its configured remote, and create the PR with that body. Check for an existing PR
+approved branch to its configured remote, and create the PR with that body, explicitly targeting
+`publication.base_branch` from the returned checkpoint (`gh pr create --base <branch>`). Check for an existing PR
 first so recovery reuses it. In Codex, attach the resulting PR with `attach_artifact` when available. Report
 “PR #<number> opened” with its link, a short summary of the work and verification, and the recorded
 `review_rounds` count (for example, “Invariant review passed in 2 rounds”);

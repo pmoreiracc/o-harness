@@ -180,17 +180,17 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         data['diff']={'path':str(directory/'change.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
         prompt+='\nThe exact code change under review, from HEAD to the reviewed tree, is in '+str(directory/'change.diff')+'.'
     if role=='review' and (covers:=state.get('delivery',{}).get('covers')) and not state['summaries']:
-        # Commits OH didn't make: the person's own, and merges of main resolved by the agent or the person (for those,
+        # Commits OH didn't make: the person's own, and merges of the base branch resolved by the agent or the person (for those,
         # what the resolution changed beyond Git's own merge).
         text=b''.join(subprocess.run(['git','-C',str(root),'show','--remerge-diff','--no-color','--no-ext-diff',commit],capture_output=True,check=True,
                                      env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout for commit in covers)
         (directory/'covered.diff').write_bytes(text)
         data['covers']={'commits':covers,'path':str(directory/'covered.diff'),'sha256':hashlib.sha256(text).hexdigest()}
-        prompt+=('\nThis branch also holds commits OH did not make: '+', '.join(covers)+' (the person\'s own, or merges of main '
+        prompt+=('\nThis branch also holds commits OH did not make: '+', '.join(covers)+' (the person\'s own, or merges of the base branch '
                  'resolved by hand). What each changed, for a merge beyond Git\'s own merge, is in '+str(directory/'covered.diff')
                  +'. Review it as part of this subject: a '
                  'resolution that loses either side\'s intent, changes more than the conflict needs, or edits the plans beyond '
-                 'main\'s version and this branch\'s recorded progress is a blocker.')
+                 'the base branch\'s version and this branch\'s recorded progress is a blocker.')
     if role=='review' and state.get('delivery',{}).get('layout',{}).get('location')=='private':
         from .plans import file_identity,digest_of
         render=state['delivery_render'];candidate=Path(render['candidate'])
@@ -347,8 +347,9 @@ def _run(root,invoke):
                 finish_move(root,journal,state)
                 state=reduce(journal.records())
         # A proposal cuts its branch when it first writes; nothing runs on main before that.
-        if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in ('main','master',''):
-            raise Refused('Execute tasks on a short-lived branch, not main or detached HEAD')
+        from .branches import trunk
+        if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in (trunk(root,state['config']),''):
+            raise Refused('Execute tasks on a short-lived branch, not the base branch or detached HEAD')
         if git(root,'branch','--show-current')!=state['branch']:
             raise Refused('Run belongs to another branch; return to its checkout')
         from .branches import incarnation
@@ -593,7 +594,8 @@ def move(root,journal,topic):
     if state.get('branch_move'):
         finish_move(root,journal,state)
         return
-    if current not in ('main','master'):return
+    from .branches import trunk
+    if current!=trunk(root,state['config']):return
     from .plans import branch_for,Blocked
     name=branch_for(root,topic,state['id'],'propose')
     journal.append('branch.creating',{'from':current,'from_incarnation':state['incarnation'],

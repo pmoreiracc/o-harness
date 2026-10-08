@@ -64,7 +64,7 @@ def remember(root,host,payload,event):
 
 def activate(root,journal,state,event):
     """Only an approved, unchanged snapshot can become executable. Retain branch creation for crash recovery."""
-    from .branches import execution_branch,incarnation,run_git
+    from .branches import execution_branch,incarnation,run_git,trunk
     from .config import version
     from .storage import changes
     if event['host']!=state['host'] or event['session']!=state['human']['session']:raise Refused('Approve in the conversation that prepared these tasks')
@@ -74,7 +74,7 @@ def activate(root,journal,state,event):
     branch=git(root,'branch','--show-current');intent=state.get('activation')
     if not intent:
         if branch!=state['branch'] or incarnation(root,branch)!=state['incarnation']:raise Refused('Return to the checkout and branch where these tasks were prepared')
-        target=execution_branch(root,state['tasks'][0]['title'],state['id']) if branch in ('main','master') else branch
+        target=execution_branch(root,state['tasks'][0]['title'],state['id']) if branch==trunk(root,state['config']) else branch
         if target!=branch and run_git(root,'show-ref','--verify','--quiet','refs/heads/'+target).returncode==0:raise Refused('The prepared execution branch already exists; prepare again')
         record=journal.records()[-1]
         intent={'branch':target,'base':state['base'],'gate_record':{k:record[k] for k in ('hash','at')}}

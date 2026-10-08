@@ -113,7 +113,13 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
 
     def test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed(self):
-        main = self.git('rev-parse', 'main')
+        # docs/usage.md: an explicit development base wins over the release default.
+        self.git('switch','-qc','develop')
+        self.git('commit','--allow-empty','-qm','development base')
+        self.git('update-ref','refs/remotes/origin/main','main')
+        self.git('symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main')
+        change(self.root,'base_branch','develop')
+        main = self.git('rev-parse', 'develop')
         self.design_run()
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
         self.assertEqual(self.git('rev-parse', 'HEAD'), main)
@@ -138,8 +144,12 @@ class DesignRunTest(unittest.TestCase):
         self.assertIn('| `auth` | Sign-in with passkeys | — | [0001](./design/0001-auth.md) |', self.where['roadmap'].read_text())
         self.assertEqual(self.git('log', '-1', '--format=%s'), 'design 0001: Sign-in')
         self.assertEqual(self.git('status', '--porcelain'), '')
-        self.assertEqual(self.git('diff', '--name-only', 'main', 'HEAD').split(), ['docs/design/0001-auth.md', 'docs/roadmap.md'])
+        self.assertEqual(self.git('diff', '--name-only', 'develop', 'HEAD').split(), ['docs/design/0001-auth.md', 'docs/roadmap.md'])
+        change(self.root,'base_branch','main')  # a running batch keeps its approved base
         choose(self.root, 'pr', self.event('2', 'pr'))
+        self.assertEqual(load_run(self.root)[1]['publication']['base_branch'],'develop')
+        from .publication import render
+        self.assertIn('Base branch: `develop`',render(self.root))
         self.assertEqual(load_run(self.root)[1]['status'], 'pr')
 
     def test_new_plans_start_from_main_brought_up_to_date(self):

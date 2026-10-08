@@ -22,7 +22,7 @@ class DeliveryTest(unittest.TestCase):
         self.git('switch','main')
         fixtures.configure(self.root,tasks_per_batch=1)
 
-    def documents(self,location='repo',body=BODY):
+    def documents(self,location='repo',body=BODY,base='main'):
         change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
         change(self.root,'plans.location',location)
         where=plans.layout(self.root)
@@ -32,7 +32,7 @@ class DeliveryTest(unittest.TestCase):
         plans.claim(self.root,where,'auth',number)
         if location=='private':plans.approve(self.root,where,number,'human-approved',False)
         else:self.git('add','.');self.git('commit','-qm','approved plan')
-        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        self.git('update-ref','refs/remotes/origin/'+base,'HEAD')
         return where,Path(path)
 
     def start_delivery(self,arguments='0001',turn='delivery'):
@@ -61,19 +61,20 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.calls,[])
 
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
+        self.git('branch','-m','main','master')
         title=f'Add {self.root}/credential.py.'
-        where,path=self.documents(body=BODY.replace('Add the credential store.',title));listed=delivery.listing(self.root)
+        where,path=self.documents(body=BODY.replace('Add the credential store.',title),base='master');listed=delivery.listing(self.root)
         self.assertEqual(len(listed['ready']),1);self.assertEqual(len(self.calls),0)
         original=self.git('rev-parse','HEAD')
         self.git('commit','--allow-empty','-qm','merged elsewhere')
-        fresh=self.git('rev-parse','HEAD');self.git('update-ref','refs/remotes/origin/main',fresh)
+        fresh=self.git('rev-parse','HEAD');self.git('update-ref','refs/remotes/origin/master',fresh)
         self.git('reset','-q','--hard',original)
         self.git('branch','deliver/0001')  # an earlier delivery main already absorbed: retired for a fresh one
         self.start_delivery();first=load_run(self.root)[1]['id']
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
         self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(load_run(self.root)[1]['base'],fresh)
-        self.assertEqual(self.git('rev-parse','main'),fresh)
+        self.assertEqual(self.git('rev-parse','master'),fresh)
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertIn('- [x] **1.**',path.read_text())
         # docs/usage.md: PR refuses an unmarked completed task, even before an agent commits the bad edit.
@@ -93,8 +94,10 @@ class DeliveryTest(unittest.TestCase):
         self.assertNotIn('requires approval',completed['unavailable'][0]['reason'])
         self.assertEqual(self.git('status','--porcelain'),'')
         choose(self.root,'pr',self.event('good-pr','pr'))  # a correct two-task batch, including its dependency, passes
+        self.assertEqual(load_run(self.root)[1]['publication']['base_branch'],'master')
         from .publication import render
         public=render(self.root)
+        self.assertIn('Base branch: `origin/master`',public)
         self.assertIn('Task 2:',public)
         self.assertNotIn(str(self.root.parent),public)  # display redaction must not invalidate the original commit title
 

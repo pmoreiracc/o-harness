@@ -25,19 +25,42 @@ def incarnation(root,branch,*,create=False):
     return digest({'device':st.st_dev,'inode':st.st_ino,'birth':birth,'first':first})
 
 
-def trunk(root):
-    """The repository's main branch: main, or master where it has no main. None when it has neither."""
-    for name in ('main','master'):
-        for ref in ('refs/heads/','refs/remotes/origin/'):
-            if run_git(root,'rev-parse','--verify','--quiet',ref+name).returncode==0:return name
-    return None
+def base_branch(root,config=None):
+    """Resolve the project override, origin's default, then main/master, without network access."""
+    if config is None:
+        from .config import load,load_global,project_name
+        config=load(root) if project_name(root,required=False) else load_global()
+    name=config.get('base_branch','')
+    def exists(ref):return run_git(root,'rev-parse','--verify','--quiet',ref+'^{commit}').returncode==0
+    if name:
+        if not any(exists(ref+name) for ref in ('refs/heads/','refs/remotes/origin/')):
+            raise Refused(f'Base branch {name} is unavailable; fetch origin {name}, or correct base_branch with oh config')
+        source='setting'
+    else:
+        remote=run_git(root,'symbolic-ref','--quiet','refs/remotes/origin/HEAD').stdout.strip()
+        if remote.startswith('refs/remotes/origin/') and exists(remote):
+            name=remote[len('refs/remotes/origin/'):];source='origin/HEAD'
+        else:
+            name=next((n for n in ('main','master') if any(exists(ref+n) for ref in ('refs/heads/','refs/remotes/origin/'))),None)
+            source='fallback'
+    ref=('origin/'+name if exists('refs/remotes/origin/'+name) else name) if name else None
+    return {'name':name,'ref':ref,'source':source}
 
 
-def main_ref(root):
-    """The ref of the main branch work is measured against: origin's copy when there is one. None without one."""
-    name=trunk(root)
-    if not name:return None
-    return 'origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
+def trunk(root,config=None):
+    return base_branch(root,config)['name']
+
+
+def main_ref(root,config=None,*,require_remote=False):
+    """The comparison ref for the selected base; repository approval requires origin's copy."""
+    selected=base_branch(root,config)
+    if require_remote:
+        if not selected['name']:raise Refused('No base branch found; set base_branch with oh config')
+        ref='origin/'+selected['name']
+        if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/'+ref+'^{commit}').returncode:
+            raise Refused(f'Fetch {ref} before delivering repository plans')
+        return ref
+    return selected['ref']
 
 
 def execution_branch(root,title,run):
@@ -87,7 +110,7 @@ def untouched(root):
 
 
 def fetched(root,name):
-    """Fetch the main branch `name` and return the ref new work starts from: origin/<name>, or the local branch
+    """Fetch the base branch `name` and return the ref new work starts from: origin/<name>, or the local branch
     when the repository has no origin. Offline, the last fetched origin/<name> serves."""
     if run_git(root,'remote','get-url','origin').returncode==0:run_git(root,'fetch','--quiet','origin',name,timeout=60)
     return 'origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
@@ -110,9 +133,9 @@ def merged_tree(root,ours,theirs):
 
 
 def from_main(root, *, base=None):
-    """Put the checkout on its main branch, up to date with origin, as the pre-separation harness did
+    """Put the checkout on its base branch, up to date with origin, as the pre-separation harness did
     (`git checkout main && git pull`) before new work. Only what needs the person stops it: their own uncommitted
-    edits, and a main that differs from origin's."""
+    edits, and a base branch that differs from origin's."""
     untouched(root)
     name=trunk(root)
     if name is None:return
@@ -120,7 +143,8 @@ def from_main(root, *, base=None):
     if git(root,'branch','--show-current')!=name:
         if elsewhere:=holder(root,name):
             raise Refused(f'OH starts new work from {name}, which is checked out in {elsewhere}; type the command there.')
-        switched=run_git(root,'switch','--quiet',name)
+        local=run_git(root,'show-ref','--verify','--quiet','refs/heads/'+name).returncode==0
+        switched=run_git(root,'switch','--quiet',name) if local else run_git(root,'switch','--quiet','--no-track','-c',name,base)
         if switched.returncode:
             raise Refused(f'OH starts new work from {name}, but Git could not switch this checkout to it: {switched.stderr.strip()}')
     if base!=name and (run_git(root,'merge','--ff-only','--quiet',base).returncode or git(root,'rev-parse','HEAD')!=git(root,'rev-parse',base)):
@@ -135,7 +159,7 @@ def delivery_branch(doc,track=''):
 
 def to_delivery(root,name):
     """Put the checkout on the delivery branch `name`, as the pre-separation harness did. A branch whose work main
-    already holds (merged, squashed or rebased) is retired and a fresh one starts from origin's main; a branch with
+    already holds (merged, squashed or rebased) is retired and a fresh one starts from origin's base; a branch with
     unmerged work is resumed: the returned base is what `refresh` merges into it. Only the person's own edits, or
     the branch being checked out in another worktree, need them."""
     untouched(root)
@@ -205,8 +229,8 @@ def delivered(root,into,commit):
 
 
 def refresh(root,name,base):
-    """Merge origin's main into a resumed delivery branch. A conflict is the person's call: start over from main,
-    finish without main's changes, or let the agent plan a resolution for them to approve."""
+    """Merge origin's base into a resumed delivery branch. A conflict is the person's call: start over from the base branch,
+    finish without the base branch's changes, or let the agent plan a resolution for them to approve."""
     from .storage import checkout_file,read_json
     try:
         if read_json(checkout_file(root,'oh-without-main.json'))=={'branch':name,'base':git(root,'rev-parse',base)}:return
