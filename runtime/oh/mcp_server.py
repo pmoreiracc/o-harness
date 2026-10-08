@@ -60,13 +60,13 @@ TOOLS = [
          'fresh discards the branch to start over from main, keep finishes without main\'s changes.',
          {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),
     tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
-    tool('pr_summary', 'PR summary', 'The review summary for this branch\'s pull request.', {'base': TEXT}, read_only=True),
+    tool('pr_summary', 'PR summary', 'Refresh the main reference and generate the review summary for this branch\'s pull request.', {'base': TEXT}),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
-         'as a menu and records their click in OH. Call it when OH output has a `gate`, in the conversation that '
+         'as a menu and records their click in OH. Prefer gate.native_ask with request_user_input_async when an interruptible wait tool can keep the turn open; '
+         'choose is the fallback. Call it when OH output has a `gate`, in the conversation that '
          'started the run. The result says what was recorded and whether to call `run`.'),
     tool('confirm', 'Ask the person', 'Shows the person a question and its options as a menu and waits for their click. '
-         'Use it whenever OH\'s instructions say to ask the person to choose or confirm something that is not an OH '
-         '`gate` (that is `choose`), instead of Codex\'s own question tool, which closes when your turn ends. The result '
+         'Use it for a question outside an OH `gate`; use the returned gate menu for workflow decisions. The result '
          'is their answer, or says none was given: never answer for them.',
          {'question': TEXT, 'options': {'type': 'array', 'items': TEXT, 'minItems': 1, 'maxItems': 10},
           'typed': {'type': 'boolean', 'description': 'Also let the person type their own answer'}},
@@ -309,7 +309,7 @@ class Server:
         return 'The person chose: ' + choice
 
     def choose(self, root, thread, call):
-        from .config import project_name, version
+        from .config import version
         from .gates import apply, current
         from .workflow import load_run
         gate = current(root)
@@ -326,12 +326,14 @@ class Server:
             return 'OH was updated after this run started, so its menu is not shown. ' + fallback
         if 'elicitation' not in (self.client.get('capabilities') or {}):
             return 'This Codex surface cannot show OH menus. ' + fallback
-        menu = gate['options'] + ([{'choice': 'refine', 'label': 'Refine', 'description': ''}] if gate['words'] else [])
+        menu = gate['options']
         properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': [o['choice'] for o in menu],
                                  'enumNames': [o['label'] for o in menu]}}
-        details = '\n'.join(f'- {o["label"]}: {o["description"]}' for o in gate['options'] if o['description'] != o['label'])
-        message = (f"{gate['question'].removesuffix(' [OH gate '+gate['id']+']')}\nProject {project_name(root)} · {root} · run {state['id'][:8]}"
-                   + ('\n' + details if details else ''))
+        if gate.get('preview'):
+            # The review copy holds the proposal and destinations; the popup holds only the decision.
+            message = gate['question'].split(' [OH gate ',1)[0]
+        else:
+            message = gate['question'].removesuffix(' [OH gate '+gate['id']+']')
         reply = self.elicit(message, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
         result = reply.get('result') or {}
         if result.get('action') != 'accept':
@@ -339,17 +341,14 @@ class Server:
         content = result.get('content') or {}
         choice = content.get('choice')
         if choice not in [o['choice'] for o in menu]:return 'The menu came back without a valid choice. ' + fallback
-        if choice == 'refine':
-            words = self.text_answer(message, 'What should OH change?', call)
-            if words is None:
-                return 'Refine needs what to change; nothing was recorded. Ask the person to type: refine: <what to change>.'
-            choice = 'refine: ' + words
         event = {'host': 'codex', 'session': thread, 'turn': 'menu-' + identifier(), 'prompt': choice, 'via': 'elicitation', 'at': now()}
         after = apply(root, event, gate['id'])
         dropped = supersede(root, 'codex', event)
         answered(root, 'codex', thread, state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
         if dropped:label += f' (this set aside {dropped}, which the person typed earlier; they type it again to run it)'
+        if after.get('waiting'):return json.dumps(after)
+        if after['status']=='pr':return json.dumps(after)
         if after['status'] in ('stopped', 'completed') and not after.get('gate'):
             return f'Recorded the person\'s choice: {label}. The run is {after["status"]}; there is nothing left to run.'
         return f'Recorded the person\'s choice: {label}. Call `run` to carry it out. Status now: {after["status"]}.'

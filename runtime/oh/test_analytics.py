@@ -41,10 +41,34 @@ class AnalyticsTest(unittest.TestCase):
             db.execute('UPDATE tasks SET expected_reviews=2')  # observed rework supplies a real supported candidate
         answer={'failed':False,'duration_ms':1,'structured':{'priority':['review-rework']}}
         with patch('oh.suggestions.invoke',return_value=answer) as invoke, \
+                patch('oh.hosts.invoke',invoke), \
+                patch('oh.capabilities.codex_models',return_value={'gpt-6-sol':{'medium'}}) as models, \
                 patch('oh.suggestions.project',side_effect=AssertionError('The engine is not a consumer project')):
+            from .storage import Refused,read_json
+            for host in ('codex','claude'):
+                for failure in ('exception','native','ranking'):
+                    with self.subTest(host=host,failure=failure):
+                        invoke.side_effect=Refused('Subscription unavailable. Sign in again.') if failure=='exception' else None
+                        invoke.return_value=({'failed':True,'duration_ms':1,'text':'Subscription unavailable. Sign in again.','structured':None}
+                                             if failure=='native' else answer|{'structured':{'priority':[]}})
+                        failed=generate(host=host)
+                        self.assertEqual(failed['status'],'failed')
+                        self.assertIn('Analysis failed:',failed['message'])
+                        self.assertIn('Sign in again.' if failure!='ranking' else 'invalid ranking',failed['message'])
+                        self.assertNotIn('Continuing with',failed['message'])
+                        self.assertTrue(read_json(Path(failed['evidence'])/'result.json')['failed'])
+                        if host=='codex':self.assertIn('gpt-6-sol',failed['model_notices'][0])
+                        else:self.assertNotIn('model_notices',failed)
+            models.side_effect=Refused('Discovery failed. Update the Codex CLI.')
+            failed=generate()
+            self.assertIn('Discovery failed. Update the Codex CLI.',failed['message'])
+            self.assertNotIn('model_notices',failed)
+            models.side_effect=None;invoke.side_effect=None;invoke.return_value=answer;invoke.reset_mock()
             result=generate()
-            self.assertEqual(result,{'status':'saved','saved':1})
-            self.assertEqual(invoke.call_args.args[:3],('codex',HOME,{'model':'gpt-6.1-sol','effort':'medium'}))
+            self.assertEqual((result['status'],result['saved']),('saved',1))
+            self.assertIn('Continuing with gpt-6-sol / medium',result['message'])
+            self.assertEqual(result['model_notices'],[result['message']])
+            self.assertEqual(invoke.call_args.args[:3],('codex',HOME,{'model':'gpt-6-sol','effort':'medium'}))
             self.assertTrue(invoke.call_args.args[6]['standalone'])
             self.assertEqual(generate()['status'],'unchanged')
             invoke.assert_called_once()

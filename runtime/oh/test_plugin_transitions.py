@@ -80,8 +80,14 @@ class PluginTransitions(unittest.TestCase):
     def test_repair_review_retains_prior_family_and_exact_subject(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         manifests=[]
+        repair_history=[]
         def review(*args,**kwargs):
             value=self.fake(*args,**kwargs)
+            if args[4]=='implementation':
+                request=read_json(args[5]/'request.json')
+                if request.get('prior_reviews'):
+                    binding=request['prior_reviews'];prior=read_json(binding['path'])
+                    self.assertEqual(digest(prior),binding['hash']);repair_history.append(prior)
             if args[4]=='review':
                 request=read_json(args[5]/'request.json');binding=request['prior_reviews'];prior=read_json(Path(binding['path']))
                 self.assertEqual(digest(prior),binding['hash']);manifests.append(prior)
@@ -91,6 +97,7 @@ class PluginTransitions(unittest.TestCase):
         self.assertEqual(run(self.root,review)['completed'],1)
         self.assertEqual(manifests[0],[])
         self.assertEqual(manifests[1][0]['findings'][0]['family'],'sibling-paths')
+        self.assertEqual(repair_history,[manifests[1]])
         self.assertTrue(manifests[1][0]['git_tree'])
 
     def tracked_script(self):

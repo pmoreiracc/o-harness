@@ -15,7 +15,7 @@ def parse(arguments):
     if re.fullmatch(r'request:[0-9a-f]{64}',text):return {'kind':'request','request':text}
     if re.match(r'(?:[0-9]|request:)',text):raise Refused('Use /oh-deliver NNNN [track], or describe a quick fix')
     return {'kind':'quick_fix','intent':text,'authorized':False,'prepare':True,
-            'next':'Propose a bounded task list for this fix, prepare it, and present its exact approval trigger and limits. Do not implement before approval.'}
+            'next':'Prepare the agreed task list and return its preview and decision menu, including the task/review limits. Execution has not started.'}
 
 
 def inputs(where):
@@ -27,6 +27,15 @@ def document(root,where,doc):
     if len(found)!=1:raise Refused('Design does not resolve uniquely')
     plans.ordinary_outputs(found[0])
     return found[0]
+
+
+def track_question(root,doc):
+    """Read-only input collection, before delivery switches branches or starts a batch."""
+    where=plans.layout(root,claim=False)
+    rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
+    tracks=sorted({row[2] for row in rows if len(row)==6})
+    if len(tracks)>1 and any(row[1]=='pending' for row in rows):
+        return {'waiting':{'command':'deliver','ask':'Which track should OH deliver?', 'design':doc,'tracks':tracks}}
 
 
 def delivered_base(root,record,*,progressed=False):
@@ -216,6 +225,7 @@ def difficulty(block):
 def selection(root,doc,track='',*,claim=True):
     where=plans.layout(root,claim=claim);path=document(root,where,doc)
     status=plans.approval(root,where,doc)
+    if status=='frozen':raise Refused(f'Design {doc} is completed; there are no remaining tasks. Describe a quick fix or propose new work.')
     if status!='approved':raise Refused(f'Design {doc} is {status or "missing a status"}; delivery requires approval')
     approvals={}
     if where['location']=='repo':

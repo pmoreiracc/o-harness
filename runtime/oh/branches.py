@@ -40,6 +40,15 @@ def main_ref(root):
     return 'origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
 
 
+def execution_branch(root,title,run):
+    """Delivery names come from the approved task title, never a model-selected prefix or run ID."""
+    import re,unicodedata
+    from .plans import branch_for
+    text=unicodedata.normalize('NFKD',title).encode('ascii','ignore').decode().lower()
+    slug=re.sub('[^a-z0-9]+','-',text).strip('-')[:56].rstrip('-') or 'work'
+    return branch_for(root,slug,run,'deliver')
+
+
 def run_git(root,*args,timeout=None):
     import subprocess
     env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}|{'GIT_TERMINAL_PROMPT':'0'}
@@ -100,20 +109,20 @@ def merged_tree(root,ours,theirs):
     raise Refused('OH needs Git 2.38 or newer to resume or publish a delivery branch; update Git, then OH carries on with your command.')
 
 
-def from_main(root):
+def from_main(root, *, base=None):
     """Put the checkout on its main branch, up to date with origin, as the pre-separation harness did
-    (`git checkout main && git pull`) before new plans. Only what needs the person stops it: their own uncommitted
+    (`git checkout main && git pull`) before new work. Only what needs the person stops it: their own uncommitted
     edits, and a main that differs from origin's."""
     untouched(root)
     name=trunk(root)
     if name is None:return
-    base=fetched(root,name)
+    base=base or fetched(root,name)
     if git(root,'branch','--show-current')!=name:
         if elsewhere:=holder(root,name):
-            raise Refused(f'OH starts new plans from {name}, which is checked out in {elsewhere}; type the command there.')
+            raise Refused(f'OH starts new work from {name}, which is checked out in {elsewhere}; type the command there.')
         switched=run_git(root,'switch','--quiet',name)
         if switched.returncode:
-            raise Refused(f'OH starts new plans from {name}, but Git could not switch this checkout to it: {switched.stderr.strip()}')
+            raise Refused(f'OH starts new work from {name}, but Git could not switch this checkout to it: {switched.stderr.strip()}')
     if base!=name and (run_git(root,'merge','--ff-only','--quiet',base).returncode or git(root,'rev-parse','HEAD')!=git(root,'rev-parse',base)):
         raise Refused(f'Your local {name} has commits that are not on {base}, so new work would carry them. '
                       f'Push them, or reset {name} to {base}, then OH carries on with your command.')
@@ -147,6 +156,10 @@ def to_delivery(root,name):
             if read_json(marker)['branch']==name:marker.unlink()
         except FileNotFoundError:pass
     if not exists:
+        # Keep local main current too when this checkout owns it. Another worktree may own main;
+        # a new branch there still starts from the freshly fetched remote main, without disturbing it.
+        if not holder(root,main) and run_git(root,'merge-base','--is-ancestor',main,base).returncode==0:
+            from_main(root,base=base)
         git(root,'switch','--quiet','--no-track','-c',name,base);return None
     if current!=name:git(root,'switch','--quiet',name)
     return base

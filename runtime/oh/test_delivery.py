@@ -6,7 +6,7 @@ from . import delivery,plans
 from .cli import host_hook
 from .config import change
 from .runner import run
-from .storage import Refused,read_json
+from .storage import digest,Refused,read_json
 from .workflow import choose,load_run
 from . import test_workflow as fixtures
 from .test_design import BODY
@@ -50,14 +50,30 @@ class DeliveryTest(unittest.TestCase):
         result=receive(self.root,'codex',{'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'fix','prompt':'/oh-deliver fix X'})
         self.assertTrue(result['pending'])  # preparation can now offer an owner-bound approval menu
         self.assertTrue(pending_file(self.root).exists())
+        # Direct prose invocation must refresh the checkout before the coordinator inspects the fix.
+        import contextlib,io
+        from .cli import main
+        self.git('switch','-qc','feature/old')
+        with patch('oh.authority.materialize',side_effect=lambda root: self.start_delivery('fix X',turn='direct')), contextlib.redirect_stdout(io.StringIO()) as output:
+            main(['--root',str(self.root),'deliver','fix X'])
+        self.assertEqual(json.loads(output.getvalue())['kind'],'quick_fix')
+        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertEqual(self.calls,[])
 
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
-        where,path=self.documents();listed=delivery.listing(self.root)
+        title=f'Add {self.root}/credential.py.'
+        where,path=self.documents(body=BODY.replace('Add the credential store.',title));listed=delivery.listing(self.root)
         self.assertEqual(len(listed['ready']),1);self.assertEqual(len(self.calls),0)
+        original=self.git('rev-parse','HEAD')
+        self.git('commit','--allow-empty','-qm','merged elsewhere')
+        fresh=self.git('rev-parse','HEAD');self.git('update-ref','refs/remotes/origin/main',fresh)
+        self.git('reset','-q','--hard',original)
         self.git('branch','deliver/0001')  # an earlier delivery main already absorbed: retired for a fresh one
         self.start_delivery();first=load_run(self.root)[1]['id']
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
         self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
+        self.assertEqual(load_run(self.root)[1]['base'],fresh)
+        self.assertEqual(self.git('rev-parse','main'),fresh)
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertIn('- [x] **1.**',path.read_text())
         # docs/usage.md: PR refuses an unmarked completed task, even before an agent commits the bad edit.
@@ -71,10 +87,16 @@ class DeliveryTest(unittest.TestCase):
         choose(self.root,'continue',self.event('next','continue'))
         self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertIn('status: frozen',path.read_text())
+        completed=delivery.listing(self.root)
+        self.assertEqual(completed['ready'],[])
+        self.assertIn('completed',completed['unavailable'][0]['reason'])
+        self.assertNotIn('requires approval',completed['unavailable'][0]['reason'])
         self.assertEqual(self.git('status','--porcelain'),'')
         choose(self.root,'pr',self.event('good-pr','pr'))  # a correct two-task batch, including its dependency, passes
         from .publication import render
-        self.assertIn('Task 2:',render(self.root))
+        public=render(self.root)
+        self.assertIn('Task 2:',public)
+        self.assertNotIn(str(self.root.parent),public)  # display redaction must not invalidate the original commit title
 
     def test_a_delivery_resumes_on_its_branch_and_one_pr_publishes_both_runs(self):
         from .publication import render
@@ -241,7 +263,8 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.git('-C',str(side),'branch','--show-current'),'deliver/0001')
 
     def test_private_progress_is_reviewed_then_published_after_code_commit(self):
-        where,path=self.documents('private');original=path.read_bytes();observed=[]
+        title=f'Add {self.root}/credential.py.'
+        where,path=self.documents('private',body=BODY.replace('Add the credential store.',title));original=path.read_bytes();observed=[]
         def worker(*args,**kwargs):
             if args[4]=='review':
                 admission=read_json(args[5]/'request.json');candidate=Path(next(iter(admission['artifact']['files'])))
@@ -255,6 +278,9 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,worker)['status'],'completed')
         self.assertIn('status: frozen',path.read_text());self.assertEqual(len(observed),2)
         self.assertEqual(self.git('status','--porcelain'),'')
+        choose(self.root,'pr',self.event('private-pr','pr'))
+        from .publication import render
+        self.assertNotIn(str(self.root.parent),render(self.root))
 
     def test_scope_routing_and_repairs_preserve_the_approved_task(self):
         """docs/usage.md: scope never grows a task; notes and reports belong to the reviewed result."""
@@ -280,6 +306,9 @@ class DeliveryTest(unittest.TestCase):
                         self.assertIn(note,text)
                         self.assertIn('claims to attack, never as evidence',args[3])
                         self.assertEqual(read_json(request['implementer_reports'][-1]['path'])['structured']['summary'],'Implemented with evidence in output.txt')
+                        for ref in request['implementer_reports']+[request['prior_reviews']]:
+                            self.assertEqual(digest(read_json(ref['path'])),ref['hash'])
+                        self.assertIn('They are not hashes of the formatted file bytes',args[3])
                         for section in ('Default to violation when uncertain','What counts as a finding','What is not a finding','Report the class','When the subject is a plan'):
                             self.assertIn(section,args[3])
                         if len(reviews)==1:
@@ -358,6 +387,11 @@ class DeliveryTest(unittest.TestCase):
         body+='\n### UI track\n\n- [ ] **3.** Add a sign-in placeholder.\n  Difficulty: simple — one static page.\n\n## 3. Open questions\n\nChoose the storage.\n'
         self.documents(body=body)
         with self.assertRaisesRegex(Refused,'several tracks'):delivery.selection(self.root,'0001')
+        before=self.git('branch','--show-current')
+        question=self.start_delivery()['waiting']
+        self.assertEqual(question['tracks'],['core','ui'])
+        self.assertEqual(self.git('branch','--show-current'),before)  # asking does not start or switch a delivery
+        self.assertEqual(self.calls,[])
         manifest,_=delivery.selection(self.root,'0001','ui')
         self.assertEqual([t['id'] for t in manifest['tasks']],['3'])
         self.start_delivery('0001 ui')  # the run builds each task with the difficulty the design gave it
@@ -394,7 +428,9 @@ class DeliveryTest(unittest.TestCase):
         self.documents()
         event={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','prompt':'/oh-deliver'}
         self.assertEqual(len(receive(self.root,'codex',event)['ready']),1)
-        self.assertFalse(pending_file(self.root).exists())
+        self.assertTrue(pending_file(self.root).exists())  # locator for its future reply; no delivery grant
+        from .workflow import active_file
+        self.assertFalse(active_file(self.root).exists())
         self.assertTrue(receive(self.root,'codex',event|{'prompt':'/oh-deliver 0001'})['pending'])
 
     def test_unmerged_context_and_unfinished_initiative_dependency_block_delivery(self):

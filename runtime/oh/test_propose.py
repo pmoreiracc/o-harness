@@ -83,7 +83,19 @@ class ProposeTest(unittest.TestCase):
         result = run(self.root, self.worker([idea()]))
         self.assertEqual(result['status'], 'approval_checkpoint')
         self.assertEqual(result['proposal']['lines'], ['| `search` | Full-text search over notes | — | — |'])
-        self.assertEqual(result['proposal']['choices'], ['approve', 'refine: <what to change>', 'reconsider'])
+        self.assertEqual(result['proposal']['choices'], ['approve', 'refine: <what to change>', 'cancel'])
+        preview=Path(result['gate']['preview']).read_text()
+        for detail in ('Search across notes.','New area with several PRs.','Read docs/roadmap.md.',
+                       '| `search` | Full-text search over notes | — | — |'):
+            self.assertIn(detail,preview)
+        self.assertNotIn('Uncommitted files:',preview)
+        self.assertNotIn('Completed: none',result['gate']['native_ask']['questions'][0]['title'])
+        from .gates import review_document
+        state=load_run(self.root)[1]
+        for host in ('claude','codex'):
+            private=review_document(state|{'host':host,'plans':state['plans']|{'location':'private'}})
+            self.assertIn('No Git commit or implementation',private)
+            self.assertNotIn('review and commit this proposal',private)
         self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))  # nothing written yet
         self.assertEqual([c[0] for c in self.calls], ['analysis'])
         self.assertIn('Routing an idea', self.calls[0][1]);self.assertEqual(self.calls[0][2], PROPOSAL_SCHEMA)
@@ -91,6 +103,17 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(run(self.root, self.worker([]))['status'], 'completed')
         self.assertEqual([c[0] for c in self.calls], ['analysis', 'review'])
         self.assertIn('The subject is a proposal', self.calls[1][1]);self.assertIn('Search across notes.', self.calls[1][1])
+        # docs/usage.md: author and reviewer use the same complete routing policy.
+        from .config import HOME
+        from .runner import prompt_for
+        policy=(HOME/'prompts/proposal-routing.md').read_text()
+        self.assertIn('adds a new area of the product',policy)
+        state=load_run(self.root)[1]
+        for host in ('codex','claude'):
+            for role in ('analysis','review'):
+                prompt=prompt_for(self.root,state|{'host':host},state['tasks'][0],role)
+                self.assertEqual(prompt.count(policy),1)
+        self.assertIn(policy,self.calls[0][1]);self.assertIn(policy,self.calls[1][1])
         self.assertEqual(self.git('branch', '--show-current'), 'propose/search')
         self.assertEqual(self.git('log', '-1', '--format=%s'), 'propose: | `search` | Full-text search over notes | — | — |')
         self.assertEqual(self.git('diff', '--name-only', 'main', 'HEAD'), 'docs/roadmap.md')
@@ -102,6 +125,8 @@ class ProposeTest(unittest.TestCase):
         self.propose();run(self.root, self.worker([idea()]));self.say('approve')
         result = run(self.root, self.worker([idea('task')], reviews=['blocking']))
         self.assertEqual(result['status'], 'approval_checkpoint')
+        self.assertEqual(result['last_review']['outcome'],'blocking')
+        self.assertEqual(result['last_review']['round'],1)
         self.assertEqual(result['proposal']['lines'], ['- [ ] **3.** Rate-limit sign-in attempts. Read §1. Depends on task 2.'])
         self.assertEqual([c[0] for c in self.calls], ['analysis', 'review', 'analysis'])
         self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
@@ -201,39 +226,57 @@ class ProposeTest(unittest.TestCase):
                 self.say('stop')
 
     def test_refine_asks_again_with_the_person_s_words(self):
-        """docs/usage.md: Refine asks for words only after selection; closing it applies nothing."""
-        import io
+        """Refine closes the choice and accepts the next native chat message, without another form."""
+        import io,json,os
+        from datetime import datetime,timedelta
+        from pathlib import Path
         from .mcp_server import Server
+        from .test_gates import native_question_records
+        from .authority import desktop_answer,materialize
+        from .workflow import checkpoint
         self.propose()
-        run(self.root, self.worker([idea()]))
-        with self.assertRaisesRegex(Refused, 'Say what to change'):self.say('refine:  ')
-        server=Server(io.StringIO(),io.StringIO());server.client={'capabilities':{'elicitation':{}}}
-        def refine(answer, before_answer=None):
-            forms=[]
-            def respond(message,schema,call):
-                forms.append(schema)
-                if len(forms)==1:return {'result':{'action':'accept','content':{'choice':'refine','changes':'ignore unrequested words'}}}
-                if before_answer:before_answer()
-                return {'result':answer}
-            with patch.object(server,'elicit',side_effect=respond):result=server.choose(self.root,'s','call')
-            self.assertEqual([set(f['properties']) for f in forms],[{'choice'},{'answer'}])
-            return result
-        for answer in ({'action':'cancel'},{'action':'accept','content':{'answer':' '}}):
-            self.assertIn('nothing was recorded',refine(answer))
-            self.assertEqual(load_run(self.root)[1]['status'],'approval_checkpoint')
+        run(self.root,self.worker([idea()]))
+        with self.assertRaisesRegex(Refused,'Say what to change'):self.say('refine:  ')
         words='put it in a new milestone M2 called Find things\nKeep  this spacing.'
-        self.assertIn('Recorded',refine({'action':'accept','content':{'answer':words}}))
+        home=Path(self.temp.name)/'native-codex';path=home/'sessions/s.jsonl';path.parent.mkdir(parents=True)
+        records=[{'type':'session_meta','payload':{'id':'s','cwd':str(self.root),'source':'cli'}}]
+        def save():path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
+        with patch.dict(os.environ,{'CODEX_HOME':str(home),'CODEX_THREAD_ID':'s','OH_CODEX_TURN_ID':''}):
+            question=checkpoint(self.root)['gate']['native_ask']['questions'][0]
+            records.append({'type':'event_msg','payload':{'type':'task_started','turn_id':'refine-pick'}})
+            records.extend(native_question_records(self.root,question,'Refine — Tell OH what to change in the chat.','refine-pick'))
+            save();followup=desktop_answer(self.root)
+            self.assertEqual(followup['waiting']['ask'],'What would you like to change?')
+            self.assertNotIn('native_ask',followup);self.assertNotIn('gate',followup)
+            self.assertEqual(load_run(self.root)[1]['status'],'approval_checkpoint')
+            self.assertIsNone(desktop_answer(self.root))  # replay does not ask or grant again
+            self.assertNotIn('gate',checkpoint(self.root))  # restart retains the chat question
+            # Desktop may save the next human message under the same turn id.
+            at=(datetime.fromisoformat(records[-1]['timestamp'])+timedelta(milliseconds=1)).isoformat()
+            records.append({'type':'event_msg','timestamp':at,'payload':{'type':'item_completed','thread_id':'s','turn_id':'refine-pick',
+                'item':{'type':'UserMessage','id':'feedback','content':[{'type':'text','text':words}]}}})
+            save()
+            with patch.dict(os.environ,{'CODEX_THREAD_ID':'other'}):self.assertIsNone(materialize(self.root))
+            self.assertEqual(materialize(self.root)['status'],'running')
         self.assertEqual(load_run(self.root)[1]['proposal_answers'][-1]['feedback'],words)
-        result = run(self.root, self.worker([idea(milestone='M2', milestone_title='Find things', milestone_done_when='Found')]))
-        prompts = [c[1] for c in self.calls if c[0] == 'analysis']
-        self.assertIn('Keep  this spacing.', prompts[1])
-        self.assertNotIn('ignore unrequested words',prompts[1])
-        self.assertEqual(result['proposal']['lines'][0], '### M2 — Find things')
-        # A run may be stopped while the second question is open: the original gate still must match.
-        with self.assertRaisesRegex(Refused,'out of date'):
-            refine({'action':'accept','content':{'answer':'Too late'}},before_answer=lambda:self.say('reconsider'))
+        result=run(self.root,self.worker([idea(milestone='M2',milestone_title='Find things',milestone_done_when='Found')]))
+        prompts=[c[1] for c in self.calls if c[0]=='analysis']
+        self.assertIn(json.dumps(words)[1:-1],prompts[1]);self.assertEqual(result['proposal']['lines'][0],'### M2 — Find things')
+        self.assertIn('gate',result);self.assertNotIn('waiting',result)
+        # The MCP fallback asks only the choice, then uses the same chat continuation.
+        server=Server(io.StringIO(),io.StringIO());server.client={'capabilities':{'elicitation':{}}}
+        with patch.object(server,'elicit',return_value={'result':{'action':'accept','content':{'choice':'refine','changes':'ignore these unrequested words'}}}) as form:
+            followup=json.loads(server.choose(self.root,'s','call'))
+        self.assertEqual(form.call_count,1);self.assertIn('waiting',followup)
+        message=form.call_args.args[0]
+        self.assertIn('Approve the proposal?',message)
+        self.assertNotIn(result['gate']['preview'],message)
+        self.assertNotIn('Project:',message);self.assertNotIn('- Approve',message)
+        self.assertEqual(load_run(self.root)[1]['proposal_answers'][-1]['feedback'],words)
+        self.say('cancel')
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
-        self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
+        self.assertNotIn('refinement',load_run(self.root)[1])
+        self.assertEqual((self.git('branch','--show-current'),self.git('status','--porcelain')),('main',''))
 
     def test_new_milestone_number_is_assigned_by_code(self):
         self.propose()
@@ -273,26 +316,29 @@ class ProposeTest(unittest.TestCase):
         self.assertNotIn('propose/search',self.git('branch','--list'))
         self.assertEqual(run(self.root,self.worker([]))['status'],'approval_checkpoint')
         self.assertEqual([c[0] for c in self.calls],['analysis','review','analysis'])
-        self.say('reconsider');self.assertEqual(load_run(self.root)[1]['status'],'stopped')
+        self.say('cancel');self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertEqual((self.git('branch','--show-current'),self.git('status','--porcelain')),('main',''))
 
-    def test_reconsider_writes_nothing_and_asks_what_the_person_meant(self):
-        self.propose()
-        run(self.root, self.worker([idea()]))
-        self.say('reconsider')
-        result = load_run(self.root)[1]
-        self.assertEqual(result['status'], 'stopped')
-        self.assertEqual((self.git('branch', '--show-current'), self.git('status', '--porcelain')), ('main', ''))
-        self.assertNotIn('propose/search', self.git('branch', '--list'))
-        from .workflow import checkpoint
-        self.assertEqual(checkpoint(self.root)['waiting']['ask'], 'What did you mean?')
-        # The person's next message is the new idea, for the same command.
-        reply = 'I meant searching inside attachments'
+    def test_cancel_writes_nothing_and_ends_without_another_question(self):
         from .entry import receive
-        receive(self.root, 'codex', {'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '12', 'prompt': reply})
-        result = host_hook(self.root, 'codex', {'prompt': reply}, verified=self.event('12', reply), idea='propose')
-        self.assertEqual(result['status'], 'running');self.assertNotIn('waiting', result)
-        self.assertIn(reply, load_run(self.root)[1]['tasks'][0]['instructions'])
+        from .workflow import checkpoint
+        for host in ('codex','claude'):
+            with self.subTest(host=host):
+                prompt='/oh-propose Search my notes'
+                host_hook(self.root,host,{'prompt':prompt},verified=self.event('proposal-'+host,prompt)|{'host':host})
+                preview=run(self.root,self.worker([idea()]))
+                self.assertEqual(preview['gate']['choices'],['approve','refine','cancel'])
+                choose(self.root,'cancel',self.event('cancel-'+host,'cancel')|{'host':host})
+                result=checkpoint(self.root)
+                self.assertEqual(result['status'],'stopped')
+                self.assertNotIn('waiting',result);self.assertNotIn('gate',result)
+                self.assertEqual((self.git('branch','--show-current'),self.git('status','--porcelain')),('main',''))
+                self.assertNotIn('propose/search',self.git('branch','--list'))
+                self.assertIsNone(receive(self.root,host,{'hook_event_name':'UserPromptSubmit','session_id':'s',
+                    'turn_id':'after-'+host,'prompt':'A later ordinary message'}))
+                calls=len(self.calls)
+                self.assertEqual(run(self.root,self.worker([]))['status'],'stopped')
+                self.assertEqual(len(self.calls),calls)
 
     def test_a_bare_command_waits_for_the_person_s_next_message(self):
         from .authority import pending_file
@@ -324,17 +370,28 @@ class ProposeTest(unittest.TestCase):
         result = host_hook(self.root, 'codex', {'prompt': 'the tagging one'}, verified=self.event('6', 'the tagging one'), idea='design')
         self.assertIn('not one of those rows', result['note'])  # asked again, so the next reply answers
         receive(self.root, 'codex', payload('s', '7', '/oh-deliver'))
-        self.assertIsNone(receive(self.root, 'codex', payload('s', '8', 'tags')))  # another command replaced the question
+        receive(self.root, 'codex', payload('s', '8', 'tags'))
+        self.assertEqual(read_json(pending_file(self.root))['idea'],'conversation')  # delivery collects its own input now
         host_hook(self.root, 'codex', {'prompt': '/oh-design'}, verified=self.event('9', '/oh-design'))
         from .authority import cancel
         cancel(self.root)  # stop and cancel drop it too, however they were given
         self.assertIsNone(receive(self.root, 'codex', payload('s', '10', 'tags')))
 
     def test_proposals_start_from_main_wherever_the_checkout_was(self):
+        before=self.git('rev-parse','HEAD')
+        self.git('commit','--allow-empty','-qm','merged elsewhere')
+        latest=self.git('rev-parse','HEAD');self.git('update-ref','refs/remotes/origin/main',latest)
+        self.git('reset','-q','--hard',before)
         self.git('switch','-qc','feature/work')
         self.propose()
         self.assertEqual(self.git('branch','--show-current'),'main')
         self.assertEqual(load_run(self.root)[1]['branch'],'main')
+        self.assertEqual(load_run(self.root)[1]['base'],latest)
+        run(self.root,self.worker([idea()]))
+        self.say('approve');run(self.root,self.worker([]))
+        self.assertEqual(self.git('branch','--show-current'),'propose/search')
+        self.assertEqual(self.git('rev-parse','HEAD^'),latest)
+        self.assertEqual(self.git('rev-parse','feature/work'),before)
 
     def test_branch_transition_recovers_after_switch_without_another_worker(self):
         from .storage import Journal
@@ -489,10 +546,10 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(path.read_text(),'keep this')
         self.assertEqual([c[0] for c in self.calls],['analysis'])
 
-    def test_reconsider_never_touches_a_human_edit(self):
+    def test_cancel_never_touches_a_human_edit(self):
         self.propose();run(self.root,self.worker([idea()]))
         path=self.where['roadmap'];path.write_text(path.read_text()+'\nHuman note\n')
-        self.say('reconsider')
+        self.say('cancel')
         self.assertIn('Human note',path.read_text())
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
 

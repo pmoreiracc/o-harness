@@ -13,16 +13,28 @@ from .storage import Refused, atomic_json, checkout_id, digest, identifier, proj
 from .workflow import active_file, checkpoint, choose, human_event, start
 
 
-def host_hook(root,host,payload,*,verified,idea=None):
+def host_hook(root,host,payload,*,verified,idea=None,request=None):
     """Carry out a verified typed command. `idea`: the command whose argument the text is, because OH asked for it
     (see authority.wait_for)."""
     from .entry import invocation
     prompt=invocation(payload.get('prompt','')) if not idea else payload.get('prompt','').strip()
+    if request:prompt='/oh-'+request[0]+' '+request[1]
     import re
     prompt=re.sub(r'^[$/](?:o-harness:)?(oh-(?:pause|resume|stop))$',lambda m:m[1],prompt)
     prompt={'oh-pause':'pause','oh-stop':'stop','oh-resume':'resume'}.get(prompt,prompt)
     planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
     from .workflow import load_run,occupied,unfinished
+    if idea=='refine':
+        from .workflow import refinement_for
+        from .authority import newer
+        pending=refinement_for(root,host,verified['session'])
+        if not pending or not newer(verified.get('at'),pending['source'].get('at')):
+            raise Refused('No current request for changes precedes this reply; run status to see the current preview.')
+        if load_run(root)[1]['status']=='prepared_checkpoint':
+            from .prepared import remember
+            remember(root,host,payload,verified)
+        choose(root,'refine: '+prompt,verified)
+        return checkpoint(root)
     if idea:
         if idea=='design':
             from .plans import listing
@@ -58,6 +70,8 @@ def host_hook(root,host,payload,*,verified,idea=None):
         return listing(root)
     if delivery and delivery['kind']=='quick_fix' or parsed==('oh-start',''):
         if unfinished(root,verified):raise occupied(load_run(root)[1])
+        from .branches import from_main
+        from_main(root)
         from .prepared import remember
         remember(root,host,payload,verified)
         return delivery or {'prepare':True,'authorized':False,'next':'Prepare the agreed tasks and show the returned approval menu.'}
@@ -69,6 +83,9 @@ def host_hook(root,host,payload,*,verified,idea=None):
             if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return carry_on(root,verified)
             raise occupied(state)
         if started(root,verified):return checkpoint(root)
+        from .delivery import track_question
+        if not delivery['track'] and not delivery['request'] and (question:=track_question(root,delivery['doc'])):
+            return question
         from .prepared import resolve
         if delivery['request']:  # prepared on a branch it is bound to, which OH leaves where it is
             prepared=resolve(root,delivery['request'],verified,'design')
@@ -99,6 +116,9 @@ def host_hook(root,host,payload,*,verified,idea=None):
         return checkpoint(root)
     from .entry import CHOICES,REFINE
     if (prompt in CHOICES|{'pause'} or re.fullmatch(REFINE,prompt,re.S)) and active_file(root).exists():
+        if prompt.startswith('refine:') and load_run(root)[1]['status']=='prepared_checkpoint':
+            from .prepared import remember
+            remember(root,host,payload,verified)
         choose(root,prompt,verified)
         return checkpoint(root)
     return None
@@ -220,6 +240,9 @@ def main(argv=None):
             raise SystemExit(1 if any(x['returncode'] for x in result) else 0)
         elif args.command=='pr-summary':
             from .publication import has_native_history,render,validate_event
+            if not args.validate_event and args.base in ('origin/main','origin/master'):
+                from .branches import fetched
+                fetched(root,args.base.split('/')[1])
             if not has_native_history(root,args.base):raise Refused('This branch has no OH-reviewed commits to summarize')
             if args.validate_event:result=validate_event(root,read_json(args.validate_event),args.base)
             else:print(render(root,args.base));return
@@ -292,7 +315,7 @@ def main(argv=None):
             from .authority import materialize
             admitted=materialize(root)
             if admitted and admitted.get('note'):print(admitted['note'],flush=True)
-            if admitted and (admitted.get('waiting') or admitted.get('prepare') or admitted.get('kind')=='quick_fix' or admitted.get('authorized') is False):
+            if admitted and (admitted.get('waiting') or admitted.get('prepare') or admitted.get('kind') in ('quick_fix','list') or admitted.get('authorized') is False):
                 print(json.dumps(admitted,indent=2));return  # preparation/waiting cannot run an older batch
             executable_run(root,admitted)
             if args.command=='start' and args.request:
@@ -322,12 +345,20 @@ def main(argv=None):
             result=generate(root,args.host)
         elif args.command=='deliver':
             from .delivery import parse,listing
+            from .registry import index_path
+            if not index_path(root).is_file():
+                from .authority import desktop_pending
+                desktop_pending(root)
             selected=parse(' '.join(args.arguments))
             if selected['kind']=='list':result=listing(root)
-            elif selected['kind']=='quick_fix':result=selected
+            elif selected['kind']=='quick_fix':
+                from .authority import materialize
+                result=materialize(root) or selected
             else:
                 from .authority import materialize
                 admitted=materialize(root)
+                if admitted and admitted.get('waiting'):
+                    print(json.dumps(admitted,indent=2));return
                 executable_run(root,admitted)
                 if admitted and admitted.get('limits'):print(admitted['limits'],flush=True)
                 if admitted and admitted.get('note'):

@@ -1,5 +1,6 @@
 from .registry import register, profile_path
 import json
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -60,11 +61,27 @@ class WorkflowTest(unittest.TestCase):
                 'structured':{'verdict':'clean','summary':'Checked behavior','findings':[],'evidence':EVIDENCE},'usage_observed':False}
 
     def test_initial_and_continue_same_batch_snapshot_and_idempotent_restart(self):
+        from .workflow import checkpoint
+        observed=[]
+        def working(*args,**kwargs):
+            progress=checkpoint(self.root)['progress']
+            self.assertEqual(progress['phase'],args[4])
+            self.assertEqual(progress['profile'],args[2])
+            if args[4]=='review':
+                self.assertEqual(progress['implementation']['summary'],'Checked behavior')
+                self.assertIn('attempt',progress['implementation'])
+            observed.append((progress['task'],progress['phase']))
+            return self.fake(*args,**kwargs)
+        def checking(*args,**kwargs):
+            self.assertEqual(checkpoint(self.root)['progress']['phase'],'checks')
+            return verify(*args,**kwargs)
         journal,_=start(self.root,{'tasks':self.tasks},self.event())
-        result=run(self.root,self.fake)
+        with patch('oh.runner.verify',side_effect=checking):result=run(self.root,working)
         self.assertEqual((result['completed'],result['status']),(5,'checkpoint'))
         self.assertTrue(result['limits'].startswith('Continue runs 1 of the 1 remaining task, up to 3 review rounds each.'))
         self.assertEqual(len(self.calls),10)
+        self.assertEqual(observed,[(str(i),role) for i in range(1,6) for role in ('implementation','review')])
+        self.assertNotIn('progress',result)  # a spent batch never claims a specialist is still working
         configure(self.root,tasks_per_batch=1,review_rounds=10)
         run(self.root,self.fake);self.assertEqual(len(self.calls),10)
         choose(self.root,'continue',self.event('2','continue'))
@@ -84,6 +101,12 @@ class WorkflowTest(unittest.TestCase):
     def test_review_budget_survives_failures_and_restart(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         def blocked(*args,**kw):
+            from .workflow import checkpoint
+            progress=checkpoint(self.root)['progress']
+            if args[4]=='implementation' and progress.get('review'):
+                self.assertEqual(progress['review']['outcome'],'blocking')
+                self.assertEqual(progress['review']['findings'][0]['description'],'Wrong')
+                self.assertEqual(progress['review']['finding_count'],1)
             value=self.fake(*args,**kw)
             if args[4]=='review':value['structured']={'verdict':'blocking','summary':'Fix it','findings':[{'severity':'blocking','description':'Wrong','path':'output.txt','family':'wrong-output','relation':'original'}],'evidence':EVIDENCE}
             return value
@@ -91,11 +114,16 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(result['status'],'review_checkpoint')
         # docs/usage.md: spent review windows show findings and their complete retained history.
         for detail in ('Round 3 of 3','Reviews used/granted: 3/3','Wrong','repeats an earlier finding','Open findings: blocking'):
-            self.assertIn(detail,result['gate']['summary'])
+            self.assertIn(detail,result['gate']['details'])
         reviews=sum(c[0]=='review' for c in self.calls);self.assertEqual(reviews,3)
         run(self.root,blocked);self.assertEqual(sum(c[0]=='review' for c in self.calls),3)
         choose(self.root,'grant review',self.event('2','grant review'))
-        self.assertEqual(run(self.root,self.fake)['completed'],1)
+        finished=run(self.root,self.fake)
+        self.assertEqual(finished['completed'],1)
+        self.assertEqual(finished['last_review']['outcome'],'clean')
+        self.assertEqual(finished['last_review']['finding_count'],0)
+        self.assertEqual(finished['last_review']['round'],4)
+        self.assertNotIn('progress',finished)  # a completed task still reports its final review, not a running phase
 
     def test_failed_review_does_not_repeat_successful_implementation(self):
         # A host keeps its own worktrees inside the checkout: they are never its changes, reviewed or committed.
@@ -107,7 +135,24 @@ class WorkflowTest(unittest.TestCase):
             if args[4]=='review' and not failed:
                 failed.append(True);value['failed']=True
             return value
-        self.assertEqual(run(self.root,review_failure)['completed'],1)
+        # The native executor resolves fallback before admission, including a retried review.
+        from . import hosts
+        catalog={'gpt-6-luna':{'high'},'gpt-6-sol':{'medium','high'},'gpt-6-astra':{'high'}}
+        with patch.object(hosts,'invoke',side_effect=review_failure) as native,patch('sys.stderr',new_callable=io.StringIO) as messages, \
+                patch('oh.capabilities.codex_models',return_value=catalog):
+            completed=run(self.root,native)
+        self.assertEqual(completed['completed'],1)
+        self.assertEqual(len(completed['model_notices']),2)  # implementation/medium and review/high
+        self.assertEqual(messages.getvalue().count('Continuing with'),2)  # review retry never repeats the notice
+        journal,state=load_run(self.root)
+        self.assertEqual(state['config']['models']['codex']['review']['model'],'gpt-6.1-sol')
+        for review in (a for a in state['attempts'] if a['role']=='review'):
+            admission=json.loads((journal.path/'attempts'/review['id']/'request.json').read_text())
+            self.assertEqual(admission['profile'],{'model':'gpt-6-sol','effort':'high'})
+            self.assertEqual(admission['model_fallback']['requested'],state['config']['models']['codex']['review'])
+        collect()
+        with connect() as db:
+            self.assertEqual([r[0] for r in db.execute("SELECT model FROM attempts WHERE role='review'")],['gpt-6-sol','gpt-6-sol'])
         self.assertEqual([c[0] for c in self.calls],['implementation','review','review'])
         self.assertEqual(self.git('show','--name-only','--format=','HEAD'),'output.txt')
         subprocess.run(['git','init','-q',str(self.root/'vendor')],check=True)  # any other repository is a change
@@ -163,6 +208,14 @@ class WorkflowTest(unittest.TestCase):
         event=self.event('2','grant review')
         with ThreadPoolExecutor(2) as pool:list(pool.map(lambda _:choose(self.root,'grant review',event),range(2)))
         self.assertEqual(len(load_run(self.root)[1]['review_grants']),1)
+        # The reference's third option is a stop/handoff, never review or publication authority.
+        journal.append('run.status',{'status':'review_checkpoint'})
+        choose(self.root,'handoff pr',self.event('handoff','handoff pr'))
+        state=load_run(self.root)[1]
+        self.assertEqual(state['status'],'stopped');self.assertEqual(state['done'],[])
+        self.assertEqual(len(state['review_grants']),1);self.assertNotIn('publication',state)
+        self.assertEqual(state['review_handoff']['choice'],'handoff pr')
+        with self.assertRaises(Refused):choose(self.root,'pr',self.event('publish','pr'))
 
     def test_stop_during_review_prevents_commit(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
@@ -245,29 +298,60 @@ class WorkflowTest(unittest.TestCase):
 
 
     def test_native_pr_evidence_binds_all_commits_and_refuses_tampering(self):
-        from .publication import render,validate_event,START,END
+        from .publication import render,validate_event,public_value,START,END
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         def report(*args,**kwargs):
             result=self.fake(*args,**kwargs)
-            if args[4]=='implementation':result['structured']={'found_along_way':['Follow-up outside this quick fix '+('x'*4100)],'summary':'Implemented the timeout.'}
+            if args[4]=='implementation':result['structured']={'found_along_way':['Follow-up outside this quick fix --> <tag> & '+str(self.root/'other.py')+' '+('x'*4100)],
+                'summary':f'Implemented the timeout. See [output.txt]({self.root}/output.txt).'}
             result['text']=json.dumps(result['structured'])  # actual Codex structured output, not the fixture's plain 'done'
             return result
-        start(self.root,{'tasks':self.tasks[:2]},self.event());run(self.root,report)
+        def checkout_redaction(root,state,value):
+            # Model a checkout outside home/temp: those incidental prefixes must not
+            # mask a missing checkout root in the real completion -> sealing path.
+            with patch('pathlib.Path.home',return_value=self.root.parent/'other-home'), \
+                    patch('tempfile.gettempdir',return_value=str(self.root.parent/'other-temp')):
+                return public_value(root,state,value)
+        with patch('oh.publication.public_value',side_effect=checkout_redaction):
+            start(self.root,{'tasks':self.tasks[:2]},self.event());run(self.root,report)
         with self.assertRaises(Refused):render(self.root)
         choose(self.root,'pr',self.event('2','pr'))
+        from .workflow import checkpoint
+        publication=checkpoint(self.root)['publication']
+        self.assertEqual(publication['head'],self.git('rev-parse','HEAD'))
+        self.assertEqual(publication['branch'],'work')
+        self.assertEqual(len(publication['commits']),2)
+        self.assertIn('Execution is finished',publication['next'])
+        self.assertEqual(checkpoint(self.root)['review_rounds'],2)
+        self.assertEqual(checkpoint(self.root)['last_review']['task'],'2')
+        self.assertEqual(checkpoint(self.root)['last_review']['finding_count'],0)
         body=render(self.root)
         self.assertIn('Found along the way (task 1)',body)  # docs/usage.md: quick-fix observations reach the PR
         self.assertIn('Follow-up outside this quick fix',body)
-        prose=body.split(START)[0]  # docs/usage.md: readable PR history precedes portable JSON
-        for detail in ('Task 1:', 'Implementing report: Implemented the timeout.', 'Checked behavior', 'Review 1:', 'started ', 'clean', 'Task history:', 'the person chose to open a PR'):
+        prose=body.split(START)[0]  # docs/usage.md: work and outcomes, not execution logs or machine JSON
+        for detail in ('### Task 1:', 'Implemented the timeout.', 'Verification: fixture (passed).', 'Independent invariant review: clean; 1 round.'):
             self.assertIn(detail,prose)
-        self.assertNotIn('Implementing report: {',prose)
-        self.assertNotIn('\"verdict\":',prose)
+        for detail in ('Run history:', 'Task history:', 'Reviews used/granted:', '```json', '\"verdict\":'):
+            self.assertNotIn(detail,prose)
+        block=body.split(START)[1].split(END)[0].strip()
+        self.assertTrue(block.startswith('<!--\n```json\n') and block.endswith('\n```\n-->'))
+        self.assertNotIn('-->',block[:-3])  # reported text cannot close the hidden evidence comment
+        self.assertNotIn(str(self.root),body)
+        self.assertIn('[output.txt](output.txt)',body)
         event={'pull_request':{'head':{'ref':'work','sha':self.git('rev-parse','HEAD')},'body':body}}
         self.assertEqual(validate_event(self.root,event,'origin/main')['commits'],2)
-        packet=json.loads(body.split('```json\n')[1].split('\n```')[0]);packet['records'][0]['evidence']['attempts'][0]['duration_ms']=999
-        tampered=START+'\n```json\n'+json.dumps(packet)+'\n```\n'+END
-        with self.assertRaises(Refused):validate_event(self.root,{'pull_request':event['pull_request']|{'body':tampered}},'origin/main')
+        packet=json.loads(body.split('```json\n')[1].split('\n```')[0])
+        published_note=next(iter(packet['records'][0]['evidence']['scope'].values()))['findings'][0]['description']
+        self.assertIn('--> <tag> &',published_note)
+        self.assertNotIn(str(self.root),published_note)  # decoded Windows paths cannot hide behind JSON escaping
+        legacy=START+'\n```json\n'+json.dumps(packet)+'\n```\n'+END
+        self.assertEqual(validate_event(self.root,{'pull_request':event['pull_request']|{'body':legacy}},'origin/main')['commits'],2)
+        packet['records'][0]['evidence']['attempts'][0]['duration_ms']=999
+        altered='```json\n'+json.dumps(packet)+'\n```'
+        for retained in (altered,'<!--\n'+altered+'\n-->'):
+            tampered=START+'\n'+retained+'\n'+END
+            with self.assertRaises(Refused):validate_event(self.root,{'pull_request':event['pull_request']|{'body':tampered}},'origin/main')
+        with self.assertRaises(Refused):validate_event(self.root,{'pull_request':event['pull_request']|{'body':prose}},'origin/main')
         self.git('commit','--allow-empty','-qm','unreviewed extra')
         with self.assertRaises(Refused):render(self.root)
         with self.assertRaises(Refused):validate_event(self.root,event,'origin/main')
@@ -278,7 +362,8 @@ class WorkflowTest(unittest.TestCase):
         start(self.root,{'tasks':self.tasks[:1]},self.event());run(self.root,self.fake)
         choose(self.root,'pr',self.event('2','pr'))
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
-        self.assertIn('"choice": "pr"',render(self.root,'origin/master'))
+        packet=json.loads(render(self.root,'origin/master').split('```json\n')[1].split('\n```')[0])
+        self.assertEqual(packet['grants'][load_run(self.root)[1]['id']]['choice'],'pr')
 
 
     def test_publication_stopped_and_mixed_cli_paths_refuse(self):
@@ -301,9 +386,10 @@ class ReviewResultTest(unittest.TestCase):
         """docs/usage.md: frozen designs and quick fixes retain scope in an issue or a dismissal."""
         from .scope import prepare
         from .gates import options
-        from .publication import validate_evidence
+        from .publication import validate_evidence,readable,public_value
+        self.assertEqual(public_value(r'C:\Users\Fixture\repo',{},r'See c:\users\fixture\repo\smoke.py'),'See smoke.py')
         finding={'severity':'scope','description':'Unrelated logout','path':'logout.py','family':'logout','relation':'original'}
-        attempt={'id':'review','task':'1','findings':[finding],'git_tree':'tree','head':'parent','outcome':'needs_resolution'}
+        attempt={'id':'review','task':'1','role':'review','finished':True,'findings':[finding],'git_tree':'tree','head':'parent','outcome':'needs_resolution'}
         state={'id':'run','project':'project','status':'findings_checkpoint','attempts':[attempt]}
         for delivery in ({},{'status':'frozen'}):
             with patch('oh.delivery.guard'),patch('oh.issues.route',return_value={'url':'https://github.com/example/repo/issues/1'}) as issue:
@@ -314,6 +400,21 @@ class ReviewResultTest(unittest.TestCase):
         evidence={'schema':1,'attempts':[attempt],'review':'review','parent':'parent','git_tree':'tree','resolutions':{
             'review':{'choice':'dismiss scope','tree':'tree','source':'human','scope':dismissed}}}
         validate_evidence(evidence)
+        from .workflow import review_progress
+        final_review=review_progress(state,'1')
+        self.assertEqual(final_review['outcome'],'needs_resolution')
+        self.assertEqual(final_review['finding_count'],1)  # accepted findings must never become a clean/no-findings claim
+        # The readable PR retains actual finding decisions and destinations, without raw dictionaries.
+        for choice,scope in (('dismiss scope',dismissed),('route scope',value)):
+            published=evidence|{'run':'run','task':'1','title':'Logout scope','scope':{'review':scope},
+                'resolutions':{'review':{'choice':choice,'tree':'tree','source':'human','scope':scope,
+                                       'issue':scope['destination'].get('issue')}}}
+            validate_evidence(published)
+            self.assertEqual(review_progress(state|{'resolutions':published['resolutions']},'1')['decision'],choice)
+            prose=readable([{'commit':'commit','evidence':published}],{'run':state})
+            self.assertIn('Unrelated logout',prose);self.assertIn('Decision: '+choice,prose)
+            self.assertIn('this PR' if choice=='dismiss scope' else 'https://github.com/example/repo/issues/1',prose)
+            self.assertNotIn("{'url':",prose)
         dismissed['findings']=[]
         with self.assertRaises(Refused):validate_evidence(evidence)
         attempt['findings'].append(finding|{'severity':'concern'})

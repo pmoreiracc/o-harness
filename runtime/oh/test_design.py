@@ -125,6 +125,13 @@ class DesignRunTest(unittest.TestCase):
         (role, prompt, schema, _), (review, review_prompt, _, seen) = self.calls
         self.assertEqual((role, schema, review), ('analysis', DESIGN_SCHEMA, 'review'))
         self.assertIn('Writing a design', prompt);self.assertIn('Sign-in with passkeys', prompt)
+        from .runner import prompt_for
+        state=load_run(self.root)[1]
+        for host in ('codex','claude'):
+            for role in ('analysis','review'):
+                text=prompt_for(self.root,state|{'host':host},state['tasks'][0],role)
+                handoff=json.JSONDecoder().raw_decode(text[text.index('\n{"task":')+1:])[0]
+                self.assertEqual(handoff['planning'],{'location':'repo','design_approval':'human_merge'})
         self.assertEqual(seen, ['0001-auth.md']);self.assertIn('The subject is a plan', review_prompt)
         doc = (self.root / 'docs/design/0001-auth.md').read_text()
         self.assertIn('status: approved', doc);self.assertIn('# 0001 — Sign-in', doc)
@@ -173,6 +180,20 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.root / 'docs/design').iterdir()), ['0001-auth.md'])
         self.assertIn('# 0001 — Sign-in, split', (self.root / 'docs/design/0001-auth.md').read_text())
         self.assertEqual(self.where['roadmap'].read_text().count('[0001]'), 1)
+        # docs/usage.md: planning repairs see history, and reviewers see author reports.
+        from .storage import digest
+        journal,state=load_run(self.root)
+        requests=[read_json(journal.path/'attempts'/a['id']/'request.json') for a in state['attempts']]
+        repair=requests[2];history=read_json(repair['prior_reviews']['path'])
+        self.assertEqual(history[0]['findings'][0]['family'],'size')
+        self.assertEqual(digest(history),repair['prior_reviews']['hash'])
+        self.assertIn('whole defect family',repair['prompt'])
+        self.assertIn('not additional task scope',repair['prompt'])
+        for request,count in ((requests[1],1),(requests[3],2)):
+            self.assertEqual(len(request['implementer_reports']),count)
+            for report in request['implementer_reports']:
+                self.assertEqual(digest(read_json(report['path'])),report['hash'])
+                self.assertIn('Sign-in',read_json(report['path'])['structured']['title'])
 
     def test_an_owed_decision_is_proposed_without_a_design(self):
         self.design_run()
@@ -201,7 +222,7 @@ class DesignRunTest(unittest.TestCase):
     def test_a_design_branch_never_reuses_an_existing_branch(self):
         self.git('branch', 'design/auth')
         self.design_run()
-        self.assertRegex(self.git('branch', '--show-current'), r'^design/auth-[0-9a-f]{8}$')
+        self.assertEqual(self.git('branch','--show-current'),'design/auth-2')
 
     def test_undo_restores_only_what_oh_wrote_and_never_a_human_edit(self):
         intents = []
@@ -372,7 +393,7 @@ class DesignRunTest(unittest.TestCase):
                 unittest.mock.patch('oh.transcripts.register'):
             stage(self.root, 'codex', payload('1', '/oh-design auth'))
             self.assertEqual(materialize(self.root)['status'], 'running')
-        self.assertRegex(self.git('branch', '--show-current'), r'^design/auth-[0-9a-f]{8}$')
+        self.assertEqual(self.git('branch','--show-current'),'design/auth-2')
         with unittest.mock.patch('oh.cli.host_hook', side_effect=RuntimeError('boom')), \
                 unittest.mock.patch('oh.authority._attest', side_effect=lambda host, p, root=None, **kwargs: self.event(p['turn_id'], p['prompt']) | {'transcript_path': 'x'}):
             stage(self.root, 'codex', payload('2', 'stop'))

@@ -105,6 +105,7 @@ def reduce(records):
         elif kind=='verification':state.setdefault('verification',{})[d['task']]=d
         elif kind=='run.status':
             state['status']=d['status']
+            if d['status'] not in ('approval_checkpoint','prepared_checkpoint'):state.pop('refinement',None)
             state.setdefault('status_history',[]).append(d|{'at':record['at']})
             if d['status']=='pausing':state['pause_return_status']=d['return_status']
             if d['status']=='paused':state['pause_snapshot']={'tree':d['tree'],'head':d['head']}
@@ -138,6 +139,8 @@ def reduce(records):
         elif kind=='proposal':
             state.setdefault('proposals',{})[d['attempt']]=d
             state.setdefault('proposal_answers',[]).append(d)
+        elif kind=='refinement.requested':state['refinement']=d
+        elif kind=='refinement.feedback':state['refinement']=d
         elif kind=='proposal.preview':state['preview']=d
         elif kind=='subject.cleared':
             state.pop('rendered',None)
@@ -155,6 +158,7 @@ def reduce(records):
         elif kind=='decision':
             state['decisions'].append(d['source'])
             if d['choice']=='pr':state['publication']=d
+            if d['choice']=='handoff pr':state['review_handoff']=d
     return state
 
 
@@ -175,6 +179,7 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
         if state['source']==source:return journal,state
         if state['status']=='prepared_checkpoint' and waiting and state['human']['session']==event['session'] and state['host']==event['host']:
             journal.append('run.status',{'status':'stopped','reason':'Replaced by a newer prepared scope; no work was granted.'})
+            best_effort('run.status',state['project'],state['id'],status='stopped')
         elif state['status'] not in ('stopped','pr','completed'):raise occupied(state)
     config=prepared['snapshot'] if prepared else snapshot(root)
     from .config import project_checks
@@ -189,16 +194,17 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
         raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
     try:
         if workflow=='deliver' and not waiting and git(root,'branch','--show-current') in ('main','master'):
-            created='codex/oh-'+run[:8]  # design deliveries are already on their deliver/ branch
-            git(root,'switch','-c',created)
+            from .branches import execution_branch
+            target=execution_branch(root,tasks[0]['title'],run)  # numbered designs already have their deliver/ branch
+            git(root,'switch','-c',target);created=target
         import re
         current=git(root,'branch','--show-current')
         if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
             raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main first')
         if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
             from .plans import branch_for
-            created=branch_for(root,plan['slug'],run)
-            git(root,'switch','-c',created)
+            target=branch_for(root,plan['slug'],run)
+            git(root,'switch','-c',target);created=target
         from .branches import incarnation
         branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
         for task in tasks:
@@ -235,6 +241,7 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
         raise
     best_effort('run.started',p['id'],run,name=p['name'],work_kind=p['kind'],host=event['host'],
                 version=data['harness_version'],config_hash=data['config_hash'])
+    if waiting:best_effort('run.status',p['id'],run,status='prepared_checkpoint')
     return journal,reduce(journal.records())
 
 
@@ -250,7 +257,24 @@ def _choose(root, choice, event):
     if source in state['decisions']:return state
     if event['host']!=state['host']:
         raise Refused('Resume through the host that owns this run')
-    if state['status']=='prepared_checkpoint' and choice=='approve':
+    if choice=='approve' and 'feedback' in state.get('refinement',{}):
+        raise Refused('Revise the unapproved task list and call prepare before asking for approval.')
+    if choice=='approve' and state['status'] in ('approval_checkpoint','prepared_checkpoint'):
+        from .gates import describe
+        describe(journal,state,root)  # approval must still refer to the unchanged review copy
+    if choice=='refine':
+        if state['status'] not in ('approval_checkpoint','prepared_checkpoint'):raise Refused('No preview is waiting for changes')
+        append('refinement.requested',{'source':event})
+        append('decision',{'source':source,'choice':choice})
+    elif state['status']=='prepared_checkpoint' and choice=='cancel':
+        append('decision',{'source':source,'choice':choice})
+        append('run.status',{'status':'stopped'})
+    elif state['status']=='prepared_checkpoint' and choice.startswith('refine:'):
+        words=choice[len('refine:'):].strip()
+        if not words:raise Refused('Say what to change in the chat.')
+        append('refinement.feedback',{'source':event,'feedback':words})
+        append('decision',{'source':source,'choice':'refine'})
+    elif state['status']=='prepared_checkpoint' and choice=='approve':
         from .prepared import activate
         activation=activate(root,journal,state,event)
         append('preparation.activated',activation)
@@ -280,20 +304,19 @@ def _choose(root, choice, event):
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':state.get('pause_return_status','running') if choice=='resume' else 'running'})
         append('task.intervention',{'task':task})
-        best_effort('task.intervention',state['project'],state['id'],task,reason=choice)
-    elif choice in ('approve','reconsider') or choice.startswith('refine:'):
-        if state['status']!='approval_checkpoint':raise Refused('No proposal is waiting for approve, refine or reconsider')
+    elif choice in ('approve','cancel') or choice.startswith('refine:'):
+        if state['status']!='approval_checkpoint':raise Refused('No proposal is waiting for approve, refine or cancel')
         task=state['tasks'][0]['id'];last=[a for a in state['attempts'] if a['task']==task][-1]
         proposing=state.get('workflow')=='propose'
-        if choice=='reconsider' and proposing and not (state.get('rendered') or {}).get('files'):
-            # Nothing is written before approval: end this reading, and ask what the person meant (see `wait_for`).
+        if choice=='cancel' and proposing and not (state.get('rendered') or {}).get('files'):
+            # Nothing is written before approval; cancellation ends this proposal without another question.
             append('decision',{'source':source,'choice':choice})
             append('run.status',{'status':'stopped'})
-        elif choice=='reconsider':
+        elif choice=='cancel':
             # Write nothing: undo what OH wrote and leave the branch it cut, when that branch holds no commit.
             from .plans import undo
             if git(root,'branch','--show-current')!=state['branch'] or git(root,'rev-parse','HEAD')!=state['base']:
-                raise Refused('Return to the proposal branch and its recorded base before reconsidering')
+                raise Refused('Return to the proposal branch and its recorded base before cancelling')
             from .branches import incarnation
             if incarnation(root,state['branch'])!=state['incarnation']:raise Refused('The proposal branch was recreated; preserve it and stop this run')
             undo(root,state.get('rendered'),check_only=True)
@@ -310,12 +333,21 @@ def _choose(root, choice, event):
             append('decision',{'source':source,'choice':decided})
             append('run.status',{'status':'running'})
             if words:append('task.intervention',{'task':task})
+    elif choice=='handoff pr':
+        if state['status']!='review_checkpoint' or not committed(state):
+            raise Refused('A PR handoff requires a spent review window for repository work')
+        from .verification import tree
+        append('decision',{'source':source,'choice':choice,'head':git(root,'rev-parse','HEAD'),
+                           'tree':tree(root),'reviews':[a['id'] for a in state['attempts'] if a['role']=='review']})
+        append('run.status',{'status':'stopped'})
     elif choice in ('pr','stop'):
         if choice=='pr' and not committed(state):raise Refused('Planning does not authorize product publication')
         if choice=='pr' and state['status'] not in ('checkpoint','completed'):
             raise Refused('PR choice requires completed work at a checkpoint')
         decision={'source':source,'choice':choice}
         if choice=='pr':
+            from .branches import fetched,trunk
+            if main:=trunk(root):fetched(root,main)
             from .delivery_verify import verify
             verify(root,state)
             head=git(root,'rev-parse','HEAD');branch=git(root,'branch','--show-current')
@@ -349,12 +381,10 @@ def _choose(root, choice, event):
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':'running'})
         append('task.intervention',{'task':task})
-        best_effort('task.intervention',state['project'],state['id'],review['task'],reason=choice)
     elif choice=='grant review':
         if state['status']!='review_checkpoint':raise Refused('No spent review window')
         task=next(t['id'] for t in state['tasks'] if t['id'] not in state['done'])
         append('task.intervention',{'task':task})
-        best_effort('task.intervention',state['project'],state['id'],task,reason='review_window_renewed')
         append('review.grant',{'task':task,'source':source,'rounds':state['config']['review_rounds']})
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':'running'})
@@ -368,17 +398,21 @@ def _choose(root, choice, event):
     journal.append('transition',{'source':event,'events':events})
     for item in events:
         if item['kind']=='run.status':best_effort('run.status',state['project'],state['id'],**item['data'])
+        elif item['kind']=='task.intervention':
+            best_effort('task.intervention',state['project'],state['id'],item['data']['task'],
+                        reason='review_window_renewed' if choice=='grant review' else choice.split(':',1)[0])
     state=reduce(journal.records())
     if choice=='stop':checkout_file(root,'oh-preparation-owner.json').unlink(missing_ok=True)
     if state.get('discard'):discard_proposal(root,journal,state)
-    if choice=='reconsider' and state.get('workflow')=='propose':
-        from .authority import wait_for
-        wait_for(root,state['human'],'propose','What did you mean?')
+    if choice=='cancel':
+        from .authority import drop_waiting
+        drop_waiting(state['human']['session'])
+        checkout_file(root,'oh-preparation-owner.json').unlink(missing_ok=True)
     return reduce(journal.records())
 
 
 def discard_proposal(root,journal,state):
-    """Finish a durably recorded reconsideration; retries never grant work."""
+    """Finish a durably recorded cancellation; retries never grant work."""
     from .plans import undo
     from .branches import incarnation
     pending=state['discard'];branch=pending['branch'];target=pending['return_to']
@@ -475,10 +509,48 @@ def owned(journal,state,event):
     journal.append('run.owner',{'human':event})
 
 
+def review_progress(state,task):
+    """Keep a finished review available at approval and completion checkpoints."""
+    from .gates import report_text
+    reviews=[a for a in state['attempts'] if a['task']==task and a['role']=='review' and a.get('finished')]
+    if not reviews:return None
+    review=reviews[-1];findings=review.get('findings',[])
+    return {'attempt':review['id'],'task':task,'round':len(reviews),'outcome':review['outcome'],
+            'summary':report_text(review)[:600],'finding_count':len(findings),
+            'decision':state.get('resolutions',{}).get(review['id'],{}).get('choice'),
+            'findings':[{k:str(f.get(k,''))[:250] for k in ('severity','description','path','family')} for f in findings[:5]]}
+
+
+def running_progress(state):
+    """Describe the current task from retained execution evidence, without inspecting worker transcripts."""
+    if state['status']!='running':return {}
+    task=next((t for t in state['tasks'] if t['id'] in state['granted'] and t['id'] not in state['done']),None)
+    if not task:return {}
+    attempts=[a for a in state['attempts'] if a['task']==task['id']]
+    last=attempts[-1] if attempts else None
+    phase='preparing'
+    if last:
+        if not last['finished']:
+            phase=last['role']
+        elif last['role']=='review':
+            phase='completing' if last.get('outcome')=='clean' or last['id'] in state['resolutions'] else 'preparing'
+        elif last.get('outcome')=='implemented':phase='checks'
+    from .gates import report_text
+    worker=next((a for a in reversed(attempts) if a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
+    progress={'task':task['id'],'title':' '.join(task['title'].split())[:200], 'phase':phase}
+    if last and not last['finished']:progress|={'attempt':last['id'],'profile':last['profile']}
+    if worker:progress['implementation']={'attempt':worker['id'],'summary':report_text(worker)[:900]}
+    if review:=review_progress(state,task['id']):progress['review']=review
+    return {'progress':progress}
+
+
 def checkpoint(root):
     journal,state=load_run(root)
     from .prepared import limits
     left=len([t for t in state['tasks'] if t['id'] not in state['done']])
+    reviewed=next((a['task'] for a in reversed(state['attempts']) if a['role']=='review' and a.get('finished')),None)
+    last_review=review_progress(state,reviewed) if reviewed else None
+    model_notices=list(dict.fromkeys(a['model_fallback']['notice'] for a in state['attempts'] if a.get('model_fallback')))[-5:]
     private_diff={}
     if state['status']=='approval_checkpoint' and state.get('plans',{}).get('location')=='private' and state.get('rendered',{}).get('files'):
         from .plans import changed_text,validate_outputs
@@ -487,19 +559,41 @@ def checkpoint(root):
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
-            'config_hash':state['config_hash'],'version':state['harness_version']}|(
+            'review_rounds':sum(a['role']=='review' and a['task'] in state['done'] for a in state['attempts']),
+            'config_hash':state['config_hash'],'version':state['harness_version']} | (
+            {'model_notices':model_notices} if model_notices else {}) | (
+            {'last_review':last_review} if last_review else {}) | running_progress(state) | (
+            {'publication':state['publication']|{'next':'Execution is finished. Use pr_summary, push the approved branch and open one PR. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.'}}
+            if state['status']=='pr' and state.get('publication') else {}) | (
+            {'handoff':state['review_handoff']|{'next':'OH stopped with unresolved work for human PR triage. No task completion, review renewal or publication approval was granted.'}}
+            if state.get('review_handoff') else {})|(
             {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}
-                    |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
+                    |({'choices':['approve','refine: <what to change>','cancel']} if state['status']=='approval_checkpoint' else {})}
              if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
             {'proposal':{k:v for k,v in state['preview']['plan'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent','writes')}
-                        |({'choices':['approve','refine: <what to change>','reconsider']} if state['status']=='approval_checkpoint' else {})}
+                        |({'choices':['approve','refine: <what to change>','cancel']} if state['status']=='approval_checkpoint' else {})}
              if state.get('workflow')=='propose' and state.get('preview') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else
             {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | private_diff | menu(root,journal,state) | waiting(root,state)
 
 
+def refinement_for(root,host,session):
+    from .registry import index_path
+    if not index_path(root).is_file() or not active_file(root).exists():return None
+    _,state=load_run(root)
+    if state['host']==host and state['human']['session']==session:
+        return state.get('refinement')
+    return None
+
+
 def waiting(root,state):
-    """The question the agent asks when OH waits for the person's next message (after Reconsider)."""
+    """The question the agent asks while collecting conversational input."""
+    if refinement:=state.get('refinement'):
+        if 'feedback' in refinement:
+            return {'prepare':True,'authorized':False,'feedback':refinement['feedback'],'tasks':state['tasks'],
+                    'next':'Revise the unapproved task list using this feedback, then call prepare to show a fresh approval. No tasks have been granted.'}
+        return {'waiting':{'command':'refine','ask':'What would you like to change?',
+                           'next':'Ask in plain chat and end your turn; do not open another question form. After the human replies, call OH run to read their message and update the preview.'}}
     from .authority import waiting_for
     found=waiting_for(root,state['human']['host'],state['human']['session'])
     return {'waiting':found|{'next':WAIT_NEXT}} if found else {}
@@ -511,10 +605,14 @@ WAIT_NEXT=('Ask the person exactly `ask` in plain chat and end your turn. Their 
 
 def menu(root,journal,state):
     """The current choice as a clickable menu, with how to show it on this run's host."""
-    from .gates import ask,describe,how
+    from .gates import ask,describe,how,native_ask
+    if state.get('refinement'):return {}
     gate=describe(journal,state,root)
     if not gate:return {}
-    return {'gate':{'id':gate['id'],'summary':gate['summary'],'choices':[o['choice'] for o in gate['options']]}|({'ask':ask(gate)} if gate['host']=='claude' else {})|{'how':how(gate,root)}}
+    return {'gate':{'id':gate['id'],'summary':gate['summary'],'details':gate['details'],'choices':[o['choice'] for o in gate['options']]}
+            |({'preview':gate['preview']} if gate.get('preview') else {})
+            |({'ask':ask(gate)} if gate['host']=='claude' else {'native_ask':native_ask(gate)})
+            |{'how':how(gate,root)}}
 
 
 def continue_limits(left,config):

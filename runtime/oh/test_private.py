@@ -34,40 +34,110 @@ class PrivatePlansTest(unittest.TestCase):
 
     def test_private_design_waits_for_hash_bound_human_approval_without_git_changes(self):
         head=self.git('rev-parse','HEAD');self.design_run()
-        result=run(self.root,self.worker([design()]))
+        original=self.worker([design()]);first_review=[]
+        def concern(*args,**kwargs):
+            value=original(*args,**kwargs)
+            if args[4]=='review':
+                first_review.append(load_run(self.root)[1]['attempts'][-1]['id'])
+                value['structured'].update(verdict='concern',findings=[{'severity':'concern','description':'An optional alternative needs more explanation',
+                    'path':'docs/design','family':'alternative','relation':'original'}])
+            return value
+        result=run(self.root,concern)
+        self.assertEqual(result['status'],'findings_checkpoint')
+        self.say('accept concerns');result=run(self.root,self.worker([]))
         self.assertEqual(result['status'],'approval_checkpoint')
+        self.assertEqual(result['last_review']['round'],1)
+        self.assertEqual(result['last_review']['decision'],'accept concerns')
+        self.assertEqual(result['last_review']['finding_count'],1)
+        # docs/usage.md: private approval context reaches both agents on either host.
+        from .runner import prompt_for
+        state=load_run(self.root)[1]
+        for host in ('codex','claude'):
+            for role in ('analysis','review'):
+                text=prompt_for(self.root,state|{'host':host},state['tasks'][0],role)
+                handoff=json.JSONDecoder().raw_decode(text[text.index('\n{"task":')+1:])[0]
+                self.assertEqual(handoff['planning'],{'location':'private','design_approval':'human_gate'})
+                self.assertNotIn('approved only when a human merges',text)
         path=self.where['designs']/'0001-auth.md'
         self.assertIn('status: draft',path.read_text())
         self.assertIn('approve',result['plan']['choices'])
         self.assertEqual(result['plan']['path'],str(path))
+        preview=Path(result['gate']['preview']).read_text()
+        self.assertIn(path.read_text(),preview)
+        self.assertIn('Implementation does not start here',preview)
         journal,state=load_run(self.root);review=state['attempts'][-1]
         self.assertEqual(review['artifact']['files'][str(path)],plans.digest_of(path))
+        from .cli import host_hook
+        from .storage import now
+        from .workflow import checkpoint
+        choose(self.root,'refine',self.event('refine','refine')|{'at':now()})
+        self.assertIn('waiting',checkpoint(self.root));self.assertNotIn('gate',checkpoint(self.root))
+        words='Explain that sign-in is the first delivery slice.'
+        host_hook(self.root,'codex',{'prompt':words},verified=self.event('feedback',words)|{'at':now()},idea='refine')
+        revised=design(body=design()['body'].replace('before anything else works.','for the first delivery slice.'))
+        result=run(self.root,self.worker([revised,revised],['blocking']))
+        self.assertEqual(result['last_review']['outcome'],'clean')
+        self.assertEqual(result['last_review']['round'],3)
+        self.assertEqual(result['last_review']['finding_count'],0)
+        self.assertIn(words,[c[1] for c in self.calls if c[0]=='analysis'][-1])
+        from .storage import read_json,digest
+        journal,state=load_run(self.root)
+        repair=read_json(journal.path/'attempts'/state['attempts'][-2]['id']/'request.json')
+        history=read_json(repair['prior_reviews']['path'])
+        self.assertEqual(digest(history),repair['prior_reviews']['hash'])
+        self.assertEqual(history[0]['id'],first_review[0])
+        self.assertEqual(history[0]['resolution']['choice'],'accept concerns')
+        self.assertIn('not additional task scope',repair['prompt'])
+        # docs/usage.md: human direction survives the next reviewer and blocker-driven repair.
+        for attempt in state['attempts'][2:]:
+            request=read_json(journal.path/'attempts'/attempt['id']/'request.json')
+            handoff=json.JSONDecoder().raw_decode(request['prompt'][request['prompt'].index('\n{"task":')+1:])[0]
+            self.assertEqual([r['feedback'] for r in handoff['human_refinements']],[words])
+            self.assertTrue(handoff['human_refinements'][0]['source'])
+        repair_input=json.JSONDecoder().raw_decode(repair['prompt'][repair['prompt'].index('\n{"task":')+1:])[0]
+        self.assertEqual(json.loads(repair_input['feedback'])[0]['severity'],'blocking')
+        for host in ('codex','claude'):
+            text=prompt_for(self.root,state|{'host':host},state['tasks'][0],'review')
+            handoff=json.JSONDecoder().raw_decode(text[text.index('\n{"task":')+1:])[0]
+            self.assertEqual(handoff['human_refinements'],repair_input['human_refinements'])
+        self.assertIn('first delivery slice',Path(result['gate']['preview']).read_text())
+        self.assertNotIn('waiting',result);self.assertEqual(plans.approval(self.root,self.where,'0001'),'draft')
         self.say('approve')
         self.assertEqual(run(self.root,self.worker([]))['status'],'completed')
         self.assertEqual(plans.approval(self.root,self.where,'0001'),'approved')
         self.assertEqual(self.git('rev-parse','HEAD'),head)
         self.assertEqual(self.git('status','--porcelain'),'')
+        from .telemetry import collect,connect
+        collect()
+        with connect(readonly=True) as db:
+            observed=dict(db.execute('SELECT * FROM tasks WHERE run=? AND id=?',(load_run(self.root)[1]['id'],'design')).fetchone())
+            reasons=[json.loads(r[0])['reason'] for r in db.execute("SELECT payload FROM events WHERE run=? AND kind='task.intervention' ORDER BY at",(load_run(self.root)[1]['id'],))]
+        self.assertEqual(reasons,['accept concerns','refine'])  # actions, not another copy of private feedback
+        self.assertEqual(observed['status'],'completed')
+        self.assertEqual((observed['expected_attempts'],observed['expected_reviews']),(6,3))
+        self.assertEqual((observed['intervention_count'],observed['confirmed_interventions']),(2,2))
+        self.assertIsNotNone(observed['wall_ms'])
         path.write_text(path.read_text()+'\nHuman edit\n')
         self.assertEqual(plans.listing(self.root)['initiatives'][0]['status'],'edited since approval')
 
-    def test_private_reconsider_restores_every_plan_file(self):
+    def test_private_cancel_restores_every_plan_file(self):
         before=self.where['roadmap'].read_bytes()
         self.where['roadmap'].chmod(0o600)
         mode=self.where['roadmap'].stat().st_mode & 0o777
         self.design_run();run(self.root,self.worker([design()]))
-        self.say('reconsider')
+        self.say('cancel')
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertEqual(self.where['roadmap'].read_bytes(),before)
         self.assertEqual(self.where['roadmap'].stat().st_mode & 0o777,mode)
         self.assertFalse((self.where['designs']/'0001-auth.md').exists())
         self.assertEqual(self.git('branch','--show-current'),'main')
 
-    def test_private_approval_and_reconsider_preserve_a_human_mode_change(self):
+    def test_private_approval_and_cancel_preserve_a_human_mode_change(self):
         self.design_run();run(self.root,self.worker([design()]))
         path=self.where['designs']/'0001-auth.md';path.chmod(0o444)
         self.addCleanup(path.chmod,0o600)
         mode=path.stat().st_mode & 0o777
-        with self.assertRaisesRegex(Refused,'file type, mode or content'):self.say('reconsider')
+        with self.assertRaisesRegex(Refused,'file type, mode or content'):self.say('cancel')
         self.say('approve')
         with self.assertRaisesRegex(Refused,'file type, mode or content'):run(self.root,self.worker([]))
         self.assertEqual(path.stat().st_mode & 0o777,mode)
@@ -448,8 +518,8 @@ class PrivatePlansTest(unittest.TestCase):
     def test_approval_refuses_a_file_changed_after_review(self):
         self.design_run();run(self.root,self.worker([design()]))
         path=self.where['designs']/'0001-auth.md';path.write_text(path.read_text()+'\nHuman edit\n')
-        self.say('approve')
-        with self.assertRaisesRegex(Refused,'changed after'):run(self.root,self.worker([]))
+        with self.assertRaisesRegex(Refused,'changed after review'):self.say('approve')
+        self.assertEqual(load_run(self.root)[1]['status'],'approval_checkpoint')
         self.assertIn('Human edit',path.read_text())
         self.assertNotEqual(plans.approval(self.root,self.where,'0001'),'approved')
 
