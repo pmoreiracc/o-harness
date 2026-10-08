@@ -36,7 +36,10 @@ and code and picks one route:
 
 Proposal, design and quick-fix approvals provide a complete Markdown review copy in OH's
 external storage. In Codex Desktop, OH opens it in the right panel and uses the small native
-question, so you can keep reading and scrolling while deciding. The question names that exact
+question, so you can keep reading and scrolling while deciding. In Claude desktop, the
+coordinator opens a scratchpad copy of it in the side pane (`show_pane`) when that pane tool is
+available; the stored preview stays the one OH checks, and without the pane you get the link only.
+Covered by `test_prepared_claude_menu_binds_scope_limits_and_expires`. The question names that exact
 preview through a short checkpoint reference. OH verifies the displayed question and native human answer, records the choice once,
 and refuses an edited preview or a reply to an older one. Refine asks what to change in plain
 chat. Reply normally, without a prefix or another form; OH returns a new preview for approval. Private-plan approvals do not promise a Git commit.
