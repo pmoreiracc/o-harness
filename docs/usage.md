@@ -48,7 +48,7 @@ is optional. These paths are covered by `test_codex_native_question_binds_previe
 Before writing anything, OH shows what it understood, the route and why, and the exact lines it
 would write, and waits for **approve**, **refine: <what to change>** (ask again with your words)
 or **Cancel** (end the proposal without saving it or asking another question). After approve, OH writes the row, milestone, decision record or task itself (on a new
-`propose/<topic>` branch from `main`, which OH brings up to date and switches to first), checks
+`propose/<topic>` branch from the base branch, which OH brings up to date and switches to first), checks
 the plan rules and has it reviewed independently, then commits it. You see everything it will
 write (the lines, the milestone, a new milestone's "Done when", a task's track, a decision
 record's text); if the review would change any of it, OH asks you again first. An improvement or an unclear idea writes
@@ -63,13 +63,13 @@ OH verifies both the invocation and your answer in the native conversation. Anot
 replaces the question, and `/oh-stop` drops it. The shared-host regression is
 `test_conversational_intake_needs_no_waiting_state`.
 
-With repository plans, `/oh-propose` and `/oh-design` work in the checkout that has `main`; in
+With repository plans, `/oh-propose` and `/oh-design` work in the checkout that has the base branch; in
 another worktree of the project, OH asks you to type the command there.
 
 `/oh-design <slug>` writes the design doc for one row of your roadmap, such as
 `/oh-design auth`. A fresh worker writes the design; OH numbers the doc, links it from the
 row and checks its task list. An independent reviewer checks the design, and OH commits it
-(on a new `design/<slug>` branch from an up-to-date `main`). Type **pr** to open the pull request; merging it approves the
+(on a new `design/<slug>` branch from the up-to-date base branch). Type **pr** to open the pull request; merging it approves the
 design. When a question has to be answered before the design can be written, OH writes a
 proposed decision record instead, with the question, the options and a recommendation, and
 leaves the decision to you.
@@ -92,7 +92,7 @@ choose an option.
 - `/oh-deliver 0005` starts the next ready tasks from approved design 0005 immediately.
   Add a track name to select only that track. When several tracks need a choice, OH asks for
   one before switching branches or starting tasks. Repository designs must match their approved
-  revision on `origin/main`; private designs must match their saved human approval.
+  revision on the selected base branch; private designs must match their saved human approval.
 - `/oh-deliver fix the sign-in timeout` proposes a bounded task list. The agent prepares
   it and shows the tasks and limits in an **Approve / Refine / Cancel** menu. Approve grants exactly
   that saved task list. The trigger `$o-harness:oh-deliver request:<id>` stays available as a typed fallback. The approved scope cannot grow afterwards.
@@ -106,10 +106,10 @@ and progress made on any other branch needs that branch merged first. An older p
 review and reapproval through `/oh-design <slug>` from the checkout containing that completed code.
 
 OH then runs the tasks on `deliver/0005` (`deliver/0005-<track>` for one track), made from
-an up-to-date `main`. If that branch still holds unfinished work, from a delivery you stopped,
-OH resumes it and merges `main` into it; one pull request then publishes all of it. If `main`
-conflicts with that work, you choose: start over from `main` (the branch is discarded), finish
-without `main`'s changes (you resolve the conflict when the pull request merges), or let the agent
+the up-to-date base branch. If that branch still holds unfinished work, from a delivery you stopped,
+OH resumes it and merges the base branch into it; one pull request then publishes all of it. If the base branch
+conflicts with that work, you choose: start over from the base branch (the branch is discarded), finish
+without the base branch's changes (you resolve the conflict when the pull request merges), or let the agent
 plan a resolution for you to approve; the next task's review then covers it, as it covers commits of
 your own on that branch. A branch that already holds the whole design goes to its pull request: typing the command
 again offers **pr** again, even after **stop**, and new tasks for that design come after it merges. Typing the
@@ -156,11 +156,11 @@ does not retry a rejected payload through another confirmation tool. Covered by
 `test_initial_and_continue_same_batch_snapshot_and_idempotent_restart`,
 `test_codex_menu_records_the_click_itself` and `test_native_pr_evidence_binds_all_commits_and_refuses_tampering`.
 
-Every new OH execution or repository-planning branch starts from refreshed main. Task preparation
-also refreshes main after Refine, before showing the revised list; the previous branch remains intact.
+Every new OH execution or repository-planning branch starts from the refreshed base branch. Task preparation
+also refreshes the base branch after Refine, before showing the revised list; the previous branch remains intact.
 Preparing starts no worker or execution branch. Numbered delivery retains its existing branch-resume
-behavior: bring main into unfinished work, or start fresh when main already contains it. Local main is
-fast-forwarded when it is available and has no divergent work; another worktree's main stays untouched.
+behavior: bring the base into unfinished work, or start fresh when the base already contains it. The local base branch is
+fast-forwarded when it is available and has no divergent work; another worktree's base branch stays untouched.
 New branches use fixed prefixes: `propose/<topic>`, `design/<initiative>`, and
 `deliver/<approved-task-title>` for quick fixes or generic tasks. Numbered deliveries keep
 `deliver/<design-number>[-<track>]`. OH normalizes task titles into readable names; occupied names
@@ -222,6 +222,28 @@ terminal. `oh --root <project> status` shows the current run.
 If files change while a batch is paused, OH refuses to resume until you restore them or
 stop the batch. It never discards your edits.
 
+## Base branch
+
+OH detects the base from `origin/HEAD`, then falls back to `main`, then `master`.
+To use a development branch instead of a release default, run `oh config set base_branch develop`.
+Use `--global` to set it for every project; a project's own value wins. `oh config unset base_branch`
+restores the inherited value, and setting an empty string selects detection explicitly.
+`oh config` shows the selected name, comparison ref and source. The branch must exist locally
+or as an origin tracking ref; an unavailable override gives a fetch or settings repair step.
+
+Repository proposals, designs and deliveries start from this base. Repository-plan approval and
+progress comparisons require `origin/<base>`, preserving the merged-plan requirement; a local
+branch alone does not grant approval. `oh verify` uses its comparison ref for changed paths and `{base}`;
+an explicit base argument still overrides it. `oh pr-summary` refreshes that ref and reports
+the target; the publication checkpoint supplies `base_branch` for creating the PR with an explicit
+`--base`. A running batch keeps the branch selected when it started, even if settings change.
+
+Covered by `test_base_branch_precedence_remote_only_checkout_and_checks`,
+`test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed` and
+`test_repository_design_starts_once_and_uses_existing_batch_runner` (a master-only delivery), and
+`test_missing_remote_base_is_an_actionable_listing_result` and
+`test_unapproved_or_blocked_design_cannot_become_native_task_scope`.
+
 ## Projects
 
 - `oh init` registers a checkout, named after its repository (`--name` picks another name).
@@ -260,7 +282,7 @@ the source task list or changing settings after preparation cannot widen its gra
 `test_prepared_codex_menu_uses_native_click_and_can_stop`.
 
 Before publishing a design batch, OH checks that its completed tasks—and only those tasks—are
-marked done, that approval came from main (or the unchanged private approval), that dependencies
+marked done, that approval came from the selected base branch (or the unchanged private approval), that dependencies
 were done before each task, and that the branch and task commits match the design and track.
 Dependencies completed earlier in the same batch count. A multi-track design must name a track;
 finalizing an already completed design remains separate. Quick fixes skip these design checks.

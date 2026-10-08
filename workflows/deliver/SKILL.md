@@ -62,8 +62,8 @@ argument. OH's parser selects the mode; do not infer a different workflow:
 - `0005 [track]` verifies the native human invocation and immediately runs the next ready
   tasks from that approved design. Plans can live in the repository or privately. There is
   no prepare step or second trigger. Show the resulting checkpoint and limits. OH works on
-  `deliver/0005` (`deliver/0005-<track>` for one track) from an up-to-date `main`; when that branch holds
-  unfinished work, OH resumes it and merges `main` into it; when they conflict, OH names the person's three choices. A
+  `deliver/0005` (`deliver/0005-<track>` for one track) from an up-to-date base branch; when that branch holds
+  unfinished work, OH resumes it and merges the base branch into it; when they conflict, OH names the person's three choices. A
   branch that already holds the whole design shows its PR choice again and takes no tasks. The same command while
   its run is open continues it.
 - Prose returns `quick_fix` with the original intent. Inspect that fix and prepare a bounded task
@@ -167,7 +167,8 @@ published. Do not call `run` again or repeat implementation/review.
 Use `pr_summary` (Claude: `pr-summary`), preserve the generated body including its hidden review
 metadata, and save it to an external temporary file. Do not paste machine JSON into the visible
 PR description. Push the
-approved branch to its configured remote, and create the PR with that body. Check for an existing PR
+approved branch to its configured remote, and create the PR with that body, explicitly targeting
+`publication.base_branch` from the returned checkpoint (`gh pr create --base <branch>`). Check for an existing PR
 first so recovery reuses it. In Codex, attach the resulting PR with `attach_artifact` when available. Report
 “PR #<number> opened” with its link, a short summary of the work and verification, and the recorded
 `review_rounds` count (for example, “Invariant review passed in 2 rounds”);

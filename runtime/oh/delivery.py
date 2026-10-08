@@ -76,11 +76,13 @@ def dependencies(root,where,rows,name):
 
 
 def progress_only(root,fork,paths,doc):
-    """Whether the committed plans are origin/main's exactly, apart from ticks for the tasks of design `doc` that
+    """Whether the committed plans are the base branch's exactly, apart from ticks for the tasks of design `doc` that
     OH's runs on this branch completed, with nothing uncommitted. However the branch got there (OH's commits, a
     merge of main resolved by hand, the person rebasing or amending OH's commits), the plans can't say more: a
     message that merely claims to be OH's changes nothing."""
     from subprocess import CalledProcessError
+    from .branches import main_ref
+    base=main_ref(root,require_remote=True)
     from .publication import trailer
     from .storage import Journal,project
     from .workflow import reduce
@@ -93,13 +95,13 @@ def progress_only(root,fork,paths,doc):
             if state.get('design')==doc and state['branch']==branch:
                 completed|={done['task'] for done in state['summaries']}
                 scope.update({key:record for key,record in state.get('scope_records',{}).items() if record['task'] in completed})
-        for path in git(root,'diff','--name-only','origin/main','HEAD','--',*paths).splitlines():
+        for path in git(root,'diff','--name-only',base,'HEAD','--',*paths).splitlines():
             from .scope import undo_notes
             import subprocess
             text=subprocess.check_output(['git','-C',str(root),'show','HEAD:'+path]).decode()
             records=[r for r in scope.values() if r.get('destination',{}).get('design')==str(Path(root)/path)]
             # Notes already merged on main are part of its plan, not this branch's progress.
-            base_text=subprocess.check_output(['git','-C',str(root),'show','origin/main:'+path]).decode()
+            base_text=subprocess.check_output(['git','-C',str(root),'show',base+':'+path]).decode()
             records=[r for r in records if r.get('change',{}).get('after','') not in base_text]
             if unticked(undo_notes(text,records),completed)!=base_text:return False
     except (CalledProcessError,KeyError,IndexError,Refused):return False
@@ -231,27 +233,30 @@ def selection(root,doc,track='',*,claim=True):
     if where['location']=='repo':
         from subprocess import CalledProcessError
         paths=[Path(where[key]).relative_to(root).as_posix() for key in ('roadmap','designs','decisions')]
-        try:git(root,'rev-parse','--verify','origin/main^{commit}')
-        except CalledProcessError:raise Refused('Fetch origin/main before delivering repository plans') from None
-        # The plans are origin/main's, apart from the progress OH's own reviewed commits recorded on a delivery
+        from .branches import main_ref
+        base=main_ref(root,require_remote=True)
+        if not base:raise Refused('No base branch found; set base_branch with oh config')
+        try:git(root,'rev-parse','--verify',base+'^{commit}')
+        except CalledProcessError:raise Refused(f'Fetch {base} before delivering repository plans') from None
+        # The plans are the base branch's, apart from the progress OH's own reviewed commits recorded on a delivery
         # branch that is being resumed.
-        fork=git(root,'merge-base','HEAD','origin/main')
-        if git(root,'diff','--name-only',fork,'origin/main','--',*paths) or not progress_only(root,fork,paths,doc):
+        fork=git(root,'merge-base','HEAD',base)
+        if git(root,'diff','--name-only',fork,base,'--',*paths) or not progress_only(root,fork,paths,doc):
             if without_main(root):
                 branch=git(root,'branch','--show-current')
-                raise Final(f'Delivery {doc} stops here: main changed the plans since {branch} started, and main\'s code '
-                            f'conflicts with it, so OH can\'t bring main in. The tasks done so far are saved on {branch}. '
-                            'From here it\'s yours: merge main into it, resolve the conflicts and open the pull request '
+                raise Final(f'Delivery {doc} stops here: {base} changed the plans since {branch} started, and {base}\'s code '
+                            f'conflicts with it, so OH can\'t bring {base} in. The tasks done so far are saved on {branch}. '
+                            f'From here it\'s yours: merge {base} into it, resolve the conflicts and open the pull request '
                             'when you\'re ready.')
-            if not git(root,'diff','--name-only',fork,'origin/main','--',*paths):
-                raise Refused('The plans on this branch must be main\'s exactly, apart from ticks for the tasks OH '
-                              'completed; restore their files to main\'s version with only those ticks, commit, and run again')
-            raise Refused('The design and planning context must match origin/main; merge the plans first')
+            if not git(root,'diff','--name-only',fork,base,'--',*paths):
+                raise Refused(f'The plans on this branch must be {base.removeprefix("origin/")}\'s exactly, apart from ticks for the tasks OH '
+                              f'completed; restore their files to {base}\'s version with only those ticks, commit, and run again')
+            raise Refused(f'The design and planning context must match {base}; merge the plans first')
         for filename in inputs(where):
             relative=Path(filename).relative_to(root).as_posix()
             try:matches=git(root,'hash-object','--no-filters','--',relative)==git(root,'rev-parse','HEAD:'+relative)
             except CalledProcessError:matches=False
-            if not matches:raise Refused('The design and planning context must match origin/main; merge the plans first')
+            if not matches:raise Refused(f'The design and planning context must match {base}; merge the plans first')
     rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
     if any(len(row)!=6 for row in rows):raise Refused('Malformed design task projection')
     if where['location']=='private':

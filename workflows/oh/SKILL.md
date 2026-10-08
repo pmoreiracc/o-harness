@@ -46,7 +46,7 @@ Keep later progress updates brief and factual; use `status` instead of raw inter
 
 For already prepared scope, run `start` to verify the native human
 invocation and execute its batch. For new task scope, call `run` once to bind the human request and
-refresh main before inspecting the work; it returns preparation without starting workers. Then inspect the agreed work and prepare a bounded
+refresh the base branch before inspecting the work; it returns preparation without starting workers. Then inspect the agreed work and prepare a bounded
 task list: in Codex, pass it to the `prepare` tool as `tasks`; in Claude, save it as a JSON object with `tasks`
 under the project's external OH directory and run `prepare <absolute-path>`.
 Tasks need id, title, instructions and optional needs/dependency IDs, ordered by dependency.
@@ -137,7 +137,8 @@ published. Do not call `run` again or repeat implementation/review.
 Use `pr_summary` (Claude: `pr-summary`), preserve the generated body including its hidden review
 metadata, and save it to an external temporary file. Do not paste machine JSON into the visible
 PR description. Push the
-approved branch to its configured remote, and create the PR with that body. Check for an existing PR
+approved branch to its configured remote, and create the PR with that body, explicitly targeting
+`publication.base_branch` from the returned checkpoint (`gh pr create --base <branch>`). Check for an existing PR
 first so recovery reuses it. In Codex, attach the resulting PR with `attach_artifact` when available. Report
 “PR #<number> opened” with its link, a short summary of the work and verification, and the recorded
 `review_rounds` count (for example, “Invariant review passed in 2 rounds”);

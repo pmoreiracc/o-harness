@@ -128,7 +128,20 @@ def has_native_history(root,base):
         git(root,'show','-s','--format=%B',commit),re.M) for commit in commits(root,base,reviewed=None))
 
 
-def render(root,base='origin/main'):
+def reference(root):
+    """Publication keeps the base selected when the person approved the run."""
+    from .branches import main_ref
+    from .workflow import active_file,load_run
+    config=None
+    if active_file(root).exists():
+        _,state=load_run(root)
+        if state['status']=='pr':config=state['config']
+    return main_ref(root,config)
+
+
+def render(root,base=None):
+    base=base or reference(root)
+    if not base:raise Refused('No base branch found; set base_branch with oh config')
     if changes(root):raise Refused('Publish only from a clean reviewed checkout')
     records=[];grants={};states={};p=project(root);branch=git(root,'branch','--show-current')
     for commit in commits(root,base,reviewed=None):
@@ -159,7 +172,7 @@ def render(root,base='origin/main'):
     # Keep portable evidence in the PR source, not its rendered description. Escape HTML so
     # finding text containing a comment terminator cannot expose the machine packet.
     packet=json.dumps(value,separators=(',',':')).replace('&',r'\u0026').replace('<',r'\u003c').replace('>',r'\u003e')
-    body=readable(records,states,root)+notes+'\n\n'+START+'\n<!--\n```json\n'+packet+'\n```\n-->\n'+END
+    body='Base branch: `'+base+'`.\n\n'+readable(records,states,root)+notes+'\n\n'+START+'\n<!--\n```json\n'+packet+'\n```\n-->\n'+END
     if len(body.encode())>60000:raise Refused('Review evidence exceeds the PR body budget; publish a smaller reviewed batch')
     return body
 

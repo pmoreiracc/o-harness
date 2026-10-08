@@ -188,20 +188,22 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
     if changes(root):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
+    from .branches import trunk
+    base_name=trunk(root,config['config'])
     original=git(root,'branch','--show-current');base=git(root,'rev-parse','HEAD');created=None
-    if plan and workflow in ('design','propose') and committed(plan) and original not in ('main','master'):
+    if plan and workflow in ('design','propose') and committed(plan) and original!=base_name:
         label='designs' if workflow=='design' else 'proposals'
-        raise Refused(f'Committed {label} must start from main or master; switch to that branch before typing /oh-{workflow} again')
+        raise Refused(f'Committed {label} must start from {base_name}; switch to that branch before typing /oh-{workflow} again')
     try:
-        if workflow=='deliver' and not waiting and git(root,'branch','--show-current') in ('main','master'):
+        if workflow=='deliver' and not waiting and git(root,'branch','--show-current')==base_name:
             from .branches import execution_branch
             target=execution_branch(root,tasks[0]['title'],run)  # numbered designs already have their deliver/ branch
             git(root,'switch','-c',target);created=target
         import re
         current=git(root,'branch','--show-current')
-        if plan and committed(plan) and re.match(r'(design|propose)[/-]',current):
-            raise Refused(f'This checkout is on {current}, the branch of another plan; switch to main first')
-        if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current') in ('main','master'):
+        if plan and committed(plan) and current!=base_name and re.match(r'(design|propose)[/-]',current):
+            raise Refused(f'This checkout is on {current}, the branch of another plan; switch to {base_name} first')
+        if plan and workflow=='design' and committed(plan) and git(root,'branch','--show-current')==base_name:
             from .plans import branch_for
             target=branch_for(root,plan['slug'],run)
             git(root,'switch','-c',target);created=target
@@ -347,7 +349,7 @@ def _choose(root, choice, event):
         decision={'source':source,'choice':choice}
         if choice=='pr':
             from .branches import fetched,trunk
-            if main:=trunk(root):fetched(root,main)
+            if main:=trunk(root,state['config']):fetched(root,main)
             from .delivery_verify import verify
             verify(root,state)
             head=git(root,'rev-parse','HEAD');branch=git(root,'branch','--show-current')
@@ -355,7 +357,7 @@ def _choose(root, choice, event):
             if not commits:raise Refused('Nothing was committed, so there is nothing to publish')
             if head!=commits[-1] or branch!=state['branch']:
                 raise Refused('PR choice must cover the exact completed branch head')
-            decision.update(head=head,branch=branch,commits=adopted(root,state,commits)+commits)
+            decision.update(head=head,branch=branch,base_branch=trunk(root,state['config']),commits=adopted(root,state,commits)+commits)
         append('decision',decision)
         append('run.status',{'status':'pr' if choice=='pr' else 'stopped'})
     elif choice in ('accept concerns','route scope','dismiss scope','accept concerns and route scope',
@@ -460,8 +462,8 @@ def adopted(root,state,own):
     import subprocess
     from .branches import main_ref
     from .publication import commits,made
-    base=main_ref(root)
-    if not base:raise Refused('This repository has no main or master branch to publish against')
+    base=main_ref(root,state['config'])
+    if not base:raise Refused('No base branch found; set base_branch with oh config')
     try:mine=commits(root,base,reviewed=None)  # render checks the merges
     except subprocess.CalledProcessError as exc:raise Refused(f'OH could not list this branch\'s commits since {base}') from exc
     runs={commit:other for commit in mine if (other:=made(root,state['project'],commit))}
@@ -563,7 +565,7 @@ def checkpoint(root):
             'config_hash':state['config_hash'],'version':state['harness_version']} | (
             {'model_notices':model_notices} if model_notices else {}) | (
             {'last_review':last_review} if last_review else {}) | running_progress(state) | (
-            {'publication':state['publication']|{'next':'Execution is finished. Use pr_summary, push the approved branch and open one PR. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.'}}
+            {'publication':state['publication']|{'next':'Execution is finished. Use pr_summary, push the approved branch and open one PR targeting publication.base_branch. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.'}}
             if state['status']=='pr' and state.get('publication') else {}) | (
             {'handoff':state['review_handoff']|{'next':'OH stopped with unresolved work for human PR triage. No task completion, review renewal or publication approval was granted.'}}
             if state.get('review_handoff') else {})|(

@@ -16,11 +16,14 @@ def manifest(root, doc, track=''):
     if project(root).get('design_profile')!='consumer-v1':
         raise Refused('Design delivery needs the consumer-v1 document profile; use a generic task plan')
     path=document(root,doc);relative=path.relative_to(root).as_posix()
-    approved=git(root,'show','origin/main:'+relative)
+    from .branches import main_ref
+    base=main_ref(root,require_remote=True)
+    if not base:raise Refused('No base branch found; set base_branch with oh config')
+    approved=git(root,'show',base+':'+relative)
     if not re.search(r'^status:\s*approved\s*$',approved,re.M):
-        raise Refused('The design must be approved on main before delivery')
-    if git(root,'hash-object','--no-filters','--',relative)!=git(root,'rev-parse','origin/main:'+relative):
-        raise Refused('Prepare the design against its approved main revision')
+        raise Refused(f'The design must be approved on {base} before delivery')
+    if git(root,'hash-object','--no-filters','--',relative)!=git(root,'rev-parse',base+':'+relative):
+        raise Refused(f'Prepare the design against its approved {base} revision')
     try:output=plan(root,doc)
     except Refused as exc:raise Refused(str(exc)[-2000:]) from None
     rows=[line.split('\x1f') for line in output.splitlines() if line]

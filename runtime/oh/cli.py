@@ -193,8 +193,8 @@ def main(argv=None):
     prep=sub.add_parser('prepare');prep.add_argument('manifest')
     clash=sub.add_parser('conflict');clash.add_argument('choice',choices=['fresh','keep']);clash.add_argument('doc');clash.add_argument('track',nargs='?',default='')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
-    verification=sub.add_parser('verify');verification.add_argument('base',nargs='?',default='origin/main');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
-    publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?',default='origin/main');publication.add_argument('--validate-event',type=Path)
+    verification=sub.add_parser('verify');verification.add_argument('base',nargs='?');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
+    publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?');publication.add_argument('--validate-event',type=Path)
     trusted=sub.add_parser('trust-host');trusted.add_argument('host',choices=['codex','claude']);trusted.add_argument('path',type=Path,nargs='?')
     init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
@@ -239,10 +239,12 @@ def main(argv=None):
             print(json.dumps(result,indent=2))
             raise SystemExit(1 if any(x['returncode'] for x in result) else 0)
         elif args.command=='pr-summary':
-            from .publication import has_native_history,render,validate_event
-            if not args.validate_event and args.base in ('origin/main','origin/master'):
+            from .publication import has_native_history,reference,render,validate_event
+            args.base=args.base or reference(root)
+            if not args.base:raise Refused('No base branch found; set base_branch with oh config')
+            if not args.validate_event and args.base.startswith('origin/'):
                 from .branches import fetched
-                fetched(root,args.base.split('/')[1])
+                args.base=fetched(root,args.base[len('origin/'):])
             if not has_native_history(root,args.base):raise Refused('This branch has no OH-reviewed commits to summarize')
             if args.validate_event:result=validate_event(root,read_json(args.validate_event),args.base)
             else:print(render(root,args.base));return

@@ -59,11 +59,11 @@ phase changes or findings; do not repeatedly restate unchanged constraints or in
 transcripts to fill a waiting update. `status` is the supported source of progress.
 
 Run `run`. It verifies the native human invocation and starts the design
-(repository plans use a new `design/<slug>` branch from `main`, which OH brings up to date and switches to
+(repository plans use a new `design/<slug>` branch from the configured base branch, which OH brings up to date and switches to
 itself; private plans need no branch). OH reads the roadmap row, a fresh worker writes the prose, and OH numbers
 the doc, links it from the row, checks its task list, has it reviewed independently. Repository plans are
 committed; private plans wait for your approval. Never write or edit plan files yourself, and never run your own
-worker or review loop. Repository plans need the checkout that has `main`: when OH says another worktree holds it, tell the
+worker or review loop. Repository plans need the checkout that has the base branch: when OH says another worktree holds it, tell the
 person to type the command there.
 
 If the status is `approval_checkpoint`, show the private plan path, task count and summary,
@@ -145,7 +145,8 @@ published. Do not call `run` again or repeat implementation/review.
 Use `pr_summary` (Claude: `pr-summary`), preserve the generated body including its hidden review
 metadata, and save it to an external temporary file. Do not paste machine JSON into the visible
 PR description. Push the
-approved branch to its configured remote, and create the PR with that body. Check for an existing PR
+approved branch to its configured remote, and create the PR with that body, explicitly targeting
+`publication.base_branch` from the returned checkpoint (`gh pr create --base <branch>`). Check for an existing PR
 first so recovery reuses it. In Codex, attach the resulting PR with `attach_artifact` when available. Report
 “PR #<number> opened” with its link, a short summary of the work and verification, and the recorded
 `review_rounds` count (for example, “Invariant review passed in 2 rounds”);
