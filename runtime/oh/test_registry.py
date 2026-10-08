@@ -31,6 +31,9 @@ class RegistryTests(unittest.TestCase):
                 for p in self.root.rglob('*') if p.is_file()}
 
     def test_registration_status_and_dirty_checkout_leave_every_consumer_byte_unchanged(self):
+        # Combined Git path queries must preserve spaces, Unicode and POSIX newlines without changing identity.
+        named = self.base / ('consumer with spaces-é' + ('\nline' if os.name != 'nt' else ''))
+        self.root.rename(named);self.root = named
         (self.root / 'dirty.txt').write_text('manual work')
         before = self.inventory()
         value = register(self.root, 'Fixture')
@@ -40,6 +43,9 @@ class RegistryTests(unittest.TestCase):
         self.assertTrue(checkout_state(self.root).is_relative_to(self.base / 'state'))
         self.assertEqual(lookup(self.root), first)
         self.assertEqual(self.inventory(), before)
+        from .registry import identity
+        child = self.root / 'folder';child.mkdir()
+        with self.assertRaisesRegex(Refused, 'repository root'):identity(child)
 
     def test_clones_and_sibling_worktrees_cannot_borrow_checkout_authority(self):
         original = register(self.root, 'Fixture')
@@ -50,9 +56,14 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, 'already named Fixture'): register(clone, 'Fixture')  # names pick settings
         other = register(clone, 'Fixture clone')
         self.assertNotEqual(original['id'], other['id'])
-        sibling = self.base / 'sibling'
+        sibling = self.base / 'sibling with spaces'
         self.git('worktree', 'add', '-qb', 'sibling', str(sibling))
         register(sibling, 'Fixture', attach=original['id'])
+        from .registry import identity
+        current = identity(sibling)
+        self.assertEqual(current['root'], str(sibling.resolve()))
+        self.assertEqual(current['admin'], str(Path(self.git('rev-parse', '--absolute-git-dir', root=sibling)).resolve()))
+        self.assertEqual(current['common'], str((self.root / '.git').resolve()))
         self.assertEqual(profile(sibling)['id'], original['id'])
         self.assertNotEqual(lookup(sibling)['checkout'], lookup(self.root)['checkout'])
 

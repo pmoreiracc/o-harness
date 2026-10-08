@@ -7,11 +7,17 @@ from .storage import (Refused, atomic_json, digest, git, identifier, lock, read_
 
 def identity(root):
     root = Path(root).resolve(strict=True)
-    top = Path(git(root, 'rev-parse', '--show-toplevel')).resolve(strict=True)
+    # Resolve all three paths in one Git process, but still inspect the live folders on every lookup.
+    paths = git(root, 'rev-parse', '--path-format=absolute', '--show-toplevel',
+                '--absolute-git-dir', '--git-common-dir').splitlines()
+    if len(paths) != 3:
+        # POSIX paths can contain newlines: keep the individual queries when line separation is ambiguous.
+        paths = [git(root, 'rev-parse', '--show-toplevel'),
+                 git(root, 'rev-parse', '--absolute-git-dir'),
+                 git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')]
+    top, admin, common = [Path(path).resolve(strict=True) for path in paths]
     if root != top:
         raise Refused('Select the repository root, not a subdirectory')
-    admin = Path(git(root, 'rev-parse', '--absolute-git-dir')).resolve(strict=True)
-    common = Path(git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')).resolve(strict=True)
     return {'root': str(root), 'admin': str(admin), 'common': str(common),
             'root_identity': stamp(root), 'admin_identity': stamp(admin),
             'common_identity': stamp(common)}
