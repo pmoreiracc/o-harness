@@ -85,16 +85,16 @@ class GateTest(unittest.TestCase):
             shutil.copytree(folder, saved, symlinks=True);type(self).started[host] = json.dumps(result)
         return result
 
-    def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None, extra=None, raw=None, cwd=None, apply=True):
+    def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None, extra=None, raw=None, cwd=None, apply=True, marks=None):
         """Save a question-tool call and the host's answer in the owner's transcript, as Claude does, then run OH."""
         from .storage import now
         time.sleep(0.01)  # a person answers later than OH's own records, never within the same millisecond
         request = {'questions': questions or [question]} | ({'answers': prefilled} if prefilled is not None else {}) | (extra or {})
         where = str(cwd or self.root)
         self.records += [
-            {'type': 'assistant', 'sessionId': session, 'cwd': where, **({'wireToolInputs': {use: raw}} if raw else {}),
+            {'type': 'assistant', 'sessionId': session, 'cwd': where, **({'wireToolInputs': {use: raw}} if raw else {}), **(marks or {}),
              'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': use, 'name': 'AskUserQuestion', 'input': request}]}},
-            {'type': 'user', 'sessionId': session, 'cwd': where, 'timestamp': now(),
+            {'type': 'user', 'sessionId': session, 'cwd': where, 'timestamp': now(), **(marks or {}),
              'toolUseResult': {'questions': request['questions'], 'answers': {question['question']: answer}},
              'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': use, 'content': 'answered'}]}}]
         self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
@@ -462,7 +462,7 @@ class GateTest(unittest.TestCase):
 
     def test_typed_choices_count_as_saved_by_the_desktop_app_but_not_from_other_senders(self):
         desktop = {'origin': {'kind': 'human'}, 'turnOrigin': 'human', 'promptSource': 'sdk', 'entrypoint': 'claude-desktop'}
-        self.begin('claude')
+        question = self.begin('claude')['gate']['ask']['questions'][0]
         for name, extra in (('another agent', {'origin': {'kind': 'peer'}}), ('a notification', {'promptSource': 'system'}),
                             ('an automated caller', {'entrypoint': 'sdk-cli'})):
             with self.subTest(name):
@@ -471,6 +471,10 @@ class GateTest(unittest.TestCase):
                 self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.typed('continue', 'desktop', extra=desktop)
         self.assertEqual(materialize(self.root)['status'], 'running')
+        # Remote Control from the phone app marks every record "sdk-cli": its click on the exact menu still counts.
+        journal, _ = load_run(self.root);journal.append('run.status', {'status': 'checkpoint'})
+        question = ask(current(self.root))['questions'][0]
+        self.assertEqual(self.click(question, 'Stop', use='toolu_phone', marks={'entrypoint': 'sdk-cli'})['status'], 'stopped')
 
     def test_a_refused_latest_answer_never_lets_an_older_one_apply(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
