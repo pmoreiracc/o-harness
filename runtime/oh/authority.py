@@ -118,14 +118,17 @@ def within(cwd,root):
     return not any((folder/'.git').exists() for folder in [cwd,*cwd.parents] if folder!=root and folder.is_relative_to(root))
 
 
-def human(x):
+def human(x,click=False):
     """A record the person produced, not another agent, a notification or an automated SDK caller. Claude marks
     what a person typed with origin kind "human" (the desktop app also marks it promptSource "sdk"); records
-    without an origin, such as tool results, count unless they carry an automation marker."""
+    without an origin, such as tool results, count unless they carry an automation marker. A session driven
+    over Claude's SDK protocol, such as Remote Control from the phone app, marks every record entrypoint
+    "sdk-cli"; that sets aside typed text without an origin, but not a `click`: the question-tool call and the
+    answer the host returned, which the model can't write."""
     if x.get('isSidechain') or x.get('isMeta'):return False
     origin=x.get('origin') if isinstance(x.get('origin'),dict) else {}
     if origin.get('kind') is not None:return origin['kind']=='human' and x.get('turnOrigin') in (None,'human')
-    return x.get('turnOrigin') is None and x.get('promptSource') not in ('sdk','system') and x.get('entrypoint')!='sdk-cli'
+    return x.get('turnOrigin') is None and x.get('promptSource') not in ('sdk','system') and (click or x.get('entrypoint')!='sdk-cli')
 
 
 def latest_answer(path,session,root,question,since,hint=None):
@@ -141,10 +144,11 @@ def latest_answer(path,session,root,question,since,hint=None):
             except ValueError:continue
             if not isinstance(x,dict) or x.get('sessionId')!=session:continue
             if hint and x.get('promptId')==hint and x.get('type')=='user' and x.get('timestamp'):hinted=hinted or x['timestamp']
-            if not human(x):continue
-            if not within(x.get('cwd'),root):continue  # the agent may cd into the checkout's folders
             content=(x.get('message') or {}).get('content')
-            if x.get('type')=='user' and (isinstance(content,str) or isinstance(content,list) and content and all(isinstance(c,dict) and c.get('type')=='text' for c in content)):
+            typed=x.get('type')=='user' and (isinstance(content,str) or isinstance(content,list) and content and all(isinstance(c,dict) and c.get('type')=='text' for c in content))
+            if not human(x,click=not typed):continue
+            if not within(x.get('cwd'),root):continue  # the agent may cd into the checkout's folders
+            if typed:
                 text=(content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content)).strip()
                 parsed=command(text)
                 if parsed and parsed[0]=='choice' and x.get('promptId') and newer(x.get('timestamp'),since):

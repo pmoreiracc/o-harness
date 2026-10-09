@@ -49,7 +49,9 @@ only the latest click on exactly the menu OH is waiting on counts, so a click on
 in another conversation or on an altered menu never applies. A menu word typed in Claude
 is read from the transcript the same way, so only the person's single latest answer to the
 current menu counts, typed or clicked; if OH refuses it, no earlier answer applies instead. Only
-messages Claude saved as the person's count, never another agent's or a notification; if OH can't
+messages Claude saved as the person's count, never another agent's or a notification. Claude's Remote
+Control, such as the phone app driving a computer, saves every record with an SDK marker; a click on
+the exact menu there still counts, while typed text without the person's mark does not. If OH can't
 read a typed menu word as the latest answer, it applies nothing and asks the person to choose again.
 In Codex's fallback menu path, OH's MCP server shows the menu itself and records the click,
 which travels from the Codex menu to OH without passing through the model; a click spends any menu word typed before it.
