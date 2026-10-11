@@ -49,14 +49,18 @@ only the latest click on exactly the menu OH is waiting on counts, so a click on
 in another conversation or on an altered menu never applies. A menu word typed in Claude
 is read from the transcript the same way, so only the person's single latest answer to the
 current menu counts, typed or clicked; if OH refuses it, no earlier answer applies instead. Only
-messages Claude saved as the person's count, never another agent's or a notification. An SDK marker
-does not prove a person clicked: SDK application code can supply menu answers. OH can match an
-unanswered SDK question, but an SDK answer needs the host's human-origin mark before it grants work
-or renews reviews. Claude 2.1.294 saves Remote Control phone clicks without that mark, with the same
-approval metadata as programmatic SDK answers. OH explains this once and gives the exact menu word
-to type in the owning conversation; typed phone messages carry human provenance and need no restart.
+records trusted under normal host permissions count; peer, sidechain, meta and notification records
+stay excluded. Claude Remote Control menu replies are accepted without asking the person to type
+the choice again. Claude 2.1.294 saves genuine phone clicks with the same approval metadata as
+programmatic SDK answers. Custom SDK software can also stamp typed inputs with human origin, so
+typing does not reliably distinguish that software from a person. OH accepts this SDK automation
+risk for both native menu replies and human-marked inputs, as stated in `config/invariants.json`;
+it does not claim either is unforgeable proof of a physical human action. This applies to task grants
+and review renewals as well as other choices. Exact current-menu matching, unanswered tool input,
+owning session and checkout, latest-answer ordering and one-time receipts remain required.
 Covered by `test_typed_choices_count_as_saved_by_the_desktop_app_but_not_from_other_senders` and
-`test_a_refused_latest_answer_never_lets_an_older_one_apply`. If OH can't read a typed menu word as the
+`test_a_refused_latest_answer_never_lets_an_older_one_apply` and
+`test_native_transcript_binds_host_turn_text_and_checkout`. If OH can't read a typed menu word as the
 latest answer, it applies nothing and asks the person to choose again.
 In Codex's fallback menu path, OH's MCP server shows the menu itself and records the click,
 which travels from the Codex menu to OH without passing through the model; a click spends any menu word typed before it.

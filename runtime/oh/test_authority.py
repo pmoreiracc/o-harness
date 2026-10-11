@@ -50,7 +50,10 @@ class AuthorityTest(unittest.TestCase):
                 save()
                 if host=='claude':  # the desktop app saves a typed turn as from a person, with its SDK marker
                     records[0]|={'origin':{'kind':'human'},'turnOrigin':'human','promptSource':'sdk','entrypoint':'claude-desktop'}
-                    save();self.assertEqual(attest(host,payload,root)['turn'],'turn')
+                    # docs/architecture.md: SDK code can stamp human origin; this is an accepted limitation.
+                    for entrypoint in ('claude-desktop','sdk-cli','sdk-py','sdk-ts'):
+                        records[0]['entrypoint']=entrypoint
+                        save();self.assertEqual(attest(host,payload,root)['turn'],'turn')
                     records[0]['origin']={'kind':'peer'}  # another agent's message is never the person's
                     save()
                     with self.assertRaises(Refused):attest(host,payload,root)
