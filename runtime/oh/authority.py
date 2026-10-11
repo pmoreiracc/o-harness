@@ -118,14 +118,17 @@ def within(cwd,root):
     return not any((folder/'.git').exists() for folder in [cwd,*cwd.parents] if folder!=root and folder.is_relative_to(root))
 
 
-def human(x):
+def human(x,question=False):
     """A record the person produced, not another agent, a notification or an automated SDK caller. Claude marks
     what a person typed with origin kind "human" (the desktop app also marks it promptSource "sdk"); records
-    without an origin, such as tool results, count unless they carry an automation marker."""
+    without an origin, such as tool results, count unless they carry an automation marker. An unanswered
+    SDK question can be matched to the current menu, but matching it never makes its answer human:
+    SDK application code can supply AskUserQuestion answers without a person."""
     if x.get('isSidechain') or x.get('isMeta'):return False
     origin=x.get('origin') if isinstance(x.get('origin'),dict) else {}
     if origin.get('kind') is not None:return origin['kind']=='human' and x.get('turnOrigin') in (None,'human')
-    return x.get('turnOrigin') is None and x.get('promptSource') not in ('sdk','system') and x.get('entrypoint')!='sdk-cli'
+    sdk=isinstance(x.get('entrypoint'),str) and x['entrypoint'].startswith('sdk-')
+    return x.get('turnOrigin') is None and x.get('promptSource') not in ('sdk','system') and (question or not sdk)
 
 
 def latest_answer(path,session,root,question,since,hint=None):
@@ -141,10 +144,17 @@ def latest_answer(path,session,root,question,since,hint=None):
             except ValueError:continue
             if not isinstance(x,dict) or x.get('sessionId')!=session:continue
             if hint and x.get('promptId')==hint and x.get('type')=='user' and x.get('timestamp'):hinted=hinted or x['timestamp']
-            if not human(x):continue
-            if not within(x.get('cwd'),root):continue  # the agent may cd into the checkout's folders
             content=(x.get('message') or {}).get('content')
-            if x.get('type')=='user' and (isinstance(content,str) or isinstance(content,list) and content and all(isinstance(c,dict) and c.get('type')=='text' for c in content)):
+            typed=x.get('type')=='user' and (isinstance(content,str) or isinstance(content,list) and content and all(isinstance(c,dict) and c.get('type')=='text' for c in content))
+            question_call=x.get('type')=='assistant' and isinstance(content,list) and any(
+                isinstance(c,dict) and c.get('type')=='tool_use' and c.get('name')=='AskUserQuestion' for c in content)
+            trusted=human(x,question=question_call)
+            sdk_answer=(x.get('type')=='user' and not x.get('isSidechain') and not x.get('isMeta')
+                and isinstance(x.get('entrypoint'),str) and x['entrypoint'].startswith('sdk-')
+                and isinstance(content,list) and any(isinstance(c,dict) and c.get('type')=='tool_result' for c in content))
+            if not trusted and not sdk_answer:continue
+            if not within(x.get('cwd'),root):continue  # the agent may cd into the checkout's folders
+            if typed:
                 text=(content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content)).strip()
                 parsed=command(text)
                 if parsed and parsed[0]=='choice' and x.get('promptId') and newer(x.get('timestamp'),since):
@@ -162,7 +172,7 @@ def latest_answer(path,session,root,question,since,hint=None):
                     answer=answers.get(question['question']) if isinstance(answers,dict) else None
                     if isinstance(answer,str):
                         use=c['tool_use_id']
-                        latest={'host':'claude','session':session,'turn':use,'prompt':answer,'via':'question',
+                        latest={'host':'claude','session':session,'turn':use,'prompt':answer,'via':'question' if trusted else 'unverified_question',
                             'at':x.get('timestamp'),'record_hashes':sorted({asked[use],digest(x)}),'transcript_path':str(path)}
     return latest,hinted
 
@@ -211,7 +221,10 @@ def answer(root,hint=None,after=None):
     used=used_file(root,found)
     if used.exists():return None
     try:
-        choice=pick(gate,found['prompt']) if found['via']=='question' else found['prompt']
+        choice=pick(gate,found['prompt']) if found['via'] in ('question','unverified_question') else found['prompt']
+        if found['via']=='unverified_question':
+            raise Refused(f'Claude saved this menu click without proof that a person answered, so nothing was applied. '
+                          f'Type {choice} in this conversation to choose it; no restart is needed.')
         result=apply(root,found|{'prompt':choice},gate['id'])
     except Refused as exc:
         # Said once; this answer is then spent, and it stays the latest, so nothing older applies instead.
