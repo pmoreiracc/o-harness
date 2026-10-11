@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from . import plans
 from .design_parse import freeze_render, plan
-from .storage import Final, Refused, atomic_json, git, read_json
+from .storage import Final, Refused, atomic_json, git, matches_git, read_json
 
 
 def parse(arguments):
@@ -254,8 +254,8 @@ def selection(root,doc,track='',*,claim=True):
             raise Refused(f'The design and planning context must match {base}; merge the plans first')
         for filename in inputs(where):
             relative=Path(filename).relative_to(root).as_posix()
-            try:matches=git(root,'hash-object','--no-filters','--',relative)==git(root,'rev-parse','HEAD:'+relative)
-            except CalledProcessError:matches=False
+            try:matches=matches_git(root,relative,'HEAD')
+            except (CalledProcessError,OSError):matches=False
             if not matches:raise Refused(f'The design and planning context must match {base}; merge the plans first')
     rows=[row.split(plans.US) for row in plan(root,doc,where).splitlines()]
     if any(len(row)!=6 for row in rows):raise Refused('Malformed design task projection')

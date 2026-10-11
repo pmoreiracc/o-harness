@@ -39,6 +39,31 @@ class SystemTest(unittest.TestCase):
                 self.assertFalse(acquired.wait(.5))
             self.assertTrue(acquired.wait(5));thread.join()
 
+    def test_windows_bash_uses_native_tools_and_preserves_explicit_interpreters(self):
+        # docs/usage.md: bare bash never silently enters WSL; explicit interpreters and PowerShell are kept.
+        with tempfile.TemporaryDirectory() as tmp,patch.object(system,'WINDOWS',True):
+            root=Path(tmp);wsl=root/'Windows'/'System32'/'bash.exe'
+            native=root/'Git with spaces'/'bin'/'bash.exe';git=native.parent.parent/'cmd'/'git.exe'
+            alias=root/'Local'/'Microsoft'/'WindowsApps'/'bash.exe'
+            for path in (wsl,alias,native,git):path.parent.mkdir(parents=True,exist_ok=True);path.touch()
+            env={'SystemRoot':str(wsl.parent.parent),'LOCALAPPDATA':str(alias.parents[2]),'PATH':str(wsl.parent)}
+            found={'bash':str(wsl),'bash.exe':str(wsl),'git':str(git),'powershell':'chosen-powershell'}
+            with patch.object(system.shutil,'which',side_effect=lambda name,path=None:found.get(name)):
+                self.assertEqual(system.executable('bash',env=env),str(native))
+                self.assertEqual(system.executable('bash.exe',env=env),str(native))
+                found['bash']=str(alias)
+                self.assertEqual(system.executable('bash',env=env),str(native))
+                self.assertEqual(system.executable(str(alias),env=env),str(alias))
+                self.assertEqual(system.executable(str(wsl),env=env),str(wsl))
+                self.assertEqual(system.executable('powershell',env=env),'chosen-powershell')
+                portable=root/'portable'/'bash.exe';portable.parent.mkdir();portable.touch()
+                env['PATH']+=os.pathsep+str(portable.parent)
+                self.assertEqual(system.executable('bash',env=env),str(portable))
+                portable.unlink();native.unlink()
+                with self.assertRaisesRegex(FileNotFoundError,'Git for Windows'):
+                    system.executable('bash',env=env)
+        with patch.object(system,'WINDOWS',False):self.assertEqual(system.executable('bash'),'bash')
+
     def test_stop_ends_descendants_after_the_leader_has_exited(self):
         with tempfile.TemporaryDirectory() as tmp:
             beat=Path(tmp)/'beat'

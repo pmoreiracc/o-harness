@@ -92,6 +92,9 @@ def prompt_for(root,state,task,role,feedback=''):
           'Do not edit plan files; OH records those notes. '
           'Return summary with claims and evidence for requirements, rules, affected surfaces, self-review attacks, family closure, '
           'prior finding dispositions, verification and limits. The reviewer will challenge these claims.\n')
+        common+=('Return status completed only when the supplied task and self-review are finished, including '
+                 'when the requested behavior already exists. Otherwise return status blocked and explain '
+                 'the obstacle and concrete recovery in summary; a successful host call is not task completion.\n')
     if role=='analysis':
         common+=('Self-review the proposed document against the project rules, its referenced claims and failure paths '
                  'before returning it. For review fixes, close the whole defect family across the document and its tasks, '
@@ -272,6 +275,9 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                 outcome='review_mutated_tree'
     else:
         outcome='failed' if result['failed'] else 'implemented';findings=[]
+        if role=='implementation':
+            outcome,summary=hosts.work_result(result)
+            if outcome!='implemented':result=result|{'text':summary}
         if outcome=='implemented' and (designing(task) or intake(task)):
             from .plans import answer,proposal
             try:(answer if designing(task) else proposal)(result.get('structured'))
@@ -426,7 +432,7 @@ def _run(root,invoke):
             if refined:feedback='The person asked you to refine the proposal: '+decided['feedback']+'\nYour previous answer: '+(
                 state['preview']['plan'] if intake(task) else state['rendered']).get('summary','')
             # Bounded escalation persists through restarts and repairs.
-            failures=sum(a.get('outcome') in ('failed','interrupted','verification_failed') for a in worker_attempts)
+            failures=sum(a.get('outcome') in ('failed','blocked','interrupted','verification_failed') for a in worker_attempts)
             failures-=max([g['spent_before'] for g in state.get('recovery_grants',[]) if g['task']==task_id]+[0])
             if failures>state['config']['max_escalations']:
                 status(journal,state,'needs_attention');return checkpoint(root)
@@ -459,6 +465,8 @@ def _run(root,invoke):
                     extra=[p for p in changes(root) if p not in rendered.get('intent',[])]
                     if extra:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(extra[:5])}); a plan commit holds only its plan files")
                 work=attempt(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
+                if work['outcome']=='blocked':
+                    status(journal,state,'needs_attention');return checkpoint(root)
                 if work['outcome']!='implemented' or intake(task):continue  # a proposal is shown before it is written
             apply_pending(root)
             if reduce(journal.records())['status']!='running':return checkpoint(root)
@@ -496,6 +504,14 @@ def _run(root,invoke):
             if designing(task) or intake(task):
                 from .plans import validate_outputs,layout
                 validate_outputs(root,reduce(journal.records())['rendered'],layout(root)['base'])
+            unavailable=next((r for r in check_results if r.get('unavailable')),None)
+            if unavailable:
+                apply_pending(root)
+                from .controls import check
+                check(root)
+                raise Refused('Check '+unavailable['name']+' could not run: '+unavailable['output']+
+                    '\nRestore the registered tool or make its version probe succeed, then continue with oh run. '
+                    'OH has kept the completed implementation and existing allowances; no new approval is needed.')
             if any(r['returncode'] for r in check_results):
                 journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
                     'summary':json.dumps(check_results)[-state['config']['context']['result_chars']:]})

@@ -58,7 +58,8 @@ class WorkflowTest(unittest.TestCase):
         self.calls.append((role,profile,prompt))
         if role!='review':(Path(root)/'output.txt').write_text(str(len(self.calls)))
         return {'failed':False,'returncode':0,'duration_ms':10,'text':'done',
-                'structured':{'verdict':'clean','summary':'Checked behavior','findings':[],'evidence':EVIDENCE},'usage_observed':False}
+                'structured':({'status':'completed','summary':'Checked behavior','found_along_way':[]} if role=='implementation'
+                              else {'verdict':'clean','summary':'Checked behavior','findings':[],'evidence':EVIDENCE}),'usage_observed':False}
 
     def test_initial_and_continue_same_batch_snapshot_and_idempotent_restart(self):
         from .workflow import checkpoint
@@ -302,7 +303,7 @@ class WorkflowTest(unittest.TestCase):
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         def report(*args,**kwargs):
             result=self.fake(*args,**kwargs)
-            if args[4]=='implementation':result['structured']={'found_along_way':['Follow-up outside this quick fix --> <tag> & '+str(self.root/'other.py')+' '+('x'*4100)],
+            if args[4]=='implementation':result['structured']={'status':'completed','found_along_way':['Follow-up outside this quick fix --> <tag> & '+str(self.root/'other.py')+' '+('x'*4100)],
                 'summary':f'Implemented the timeout. See [output.txt]({self.root}/output.txt).'}
             result['text']=json.dumps(result['structured'])  # actual Codex structured output, not the fixture's plain 'done'
             return result
@@ -448,6 +449,59 @@ class ReviewResultTest(unittest.TestCase):
         # A declared clean result never erases a visible, valid blocker.
         result['structured']['verdict']='clean';finding['severity']='blocking'
         self.assertEqual(review_result(result),('blocking',[finding]))
+
+
+class WorkerCompletionTest(unittest.TestCase):
+    setUp=WorkflowTest.setUp
+    git=WorkflowTest.git
+    event=WorkflowTest.event
+
+    def test_blocked_or_missing_worker_completion_never_spends_a_review(self):
+        """docs/usage.md: blocked work preserves edits, evidence and review allowance."""
+        from .storage import read_json
+        from .hosts import work_result
+        configure(self.root,max_escalations=0)
+        _,initial=start(self.root,{"tasks":self.tasks[:1]},self.event())
+        reason="Required input is inaccessible; restore its read access before retrying."
+        report={"failed":False,"returncode":0,"duration_ms":1,"text":"host succeeded",
+            "structured":{"status":"blocked","summary":reason,"found_along_way":[]},"usage_observed":False}
+        def blocked(*args,**kwargs):
+            self.assertEqual(args[4],"implementation")
+            (self.root/"partial.txt").write_text("keep this work")
+            return report
+        with patch("oh.runner.verify") as checks:
+            result=run(self.root,blocked)
+            checks.assert_not_called()
+            self.assertEqual(result["status"],"needs_attention")
+            self.assertIn(reason,result["gate"]["details"])
+            journal,state=load_run(self.root)
+            self.assertEqual(state["granted"],initial["granted"]);self.assertEqual(state["done"],[])
+            self.assertEqual([a["outcome"] for a in state["attempts"]],["blocked"])
+            self.assertEqual(state["config"],initial["config"])
+            self.assertEqual((self.root/"partial.txt").read_text(),"keep this work")
+            self.assertEqual(read_json(Path(state["attempts"][0]["evidence"])/"result.json")["structured"],report["structured"])
+            before=len(journal.records());run(self.root,blocked)
+            self.assertEqual(len(journal.records()),before)
+        choose(self.root,"retry",self.event("2","retry"))
+        _,state=load_run(self.root)
+        self.assertEqual(state["recovery_grants"][0]["spent_before"],1)
+        self.assertFalse(any(a["role"]=="review" for a in state["attempts"]))
+        self.assertEqual(work_result(report),("blocked",reason))
+        completed=report|{"structured":report["structured"]|{"status":"completed"}}
+        self.assertEqual(work_result(completed),("implemented",reason))  # no tree-change requirement
+        for key,value in (("status",None),("status","unknown"),("summary",""),("summary"," \n"),("found_along_way",[42])):
+            broken=report["structured"]|{key:value}
+            self.assertEqual(work_result(report|{"structured":broken})[0],"failed")
+
+    def test_host_schemas_avoid_string_length_keywords(self):
+        """Codex strict structured output rejects string length rules; work_result enforces a non-blank summary."""
+        from . import hosts
+        def keys(value):
+            if isinstance(value,dict):return set(value)|{k for v in value.values() for k in keys(v)}
+            if isinstance(value,list):return {k for v in value for k in keys(v)}
+            return set()
+        for schema in (hosts.WORK_SCHEMA,hosts.REVIEW_SCHEMA,hosts.DESIGN_SCHEMA,hosts.PROPOSAL_SCHEMA):
+            self.assertFalse(keys(schema)&{"minLength","maxLength"})
 
 
 if __name__=='__main__':unittest.main()

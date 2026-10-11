@@ -34,7 +34,7 @@ jobs:
   windows:
     if: github.event_name != 'push'
     runs-on: windows-latest
-    # Most PRs take about 5 minutes; one that edits a test module most others import runs nearly all of them.
+    # Editing a shared test module can select nearly the full suite.
     timeout-minutes: 45
     defaults:
       run:

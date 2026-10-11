@@ -19,6 +19,7 @@ class ControlsTest(unittest.TestCase):
     fake=fixtures.WorkflowTest.fake
 
     def test_pause_drains_worker_and_resume_keeps_allowances_without_repeating_it(self):
+        fixtures.configure(self.root,max_escalations=0)
         journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())
         def paused(*args,**kwargs):
             result=self.fake(*args,**kwargs)
@@ -31,6 +32,21 @@ class ControlsTest(unittest.TestCase):
         request(self.root,'pause');self.assertEqual(len(journal.records()),before)
         _,state=load_run(self.root);granted=state['granted']
         choose(self.root,'resume',self.event('2','oh-resume'))
+        # docs/usage.md: a missing executable must keep the same completed worker, even with no repair allowance.
+        with patch('oh.system.spawn',side_effect=FileNotFoundError('registered tool unavailable')):
+            with self.assertRaisesRegex(Refused,'no new approval is needed'):run(self.root,self.fake)
+        _,state=load_run(self.root)
+        self.assertEqual(state['attempts'][0]['outcome'],'implemented')
+        self.assertEqual(state['granted'],granted);self.assertNotIn('recovery_grants',state)
+        self.assertTrue(state['verification']['1']['checks'][0]['unavailable'])
+        self.assertEqual([c[0] for c in self.calls],['implementation'])
+        from .verification import verify
+        import subprocess
+        with patch('oh.processes.capture',return_value=(subprocess.CompletedProcess([],1,'','version unavailable'),[])):
+            result=verify(self.root,[{'name':'toolchain','command':[sys.executable,'-c','pass'],
+                         'toolchain':[[sys.executable,'--version']]}],self.project_id)[0]
+        self.assertTrue(result['unavailable']);self.assertEqual(result['returncode'],1)
+        self.assertIn('version unavailable',result['output'])
         self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertEqual([c[0] for c in self.calls],['implementation','review'])
         self.assertEqual(load_run(self.root)[1]['granted'],granted)

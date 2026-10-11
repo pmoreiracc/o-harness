@@ -301,7 +301,7 @@ def _choose(root, choice, event):
                 raise Refused('Files changed while paused; preserve them and reconcile the run before resuming')
         if choice=='retry':
             # A new, explicit human retry grants one bounded recovery window. Restart alone does not.
-            spent=sum(a.get('outcome') in ('failed','interrupted','verification_failed') for a in state['attempts'] if a['task']==task and a['role'] in ('implementation','analysis'))
+            spent=sum(a.get('outcome') in ('failed','blocked','interrupted','verification_failed') for a in state['attempts'] if a['task']==task and a['role'] in ('implementation','analysis'))
             append('recovery.grant',{'task':task,'source':source,'spent_before':spent})
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':state.get('pause_return_status','running') if choice=='resume' else 'running'})
