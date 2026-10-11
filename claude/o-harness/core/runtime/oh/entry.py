@@ -3,14 +3,22 @@ import re
 from .storage import Refused
 
 CHOICES={'continue','pr','stop','resume','retry','grant review','fix concerns','dismiss scope',
-         'fix concerns and route scope','fix concerns and dismiss scope','accept concerns and dismiss scope','accept concerns','route scope','accept concerns and route scope','approve','reconsider'}
+         'fix concerns and route scope','fix concerns and dismiss scope','accept concerns and dismiss scope','accept concerns','route scope','accept concerns and route scope','approve','refine','cancel','handoff pr'}
 REFINE=r'refine:\s*\S.*'  # refine: <what to change>, the person's own words for the next proposal
 PREFIX=r'[$/](?:o-harness:)?'
 
 
+def invocation(prompt):
+    """Unwrap only a leading Codex skill mention. The link is syntax, never a file to open."""
+    if not isinstance(prompt,str):return ''
+    prompt=prompt.strip()
+    linked=re.fullmatch(r'\[(\$(?:o-harness:)?oh-[a-z]+)\]\([^\r\n]+?[/\\]SKILL\.md\)(?=\s|$)(.*)',prompt,re.S)
+    return linked[1]+linked[2] if linked else prompt
+
+
 def command(prompt):
     if not isinstance(prompt,str):return None
-    prompt=prompt.strip()
+    prompt=invocation(prompt)
     match=re.fullmatch(PREFIX+r'oh-(start|pause|resume|stop|propose|design|deliver)(?:\s+(.*))?',prompt,re.S)
     # Workflow skills are invoked as oh-propose/oh-design/oh-deliver; internally they keep their workflow names.
     if match:return (match[1] if match[1] in ('propose','design','deliver') else 'oh-'+match[1]),match[2] or ''
@@ -22,13 +30,40 @@ def receive(root,host,payload):
     import os
     if os.environ.get('OH_CHILD_ATTEMPT'):return None
     parsed=command(payload.get('prompt'))
-    from .authority import drop_waiting,stage,waiting_for
+    from .authority import drop_waiting,stage,waiting_for,pending_file,pending_locators
     if not parsed:
-        # The one plain message OH reads: the answer to what it asked for (a bare command's argument). It uses the
-        # question up, so any later message is ordinary chat again.
+        from .workflow import refinement_for
+        if refinement_for(root,host,payload.get('session_id')):
+            return stage(root,host,payload,idea='refine')
+        # A plain message can also answer an outstanding bare command.
         if found:=waiting_for(root,host,payload.get('session_id')):
             drop_waiting(payload.get('session_id'))
             return stage(root,host,payload,idea=found['command'])
+        # Claude's prompt hook keeps the answer's locator, not an approval. The runner verifies both
+        # messages from the native conversation before interpreting this as an argument.
+        from .storage import read_json
+        try:pending=pending_locators(read_json(pending_file(root)))
+        except (FileNotFoundError,Refused):pending=[]
+        for previous in pending:
+            if previous['host']!=host or previous['event']['session']!=payload.get('session_id'):continue
+            prior=command(previous['event']['prompt'])
+            from .delivery import parse
+            selected=parse(prior[1]) if prior and prior[0]=='deliver' else {}
+            if previous.get('idea')=='conversation' or prior and (prior in (('propose',''),('design',''),('deliver','')) or
+                          selected.get('kind')=='quick_fix' or selected.get('kind')=='design' and not selected['track'] and not selected['request']):
+                return stage(root,host,payload,idea='conversation')
+        # A read-only listing/track question may already have consumed its command. Its receipt is a
+        # discovery hint only; the native conversation must still prove the invocation and reply.
+        from .storage import checkout_file
+        from .authority import used_file
+        try:
+            source=read_json(checkout_file(root,'oh-latest-request.json'))
+            result=read_json(used_file(root,source)).get('result') or {}
+            from .cli import started
+            if (source['host']==host and source['session']==payload.get('session_id') and not started(root,source)
+                    and (result.get('waiting') or result.get('kind') in ('list','quick_fix'))):
+                return stage(root,host,payload,idea='conversation')
+        except (FileNotFoundError,Refused):pass
         return None
     drop_waiting(payload.get('session_id'))  # another OH command, or /oh-stop, replaces what OH waited for
     from .workflow import load_run
@@ -42,27 +77,15 @@ def receive(root,host,payload):
         from .controls import request
         return request(root,name[3:])
     if name!='choice':
-        from .registry import lookup
-        try:lookup(root)
-        except Refused as unregistered:
-            # Typing an OH command in a checkout is the person's choice to use OH here: register it as `init` would,
-            # so the command they typed carries on.
-            # A checkout that was registered and then moved or recreated keeps lookup's own recovery step.
-            from subprocess import CalledProcessError
-            from .config import ensure_project
-            from .registry import index_path,register
-            try:
-                if index_path(root).is_file():raise unregistered
-                register(root);ensure_project(root)
-            except (Refused,CalledProcessError) as exc:  # Git fails outside a repository
-                reason=str(exc) if isinstance(exc,Refused) else str(unregistered)
-                return {'authorized':False,'onboarding':reason,'next':'Register this checkout with init as the message says, then run the command.'}
+        if result:=enroll(root):return result
         exact_request=re.fullmatch(r'request:[0-9a-f]{64}',args)
         design_request=re.fullmatch(r'[0-9]{4}(?:\s+[a-zA-Z0-9_-]+)?\s+request:[0-9a-f]{64}',args)
         if name=='deliver':
             from .delivery import parse,listing
             selected=parse(args)
-            if selected['kind']=='list':return listing(root)
+            if selected['kind']=='list':
+                stage(root,host,payload)
+                return listing(root)
             if selected['kind']=='quick_fix':return stage(root,host,payload)
             design_request=selected['kind']=='design'
         from .plans import SLUG
@@ -74,3 +97,22 @@ def receive(root,host,payload):
         if not binding:
             return {'authorized':False,'prepare':True,'next':'Select propose/design with an explicit intent, or prepare agreed delivery scope and present its exact trigger. A fresh human invocation grants that prepared scope.'}
     return stage(root,host,payload)
+
+
+def enroll(root):
+    """Register an explicit native invocation; preserve moved-checkout recovery."""
+    from .registry import lookup
+    try:lookup(root)
+    except Refused as unregistered:
+        # Typing an OH command in a checkout is the person's choice to use OH here: register it as `init` would,
+        # so the command they typed carries on.
+        # A checkout that was registered and then moved or recreated keeps lookup's own recovery step.
+        from subprocess import CalledProcessError
+        from .config import ensure_project
+        from .registry import index_path,register
+        try:
+            if index_path(root).is_file():raise unregistered
+            register(root);ensure_project(root)
+        except (Refused,CalledProcessError) as exc:  # Git fails outside a repository
+            reason=str(exc) if isinstance(exc,Refused) else str(unregistered)
+            return {'authorized':False,'onboarding':reason,'next':'Register this checkout with init as the message says, then run the command.'}

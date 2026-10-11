@@ -1,5 +1,7 @@
 interface:
   display_name: "oh-config"
   short_description: "Show or change OH settings"
+  icon_small: "./assets/icon.png"
+  icon_large: "./assets/icon.png"
 policy:
   allow_implicit_invocation: false

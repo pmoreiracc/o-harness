@@ -27,8 +27,9 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
 # Implementation reports keep unrelated observations separate from the authorized change.
-WORK_SCHEMA={'type':'object','additionalProperties':False,'required':['summary','found_along_way'],
- 'properties':{'summary':{'type':'string'},'found_along_way':STRINGS}}
+WORK_SCHEMA={'type':'object','additionalProperties':False,'required':['status','summary','found_along_way'],
+ 'properties':{'status':{'type':'string','enum':['completed','blocked']},
+               'summary':{'type':'string'},'found_along_way':STRINGS}}
 
 # A design worker returns prose only; OH adds the number, frontmatter, roadmap link and decision log row.
 DESIGN_SCHEMA={'type':'object','additionalProperties':False,
@@ -181,7 +182,8 @@ def oh_plugins():
     return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
 
 
-def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
+def command(host,profile,root,role,schema_path,compact_tokens,artifact_dir=None,*,standalone=False):
+    if standalone and role!='analysis':raise Refused('Standalone execution is only for read-only insights analysis')
     if host=='codex':
         args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
           '--config','features.multi_agent=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
@@ -189,17 +191,19 @@ def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
           '--config',f'model_auto_compact_token_limit={compact_tokens}',
           '--sandbox','read-only' if role in ('review','analysis') else 'workspace-write',
           '--cd',str(root)]
+        if standalone:args+=['--skip-git-repo-check']
         # Workers never load OH itself: its menu server would run outside their sandbox.
         for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
         if schema_path:args+=['--output-schema',str(schema_path)]
         return args+['-']
     from .storage import state_home
     from .storage import git
-    git_paths=[git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
+    git_paths=[] if standalone else [git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
     from .config import protected_paths
     protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
+    if artifact_dir:protected.append(str(artifact_dir))
     if role in ('review','analysis'):protected.append(str(root))
-    private=private_plans(root)
+    private=None if standalone else private_plans(root)
     if private:protected.append(str(private))  # workers read private plans; only OH writes them
     deny=['Agent','Task']+[f'Edit({rule_path(p)}/**)' for p in protected]
     if WINDOWS:
@@ -216,9 +220,9 @@ def command(host,profile,root,role,schema_path,compact_tokens,run_dir=None):
           '--permission-mode','plan' if role in ('review','analysis') else 'acceptEdits',
           '--permission-prompts','none']
     if schema_path:args+=['--json-schema',schema_path.read_text()]
-    # Reviewers read their admission, prior reviews, diff and artifacts in the run folder; with no shell
-    # (Windows) Read is their only way in. Edits there stay denied.
-    if run_dir and role in ('review','analysis'):args+=['--add-dir',str(run_dir)]
+    # Every role reads OH's project inputs, admissions and repair feedback. The existing protected
+    # paths still deny edits there: adding a readable directory never grants authority to change it.
+    if artifact_dir:args+=['--add-dir',str(artifact_dir)]
     if private:args+=['--add-dir',str(private)]
     return args
 
@@ -267,7 +271,11 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
     schema_path=None
     if schema:
         schema_path=attempt_dir/'output-schema.json';atomic_json(schema_path,schema,immutable=True)
-    args=command(host,profile,root,role,schema_path,context['compact_tokens'],attempt_dir.parent.parent)
+    from .storage import state_home
+    artifact_dir=(state_home()/'projects'/context['project'] if not context.get('standalone')
+                  else attempt_dir.parent.parent)
+    args=command(host,profile,root,role,schema_path,context['compact_tokens'],artifact_dir,
+                 standalone=context.get('standalone',False))
     started=time.monotonic();final='';usage_seen=False;structured=None;failed=False
     with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
         from .processes import launch
@@ -302,6 +310,19 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
         except ValueError:pass
     return {'returncode':status,'text':final,'structured':structured,'usage_observed':usage_seen,
             'duration_ms':round((time.monotonic()-started)*1000),'failed':failed or status!=0 or cancelled.is_set(),'cancellation':reason}
+
+
+def work_result(result):
+    """Host success means the report arrived, not that the assigned implementation finished."""
+    if result['failed']:return 'failed',result['text']
+    value=result.get('structured')
+    if (not isinstance(value,dict) or set(value)!=set(WORK_SCHEMA['required']) or
+            value.get('status') not in ('completed','blocked') or
+            not isinstance(value.get('summary'),str) or not value['summary'].strip() or
+            not isinstance(value.get('found_along_way'),list) or
+            any(not isinstance(note,str) for note in value['found_along_way'])):
+        return 'failed','The implementation report needs an explicit completed or blocked status, a summary and found_along_way'
+    return ('blocked' if value['status']=='blocked' else 'implemented'),value['summary']
 
 
 def review_result(result):

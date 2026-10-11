@@ -4,7 +4,7 @@ from pathlib import Path
 import math
 import re
 import stat
-from .config import HOME, merge, validate
+from .config import HOME, merge, validate, rename_keys
 from .registry import lookup, profile, register
 from .storage import Refused, git, atomic_json, identifier, read_json, state_writer
 
@@ -18,6 +18,8 @@ def validate_document(value,root):
     if not isinstance(p,dict) or set(p)-{'name','kind','design_profile'} or not isinstance(p.get('name'),str) or not p['name'].strip() or p.get('kind') not in ('product','harness'):
         raise Refused('Profile contains identity/private fields or lacks its name and kind')
     if p.get('design_profile') not in (None,'consumer-v1'):raise Refused('Unsupported document profile')
+    value=deepcopy(value)
+    if isinstance(value['config'],dict):rename_keys(value['config'])
     validate(merge(deepcopy(read_json(HOME/'config/defaults.json')),value['config']))
     checks=value['checks']
     if not isinstance(checks,list):raise Refused('Profile checks must be a list')

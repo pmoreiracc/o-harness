@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from . import hosts
 from .config import HOME
-from .storage import Refused, atomic_json, changes, digest, git, identifier, lock, whole
+from .storage import Refused, atomic_json, changes, digest, git, identifier, lock, whole, git_env
 from .telemetry import best_effort
 from .verification import tree, verify, candidate_tree
 from .workflow import checkpoint, committed, load_run, next_task, reduce, review_limit
@@ -27,6 +27,11 @@ def prompt_for(root,state,task,role,feedback=''):
     limit=state['config']['context']['handoff_chars']
     content={'task':task,'role':role,'project_contracts':contracts,'feedback':feedback,
       'run':state['id'],'config_hash':state['config_hash']}
+    if designing(task) or intake(task):
+        location=state['plans']['location']
+        content['planning']={'location':location,'design_approval':'human_gate' if location=='private' else 'human_merge'}
+        content['human_refinements']=[{'source':answer['source'],'feedback':answer['feedback']}
+            for answer in state.get('proposal_answers',[]) if answer['choice']=='refine']
     text=json.dumps(content,ensure_ascii=False)
     if len(text)>limit:
         raise Refused('Task handoff exceeds configured context bound; split the task or reference files')
@@ -34,14 +39,23 @@ def prompt_for(root,state,task,role,feedback=''):
       'You are not alone in this checkout: preserve other edits. Do not delegate, grant tasks, change OH '
       'configuration/evidence, commit, push, merge, or open a PR. The runner owns those transitions. '
       'Do not change task checkboxes or document lifecycle fields; the runner renders them before review. Do not read prior task transcripts. Report concise results with evidence paths.\n')
+    if designing(task) or intake(task):
+        common+=('Use the supplied planning context for approval claims: human_gate means a human approves '
+                 'the private design after review; human_merge means a human merges the repository design PR. '
+                 'Neither an author nor a reviewer grants approval. The supplied human_refinements are recorded '
+                 'human directions for this planning task: apply them with the original scope; newer directions '
+                 'supersede conflicting older ones. A review finding or renewed review allowance does not reverse '
+                 'them. Use them to interpret existing planning prose; do not claim the human direction lacks '
+                 'evidence when it is supplied here. If a real project invariant conflicts, explain the specific '
+                 'conflict instead of silently replacing the requested approach.\n')
+    if intake(task):common+=(HOME/'prompts/proposal-routing.md').read_text()+'\n'
     if role=='review':
         common+=(HOME/'prompts/invariant-reviewer.md').read_text()+'\n'
         if intake(task):
             common+=('The subject is a proposal, not code: the roadmap row, new milestone, proposed decision record or '
               'design task OH wrote from the worker\'s routing of one idea, after the person approved exactly these lines. '
               'A finding that would move the idea or change what is written is blocking: OH then asks the person again. '
-              'Review the routing: whether it is the right route (a roadmap row for new work that needs many PRs or has more than '
-              'one defensible approach; a task in an approved design; an improvement to existing behaviour), whether the '
+              'Review the routing against the shared proposal routing policy above, whether the '
               'dependencies are hard edges, whether it duplicates an existing initiative, task or capability, and whether it '
               'silently decides an open question. OH owns numbers and links. The worker\'s reading of the idea: '
               +json.dumps({k:(state.get('rendered') or {}).get(k,'') for k in ('understanding','reason','evidence')},ensure_ascii=False)[:3000]+'\n')
@@ -73,9 +87,19 @@ def prompt_for(root,state,task,role,feedback=''):
           'Fix review blockers and concerns as defect families: fix the root cause, search every sibling, and close the '
           'whole family together; never patch only the reported line. '
           'The approved scope never grows. Do not implement unrelated gaps or entries under Open review scope or Scope decisions. '
-          'Return unrelated observations in found_along_way, never in the change. Do not edit plan files; OH records those notes. '
+          'Return actionable unrelated gaps in found_along_way, never in the change. Routine verification notes, '
+          'absence of sibling paths and unchanged documentation belong in summary, not found_along_way. '
+          'Do not edit plan files; OH records those notes. '
           'Return summary with claims and evidence for requirements, rules, affected surfaces, self-review attacks, family closure, '
           'prior finding dispositions, verification and limits. The reviewer will challenge these claims.\n')
+        common+=('Return status completed only when the supplied task and self-review are finished, including '
+                 'when the requested behavior already exists. Otherwise return status blocked and explain '
+                 'the obstacle and concrete recovery in summary; a successful host call is not task completion.\n')
+    if role=='analysis':
+        common+=('Self-review the proposed document against the project rules, its referenced claims and failure paths '
+                 'before returning it. For review fixes, close the whole defect family across the document and its tasks, '
+                 'preserve earlier fixes, and check whether the replacement introduces a new failure or makes a source '
+                 'claim stale. Report the checks and limits concisely in your summary.\n')
     if state['host']=='claude' and hosts.WINDOWS:
         common+=('On Windows this worker has no shell: read and edit files only. OH runs the project\'s checks '
                  'afterwards and sends failures back to you.\n')
@@ -93,7 +117,7 @@ def intake(task):
 
 
 def gated(state,task):
-    """Whether a reviewed design waits for the person's approve, refine or reconsider: one whose plans are private
+    """Whether a reviewed design waits for the person's approve, refine or cancel: one whose plans are private
     (in the repository, merging its pull request approves it). A proposal asks before it writes; see `accepted`."""
     return designing(task) and not committed(state)
 
@@ -122,14 +146,25 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     from .delivery import guard
     guard(root,state)
     if state.get('plans',{}).get('location')=='private' and blocked_layout(root,current):raise Refused(blocked_layout(root,current))
+    fallback=None;profile_error=None
+    # Injected executors own their capabilities. Native selection precedes immutable admission.
+    if invoke is hosts.invoke:
+        from .capabilities import select_profile
+        try:profile,fallback=select_profile(state['host'],profile,root)
+        except Exception as exc:profile_error=exc
+    if fallback and not any(a.get('model_fallback',{}).get('notice')==fallback['notice'] for a in state['attempts']):
+        print(fallback['notice'],file=sys.stderr,flush=True)
     # Progress goes to stderr: stdout carries only the result, which tools and scripts read.
-    print(f"OH task {task['id']}: {role} · {profile['model']} / {profile['effort']}",file=sys.stderr,flush=True)
+    action=('OH’s independent reviewer agent is checking' if role=='review' else
+            'OH’s planning agent is drafting' if role=='analysis' else 'OH’s implementation agent is building')
+    print(f"{action} task {task['id']}: {' '.join(task['title'].split())[:200]} ({profile['model']} / {profile['effort']}).",file=sys.stderr,flush=True)
     attempt_id=identifier();before=tree(root)
     git_tree=candidate_tree(root) if role=='review' else None
     directory=journal.path/'attempts'/attempt_id
     data={'id':attempt_id,'task':task['id'],'role':role,'profile':profile,'tree':before,
           'head':git(root,'rev-parse','HEAD'),'config_hash':state['config_hash'],
           'harness_version':state['harness_version'],'git_tree':git_tree,'config':state['config'],'root':str(root)}
+    if fallback:data['model_fallback']=fallback
     journal.append('attempt.started',data)
     best_effort('attempt.started',state['project'],state['id'],task['id'],attempt_id,
       role=role,phase='review' if role=='review' else ('repair' if feedback else 'implementation'),
@@ -143,22 +178,22 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     if role=='review' and git_tree:
         # The exact code change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
         diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','--text','--no-textconv','HEAD',git_tree],capture_output=True,check=True,
-                            env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout
+                            env=git_env()).stdout
         (directory/'change.diff').write_bytes(diff)
         data['diff']={'path':str(directory/'change.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
         prompt+='\nThe exact code change under review, from HEAD to the reviewed tree, is in '+str(directory/'change.diff')+'.'
     if role=='review' and (covers:=state.get('delivery',{}).get('covers')) and not state['summaries']:
-        # Commits OH didn't make: the person's own, and merges of main resolved by the agent or the person (for those,
+        # Commits OH didn't make: the person's own, and merges of the base branch resolved by the agent or the person (for those,
         # what the resolution changed beyond Git's own merge).
         text=b''.join(subprocess.run(['git','-C',str(root),'show','--remerge-diff','--no-color','--no-ext-diff',commit],capture_output=True,check=True,
-                                     env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout for commit in covers)
+                                     env=git_env()).stdout for commit in covers)
         (directory/'covered.diff').write_bytes(text)
         data['covers']={'commits':covers,'path':str(directory/'covered.diff'),'sha256':hashlib.sha256(text).hexdigest()}
-        prompt+=('\nThis branch also holds commits OH did not make: '+', '.join(covers)+' (the person\'s own, or merges of main '
+        prompt+=('\nThis branch also holds commits OH did not make: '+', '.join(covers)+' (the person\'s own, or merges of the base branch '
                  'resolved by hand). What each changed, for a merge beyond Git\'s own merge, is in '+str(directory/'covered.diff')
                  +'. Review it as part of this subject: a '
                  'resolution that loses either side\'s intent, changes more than the conflict needs, or edits the plans beyond '
-                 'main\'s version and this branch\'s recorded progress is a blocker.')
+                 'the base branch\'s version and this branch\'s recorded progress is a blocker.')
     if role=='review' and state.get('delivery',{}).get('layout',{}).get('location')=='private':
         from .plans import file_identity,digest_of
         render=state['delivery_render'];candidate=Path(render['candidate'])
@@ -184,34 +219,51 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         prompt+='\nReview the actual planning artifact at '+str(artifact)+'. The unchanged code tree is not the review subject by itself.'
     if role=='review':
         reports=[{'attempt':a['id'],'path':str(Path(a['evidence'])/'result.json')}
-                 for a in state['attempts'] if a['task']==task['id'] and a['role']=='implementation' and a.get('evidence')]
+                 for a in state['attempts'] if a['task']==task['id'] and a['role'] in ('implementation','analysis') and a.get('evidence')]
         from .storage import read_json
         reports=[r|{'hash':digest(read_json(r['path']))} for r in reports]
         data['implementer_reports']=reports
-        prompt+='\nRead these immutable implementing-agent reports as claims to attack, never as evidence: '+json.dumps(reports)
+        prompt+='\nRead these immutable author-agent reports as claims to attack, never as evidence: '+json.dumps(reports)
         if len(json.dumps(reports,ensure_ascii=False))>state['config']['context']['handoff_chars']:
             raise Refused('Implementer report references exceed the bounded context; split this task before further review')
+    if role=='review' or any(a['task']==task['id'] and a['role']=='review' for a in state['attempts']):
         prior=[{'id':a['id'],'outcome':a.get('outcome'),'tree':a['tree'],'git_tree':a.get('git_tree'),
                 'findings':a.get('findings',[]),'resolution':state.get('resolutions',{}).get(a['id']),
                 'scope':{k:v for k,v in state.get('scope_records',{}).get(a['id'],{}).items() if k not in ('render','change')},
                 'admission':str(journal.path/'attempts'/a['id']/'request.json')}
                for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
-        if len(json.dumps(prior,ensure_ascii=False))>state['config']['context']['handoff_chars']:
+        if role=='review' and len(json.dumps(prior,ensure_ascii=False))>state['config']['context']['handoff_chars']:
             raise Refused('Prior findings exceed the bounded review context. Preserve them and split/reconcile this task before further review.')
         manifest=directory/'prior-reviews.json';atomic_json(manifest,prior,immutable=True)
         data['prior_reviews']={'path':str(manifest),'hash':digest(prior)}
-        prompt+='\nRead the immutable prior-review manifest '+str(manifest)+'. Resolve every retained family and its siblings; classify repeat-family/fix-regression/first-round-escape/newly-exposed against these admissions. No findings may be silently dropped.'
+        prompt+='\nRead the immutable prior-review manifest '+str(manifest)+'. '
+        if role=='review':
+            prompt+='Resolve every retained family and its siblings; classify repeat-family/fix-regression/first-round-escape/newly-exposed against these admissions. No findings may be silently dropped.'
+        else:
+            prompt+=('Use it to preserve earlier fixes and human dispositions while carrying out the supplied feedback. '
+                     'History is not additional task scope or permission to reopen accepted, dismissed or routed findings. '
+                     'Do not read prior task transcripts.')
     atomic_json(directory/'request.json',data|{'prompt':prompt},immutable=True)
     context={'project':state['project'],'run':state['id'],'task':task['id'],'attempt':attempt_id,
              'compact_tokens':state['config']['context']['compact_at_tokens'],'controlled':True}
     started=time.monotonic()
     try:
+        if profile_error:raise profile_error
         result=invoke(state['host'],root,profile,prompt,role,directory,context,
                       schema=hosts.REVIEW_SCHEMA if role=='review' else hosts.DESIGN_SCHEMA if designing(task) else hosts.PROPOSAL_SCHEMA if intake(task) else hosts.WORK_SCHEMA if role=='implementation' else None)
     except Exception as exc:
         result={'failed':True,'returncode':-1,'text':str(exc),'structured':None,
                 'duration_ms':round((time.monotonic()-started)*1000),'usage_observed':False}
-    after=tree(root)
+    try:after=tree(root)
+    except Exception as exc:
+        _,findings=hosts.review_result(result) if role=='review' else ('failed',[])
+        detail=f'OH could not fingerprint the returned worker result: {exc}. Preserve the work, repair the checkout and resume this run.'
+        atomic_json(directory/'result.json',result|{'outcome':'failed','tree':None,'findings':findings,'fingerprint_error':str(exc)},immutable=True)
+        journal.append('attempt.finished',{'id':attempt_id,'task':task['id'],'role':role,'outcome':'failed','tree':None,
+            'findings':findings,'summary':detail,'fingerprint_error':str(exc),'duration_ms':result['duration_ms'],
+            'evidence':str(directory),'git_tree':git_tree,'head':data['head']})
+        status(journal,state,'needs_attention')
+        raise Refused(detail) from exc
     private_changed='private_inputs' in data and private_inputs(layout(root))!=data['private_inputs']
     delivery_changed=''
     try:guard(root,state)
@@ -232,6 +284,9 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                 outcome='review_mutated_tree'
     else:
         outcome='failed' if result['failed'] else 'implemented';findings=[]
+        if role=='implementation':
+            outcome,summary=hosts.work_result(result)
+            if outcome!='implemented':result=result|{'text':summary}
         if outcome=='implemented' and (designing(task) or intake(task)):
             from .plans import answer,proposal
             try:(answer if designing(task) else proposal)(result.get('structured'))
@@ -307,8 +362,9 @@ def _run(root,invoke):
                 finish_move(root,journal,state)
                 state=reduce(journal.records())
         # A proposal cuts its branch when it first writes; nothing runs on main before that.
-        if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in ('main','master',''):
-            raise Refused('Execute tasks on a short-lived branch, not main or detached HEAD')
+        from .branches import trunk
+        if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in (trunk(root,state['config']),''):
+            raise Refused('Execute tasks on a short-lived branch, not the base branch or detached HEAD')
         if git(root,'branch','--show-current')!=state['branch']:
             raise Refused('Run belongs to another branch; return to its checkout')
         from .branches import incarnation
@@ -358,6 +414,7 @@ def _run(root,invoke):
                     plan=state['preview']['plan']
                     journal.append('task.completed',{'task':task_id,'route':plan['route'],'summary':plan['summary'],
                         'evidence':previous[-1]['evidence']})
+                    observe_completion(state,task_id)
                     continue
             if gated(state,task) and previous and not decided and (previous[-1].get('outcome')=='clean' or previous[-1]['id'] in state['resolutions']):
                 # Every route waits for independent review before human approval.
@@ -384,7 +441,7 @@ def _run(root,invoke):
             if refined:feedback='The person asked you to refine the proposal: '+decided['feedback']+'\nYour previous answer: '+(
                 state['preview']['plan'] if intake(task) else state['rendered']).get('summary','')
             # Bounded escalation persists through restarts and repairs.
-            failures=sum(a.get('outcome') in ('failed','interrupted','verification_failed') for a in worker_attempts)
+            failures=sum(a.get('outcome') in ('failed','blocked','interrupted','verification_failed') for a in worker_attempts)
             failures-=max([g['spent_before'] for g in state.get('recovery_grants',[]) if g['task']==task_id]+[0])
             if failures>state['config']['max_escalations']:
                 status(journal,state,'needs_attention');return checkpoint(root)
@@ -417,6 +474,8 @@ def _run(root,invoke):
                     extra=[p for p in changes(root) if p not in rendered.get('intent',[])]
                     if extra:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(extra[:5])}); a plan commit holds only its plan files")
                 work=attempt(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
+                if work['outcome']=='blocked':
+                    status(journal,state,'needs_attention');return checkpoint(root)
                 if work['outcome']!='implemented' or intake(task):continue  # a proposal is shown before it is written
             apply_pending(root)
             if reduce(journal.records())['status']!='running':return checkpoint(root)
@@ -445,6 +504,7 @@ def _run(root,invoke):
             # Plans run no project checks: OH validates every plan write itself and undoes one that breaks a rule.
             checks=(resolve(root,state['project_checks']+state['checks'],state['base'])
                     if committed(state) and not (designing(task) or intake(task)) and state['project_checks']+state['checks'] else [])
+            print(f"OH is checking task {task_id} before handing it to the independent reviewer agent.",file=sys.stderr,flush=True)
             check_results=verify(root,checks,state['project'],controlled=True)
             journal.append('verification',{'task':task_id,'tree':tree(root),'checks':check_results})
             best_effort('phase.finished',state['project'],state['id'],task_id,phase='verification',
@@ -453,6 +513,14 @@ def _run(root,invoke):
             if designing(task) or intake(task):
                 from .plans import validate_outputs,layout
                 validate_outputs(root,reduce(journal.records())['rendered'],layout(root)['base'])
+            unavailable=next((r for r in check_results if r.get('unavailable')),None)
+            if unavailable:
+                apply_pending(root)
+                from .controls import check
+                check(root)
+                raise Refused('Check '+unavailable['name']+' could not run: '+unavailable['output']+
+                    '\nRestore the registered tool or make its version probe succeed, then continue with oh run. '
+                    'OH has kept the completed implementation and existing allowances; no new approval is needed.')
             if any(r['returncode'] for r in check_results):
                 journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
                     'summary':json.dumps(check_results)[-state['config']['context']['result_chars']:]})
@@ -551,7 +619,8 @@ def move(root,journal,topic):
     if state.get('branch_move'):
         finish_move(root,journal,state)
         return
-    if current not in ('main','master'):return
+    from .branches import trunk
+    if current!=trunk(root,state['config']):return
     from .plans import branch_for,Blocked
     name=branch_for(root,topic,state['id'],'propose')
     journal.append('branch.creating',{'from':current,'from_incarnation':state['incarnation'],
@@ -605,6 +674,17 @@ def apply_pending(root):
     if not waiting_work(root):materialize(root)
 
 
+def observe_completion(state,task_id):
+    """Completion has the same dashboard record for code, private plans and no-write assessments."""
+    attempts=[a for a in state['attempts'] if a['task']==task_id]
+    reviews=[a for a in attempts if a['role']=='review']
+    best_effort('task.finished',state['project'],state['id'],task_id,status='completed',
+        expected_attempts=len(attempts),expected_reviews=len(reviews),
+        recovered=any(g['task']==task_id for g in state.get('recovery_grants',[])),
+        confirmed_interventions=state['interventions'].get(task_id,0),first_review=reviews[0]['outcome'] if reviews else None,
+        wall_ms=round((datetime.now(timezone.utc)-datetime.fromisoformat(state['task_started'][task_id])).total_seconds()*1000))
+
+
 def complete_reviewed(root,journal,state,task,review):
     # Recover both sides of commit publication without another implementation or review.
     apply_pending(root)
@@ -639,6 +719,7 @@ def complete_reviewed(root,journal,state,task,review):
                 approval=finish_private(root,state,task['transition']['profile'],journal,artifact['files'])
                 journal.append('task.completed',{'task':task_id,'artifact':artifact,'review':review['id'],'approved':approval,
                     'summary':review['summary'],'evidence':review['evidence']})
+            observe_completion(state,task_id)
             return
         if not committed(state):
             from .storage import read_json
@@ -649,11 +730,7 @@ def complete_reviewed(root,journal,state,task,review):
                 raise Refused('The project changed while the planning artifact was reviewed')
             journal.append('task.completed',{'task':task_id,'artifact':artifact,'review':review['id'],
                 'summary':review['summary'],'evidence':review['evidence']})
-            attempts=[a for a in state['attempts'] if a['task']==task_id]
-            reviews=[a for a in attempts if a['role']=='review']
-            best_effort('task.finished',state['project'],state['id'],task_id,status='completed',
-                expected_attempts=len(attempts),expected_reviews=len(reviews),first_review=reviews[0]['outcome'],
-                wall_ms=round((datetime.now(timezone.utc)-datetime.fromisoformat(state['task_started'][task_id])).total_seconds()*1000))
+            observe_completion(state,task_id)
             return
         if not expected:raise Refused('Review predates exact Git-tree binding; a fresh review is required')
         intent=state['commit_intents'].get(task_id)
@@ -674,7 +751,7 @@ def complete_reviewed(root,journal,state,task,review):
             if git(root,'write-tree')!=expected:raise Refused('The staged tree differs from the reviewed Git tree')
             if not intent:
                 from .publication import task_evidence
-                publication=task_evidence(state,task,review,head)
+                publication=task_evidence(root,state,task,review,head)
                 intent={'task':task_id,'review':review['id'],'git_tree':expected,'parent':head,'publication':publication}
                 journal.append('commit.intent',intent)
             if not intent.get('publication'):raise Refused('This older commit intent needs fresh portable review evidence before publication')
@@ -686,8 +763,4 @@ def complete_reviewed(root,journal,state,task,review):
         finish(root,journal,state,review)
         journal.append('task.completed',{'task':task_id,'commit':git(root,'rev-parse','HEAD'),'tree':expected,'review':review['id'],
             'summary':review['summary'],'evidence':review['evidence']})
-        attempts=[a for a in state['attempts'] if a['task']==task_id]
-        reviews=[a for a in attempts if a['role']=='review']
-        best_effort('task.finished',state['project'],state['id'],task_id,status='completed',expected_attempts=len(attempts),expected_reviews=len(reviews),
-            recovered=any(g['task']==task_id for g in state.get('recovery_grants',[])),confirmed_interventions=state['interventions'].get(task_id,0),first_review=reviews[0]['outcome'] if reviews else None,
-            wall_ms=round((datetime.now(timezone.utc)-datetime.fromisoformat(state['task_started'][task_id])).total_seconds()*1000))
+        observe_completion(state,task_id)

@@ -4,7 +4,8 @@ from .storage import state_writer
 
 from datetime import datetime,timedelta,timezone
 import json
-from .config import load,version
+from .config import HOME,load,load_global,version
+from . import hosts
 from .hosts import invoke
 from .storage import atomic_json,digest,identifier,now,project,state_home
 from .telemetry import analytics,best_effort,connect,rows
@@ -44,7 +45,7 @@ def candidates(db):
 
 
 @state_writer
-def generate(root,host='codex'):
+def generate(root=None,host='codex'):
     with connect() as db:
         items,data=candidates(db)
         evidence={'summary':data['summary'],'difficulty':data['difficulty'],'candidates':items,
@@ -53,28 +54,43 @@ def generate(root,host='codex'):
         previous=rows(db,'SELECT id FROM recommendations WHERE evidence_hash=?',(evidence_hash,))
         if previous:return {'status':'unchanged','saved':len(previous)}
     if not items:return {'status':'insufficient_evidence','message':'At least ten tasks and 80% usage coverage are required, with a supported improvement signal.'}
-    p=project(root);attempt=identifier();analysis_run=identifier();directory=state_home()/'analysis'/attempt
-    config=load(root);profile=config['models'][host]['orchestrator']
+    # Dashboard analysis covers the data store, not the engine directory as a product checkout.
+    p=project(root) if root is not None else {'id':'insights','name':'OH insights'}
+    attempt=identifier();analysis_run=identifier();directory=state_home()/'analysis'/attempt
+    config=load(root) if root is not None else load_global()
+    profile=config['models'][host]['insights']
+    fallback=None;profile_error=None
+    if invoke is hosts.invoke:
+        from .capabilities import select_profile
+        try:profile,fallback=select_profile(host,profile,root if root is not None else HOME)
+        except Exception as exc:profile_error=exc
     best_effort('run.started',p['id'],analysis_run,name=p['name'],work_kind='harness',host=host,version=version(),config_hash=digest(config))
     best_effort('attempt.started',p['id'],analysis_run,None,attempt,role='analysis',phase='analysis',host=host,**profile)
     keys=[i['key'] for i in items]
     schema={'type':'object','additionalProperties':False,'required':['priority'], 'properties':{
       'priority':{'type':'array','items':{'type':'string','enum':keys},'minItems':len(keys),'maxItems':len(keys)}}}
     try:
-        result=invoke(host,root,profile,
+        if profile_error:raise profile_error
+        result=invoke(host,root if root is not None else HOME,profile,
           'Rank these supplied improvement hypotheses by expected usefulness. Return each supplied key exactly once. '
           'Do not use tools. Measurements and explanations are calculated by OH.\n'+json.dumps(evidence),
           'analysis',directory,{'project':p['id'],'run':analysis_run,'task':None,'attempt':attempt,
-                               'compact_tokens':config['context']['compact_at_tokens']},schema=schema,timeout=120)
+                               'compact_tokens':config['context']['compact_at_tokens'],'standalone':root is None},schema=schema,timeout=120)
     except Exception as exc:
         result={'failed':True,'error':str(exc),'duration_ms':None,'structured':None}
+    structured=result.get('structured')
+    order=structured.get('priority') if isinstance(structured,dict) else None
+    if not result['failed'] and (not isinstance(order,list) or any(not isinstance(key,str) for key in order) or sorted(order)!=sorted(keys)):
+        result=result|{'failed':True,'error':'The analysis agent returned an invalid ranking.'}
+    if fallback:result=result|{'model_fallback':fallback}
     best_effort('attempt.finished',p['id'],analysis_run,None,attempt,outcome='failed' if result['failed'] else 'completed',
                 duration_ms=result['duration_ms'],substantive=True)
     best_effort('run.status',p['id'],analysis_run,status='failed' if result['failed'] else 'completed')
     atomic_json(directory/'result.json',result,immutable=True)
-    order=(result.get('structured') or {}).get('priority',[])
-    if result['failed'] or not isinstance(order,list) or sorted(order)!=sorted(keys):
-        return {'status':'failed','evidence':str(directory)}
+    if result['failed']:
+        error=result.get('error') or result.get('text') or 'The analysis agent did not finish successfully.'
+        return {'status':'failed','evidence':str(directory),
+                'message':f'Analysis failed: {error} Retry Analyze my data (or `oh suggest`) after resolving the error.'}|({'model_notices':[fallback['notice']]} if fallback else {})
     items=sorted(items,key=lambda item:order.index(item['key']))
     with connect() as db:
         for item in items:
@@ -89,4 +105,4 @@ def generate(root,host='codex'):
             saved={'id':identifier(),'created':now(),'evidence_hash':evidence_hash,'status':'proposed','payload':json.dumps(record)}
             atomic_json(state_home()/'analysis/recommendations'/(saved['id']+'.json'),saved,immutable=True)
             db.execute('INSERT INTO recommendations VALUES(?,?,?,?,?)',tuple(saved[k] for k in ('id','created','evidence_hash','status','payload')))
-    return {'status':'saved','saved':len(items)}
+    return {'status':'saved','saved':len(items)}|({'model_notices':[fallback['notice']],'message':fallback['notice']} if fallback else {})

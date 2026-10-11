@@ -36,6 +36,8 @@ if WINDOWS:
     _advapi32.OpenProcessToken.argtypes=[wintypes.HANDLE,wintypes.DWORD,ctypes.POINTER(wintypes.HANDLE)];_advapi32.OpenProcessToken.restype=wintypes.BOOL
     _advapi32.GetTokenInformation.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(wintypes.DWORD)]
     _advapi32.GetTokenInformation.restype=wintypes.BOOL
+    _advapi32.SetTokenInformation.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
+    _advapi32.SetTokenInformation.restype=wintypes.BOOL
     _kernel32.GetCurrentProcess.restype=wintypes.HANDLE;_kernel32.LocalFree.argtypes=[ctypes.c_void_p];_kernel32.LocalFree.restype=ctypes.c_void_p
     _ntdll=ctypes.WinDLL('ntdll');_ntdll.NtResumeProcess.argtypes=[wintypes.HANDLE];_ntdll.NtResumeProcess.restype=ctypes.c_long
 else:
@@ -60,15 +62,40 @@ def unlock_file(fd):
     else:fcntl.flock(fd,fcntl.LOCK_UN)
 
 
+def executable(program,*,env=None,cwd=None):
+    """Resolve native Windows programs; bare Bash must not silently enter WSL."""
+    if not WINDOWS:return program
+    if os.path.dirname(program):
+        return os.path.join(cwd,program) if cwd and not os.path.isabs(program) else program
+    env=os.environ if env is None else env
+    path=env.get('PATH','')
+    found=shutil.which(program,path=path)
+    if program.lower() not in ('bash','bash.exe'):return found or program
+    windows=env.get('SystemRoot') or os.environ.get('SystemRoot',r'C:\Windows')
+    wsl={os.path.normcase(os.path.realpath(os.path.join(windows,folder,'bash.exe')))
+         for folder in ('System32','SysWOW64','Sysnative')}
+    # The Microsoft Store WSL alias may precede System32 and Git for Windows on PATH.
+    local=env.get('LOCALAPPDATA') or os.environ.get('LOCALAPPDATA')
+    if local:wsl.add(os.path.normcase(os.path.realpath(os.path.join(local,'Microsoft','WindowsApps','bash.exe'))))
+    candidates=[found]+[os.path.join(folder,'bash.exe') for folder in path.split(os.pathsep) if folder]
+    git=shutil.which('git',path=path)
+    if git:
+        base=os.path.dirname(os.path.dirname(git))
+        candidates += [os.path.join(base,'bin','bash.exe'),os.path.join(base,'usr','bin','bash.exe')]
+    candidates += [os.path.join(env[name],'Git','bin','bash.exe')
+                   for name in ('ProgramFiles','ProgramFiles(x86)') if env.get(name)]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.path.normcase(os.path.realpath(candidate)) not in wsl:
+            return candidate
+    raise FileNotFoundError(errno.ENOENT,
+        'Native Windows Bash is unavailable. Install Git for Windows or register an explicit WSL command',program)
+
+
 def spawn(command,**kwargs):
     """Start a command that stop() can end together with every descendant."""
     if not WINDOWS:return subprocess.Popen(command,start_new_session=True,**kwargs)
-    if not os.path.dirname(command[0]):
-        # CreateProcess finds only .exe files; npm and similar tools are .cmd shims found through PATHEXT.
-        command=[shutil.which(command[0],path=(kwargs.get('env') or os.environ).get('PATH')) or command[0],*command[1:]]
-    elif not os.path.isabs(command[0]) and kwargs.get('cwd'):
-        # CreateProcess reads a relative program against OH's own folder, not cwd; a check's .\\gradlew.bat is the project's.
-        command=[os.path.join(kwargs['cwd'],command[0]),*command[1:]]
+    # CreateProcess needs PATHEXT shims and resolves relative executables against OH rather than cwd.
+    command=[executable(command[0],env=kwargs.get('env'),cwd=kwargs.get('cwd')),*command[1:]]
     # Start suspended and resume only inside a job object, so no descendant can be born outside it.
     child=subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP|0x4,**kwargs)  # CREATE_SUSPENDED
     job=_kernel32.CreateJobObjectW(None,None)
@@ -178,6 +205,32 @@ def _current_user():
         if not _advapi32.GetTokenInformation(token,1,buffer,size,ctypes.byref(size)):raise ctypes.WinError(ctypes.get_last_error())
         return _sid_text(ctypes.cast(buffer,ctypes.POINTER(ctypes.c_void_p))[0])
     finally:_kernel32.CloseHandle(token)
+
+
+def _user_owned_objects():
+    # Elevated Windows tokens default to Administrators as owner. Python's private directories
+    # grant OWNER RIGHTS, so inheriting that owner locks the same account out after elevation ends.
+    # Change only this process's default owner, retaining its privileges and all private ACLs.
+    token=wintypes.HANDLE()
+    if not _advapi32.OpenProcessToken(_kernel32.GetCurrentProcess(),0x0088,ctypes.byref(token)):  # QUERY | ADJUST_DEFAULT
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        values=[]
+        for kind in (1,4):  # TokenUser, TokenOwner
+            size=wintypes.DWORD()
+            _advapi32.GetTokenInformation(token,kind,None,0,ctypes.byref(size))
+            buffer=ctypes.create_string_buffer(size.value)
+            if not _advapi32.GetTokenInformation(token,kind,buffer,size,ctypes.byref(size)):raise ctypes.WinError(ctypes.get_last_error())
+            values.append(buffer)
+        user,owner=[ctypes.cast(buffer,ctypes.POINTER(ctypes.c_void_p))[0] for buffer in values]
+        if _sid_text(user)!=_sid_text(owner):
+            chosen=ctypes.c_void_p(user)  # TOKEN_OWNER contains one SID pointer.
+            if not _advapi32.SetTokenInformation(token,4,ctypes.byref(chosen),ctypes.sizeof(chosen)):
+                raise ctypes.WinError(ctypes.get_last_error())
+    finally:_kernel32.CloseHandle(token)
+
+
+if WINDOWS:_user_owned_objects()
 
 
 def untrusted(path,kind):

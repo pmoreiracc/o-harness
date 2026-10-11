@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "base_branch": "",
   "tasks_per_batch": 5,
   "review_rounds": 3,
   "max_escalations": 1,
@@ -11,11 +12,11 @@
   "models": {
     "codex": {
       "simple": {
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "effort": "high"
       },
       "standard": {
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "medium"
       },
       "complex": {
@@ -23,10 +24,10 @@
         "effort": "high"
       },
       "review": {
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6.1-sol",
         "effort": "high"
       },
-      "orchestrator": {
+      "insights": {
         "model": "gpt-6-astra",
         "effort": "high"
       }
@@ -48,7 +49,7 @@
         "model": "opus",
         "effort": "high"
       },
-      "orchestrator": {
+      "insights": {
         "model": "opus",
         "effort": "high"
       }

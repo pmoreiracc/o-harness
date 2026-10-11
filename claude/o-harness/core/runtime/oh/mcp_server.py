@@ -56,17 +56,17 @@ TOOLS = [
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
     tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
     tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
-    tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with main: '
-         'fresh discards the branch to start over from main, keep finishes without main\'s changes.',
+    tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with the base branch: '
+         'fresh discards the branch to start over from the base branch, keep finishes without the base branch\'s changes.',
          {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),
     tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
-    tool('pr_summary', 'PR summary', 'The review summary for this branch\'s pull request.', {'base': TEXT}, read_only=True),
+    tool('pr_summary', 'PR summary', 'Refresh the selected base reference and generate the review summary for this branch\'s pull request.', {'base': TEXT}),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
-         'as a menu and records their click in OH. Call it when OH output has a `gate`, in the conversation that '
+         'as a menu and records their click in OH. Prefer gate.native_ask with request_user_input_async when an interruptible wait tool can keep the turn open; '
+         'choose is the fallback. Call it when OH output has a `gate`, in the conversation that '
          'started the run. The result says what was recorded and whether to call `run`.'),
     tool('confirm', 'Ask the person', 'Shows the person a question and its options as a menu and waits for their click. '
-         'Use it whenever OH\'s instructions say to ask the person to choose or confirm something that is not an OH '
-         '`gate` (that is `choose`), instead of Codex\'s own question tool, which closes when your turn ends. The result '
+         'Use it for a question outside an OH `gate`; use the returned gate menu for workflow decisions. The result '
          'is their answer, or says none was given: never answer for them.',
          {'question': TEXT, 'options': {'type': 'array', 'items': TEXT, 'minItems': 1, 'maxItems': 10},
           'typed': {'type': 'boolean', 'description': 'Also let the person type their own answer'}},
@@ -124,20 +124,13 @@ def conversation(meta):
 
 def folder(thread):
     """The folder the conversation works in, from Codex's own saved session."""
+    from .authority import saved, Saving, codex_history
     from .hosts import codex_home
-    files = list((codex_home() / 'sessions').rglob('*' + thread + '.jsonl'))
-    if len(files) != 1:raise Refused('OH could not find this Codex conversation\'s saved session.')
-    cwd = None
-    with files[0].open('rb') as stream:
-        first = json.loads(stream.readline() or b'{}')
-        if first.get('type') != 'session_meta' or (first.get('payload') or {}).get('id') != thread:
-            raise Refused('OH could not read this Codex conversation\'s saved session.')
-        cwd = first['payload'].get('cwd')
-        stream.seek(max(0, files[0].stat().st_size - 4 * 1024 * 1024))
-        for line in stream:
-            try:item = json.loads(line)
-            except ValueError:continue
-            if isinstance(item, dict) and item.get('type') == 'turn_context':cwd = (item.get('payload') or {}).get('cwd') or cwd
+    def read():
+        files = list((codex_home() / 'sessions').rglob('*' + thread + '.jsonl'))
+        if len(files) != 1:raise Saving('OH could not find this Codex conversation\'s saved session; retry the same OH operation.')
+        return codex_history(files[0], thread)[3]
+    cwd = saved(read)
     if not isinstance(cwd, str) or not cwd:raise Refused('OH could not tell which folder this Codex conversation works in.')
     return Path(cwd).resolve()
 
@@ -230,21 +223,26 @@ class Server:
         root = checkout(arguments, thread)
         if name == 'choose':return self.choose(root, thread, ident)
         if name == 'confirm':return self.confirm(arguments, ident)
-        return self.oh(root, command(name, arguments, root), thread, meta.get('progressToken'))
+        native=meta.get('x-codex-turn-metadata')
+        turn=native.get('turn_id') if isinstance(native,dict) else None
+        return self.oh(root, command(name, arguments, root), thread, meta.get('progressToken'), turn)
 
-    def environment(self, thread):
+    def environment(self, thread, turn=None):
         """What an OH command gets in Codex's shell: the person's own shell setup (PATH additions, JAVA_HOME, proxies...),
         which Codex does not give this server, with Codex's forwarded values on top."""
         with self.reading:  # its own lock: replies to the host never wait for the shell
             if self.shell is None:self.shell = shell_environment()
         # OH's and the hosts' own settings come only from Codex, exactly as this server sees them, so a command
         # and the server always use the same OH state and Codex folder.
-        return dict(os.environ) | {k: v for k, v in self.shell.items() if k not in FORWARDED} | {'CODEX_THREAD_ID': thread}
+        environment=dict(os.environ) | {k: v for k, v in self.shell.items() if k not in FORWARDED} | {'CODEX_THREAD_ID': thread}
+        environment.pop('OH_CODEX_TURN_ID',None)
+        if isinstance(turn,str) and re.fullmatch(r'[a-zA-Z0-9_-]+',turn):environment['OH_CODEX_TURN_ID']=turn
+        return environment
 
-    def oh(self, root, argv, thread, token):
+    def oh(self, root, argv, thread, token, turn=None):
         """Run one OH command through the plugin's launcher, as the shell would, in the calling conversation.
         OH's progress lines become progress notifications when the host asked for them."""
-        environment = self.environment(thread)
+        environment = self.environment(thread,turn)
         output, lines = [], []
         # OH keeps working if Codex ends this server: its own session on POSIX, its own process group on Windows.
         detached = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
@@ -274,6 +272,15 @@ class Server:
                     if call not in self.cancelled or self.cancelled[call].is_set():return {'result': {'action': 'cancel'}}
         finally:self.replies.pop(ident, None)
 
+    def text_answer(self, message, title, call):
+        """Ask for words only after the person chose Other or Refine, never beside the choice menu."""
+        reply = self.elicit(message, {'type': 'object', 'required': ['answer'],
+            'properties': {'answer': {'type': 'string', 'title': title, 'minLength': 1}}}, call)
+        result = reply.get('result') or {}
+        if result.get('action') != 'accept':return None
+        answer = (result.get('content') or {}).get('answer')
+        return answer if isinstance(answer, str) and answer.strip() else None
+
     def confirm(self, arguments, call):
         """Asks the person a question OH's instructions need answered and waits for the click: the call stays open
         until they answer or close the menu, so the conversation can't move on without them."""
@@ -289,7 +296,6 @@ class Server:
         properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': options}}
         if typed:
             properties['choice']['enum'] = options + ['Other']
-            properties['answer'] = {'type': 'string', 'title': 'Your answer (only for Other)'}
         reply = self.elicit(question, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
         result = reply.get('result') or {}
         if result.get('action') != 'accept':return 'The menu was closed. ' + fallback
@@ -297,13 +303,13 @@ class Server:
         choice = content.get('choice')
         if choice not in properties['choice']['enum']:return 'The menu came back without a valid choice. ' + fallback
         if choice == 'Other' and typed:
-            answer = content.get('answer')
-            if not isinstance(answer, str) or not answer.strip():return 'Other needs an answer, and none was typed. ' + fallback
-            return 'The person answered: ' + ' '.join(answer.split())
+            answer = self.text_answer(question, 'Your answer', call)
+            if answer is None:return 'Other needs an answer, and none was typed. ' + fallback
+            return 'The person answered: ' + answer
         return 'The person chose: ' + choice
 
     def choose(self, root, thread, call):
-        from .config import project_name, version
+        from .config import version
         from .gates import apply, current
         from .workflow import load_run
         gate = current(root)
@@ -320,14 +326,14 @@ class Server:
             return 'OH was updated after this run started, so its menu is not shown. ' + fallback
         if 'elicitation' not in (self.client.get('capabilities') or {}):
             return 'This Codex surface cannot show OH menus. ' + fallback
-        menu = gate['options'] + ([{'choice': 'refine', 'label': 'Refine', 'description': ''}] if gate['words'] else [])
+        menu = gate['options']
         properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': [o['choice'] for o in menu],
                                  'enumNames': [o['label'] for o in menu]}}
-        if gate['words']:
-            properties['changes'] = {'type': 'string', 'title': 'What to change (only for Refine)'}
-        details = '\n'.join(f'- {o["label"]}: {o["description"]}' for o in gate['options'] if o['description'] != o['label'])
-        message = (f"{gate['question'].removesuffix(' [OH gate '+gate['id']+']')}\nProject {project_name(root)} · {root} · run {state['id'][:8]}"
-                   + ('\n' + details if details else ''))
+        if gate.get('preview'):
+            # The review copy holds the proposal and destinations; the popup holds only the decision.
+            message = gate['question'].split(' [OH gate ',1)[0]
+        else:
+            message = gate['question'].removesuffix(' [OH gate '+gate['id']+']')
         reply = self.elicit(message, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
         result = reply.get('result') or {}
         if result.get('action') != 'accept':
@@ -335,17 +341,14 @@ class Server:
         content = result.get('content') or {}
         choice = content.get('choice')
         if choice not in [o['choice'] for o in menu]:return 'The menu came back without a valid choice. ' + fallback
-        if choice == 'refine':
-            words = content.get('changes')
-            if not isinstance(words, str) or not words.strip():
-                return 'Refine needs what to change; nothing was recorded. Ask the person to type: refine: <what to change>.'
-            choice = 'refine: ' + ' '.join(words.split())
         event = {'host': 'codex', 'session': thread, 'turn': 'menu-' + identifier(), 'prompt': choice, 'via': 'elicitation', 'at': now()}
         after = apply(root, event, gate['id'])
-        dropped = supersede(root, 'codex')  # anything typed while the menu was open is older than this click
+        dropped = supersede(root, 'codex', event)
         answered(root, 'codex', thread, state['human'].get('transcript_path'))
         label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
         if dropped:label += f' (this set aside {dropped}, which the person typed earlier; they type it again to run it)'
+        if after.get('waiting'):return json.dumps(after)
+        if after['status']=='pr':return json.dumps(after)
         if after['status'] in ('stopped', 'completed') and not after.get('gate'):
             return f'Recorded the person\'s choice: {label}. The run is {after["status"]}; there is nothing left to run.'
         return f'Recorded the person\'s choice: {label}. Call `run` to carry it out. Status now: {after["status"]}.'

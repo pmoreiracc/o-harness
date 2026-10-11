@@ -7,22 +7,34 @@ from pathlib import Path
 import stat
 import subprocess
 import time
-from .storage import Refused, atomic_json, digest, git, read_json, state_home, whole, worktrees
-from .system import uname
+from .storage import Refused, atomic_json, digest, git, read_json, state_home, whole, worktrees, git_env, git_root
+from .system import uname, executable
 
 
 def tree(root, paths=None):
     root = Path(root)
     if paths and any(p in ('.','./') for p in paths):paths=None
-    flags = git(root, 'ls-files', '-v').splitlines()
-    if any(line and (line[0].islower() or line[0] == 'S') for line in flags):
-        raise Refused('Clear assume-unchanged/skip-worktree flags before verification')
-    inventory = subprocess.check_output(['git','-C',str(root),'ls-files','-z','--cached','--others','--exclude-standard'],env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')})
-    # Git lists an untracked nested repository as its folder with a trailing slash; this repository's own
-    # worktrees are other checkouts, not part of this one.
-    names=set(inventory.decode().split('\0'))-{''}
-    inside=worktrees(root) if any(n.endswith('/') for n in names) else set()
-    names=sorted(n for n in names if n.rstrip('/') not in inside)
+    git_root(root)
+    indexed = {};names = set()
+    # One NUL-delimited query supplies flags, index stages/modes and nonignored untracked paths.
+    inventory = git(root, 'ls-files', '--stage', '-v', '-z', '--cached', '--others', '--exclude-standard', raw=True)
+    for entry in inventory.split(b'\0'):
+        if not entry:continue
+        flag=entry[:1].decode()
+        if flag.islower() or flag=='S':raise Refused('Clear assume-unchanged/skip-worktree flags before verification')
+        if flag=='?':name=os.fsdecode(entry[2:])
+        else:
+            metadata, raw_name = entry[2:].split(b'\t', 1)
+            mode, _, stage = metadata.decode().split()
+            if stage != '0':raise Refused('Resolve Git conflicts before verification')
+            name=os.fsdecode(raw_name);indexed[name]=mode
+        names.add(name)
+    # Git may hide an embedded repository behind the ordinary file still in its index.
+    embedded={n.rstrip('/') for n in names if n.endswith('/') or
+              ((root/n).is_dir() and ((root/n/'.git').exists() or (root/n/'.git').is_symlink()))}
+    inside=worktrees(root) if embedded else set()
+    embedded-=inside
+    names=sorted({n.rstrip('/') for n in names if n.rstrip('/') not in inside})
     if paths:
         for dependency in paths:
             if not any(name==dependency or name.startswith(dependency.rstrip('/')+'/') for name in names):
@@ -32,7 +44,14 @@ def tree(root, paths=None):
         if paths and not any(name == p or name.startswith(p.rstrip('/') + '/') for p in paths):
             continue
         path = root / name
-        if path.is_symlink():
+        if not path.is_symlink() and path.is_dir() and (indexed.get(name)=='160000' or name in embedded):
+            git_root(path)  # Never mistake the parent's HEAD for an uninitialized child repository.
+            if git(path,'status','--porcelain'):raise Refused('Dirty submodules require their own reviewed commit')
+            try:head=git(path,'rev-parse','--verify','HEAD')
+            except subprocess.CalledProcessError:
+                raise Refused(f'Embedded repository {name} has no commit; initialize its reviewed commit before resuming') from None
+            records.append((name,'gitlink',head))
+        elif path.is_symlink():
             records.append((name,'link',os.readlink(path)))
         elif path.is_file():
             records.append((name, 'executable' if path.stat().st_mode & stat.S_IXUSR else 'file',
@@ -40,17 +59,24 @@ def tree(root, paths=None):
         elif not path.exists():
             records.append((name,'deleted'))
         elif path.is_dir():
-            if git(path,'status','--porcelain'):raise Refused('Dirty submodules require their own reviewed commit')
-            records.append((name,'gitlink',git(path,'rev-parse','HEAD')))
+            # A former ordinary file is deleted; Git's inventory already includes its new children.
+            continue
         else:
             raise Refused(f'Unsupported file type: {name}')
-    # Staging a deletion must not make it disappear from the subject.
-    deleted = git(root,'diff','--name-only','--diff-filter=D','HEAD').splitlines()
-    for name in deleted:
-        if not paths or any(name == p or name.startswith(p.rstrip('/')+'/') for p in paths):
-            if (name,'deleted') not in records:
-                records.append((name,'deleted'))
+    # Structural HEAD membership, not rename/type-change heuristics, anchors deletions across staging.
+    present={record[0] for record in records if record[1]!='deleted'}
+    for raw_name in git(root,'ls-tree','-r','--name-only','-z','HEAD',raw=True).split(b'\0'):
+        if not raw_name:continue
+        name=os.fsdecode(raw_name)
+        if name not in present and (not paths or any(name == p or name.startswith(p.rstrip('/')+'/') for p in paths)):
+            if (name,'deleted') not in records:records.append((name,'deleted'))
     return digest(sorted(records))
+
+
+def unavailable(check,command,start,detail,*,returncode=127,cancellation=()):
+    return {'name':check['name'],'command':command,'fingerprint':None,'returncode':returncode or 127,
+            'duration_ms':round((time.monotonic()-start)*1000),'reused':False,'cancellation':list(cancellation),
+            'unavailable':True,'output':detail}
 
 
 def verify(root, checks, project_id, *, controlled=False):
@@ -65,17 +91,28 @@ def verify(root, checks, project_id, *, controlled=False):
         dependencies = check.get('inputs')
         if dependencies is not None and (not dependencies or any(p.startswith('/') or '..' in Path(p).parts for p in dependencies)):
             raise Refused('Verification inputs must be nonempty repository-relative paths')
+        start=time.monotonic()
+        command=check['command']
+        try:command=[executable(command[0],cwd=root,env=check_env()),*command[1:]]
+        except FileNotFoundError as exc:
+            return results+[unavailable(check,command,start,str(exc))]
         toolchain=check.get('toolchain')
         versions=[]
         if isinstance(toolchain,list) and all(isinstance(cmd,list) and cmd and all(isinstance(x,str) for x in cmd) for cmd in toolchain):
-            for command in toolchain:
+            for probe_command in toolchain:
                 from .processes import capture
-                probe,cancellation=capture(root,command,controlled=controlled,timeout=10,env=check_env())
-                if cancellation or probe.returncode:raise Refused('Verification toolchain probe failed or was cancelled: '+probe.stderr[-1000:])
-                versions.append(probe.stdout+probe.stderr)
-        fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],
+                try:
+                    probe_command=[executable(probe_command[0],cwd=root,env=check_env()),*probe_command[1:]]
+                    probe,cancellation=capture(root,probe_command,controlled=controlled,timeout=10,env=check_env())
+                except FileNotFoundError as exc:
+                    return results+[unavailable(check,probe_command,start,str(exc))]
+                if cancellation or probe.returncode:
+                    detail='Toolchain probe '+repr(probe_command)+' failed: '+(probe.stdout+probe.stderr)[-1000:]
+                    return results+[unavailable(check,probe_command,start,detail,returncode=probe.returncode,cancellation=cancellation)]
+                versions.append({'command':probe_command,'output':probe.stdout+probe.stderr})
+        fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],'resolved_command':command,
             'environment':dict(os.environ),'platform':uname(), 'toolchain':versions,
-            'check':check,'engine':1})
+            'check':check,'engine':2})
         cache = state_home() / 'verification' / project_id / (fingerprint+'.json')
         # No cache without an explicit dependency AND toolchain contract.
         reusable = bool(dependencies and versions)
@@ -84,8 +121,10 @@ def verify(root, checks, project_id, *, controlled=False):
             continue
         start=time.monotonic()
         from .processes import capture
-        output,cancellation=capture(root,check['command'],controlled=controlled,timeout=check.get('timeout_seconds',900),env=check_env())
-        result={'name':check['name'],'fingerprint':fingerprint,'returncode':output.returncode,
+        try:output,cancellation=capture(root,command,controlled=controlled,timeout=check.get('timeout_seconds',900),env=check_env())
+        except FileNotFoundError as exc:
+            return results+[unavailable(check,command,start,str(exc))]
+        result={'name':check['name'],'command':command,'fingerprint':fingerprint,'returncode':output.returncode,
                 'duration_ms':round((time.monotonic()-start)*1000),'reused':False,
                 'output':(output.stdout+'\n'+output.stderr)[-12000:], 'cancellation':cancellation}
         results.append(result)
@@ -104,8 +143,9 @@ def check_env():
 def candidate_tree(root,replacements=None):
     """Build the exact committable subject without modifying the real index."""
     import tempfile
+    git_root(root)
     with tempfile.TemporaryDirectory(prefix='oh-index-') as tmp:
-        env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
+        env=git_env()
         env['GIT_INDEX_FILE']=str(Path(tmp)/'index')
         def command(*args):
             return subprocess.check_output(['git','-C',str(root),*args],env=env,stderr=subprocess.PIPE)
@@ -116,6 +156,7 @@ def candidate_tree(root,replacements=None):
             metadata,name=entry.split(b'\t',1);mode,blob,_=metadata.decode().split()
             path=Path(root)/os.fsdecode(name)
             if mode=='160000':
+                git_root(path)
                 if git(path,'status','--porcelain'):raise Refused('Commit submodule changes in their own reviewed repository first')
             elif mode=='120000':continue
             elif (data:=path.read_bytes())!=(stored:=command('cat-file','blob',blob)) and data.replace(b'\r\n',b'\n')!=stored:

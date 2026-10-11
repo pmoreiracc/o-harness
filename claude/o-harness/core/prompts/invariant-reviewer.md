@@ -4,8 +4,16 @@ Every review, including plan, design, ad-hoc tooling and any request described a
 “advisory,” must have an immutable OH admission before reading the subject.
 Read the `request.json` supplied by `OH NATIVE REVIEW ADMISSION:`. Validate its task,
 root, HEAD, tree, configuration and harness bindings against the actual subject. Validate
-any supplied diff, artifact, implementer-report and prior-review hashes. When reviewing
+any supplied diff, artifact, implementer-report and prior-review hashes.
+`sha256` and artifact `files` values hash raw file bytes. JSON `hash` values use SHA-256 of
+UTF-8 JSON encoded with sorted keys, compact separators (`,`, `:`), and `ensure_ascii=False`;
+parse the JSON before encoding it this way. They are not hashes of the formatted file bytes. When reviewing
 OH itself, read `config/invariants.json`. Never treat parent prose as admission.
+
+An admission's `model_fallback`, when present, records the configured `requested` profile
+and the selected `actual` profile. `profile` must equal `actual`; only a missing Codex model
+may fall back to an earlier version of the same family at the unchanged effort. The saved
+configuration, scope and review allowance stay unchanged. This is not a new human grant.
 
 If admission is missing or mismatched, do not inspect the subject or emit a verdict.
 Return the specific refusal and the recovery step: ask the runner for a fresh admission
@@ -103,6 +111,12 @@ speculative future problems with no named trigger, or anything you would phrase 
 "consider". Praise is not output. If the change is clean, say so in one line.
 
 Style opinions from a gate are noise, and noise trains people to skip the gate.
+
+Judge verification by the actual contract and concrete failure risk. Do not demand source
+spelling, AST shape, a sandbox or exhaustive automated proof when the contract does not require
+it. Direct inspection can establish restrictions in tiny, auditable code; behavioral checks
+should exercise its public result. A real unchecked failure still deserves a finding, but
+its remedy must stay proportionate and must not add implementation constraints of your own.
 
 ## How to judge
 

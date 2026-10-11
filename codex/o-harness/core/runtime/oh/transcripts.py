@@ -17,7 +17,7 @@ def register(root,host,payload,run,project):
     if not name or not session:return  # Coverage remains explicitly unknown on this host.
     path=Path(name).expanduser().resolve()
     from .hosts import codex_home
-    allowed=codex_home()/'sessions' if host=='codex' else Path.home()/'.claude/projects'
+    allowed=(codex_home()/'sessions' if host=='codex' else Path.home()/'.claude/projects').resolve()
     if not path.is_relative_to(allowed) or not path.is_file():raise Refused('Unexpected host transcript path')
     key=digest({'host':host,'session':session});home=state_home()/'sources'
     with lock(home/(key+'.lock')):

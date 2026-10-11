@@ -133,11 +133,29 @@ def lock(path, *, wait=True):
             unlock_file(fd)
 
 
-def git(root, *args):
-    env = {k: v for k, v in os.environ.items() if k not in {
+def git_env():
+    """Keep Git configuration and credentials; select the checkout/index explicitly in each child."""
+    return {k: v for k, v in os.environ.items() if k not in {
         'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
         'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_PREFIX'}}
-    return subprocess.check_output(['git', '-C', str(root), *args], env=env).decode().strip()
+
+
+def git(root, *args, raw=False):
+    output=subprocess.check_output(['git', '-C', str(root), *args], env=git_env())
+    return output if raw else output.decode().strip()
+
+
+def git_root(root):
+    """Refuse a checkout redirected by Git configuration, including an inherited core.worktree."""
+    if Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != Path(root).resolve():
+        raise Refused('Git resolves a different checkout root; select the registered root, correct core.worktree or initialize the child repository before resuming')
+
+
+def matches_git(root,path,revision):
+    """Accept Windows checkout line endings, without applying filters or dropping any other bytes."""
+    actual=(Path(root)/path).read_bytes()
+    approved=git(root,'cat-file','blob',revision+':'+path,raw=True)
+    return actual==approved or actual.replace(b'\r\n',b'\n')==approved
 
 
 def worktrees(root):
@@ -154,7 +172,7 @@ def status(root):
     """Git's changed and untracked paths, as (changes, nested). `nested` are this repository's worktrees inside the
     checkout: they are never its changes and OH never commits them. Any other repository inside it, such as one a
     worker cloned, is a change like any new folder."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env = git_env() | {'GIT_OPTIONAL_LOCKS':'0'}
     output = subprocess.run(['git', '-C', str(root), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
                             capture_output=True, check=True, env=env).stdout.decode().split('\0')
     paths, skip = [], False
