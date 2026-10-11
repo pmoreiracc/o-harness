@@ -235,9 +235,10 @@ def main(argv=None):
             result=prepare(root,manifest=args.manifest) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
         elif args.command=='verify':
             from .checks import run
+            from .verification import check_failed
             result=run(root,args.base,args.mode)
             print(json.dumps(result,indent=2))
-            raise SystemExit(1 if any(x['returncode'] for x in result) else 0)
+            raise SystemExit(1 if any(check_failed(x) for x in result) else 0)
         elif args.command=='pr-summary':
             from .publication import has_native_history,reference,render,validate_event
             args.base=args.base or reference(root)

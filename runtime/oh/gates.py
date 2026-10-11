@@ -4,6 +4,7 @@ transcript. Codex asks through OH's MCP server, which records the click itself. 
 import re
 from pathlib import Path
 from .storage import Refused, checkout_file, digest, lock, state_writer
+from .verification import check_failed
 
 MARK = 'OH gate '
 LABELS = {'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committed work as one pull request.'),
@@ -147,7 +148,7 @@ def full_summary(state,root=None):
     check_task=task['id'] if task['id'] in verification else next(reversed(verification),None)
     checks=verification.get(check_task)
     if checks:
-        lines.append(f'Checks: task {check_task}: '+(', '.join(c.get('name','unnamed check')+(': passed' if c['returncode']==0 else ': failed') for c in checks['checks']) or 'none selected')+'.')
+        lines.append(f'Checks: task {check_task}: '+(', '.join(c.get('name','unnamed check')+(': failed' if check_failed(c) else ': passed') for c in checks['checks']) or 'none selected')+'.')
     else:lines.append('Checks: not recorded for this task'+(' (planning runs validate document format only).' if state.get('workflow') in ('propose','design') else '.'))
     status=state['status']
     reasons={'checkpoint':'This batch is complete. Continue with the next tasks, open a PR, or finish here.',
@@ -235,6 +236,8 @@ def decision_summary(state):
     pending=[t for t in state['tasks'] if t['id'] not in state['done']]
     task=pending[0] if pending else state['tasks'][-1]
     status=state['status']
+    verification_status=('failed' if any(check_failed(check)
+        for result in state.get('verification',{}).values() for check in result['checks']) else 'passed')
     if status=='review_checkpoint':
         from .workflow import review_limit
         used=sum(a['role']=='review' and a['task']==task['id'] for a in state['attempts'])
@@ -243,12 +246,12 @@ def decision_summary(state):
                 'The current task still needs a completed review or a repair.')
         return f"OH has used {used} of {review_limit(state,task['id'])} allowed reviews. {reason}"
     if status=='checkpoint':
-        return (f"{len(state['done'])} of {len(state['tasks'])} tasks completed. Checks passed; independent review completed. Next: "
+        return (f"{len(state['done'])} of {len(state['tasks'])} tasks completed. Checks {verification_status}; independent review completed. Next: "
                 +(' '.join(task['title'].split())[:200] if pending else 'none')+'.')
     if status=='completed':
         count=len(state['done'])
         checks='Checks' if state.get('workflow','deliver')=='deliver' else 'Document validation'
-        return f"{count} task"+('s' if count!=1 else '')+f" completed. {checks} passed; independent review completed."
+        return f"{count} task"+('s' if count!=1 else '')+f" completed. {checks} {verification_status}; independent review completed."
     if status=='paused':return 'The run is paused. Resume continues the approved work with its remaining allowances.'
     last=next((a for a in reversed(state['attempts']) if a['task']==task['id']),{})
     text=last.get('human_summary') or ('A task needs your attention before OH can continue.' if status=='needs_attention' else 'Review findings need your decision.')

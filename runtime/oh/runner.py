@@ -16,7 +16,7 @@ from . import hosts
 from .config import HOME
 from .storage import Refused, atomic_json, changes, digest, git, identifier, lock, whole, git_env
 from .telemetry import best_effort
-from .verification import tree, verify, candidate_tree, failure_summary
+from .verification import tree, verify, candidate_tree, failure_summary, check_failed
 from .workflow import checkpoint, committed, load_run, next_task, reduce, review_limit
 
 
@@ -523,7 +523,7 @@ def _run(root,invoke):
                 raise Refused('Check '+unavailable['name']+' could not run: '+unavailable['output']+
                     '\nRestore the registered tool or make its version probe succeed, then continue with oh run. '
                     'OH has kept the completed implementation and existing allowances; no new approval is needed.')
-            if any(r['returncode'] for r in check_results):
+            if any(check_failed(r) for r in check_results):
                 journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
                     'summary':failure_summary(check_results,state['config']['context']['result_chars'])})
                 continue

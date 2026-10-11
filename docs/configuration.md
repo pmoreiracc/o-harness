@@ -178,3 +178,9 @@ with `oh config set checks '<JSON list>'`, which replaces the whole list:
 Commands run without a shell. `when` limits a check to changes matching those paths.
 `inputs` and `toolchain` let OH reuse a passing result when nothing relevant changed; leave
 them out if you're unsure. `modes` picks when a check runs (`review`, `pre-push`, `ci`).
+
+A cancelled or timed-out check fails even if its cleanup exits with code `0`. OH skips
+the remaining checks and cannot advance that attempt to review or commit. `oh verify`
+returns failure, and task and PR summaries label the result failed while retaining the
+actual exit code and cancellation reason. Covered by
+`test_zero_exit_cancelled_check_blocks_delivery_and_is_reported_failed` in `runtime/oh/test_workflow.py`.
