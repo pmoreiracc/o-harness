@@ -280,7 +280,7 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
     with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
         from .processes import launch
         controlled=context.get('controlled',False)
-        with launch(root,args,controlled=controlled,timeout=timeout,cwd=root,
+        with launch(root,args,controlled=controlled,timeout=timeout,interrupt=True,cwd=root,
                     env=subscription_env(root)|{'OH_CHILD_ATTEMPT':context['attempt']},
                     stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error) as (child,cancelled,reason):
             try:

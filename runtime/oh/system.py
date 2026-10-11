@@ -112,7 +112,7 @@ def spawn(command,**kwargs):
     return child
 
 
-def stop(child,*,force=False):
+def stop(child,*,force=False,interrupt=False):
     """Ask the child's process group to end, or end it and all descendants at once with force."""
     if WINDOWS:
         # CTRL_BREAK to a group whose leader has exited can reach every process on the console, OH included.
@@ -121,7 +121,7 @@ def stop(child,*,force=False):
             except OSError:pass
         elif force:_kernel32.TerminateJobObject(child.oh_job,1)
         return
-    try:os.killpg(child.pid,signal.SIGKILL if force else signal.SIGTERM)
+    try:os.killpg(child.pid,signal.SIGKILL if force else signal.SIGINT if interrupt else signal.SIGTERM)
     except ProcessLookupError:pass
     except PermissionError:
         # Darwin reports EPERM for a group containing only unreaped zombies.

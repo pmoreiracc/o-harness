@@ -8,7 +8,7 @@ from . import system
 
 
 @contextlib.contextmanager
-def launch(root, command, *, controlled=False, timeout=None, **kwargs):
+def launch(root, command, *, controlled=False, timeout=None, interrupt=False, **kwargs):
     from .controls import check
     gate = lock(checkout_file(root, 'oh-control.lock')) if controlled else contextlib.nullcontext()
     journal=None
@@ -39,7 +39,8 @@ def launch(root, command, *, controlled=False, timeout=None, **kwargs):
             if stop or deadline is not None and time.monotonic() >= deadline:
                 reason.append('stopped' if stop else 'timeout')
                 cancelled.set()
-                system.stop(child)
+                # Host CLIs handle Ctrl-C by cancelling shell tools in their own sessions.
+                system.stop(child, interrupt=interrupt)
                 # Keep the group leader unreaped until escalation. Its PID cannot be reused.
                 done.wait(5)
                 system.stop(child, force=True)

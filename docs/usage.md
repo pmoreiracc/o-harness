@@ -122,11 +122,14 @@ exact result, blockers get fixed, and the reviewed tree is committed. Workers ca
 OH's state, your settings or Git internals.
 
 Workers have no total execution deadline: implementation, planning and review can continue
-as long as the task needs. Explicit stop still terminates their process group. When a worker
-exits, OH cleans up its descendants so an inherited output pipe cannot keep the attempt waiting.
+as long as the task needs. Explicit stop first interrupts the host so it can cancel shell tools
+running in separate sessions, then force-stops its process group if needed. On Windows the
+worker's job object contains those commands. When a worker exits, OH closes its remaining
+process group so an inherited output pipe cannot keep the attempt waiting.
 Project checks and short host operations keep their own timeouts. Covered by
 `test_workers_outlive_elapsed_time_and_close_descendants_output` and
-`test_explicit_command_deadline_still_cancels` in `runtime/oh/test_system.py`.
+`test_explicit_command_deadline_still_cancels` and
+`test_worker_cancellation_interrupts_the_host_to_clean_detached_commands` in `runtime/oh/test_system.py`.
 
 Claude workers can read this project's OH task inputs and repair feedback while those files
 remain protected from edits. A worker that reports blocked work keeps its edits and report;
