@@ -85,7 +85,7 @@ class GateTest(unittest.TestCase):
             shutil.copytree(folder, saved, symlinks=True);type(self).started[host] = json.dumps(result)
         return result
 
-    def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None, extra=None, raw=None, cwd=None, apply=True, marks=None):
+    def click(self, question, answer, use='toolu_1', session='s', prefilled=None, questions=None, extra=None, raw=None, cwd=None, apply=True, marks=None, answer_marks=None):
         """Save a question-tool call and the host's answer in the owner's transcript, as Claude does, then run OH."""
         from .storage import now
         time.sleep(0.01)  # a person answers later than OH's own records, never within the same millisecond
@@ -94,7 +94,7 @@ class GateTest(unittest.TestCase):
         self.records += [
             {'type': 'assistant', 'sessionId': session, 'cwd': where, **({'wireToolInputs': {use: raw}} if raw else {}), **(marks or {}),
              'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': use, 'name': 'AskUserQuestion', 'input': request}]}},
-            {'type': 'user', 'sessionId': session, 'cwd': where, 'timestamp': now(), **(marks or {}),
+            {'type': 'user', 'sessionId': session, 'cwd': where, 'timestamp': now(), **(marks or {}), **(answer_marks or {}),
              'toolUseResult': {'questions': request['questions'], 'answers': {question['question']: answer}},
              'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': use, 'content': 'answered'}]}}]
         self.transcript.write_text(''.join(json.dumps(r) + '\n' for r in self.records), newline='\n')
@@ -467,21 +467,40 @@ class GateTest(unittest.TestCase):
         desktop = {'origin': {'kind': 'human'}, 'turnOrigin': 'human', 'promptSource': 'sdk', 'entrypoint': 'claude-desktop'}
         question = self.begin('claude')['gate']['ask']['questions'][0]
         for name, extra in (('another agent', {'origin': {'kind': 'peer'}}), ('a notification', {'promptSource': 'system'}),
-                            ('an automated caller', {'entrypoint': 'sdk-cli'})):
+                            *((entrypoint, {'entrypoint': entrypoint}) for entrypoint in ('sdk-cli','sdk-py','sdk-ts'))):
             with self.subTest(name):
                 self.typed('continue', 'from-' + name.split()[-1], extra=extra)
                 with self.assertRaisesRegex(Refused, 'could not read'):materialize(self.root)
                 self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.typed('continue', 'desktop', extra=desktop)
         self.assertEqual(materialize(self.root)['status'], 'running')
-        # Remote Control from the phone app marks every record "sdk-cli": its click on the exact menu still counts.
+        # docs/architecture.md: matching an SDK question is not proof that a person supplied its answer.
         journal, _ = load_run(self.root);journal.append('run.status', {'status': 'checkpoint'})
         question = ask(current(self.root))['questions'][0]
-        self.assertEqual(self.click(question, 'Stop', use='toolu_phone', marks={'entrypoint': 'sdk-cli'})['status'], 'stopped')
+        before=load_run(self.root)[1]
+        for entrypoint in ('sdk-cli','sdk-py','sdk-ts'):
+            self.click(question,'Continue',use='toolu_'+entrypoint,marks={'entrypoint':entrypoint},
+                answer_marks={'permissionDecision':{'decision':'accept','source':'user_temporary'}},apply=False)
+            with self.assertRaisesRegex(Refused,'Type continue .*no restart'):materialize(self.root)
+            self.assertIsNone(materialize(self.root))  # the explanation is said once, without an older answer applying
+            state=load_run(self.root)[1]
+            self.assertEqual(state['status'],'checkpoint')
+            self.assertEqual(state['granted'],before['granted']);self.assertEqual(state['done'],before['done'])
+            self.assertEqual(state.get('review_grants'),before.get('review_grants'))
+        self.typed('continue','phone-typed',extra=desktop|{'entrypoint':'sdk-cli'})
+        self.assertEqual(materialize(self.root)['status'],'running')
+        journal.append('run.status',{'status':'checkpoint'})
+        question=ask(current(self.root))['questions'][0]
+        self.assertEqual(self.click(question,'Stop',use='toolu_phone',marks={'entrypoint':'sdk-cli'},
+            answer_marks={'origin':{'kind':'human'}})['status'],'stopped')
 
     def test_a_refused_latest_answer_never_lets_an_older_one_apply(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
         self.click(question, 'Continue', apply=False)
+        self.click(question,'Continue',use='toolu_unverified',marks={'entrypoint':'sdk-cli'},apply=False)
+        with self.assertRaisesRegex(Refused,'Type continue'):materialize(self.root)
+        self.assertIsNone(materialize(self.root))  # an unverified SDK answer cannot revive the older click
+        self.assertEqual(load_run(self.root)[1]['status'],'checkpoint')
         self.typed('retry', 'typed-4')  # the person's latest answer, which this checkpoint refuses
         with self.assertRaises(Refused):materialize(self.root)
         self.assertIsNone(materialize(self.root))  # the older Continue click never takes its place
