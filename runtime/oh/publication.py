@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from .storage import Refused,Journal,changes,digest,git,project
 from .workflow import reduce
+from .verification import check_failed
 
 START='<!-- oh-review:start -->'
 END='<!-- oh-review:end -->'
@@ -188,7 +189,7 @@ def readable(records,states,root=None):
         lines.extend(['',report_text(worker) or 'No implementing report recorded.' if worker else 'No implementing report recorded.',''])
         verification=state.get('verification',{}).get(task)
         checks=verification.get('checks',[]) if verification else []
-        lines.append('Verification: '+('; '.join(c['name']+' ('+('passed' if c['returncode']==0 else 'failed')+')' for c in checks) if checks else
+        lines.append('Verification: '+('; '.join(c['name']+' ('+('failed' if check_failed(c) else 'passed')+')' for c in checks) if checks else
                      'document validation passed' if state.get('workflow') in ('design','propose') else
                      'no project checks applied' if verification else 'no check results recorded')+'.')
         reviews=evidence['attempts'];final=reviews[-1]

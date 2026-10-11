@@ -4,6 +4,7 @@ transcript. Codex asks through OH's MCP server, which records the click itself. 
 import re
 from pathlib import Path
 from .storage import Refused, checkout_file, digest, lock, state_writer
+from .verification import check_failed
 
 MARK = 'OH gate '
 LABELS = {'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committed work as one pull request.'),
@@ -147,7 +148,7 @@ def full_summary(state,root=None):
     check_task=task['id'] if task['id'] in verification else next(reversed(verification),None)
     checks=verification.get(check_task)
     if checks:
-        lines.append(f'Checks: task {check_task}: '+(', '.join(c.get('name','unnamed check')+(': passed' if c['returncode']==0 else ': failed') for c in checks['checks']) or 'none selected')+'.')
+        lines.append(f'Checks: task {check_task}: '+(', '.join(c.get('name','unnamed check')+(': failed' if check_failed(c) else ': passed') for c in checks['checks']) or 'none selected')+'.')
     else:lines.append('Checks: not recorded for this task'+(' (planning runs validate document format only).' if state.get('workflow') in ('propose','design') else '.'))
     status=state['status']
     reasons={'checkpoint':'This batch is complete. Continue with the next tasks, open a PR, or finish here.',

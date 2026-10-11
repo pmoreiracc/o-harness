@@ -80,6 +80,11 @@ def unavailable(check,command,start,detail,*,returncode=127,cancellation=()):
             'unavailable':True,'output':detail}
 
 
+def check_failed(result):
+    """A cleanup exit of zero cannot turn a cancelled or unavailable check into success."""
+    return result.get('returncode') != 0 or bool(result.get('cancellation') or result.get('unavailable'))
+
+
 def verify(root, checks, project_id, *, controlled=False):
     results = []
     for check in checks:
@@ -129,7 +134,7 @@ def verify(root, checks, project_id, *, controlled=False):
                 'duration_ms':round((time.monotonic()-start)*1000),'reused':False,
                 'output':(output.stdout+'\n'+output.stderr)[-12000:], 'cancellation':cancellation}
         results.append(result)
-        if cancellation or output.returncode:
+        if check_failed(result):
             return results
         if reusable:
             atomic_json(cache,result)
@@ -138,7 +143,7 @@ def verify(root, checks, project_id, *, controlled=False):
 
 def failure_summary(results, limit):
     """Readable bounded repair feedback; complete check evidence stays in the journal."""
-    failed=[r for r in results if r.get('returncode') or r.get('cancellation') or r.get('unavailable')]
+    failed=[r for r in results if check_failed(r)]
     header='\n'.join(f"{r['name']} failed (exit {r.get('returncode', 'unknown')}"+
                      (', '+', '.join(r['cancellation']) if r.get('cancellation') else '')+').' for r in failed)
     output='\n'.join(r.get('output','') for r in failed)

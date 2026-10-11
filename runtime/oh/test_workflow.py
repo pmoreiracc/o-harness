@@ -190,6 +190,39 @@ class WorkflowTest(unittest.TestCase):
         (self.root/'value').write_text('two')
         self.assertFalse(verify(self.root,checks,self.project_id)[0]['reused'])
 
+    def test_zero_exit_cancelled_check_blocks_delivery_and_is_reported_failed(self):
+        # docs/configuration.md: cancellation is failure even when cleanup exits zero.
+        from .cli import main
+        from .gates import full_summary
+        from .publication import readable
+        configure(self.root,max_escalations=0,checks=[
+            {'name':'timed check','command':[sys.executable,'-c','pass']},
+            {'name':'remaining check','command':[sys.executable,'-c','pass']}])
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        head=self.git('rev-parse','HEAD')
+        # The process layer retains both the cleanup exit code and its cancellation reason.
+        with patch('oh.processes.capture',return_value=(subprocess.CompletedProcess([],0,'cleanup finished',''),['timeout'])) as capture:
+            result=run(self.root,self.fake)
+        self.assertEqual(capture.call_count,1)  # No remaining check ran after cancellation.
+        self.assertEqual(result['status'],'needs_attention')
+        self.assertEqual([c[0] for c in self.calls],['implementation'])
+        self.assertEqual(self.git('rev-parse','HEAD'),head)
+        self.assertTrue((self.root/'output.txt').exists())
+        _,state=load_run(self.root)
+        checks=state['verification']['1']['checks']
+        self.assertEqual((checks[0]['returncode'],checks[0]['cancellation']),(0,['timeout']))
+        self.assertEqual(result['last_failure']['outcome'],'verification_failed')
+        self.assertIn('exit 0, timeout',result['last_failure']['summary'])
+        self.assertIn('timed check: failed',full_summary(state))
+        # Existing publication histories can contain this falsely accepted result.
+        historical={'evidence':{'run':state['id'],'task':'1','title':'Task 1',
+            'attempts':[{'outcome':'clean','findings':[]}],'resolutions':{}}}
+        self.assertIn('timed check (failed)',readable([historical],{state['id']:state}))
+        with patch('oh.checks.run',return_value=checks),patch('sys.stdout',new_callable=io.StringIO), \
+             self.assertRaises(SystemExit) as exited:
+            main(['--root',str(self.root),'verify'])
+        self.assertEqual(exited.exception.code,1)
+
     def test_recover_clean_review_after_commit_without_new_model_calls(self):
         # docs/architecture.md: a supported file/folder replacement survives an interrupted commit without paid reruns.
         journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())
