@@ -121,6 +121,13 @@ fresh worker implements it, your project checks run, an independent reviewer che
 exact result, blockers get fixed, and the reviewed tree is committed. Workers can't write
 OH's state, your settings or Git internals.
 
+Claude workers can read this project's OH task inputs and repair feedback while those files
+remain protected from edits. A worker that reports blocked work keeps its edits and report;
+OH stops before checks or independent review and explains what must be resolved. A successful
+host call alone cannot complete a task. Covered by
+`test_claude_workers_on_windows_edit_files_but_have_no_shell` and
+`test_blocked_or_missing_worker_completion_never_spends_a_review`.
+
 Proposal authors and reviewers receive the same routing policy, including new product areas.
 Planning handoffs state whether designs use private human approval or a repository PR merge.
 Reviewers receive saved planning-author reports as well as code implementation reports.
@@ -261,6 +268,23 @@ To reuse a project's settings and checks elsewhere, run `oh profile-export <file
 that machine already has the name). Exports contain no credentials,
 sessions or evidence. Export fails unless every check runs a script tracked in the
 repository, such as `["./scripts/check.sh"]`.
+
+On native Windows, a registered check using bare `bash` runs with native Bash, such as
+Git for Windows, so it can use the installed Windows tools. Your default PowerShell stays
+unchanged. To run a check in WSL deliberately, register `wsl` or an explicit interpreter path.
+OH records the selected executable and includes it in verification reuse.
+Approved repository plans can use CRLF in the checkout while Git stores LF. OH accepts that
+line-ending conversion when comparing them with their approved revision; it still compares
+all other bytes without applying Git filters. Covered by
+`test_crlf_plans_deliver_and_freeze_without_changing_line_endings` and
+`test_unapproved_or_blocked_design_cannot_become_native_task_scope`.
+
+If a check executable is missing or a registered toolchain version probe fails, OH keeps the
+completed implementation and records the failure without escalating the implementation model.
+Restore the tool or fix its version probe, then call `oh run` to retry verification under the
+same approval. Ordinary failing checks still follow the existing implementation repair path.
+Covered by `test_windows_bash_uses_native_tools_and_preserves_explicit_interpreters` and
+`test_pause_drains_worker_and_resume_keeps_allowances_without_repeating_it`.
 
 ## Dashboard
 

@@ -8,7 +8,7 @@ import stat
 import subprocess
 import time
 from .storage import Refused, atomic_json, digest, git, read_json, state_home, whole, worktrees
-from .system import uname
+from .system import uname, executable
 
 
 def tree(root, paths=None):
@@ -53,6 +53,12 @@ def tree(root, paths=None):
     return digest(sorted(records))
 
 
+def unavailable(check,command,start,detail,*,returncode=127,cancellation=()):
+    return {'name':check['name'],'command':command,'fingerprint':None,'returncode':returncode or 127,
+            'duration_ms':round((time.monotonic()-start)*1000),'reused':False,'cancellation':list(cancellation),
+            'unavailable':True,'output':detail}
+
+
 def verify(root, checks, project_id, *, controlled=False):
     results = []
     for check in checks:
@@ -65,15 +71,26 @@ def verify(root, checks, project_id, *, controlled=False):
         dependencies = check.get('inputs')
         if dependencies is not None and (not dependencies or any(p.startswith('/') or '..' in Path(p).parts for p in dependencies)):
             raise Refused('Verification inputs must be nonempty repository-relative paths')
+        start=time.monotonic()
+        command=check['command']
+        try:command=[executable(command[0],cwd=root,env=check_env()),*command[1:]]
+        except FileNotFoundError as exc:
+            return results+[unavailable(check,command,start,str(exc))]
         toolchain=check.get('toolchain')
         versions=[]
         if isinstance(toolchain,list) and all(isinstance(cmd,list) and cmd and all(isinstance(x,str) for x in cmd) for cmd in toolchain):
-            for command in toolchain:
+            for probe_command in toolchain:
                 from .processes import capture
-                probe,cancellation=capture(root,command,controlled=controlled,timeout=10,env=check_env())
-                if cancellation or probe.returncode:raise Refused('Verification toolchain probe failed or was cancelled: '+probe.stderr[-1000:])
-                versions.append(probe.stdout+probe.stderr)
-        fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],
+                try:
+                    probe_command=[executable(probe_command[0],cwd=root,env=check_env()),*probe_command[1:]]
+                    probe,cancellation=capture(root,probe_command,controlled=controlled,timeout=10,env=check_env())
+                except FileNotFoundError as exc:
+                    return results+[unavailable(check,probe_command,start,str(exc))]
+                if cancellation or probe.returncode:
+                    detail='Toolchain probe '+repr(probe_command)+' failed: '+(probe.stdout+probe.stderr)[-1000:]
+                    return results+[unavailable(check,probe_command,start,detail,returncode=probe.returncode,cancellation=cancellation)]
+                versions.append({'command':probe_command,'output':probe.stdout+probe.stderr})
+        fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],'resolved_command':command,
             'environment':dict(os.environ),'platform':uname(), 'toolchain':versions,
             'check':check,'engine':1})
         cache = state_home() / 'verification' / project_id / (fingerprint+'.json')
@@ -84,8 +101,10 @@ def verify(root, checks, project_id, *, controlled=False):
             continue
         start=time.monotonic()
         from .processes import capture
-        output,cancellation=capture(root,check['command'],controlled=controlled,timeout=check.get('timeout_seconds',900),env=check_env())
-        result={'name':check['name'],'fingerprint':fingerprint,'returncode':output.returncode,
+        try:output,cancellation=capture(root,command,controlled=controlled,timeout=check.get('timeout_seconds',900),env=check_env())
+        except FileNotFoundError as exc:
+            return results+[unavailable(check,command,start,str(exc))]
+        result={'name':check['name'],'command':command,'fingerprint':fingerprint,'returncode':output.returncode,
                 'duration_ms':round((time.monotonic()-start)*1000),'reused':False,
                 'output':(output.stdout+'\n'+output.stderr)[-12000:], 'cancellation':cancellation}
         results.append(result)

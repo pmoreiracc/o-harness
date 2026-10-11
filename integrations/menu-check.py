@@ -71,8 +71,10 @@ def menu(host, session):
                 'lenses': {lens: 'Stand-in check' for lens in LENSES}}
     def worker(host, root, profile, prompt, role, directory, context, **options):
         if role != 'review':(Path(root) / 'menu-check.txt').write_text(identifier() + '\n', newline='\n')
+        report=({'verdict': 'clean', 'summary': 'Stand-in review', 'findings': [], 'evidence': evidence}
+                if role == 'review' else {'status': 'completed', 'summary': 'Stand-in task', 'found_along_way': []})
         return {'failed': False, 'returncode': 0, 'duration_ms': 1, 'text': 'done', 'usage_observed': False,
-                'structured': {'verdict': 'clean', 'summary': 'Stand-in review', 'findings': [], 'evidence': evidence}}
+                'structured': report}
     prompt = 'menu check'
     start(PROJECT, {'tasks': [{'id': '1', 'title': 'Menu check', 'instructions': 'Stand-in task'}]},
           human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': session, 'turn_id': 'menu-' + identifier(), 'prompt': prompt}, host))

@@ -12,6 +12,7 @@
   "checks": [
     {
       "name": "affected",
+      "timeout_seconds": 2700,
       "command": [
         "bash",
         "integrations/test.sh",

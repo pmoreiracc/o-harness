@@ -302,7 +302,7 @@ class DeliveryTest(unittest.TestCase):
                         workers.append(args[3]);self.assertIs(kwargs['schema'],hosts.WORK_SCHEMA)
                         self.assertNotIn(scope_text,args[3]);self.assertNotIn('Do not grant this',args[3])
                         self.assertIn('fix the root cause',args[3]);self.assertIn('Every testable rule',args[3])
-                        result['structured']={'summary':'Implemented with evidence in output.txt','found_along_way':[note] if len(workers)==1 else []}
+                        result['structured']={'status':'completed','summary':'Implemented with evidence in output.txt','found_along_way':[note] if len(workers)==1 else []}
                     else:
                         request=read_json(args[5]/'request.json');reviews.append(request)
                         text=Path(next(iter(request['artifact']['files']))).read_text() if location=='private' else path.read_text()
@@ -563,7 +563,8 @@ class DeliveryTest(unittest.TestCase):
         self.documents('private');self.start_delivery()
         def no_code(*args,**kwargs):
             return {'failed':False,'returncode':0,'duration_ms':10,'text':'already implemented',
-                    'structured':{'verdict':'clean','summary':'Checked existing code','findings':[],'evidence':fixtures.EVIDENCE},'usage_observed':False}
+                    'structured':({'status':'completed','summary':'Checked existing code','found_along_way':[]} if args[4]=='implementation'
+                                  else {'verdict':'clean','summary':'Checked existing code','findings':[],'evidence':fixtures.EVIDENCE}),'usage_observed':False}
         self.assertEqual(run(self.root,no_code)['status'],'checkpoint')
         record=read_json(plans.approvals_file(self.root))['0001']
         self.assertTrue(record['delivery_no_code'])
@@ -606,6 +607,8 @@ class DeliveryTest(unittest.TestCase):
                     with self.assertRaisesRegex(Refused,'changed since'):delivery.selection(self.root,target)
 
     def test_crlf_plans_deliver_and_freeze_without_changing_line_endings(self):
+        # This fixture deliberately commits CRLF bytes, regardless of the person's global Git policy.
+        self.git('config','core.autocrlf','false')
         for location in ('repo','private'):
             with self.subTest(location=location):
                 if location=='private':self.setUp()
@@ -613,7 +616,13 @@ class DeliveryTest(unittest.TestCase):
                 for target in (path,Path(where['roadmap'])):
                     target.write_bytes(target.read_bytes().replace(b'\n',b'\r\n'))
                 if location=='private':plans.approve(self.root,where,'0001','human-crlf',False)
-                else:self.git('add','.');self.git('commit','-qm','CRLF plans')
+                else:
+                    self.git('add','.');self.git('commit','-qm','CRLF plans')
+                    self.git('update-ref','refs/remotes/origin/main','HEAD')
+                    self.assertEqual(len(delivery.selection(self.root,'0001')[0]['tasks']),2)
+                    # docs/usage.md: preserve CRLF in the checkout while Git stores the same approved text as LF.
+                    self.git('config','core.autocrlf','input')
+                    self.git('add','--renormalize','.');self.git('commit','-qm','Normalize plan line endings')
                 self.git('update-ref','refs/remotes/origin/main','HEAD')
                 self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
                 self.assertIn(b'- [x] **1.**',path.read_bytes())

@@ -2,7 +2,7 @@
 from pathlib import Path
 import re
 from .design_parse import freeze_render, plan
-from .storage import Refused, git, project
+from .storage import Refused, git, matches_git, project
 
 
 def document(root, doc):
@@ -22,7 +22,7 @@ def manifest(root, doc, track=''):
     approved=git(root,'show',base+':'+relative)
     if not re.search(r'^status:\s*approved\s*$',approved,re.M):
         raise Refused(f'The design must be approved on {base} before delivery')
-    if git(root,'hash-object','--no-filters','--',relative)!=git(root,'rev-parse',base+':'+relative):
+    if not matches_git(root,relative,base):
         raise Refused(f'Prepare the design against its approved {base} revision')
     try:output=plan(root,doc)
     except Refused as exc:raise Refused(str(exc)[-2000:]) from None

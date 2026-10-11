@@ -22,7 +22,7 @@ class WindowsTest(unittest.TestCase):
             helper=str(HOME/'integrations/windows-status.ps1').replace("'","''")
             fixture=str(bad).replace("'","''")
             command=f". '{helper}'; Run 'fixture' {{ Native '{fixture}'; Write-Host 'UNREACHABLE' }}; Run 'later evidence' {{ Write-Host 'collected' }}; if ($script:Failures.Count -eq 1) {{ exit 7 }} else {{ exit 2 }}"
-            result=subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',command],capture_output=True,text=True)
+            result=subprocess.run(['powershell','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',command],capture_output=True,text=True)
             self.assertEqual(result.returncode,7,result.stdout+result.stderr)
             self.assertIn('FAIL fixture',result.stdout)
             self.assertIn('status 23',result.stdout)
@@ -63,11 +63,11 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(rule_path('/Users/me/x'), '//Users/me/x')
 
     def test_claude_workers_on_windows_edit_files_but_have_no_shell(self):
-        from .hosts import command
+        from .hosts import command,rule_path
         root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root)
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
         with patch('oh.hosts.executable', return_value='claude'), patch('oh.hosts.WINDOWS', True):
-            work = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'implementation', None, 60000)
+            work = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'implementation', None, 60000, root / 'artifacts')
             review = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'review', None, 60000, root / 'run')
         self.assertEqual(work[work.index('--tools') + 1], 'Read,Glob,Grep,Edit,Write')
         self.assertEqual(review[review.index('--tools') + 1], 'Read,Glob,Grep')
@@ -75,7 +75,15 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(settings['sandbox'], {'enabled': False})
         self.assertLessEqual({'Bash', 'PowerShell', 'Agent'}, set(settings['permissions']['deny']))
         self.assertEqual(review[review.index('--add-dir') + 1], str(root / 'run'))
-        self.assertNotIn('--add-dir', work)
+        # docs/usage.md: workers read this project's OH inputs while edits there stay denied.
+        self.assertEqual(work[work.index('--add-dir')+1],str(root/'artifacts'))
+        self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
+        with patch('oh.hosts.executable',return_value='claude'),patch('oh.hosts.WINDOWS',False):
+            posix=command('claude',{'model':'opus','effort':'high'},root,'implementation',None,60000,root/'artifacts')
+        settings=json.loads(posix[posix.index('--settings')+1])
+        self.assertEqual(posix[posix.index('--add-dir')+1],str(root/'artifacts'))
+        self.assertIn(str(root/'artifacts'),settings['sandbox']['filesystem']['denyWrite'])
+        self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
 
     @unittest.skipIf(os.name == 'nt', 'Uses POSIX sh and symlinks')
     def test_the_launcher_finds_python_or_says_how_to_get_it(self):
@@ -425,6 +433,36 @@ class NativeWindowsTest(unittest.TestCase):
         self.assertIn('S-1-1-0', untrusted(program, 'file'))
         subprocess.run(['icacls', str(folder), '/grant', '*S-1-5-32-545:(OI)(CI)(W)'], check=True, capture_output=True)
         self.assertIn('S-1-5-32-545', untrusted(folder, 'folder'))
+
+    def test_private_state_remains_owned_by_the_account_when_elevated(self):
+        import ctypes
+        from . import system
+        from .storage import atomic_json,lock,read_json
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
+            home=Path(tmp)/'state';cache=home/'hosts/claude.json';evidence=home/'attempts/receipt.json'
+            atomic_json(cache,{'version':1});atomic_json(cache,{'version':2})
+            atomic_json(evidence,{'approved':False},immutable=True)
+            with self.assertRaises(FileExistsError):atomic_json(evidence,{'approved':True},immutable=True)
+            self.assertEqual(read_json(cache),{'version':2})
+            self.assertEqual(read_json(evidence),{'approved':False})
+            with lock(home/'runner.lock'):pass
+            for path in (home,cache.parent,cache,evidence.parent,evidence,home/'runner.lock'):
+                owner,dacl,descriptor=ctypes.c_void_p(),ctypes.c_void_p(),ctypes.c_void_p()
+                error=system._advapi32.GetNamedSecurityInfoW(str(path),1,0x1|0x4,ctypes.byref(owner),None,
+                    ctypes.byref(dacl),None,ctypes.byref(descriptor))
+                if error:raise ctypes.WinError(error)
+                try:
+                    self.assertEqual(system._sid_text(owner),system._current_user(),str(path))
+                    self.assertTrue(dacl.value)
+                    count=ctypes.cast(dacl.value+4,ctypes.POINTER(ctypes.c_ushort))[0]
+                    allowed=set()
+                    for index in range(count):
+                        ace=ctypes.c_void_p()
+                        self.assertTrue(system._advapi32.GetAce(dacl,index,ctypes.byref(ace)))
+                        self.assertEqual(ctypes.cast(ace,ctypes.POINTER(ctypes.c_ubyte))[0],0)  # ACCESS_ALLOWED_ACE
+                        allowed.add(system._sid_text(ace.value+8))
+                    self.assertEqual(allowed,{'S-1-3-4','S-1-5-18','S-1-5-32-544'},str(path))
+                finally:system._kernel32.LocalFree(descriptor)
 
     def test_oh_never_runs_a_command_planted_in_the_checkout(self):
         checkout = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, checkout, ignore_errors=True)

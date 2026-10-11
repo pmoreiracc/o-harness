@@ -133,11 +133,19 @@ def lock(path, *, wait=True):
             unlock_file(fd)
 
 
-def git(root, *args):
+def git(root, *args, raw=False):
     env = {k: v for k, v in os.environ.items() if k not in {
         'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
         'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_PREFIX'}}
-    return subprocess.check_output(['git', '-C', str(root), *args], env=env).decode().strip()
+    output=subprocess.check_output(['git', '-C', str(root), *args], env=env)
+    return output if raw else output.decode().strip()
+
+
+def matches_git(root,path,revision):
+    """Accept Windows checkout line endings, without applying filters or dropping any other bytes."""
+    actual=(Path(root)/path).read_bytes()
+    approved=git(root,'cat-file','blob',revision+':'+path,raw=True)
+    return actual==approved or actual.replace(b'\r\n',b'\n')==approved
 
 
 def worktrees(root):
