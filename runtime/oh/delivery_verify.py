@@ -23,9 +23,12 @@ def authority(root,where,path,text,approval):
     if where['location']=='private':
         if not approval or approval.get('sha256')!=hashlib.sha256(path.read_bytes()).hexdigest():raise Refused('Private design needs its unchanged human approval before delivery')
         return {'text':text,'start_text':text,'approval':approval}
-    main=git(root,'rev-parse','origin/main');relative=path.relative_to(root).as_posix()
+    from .branches import main_ref
+    base=main_ref(root,require_remote=True)
+    if not base:raise Refused('No base branch found; set base_branch with oh config')
+    main=git(root,'rev-parse',base);relative=path.relative_to(root).as_posix()
     approved=contents(root,main,relative)
-    if parsed(approved)[0]!='approved':raise Refused('The design must be approved on main before delivery; merge its approval first')
+    if parsed(approved)[0]!='approved':raise Refused(f'The design must be approved on {base} before delivery; merge its approval first')
     return {'main':main,'path':relative,'text':approved,'start_text':text}
 
 
@@ -51,7 +54,7 @@ def verify_run(root,state,*,current=False):
         if source['approval']!=bound['approvals'].get(bound['doc']):raise Refused('Private delivery approval differs from its saved starting approval')
         if hashlib.sha256(source['text'].encode()).hexdigest()!=source['approval']['sha256']:raise Refused('Private starting design differs from its human-approved hash')
     elif contents(root,source['main'],source['path'])!=source['text']:
-        raise Refused('Delivery approval snapshot does not match its recorded main commit')
+        raise Refused('Delivery approval snapshot does not match its recorded base commit')
     tracks={row[2] for row in approved.values()}
     from .branches import delivery_branch
     if len(tracks)>1 and not state.get('track') and any(t['id']!='finalize' for t in state['tasks']):raise Refused('A design with several tracks needs its per-track delivery branch')
@@ -100,7 +103,7 @@ def verify(root,state):
     from .branches import main_ref
     from .publication import commits,made
     seen=set()
-    for commit in commits(root,main_ref(root),reviewed=None):
+    for commit in commits(root,main_ref(root,state['config']),reviewed=None):
         other=made(root,state['project'],commit)
         if other and other['id'] not in seen:
             verify_run(root,other,current=other['id']==state['id']);seen.add(other['id'])

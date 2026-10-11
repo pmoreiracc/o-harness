@@ -92,6 +92,9 @@ def prompt_for(root,state,task,role,feedback=''):
           'Do not edit plan files; OH records those notes. '
           'Return summary with claims and evidence for requirements, rules, affected surfaces, self-review attacks, family closure, '
           'prior finding dispositions, verification and limits. The reviewer will challenge these claims.\n')
+        common+=('Return status completed only when the supplied task and self-review are finished, including '
+                 'when the requested behavior already exists. Otherwise return status blocked and explain '
+                 'the obstacle and concrete recovery in summary; a successful host call is not task completion.\n')
     if role=='analysis':
         common+=('Self-review the proposed document against the project rules, its referenced claims and failure paths '
                  'before returning it. For review fixes, close the whole defect family across the document and its tasks, '
@@ -180,17 +183,17 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         data['diff']={'path':str(directory/'change.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
         prompt+='\nThe exact code change under review, from HEAD to the reviewed tree, is in '+str(directory/'change.diff')+'.'
     if role=='review' and (covers:=state.get('delivery',{}).get('covers')) and not state['summaries']:
-        # Commits OH didn't make: the person's own, and merges of main resolved by the agent or the person (for those,
+        # Commits OH didn't make: the person's own, and merges of the base branch resolved by the agent or the person (for those,
         # what the resolution changed beyond Git's own merge).
         text=b''.join(subprocess.run(['git','-C',str(root),'show','--remerge-diff','--no-color','--no-ext-diff',commit],capture_output=True,check=True,
                                      env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout for commit in covers)
         (directory/'covered.diff').write_bytes(text)
         data['covers']={'commits':covers,'path':str(directory/'covered.diff'),'sha256':hashlib.sha256(text).hexdigest()}
-        prompt+=('\nThis branch also holds commits OH did not make: '+', '.join(covers)+' (the person\'s own, or merges of main '
+        prompt+=('\nThis branch also holds commits OH did not make: '+', '.join(covers)+' (the person\'s own, or merges of the base branch '
                  'resolved by hand). What each changed, for a merge beyond Git\'s own merge, is in '+str(directory/'covered.diff')
                  +'. Review it as part of this subject: a '
                  'resolution that loses either side\'s intent, changes more than the conflict needs, or edits the plans beyond '
-                 'main\'s version and this branch\'s recorded progress is a blocker.')
+                 'the base branch\'s version and this branch\'s recorded progress is a blocker.')
     if role=='review' and state.get('delivery',{}).get('layout',{}).get('location')=='private':
         from .plans import file_identity,digest_of
         render=state['delivery_render'];candidate=Path(render['candidate'])
@@ -272,6 +275,9 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                 outcome='review_mutated_tree'
     else:
         outcome='failed' if result['failed'] else 'implemented';findings=[]
+        if role=='implementation':
+            outcome,summary=hosts.work_result(result)
+            if outcome!='implemented':result=result|{'text':summary}
         if outcome=='implemented' and (designing(task) or intake(task)):
             from .plans import answer,proposal
             try:(answer if designing(task) else proposal)(result.get('structured'))
@@ -347,8 +353,9 @@ def _run(root,invoke):
                 finish_move(root,journal,state)
                 state=reduce(journal.records())
         # A proposal cuts its branch when it first writes; nothing runs on main before that.
-        if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in ('main','master',''):
-            raise Refused('Execute tasks on a short-lived branch, not main or detached HEAD')
+        from .branches import trunk
+        if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in (trunk(root,state['config']),''):
+            raise Refused('Execute tasks on a short-lived branch, not the base branch or detached HEAD')
         if git(root,'branch','--show-current')!=state['branch']:
             raise Refused('Run belongs to another branch; return to its checkout')
         from .branches import incarnation
@@ -425,7 +432,7 @@ def _run(root,invoke):
             if refined:feedback='The person asked you to refine the proposal: '+decided['feedback']+'\nYour previous answer: '+(
                 state['preview']['plan'] if intake(task) else state['rendered']).get('summary','')
             # Bounded escalation persists through restarts and repairs.
-            failures=sum(a.get('outcome') in ('failed','interrupted','verification_failed') for a in worker_attempts)
+            failures=sum(a.get('outcome') in ('failed','blocked','interrupted','verification_failed') for a in worker_attempts)
             failures-=max([g['spent_before'] for g in state.get('recovery_grants',[]) if g['task']==task_id]+[0])
             if failures>state['config']['max_escalations']:
                 status(journal,state,'needs_attention');return checkpoint(root)
@@ -458,6 +465,8 @@ def _run(root,invoke):
                     extra=[p for p in changes(root) if p not in rendered.get('intent',[])]
                     if extra:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(extra[:5])}); a plan commit holds only its plan files")
                 work=attempt(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
+                if work['outcome']=='blocked':
+                    status(journal,state,'needs_attention');return checkpoint(root)
                 if work['outcome']!='implemented' or intake(task):continue  # a proposal is shown before it is written
             apply_pending(root)
             if reduce(journal.records())['status']!='running':return checkpoint(root)
@@ -495,6 +504,14 @@ def _run(root,invoke):
             if designing(task) or intake(task):
                 from .plans import validate_outputs,layout
                 validate_outputs(root,reduce(journal.records())['rendered'],layout(root)['base'])
+            unavailable=next((r for r in check_results if r.get('unavailable')),None)
+            if unavailable:
+                apply_pending(root)
+                from .controls import check
+                check(root)
+                raise Refused('Check '+unavailable['name']+' could not run: '+unavailable['output']+
+                    '\nRestore the registered tool or make its version probe succeed, then continue with oh run. '
+                    'OH has kept the completed implementation and existing allowances; no new approval is needed.')
             if any(r['returncode'] for r in check_results):
                 journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
                     'summary':json.dumps(check_results)[-state['config']['context']['result_chars']:]})
@@ -593,7 +610,8 @@ def move(root,journal,topic):
     if state.get('branch_move'):
         finish_move(root,journal,state)
         return
-    if current not in ('main','master'):return
+    from .branches import trunk
+    if current!=trunk(root,state['config']):return
     from .plans import branch_for,Blocked
     name=branch_for(root,topic,state['id'],'propose')
     journal.append('branch.creating',{'from':current,'from_incarnation':state['incarnation'],

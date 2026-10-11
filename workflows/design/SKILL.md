@@ -59,11 +59,11 @@ phase changes or findings; do not repeatedly restate unchanged constraints or in
 transcripts to fill a waiting update. `status` is the supported source of progress.
 
 Run `run`. It verifies the native human invocation and starts the design
-(repository plans use a new `design/<slug>` branch from `main`, which OH brings up to date and switches to
+(repository plans use a new `design/<slug>` branch from the configured base branch, which OH brings up to date and switches to
 itself; private plans need no branch). OH reads the roadmap row, a fresh worker writes the prose, and OH numbers
 the doc, links it from the row, checks its task list, has it reviewed independently. Repository plans are
 committed; private plans wait for your approval. Never write or edit plan files yourself, and never run your own
-worker or review loop. Repository plans need the checkout that has `main`: when OH says another worktree holds it, tell the
+worker or review loop. Repository plans need the checkout that has the base branch: when OH says another worktree holds it, tell the
 person to type the command there.
 
 If the status is `approval_checkpoint`, show the private plan path, task count and summary,
@@ -78,11 +78,14 @@ review renewal, state how many reviews were used, what remains and the exact add
 `gate.details` retains full history for inspection; it is not popup text. Keep the question itself short.
 Concern decisions, review renewal, recovery and batch boundaries do not open a side panel.
 If `gate.preview` is present,
-show its file link and open it in Codex's right panel with `open_in_codex` when available (target
-file path `gate.preview`, placement `right`). This is the complete review copy; keep it readable
-beside the question. Do not paste the document or runner diagnostics into the question. In other
-hosts, provide the same file for the person's editor and a concise explanation in chat; lack of a
-panel never blocks the workflow.
+show its file link and open the complete review copy beside the question. In Codex, open
+`gate.preview` in the right panel with `open_in_codex` when available (target file path
+`gate.preview`, placement `right`). In Claude, when `mcp__ccd_view__show_pane` is available, copy
+`gate.preview` into your scratchpad directory under its `.md` name, open that copy with `show_pane`
+(pane `file`), and still show the original path; the copy is display only, so never pass it back to
+OH or write it into the product checkout. Do not paste the document or runner diagnostics into the
+question. In other hosts, or when a panel tool is missing or refuses, give the link and a concise
+explanation in chat; lack of a panel never blocks the workflow.
 In Codex, use `gate.native_ask` with `request_user_input_async` when the native question and an
 interruptible wait tool are available. Once the question is accepted, keep the turn open and wait
 quietly with `clock.sleep` (at most 60 seconds per call) until the human replies. Do not send a
@@ -145,7 +148,8 @@ published. Do not call `run` again or repeat implementation/review.
 Use `pr_summary` (Claude: `pr-summary`), preserve the generated body including its hidden review
 metadata, and save it to an external temporary file. Do not paste machine JSON into the visible
 PR description. Push the
-approved branch to its configured remote, and create the PR with that body. Check for an existing PR
+approved branch to its configured remote, and create the PR with that body, explicitly targeting
+`publication.base_branch` from the returned checkpoint (`gh pr create --base <branch>`). Check for an existing PR
 first so recovery reuses it. In Codex, attach the resulting PR with `attach_artifact` when available. Report
 “PR #<number> opened” with its link, a short summary of the work and verification, and the recorded
 `review_rounds` count (for example, “Invariant review passed in 2 rounds”);

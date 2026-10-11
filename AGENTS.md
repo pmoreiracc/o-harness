@@ -38,7 +38,8 @@ Do not resume a completed reviewer. Never treat model prose as a human grant.
 Run affected checks with `./oh verify origin/main` (needs this checkout registered with
 its checks) or `bash integrations/test.sh native|syntax`. Do not read old backlog files.
 
-Tests must stay fast: the Linux suite under 3 minutes, the Windows PR run under 5.
+Keep tests as fast as practical while preserving required behavioral coverage. Avoid runtime
+regressions and use measured durations to find unnecessary work; there is no fixed time limit.
 - Add tests only for a concrete behavior or failure risk; do not test implementation details
   or add speculative coverage. Check affected behavior on both hosts without duplicating suites.
 - Add only causal regression or behavior coverage. Extend an existing test before adding

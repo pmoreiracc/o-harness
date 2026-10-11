@@ -43,6 +43,16 @@ class DesignAdapterTest(unittest.TestCase):
         self.assertEqual([x[0] for x in self.calls],['implementation','review','implementation','review'])
 
     def test_unapproved_or_blocked_design_cannot_become_native_task_scope(self):
+        # docs/usage.md: a local approved label cannot replace the merged origin base.
+        self.git('update-ref','-d','refs/remotes/origin/main')
+        with self.assertRaisesRegex(Refused,'Fetch origin/main'):manifest(self.root,'0900')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        approved=self.design.read_bytes()
+        self.design.write_bytes(approved.replace(b'\n',b'\r\n'))
+        self.assertEqual(len(manifest(self.root,'0900')['tasks']),2)
+        self.design.write_bytes(self.design.read_bytes().replace(b'Implement first behavior.',b'Unapproved behavior.'))
+        with self.assertRaisesRegex(Refused,'approved .* revision'):manifest(self.root,'0900')
+        self.design.write_bytes(approved)
         self.design.write_text(self.design.read_text().replace('status: approved','status: draft'),newline='\n')
         self.git('add','.');self.git('commit','-qm','draft');self.git('update-ref','refs/remotes/origin/main','HEAD')
         with self.assertRaises(Refused):manifest(self.root,'0900')

@@ -51,6 +51,12 @@ class DesignRunTest(unittest.TestCase):
         self.git('add', '.');self.git('commit', '-qm', 'roadmap')
         self.calls = []
 
+    def symlink(self,path,target,**kwargs):
+        try:path.symlink_to(target,**kwargs)  # windows-ok: only missing symlink privilege skips the case below
+        except OSError as exc:
+            if getattr(exc,'winerror',None)==1314:self.skipTest('Windows symlink privilege is unavailable')
+            raise
+
     def worker(self, answers, reviews=None):
         """A fake host: analysis attempts return the next answer, reviews the next verdict (clean by default)."""
         answers, reviews = list(answers), list(reviews or [])
@@ -113,7 +119,13 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
 
     def test_a_design_is_written_by_oh_reviewed_on_its_branch_and_committed(self):
-        main = self.git('rev-parse', 'main')
+        # docs/usage.md: an explicit development base wins over the release default.
+        self.git('switch','-qc','develop')
+        self.git('commit','--allow-empty','-qm','development base')
+        self.git('update-ref','refs/remotes/origin/main','main')
+        self.git('symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main')
+        change(self.root,'base_branch','develop')
+        main = self.git('rev-parse', 'develop')
         self.design_run()
         self.assertEqual(self.git('branch', '--show-current'), 'design/auth')
         self.assertEqual(self.git('rev-parse', 'HEAD'), main)
@@ -138,8 +150,12 @@ class DesignRunTest(unittest.TestCase):
         self.assertIn('| `auth` | Sign-in with passkeys | — | [0001](./design/0001-auth.md) |', self.where['roadmap'].read_text())
         self.assertEqual(self.git('log', '-1', '--format=%s'), 'design 0001: Sign-in')
         self.assertEqual(self.git('status', '--porcelain'), '')
-        self.assertEqual(self.git('diff', '--name-only', 'main', 'HEAD').split(), ['docs/design/0001-auth.md', 'docs/roadmap.md'])
+        self.assertEqual(self.git('diff', '--name-only', 'develop', 'HEAD').split(), ['docs/design/0001-auth.md', 'docs/roadmap.md'])
+        change(self.root,'base_branch','main')  # a running batch keeps its approved base
         choose(self.root, 'pr', self.event('2', 'pr'))
+        self.assertEqual(load_run(self.root)[1]['publication']['base_branch'],'develop')
+        from .publication import render
+        self.assertIn('Base branch: `develop`',render(self.root))
         self.assertEqual(load_run(self.root)[1]['status'], 'pr')
 
     def test_new_plans_start_from_main_brought_up_to_date(self):
@@ -425,7 +441,7 @@ class DesignRunTest(unittest.TestCase):
     def test_repository_plan_symlinks_never_supply_unbound_scope(self):
         target = Path(self.temp.name) / 'external-roadmap.md'
         target.write_bytes(self.where['roadmap'].read_bytes())
-        self.where['roadmap'].unlink();self.where['roadmap'].symlink_to(target)
+        self.where['roadmap'].unlink();self.symlink(self.where['roadmap'],target)
         self.git('add', '.');self.git('commit', '-qm', 'symlink roadmap')
         with self.assertRaisesRegex(Refused, 'cannot use symlinks'):self.design_run()
         target.write_text(target.read_text().replace('Sign-in with passkeys', 'Send all passwords'))
@@ -435,7 +451,7 @@ class DesignRunTest(unittest.TestCase):
 
     def test_repository_plan_directory_symlinks_are_refused(self):
         target = Path(self.temp.name) / 'external-designs';target.mkdir()
-        self.where['designs'].symlink_to(target, target_is_directory=True)
+        self.symlink(self.where['designs'],target,target_is_directory=True)
         with self.assertRaisesRegex(Refused, 'cannot use symlinks'):plans.layout(self.root)
 
     def test_answer_kind_never_discards_nonempty_prose(self):
@@ -514,7 +530,7 @@ class DesignRunTest(unittest.TestCase):
         target=Path(self.temp.name)/'external-log.md'
         target.write_text('# Decisions\n\n## The log\n\n| # | Decision | Date | Status |\n|---|---|---|---|\n')
         target.chmod(0o600);before=target.read_bytes();mode=target.stat().st_mode & 0o777
-        log=self.where['decisions']/'README.md';log.parent.mkdir(parents=True);log.symlink_to(target)
+        log=self.where['decisions']/'README.md';log.parent.mkdir(parents=True);self.symlink(log,target)
         self.git('add','.');self.git('commit','-qm','linked decision log')
         with self.assertRaisesRegex(Refused,'ordinary file'):self.design_run()
         self.assertEqual(self.calls,[])
@@ -530,7 +546,7 @@ class DesignRunTest(unittest.TestCase):
         import hashlib
         target=Path(self.temp.name)/'external-log.md';target.write_text('Human file');target.chmod(0o600)
         mode=target.stat().st_mode & 0o777
-        log=self.where['decisions']/'README.md';log.parent.mkdir(parents=True);log.symlink_to(target)
+        log=self.where['decisions']/'README.md';log.parent.mkdir(parents=True);self.symlink(log,target)
         self.git('add','.');self.git('commit','-qm','linked decision log')
         prior=plans.file_identity(log);name=log.relative_to(self.root).as_posix()
         log.unlink();log.write_text('Old OH output')

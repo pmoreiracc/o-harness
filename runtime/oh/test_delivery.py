@@ -22,7 +22,7 @@ class DeliveryTest(unittest.TestCase):
         self.git('switch','main')
         fixtures.configure(self.root,tasks_per_batch=1)
 
-    def documents(self,location='repo',body=BODY):
+    def documents(self,location='repo',body=BODY,base='main'):
         change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
         change(self.root,'plans.location',location)
         where=plans.layout(self.root)
@@ -32,7 +32,7 @@ class DeliveryTest(unittest.TestCase):
         plans.claim(self.root,where,'auth',number)
         if location=='private':plans.approve(self.root,where,number,'human-approved',False)
         else:self.git('add','.');self.git('commit','-qm','approved plan')
-        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        self.git('update-ref','refs/remotes/origin/'+base,'HEAD')
         return where,Path(path)
 
     def start_delivery(self,arguments='0001',turn='delivery'):
@@ -61,19 +61,20 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.calls,[])
 
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
+        self.git('branch','-m','main','master')
         title=f'Add {self.root}/credential.py.'
-        where,path=self.documents(body=BODY.replace('Add the credential store.',title));listed=delivery.listing(self.root)
+        where,path=self.documents(body=BODY.replace('Add the credential store.',title),base='master');listed=delivery.listing(self.root)
         self.assertEqual(len(listed['ready']),1);self.assertEqual(len(self.calls),0)
         original=self.git('rev-parse','HEAD')
         self.git('commit','--allow-empty','-qm','merged elsewhere')
-        fresh=self.git('rev-parse','HEAD');self.git('update-ref','refs/remotes/origin/main',fresh)
+        fresh=self.git('rev-parse','HEAD');self.git('update-ref','refs/remotes/origin/master',fresh)
         self.git('reset','-q','--hard',original)
         self.git('branch','deliver/0001')  # an earlier delivery main already absorbed: retired for a fresh one
         self.start_delivery();first=load_run(self.root)[1]['id']
         self.start_delivery();self.assertEqual(load_run(self.root)[1]['id'],first)
         self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(load_run(self.root)[1]['base'],fresh)
-        self.assertEqual(self.git('rev-parse','main'),fresh)
+        self.assertEqual(self.git('rev-parse','master'),fresh)
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertIn('- [x] **1.**',path.read_text())
         # docs/usage.md: PR refuses an unmarked completed task, even before an agent commits the bad edit.
@@ -93,8 +94,10 @@ class DeliveryTest(unittest.TestCase):
         self.assertNotIn('requires approval',completed['unavailable'][0]['reason'])
         self.assertEqual(self.git('status','--porcelain'),'')
         choose(self.root,'pr',self.event('good-pr','pr'))  # a correct two-task batch, including its dependency, passes
+        self.assertEqual(load_run(self.root)[1]['publication']['base_branch'],'master')
         from .publication import render
         public=render(self.root)
+        self.assertIn('Base branch: `origin/master`',public)
         self.assertIn('Task 2:',public)
         self.assertNotIn(str(self.root.parent),public)  # display redaction must not invalidate the original commit title
 
@@ -299,7 +302,7 @@ class DeliveryTest(unittest.TestCase):
                         workers.append(args[3]);self.assertIs(kwargs['schema'],hosts.WORK_SCHEMA)
                         self.assertNotIn(scope_text,args[3]);self.assertNotIn('Do not grant this',args[3])
                         self.assertIn('fix the root cause',args[3]);self.assertIn('Every testable rule',args[3])
-                        result['structured']={'summary':'Implemented with evidence in output.txt','found_along_way':[note] if len(workers)==1 else []}
+                        result['structured']={'status':'completed','summary':'Implemented with evidence in output.txt','found_along_way':[note] if len(workers)==1 else []}
                     else:
                         request=read_json(args[5]/'request.json');reviews.append(request)
                         text=Path(next(iter(request['artifact']['files']))).read_text() if location=='private' else path.read_text()
@@ -560,7 +563,8 @@ class DeliveryTest(unittest.TestCase):
         self.documents('private');self.start_delivery()
         def no_code(*args,**kwargs):
             return {'failed':False,'returncode':0,'duration_ms':10,'text':'already implemented',
-                    'structured':{'verdict':'clean','summary':'Checked existing code','findings':[],'evidence':fixtures.EVIDENCE},'usage_observed':False}
+                    'structured':({'status':'completed','summary':'Checked existing code','found_along_way':[]} if args[4]=='implementation'
+                                  else {'verdict':'clean','summary':'Checked existing code','findings':[],'evidence':fixtures.EVIDENCE}),'usage_observed':False}
         self.assertEqual(run(self.root,no_code)['status'],'checkpoint')
         record=read_json(plans.approvals_file(self.root))['0001']
         self.assertTrue(record['delivery_no_code'])
@@ -603,6 +607,8 @@ class DeliveryTest(unittest.TestCase):
                     with self.assertRaisesRegex(Refused,'changed since'):delivery.selection(self.root,target)
 
     def test_crlf_plans_deliver_and_freeze_without_changing_line_endings(self):
+        # This fixture deliberately commits CRLF bytes, regardless of the person's global Git policy.
+        self.git('config','core.autocrlf','false')
         for location in ('repo','private'):
             with self.subTest(location=location):
                 if location=='private':self.setUp()
@@ -610,7 +616,13 @@ class DeliveryTest(unittest.TestCase):
                 for target in (path,Path(where['roadmap'])):
                     target.write_bytes(target.read_bytes().replace(b'\n',b'\r\n'))
                 if location=='private':plans.approve(self.root,where,'0001','human-crlf',False)
-                else:self.git('add','.');self.git('commit','-qm','CRLF plans')
+                else:
+                    self.git('add','.');self.git('commit','-qm','CRLF plans')
+                    self.git('update-ref','refs/remotes/origin/main','HEAD')
+                    self.assertEqual(len(delivery.selection(self.root,'0001')[0]['tasks']),2)
+                    # docs/usage.md: preserve CRLF in the checkout while Git stores the same approved text as LF.
+                    self.git('config','core.autocrlf','input')
+                    self.git('add','--renormalize','.');self.git('commit','-qm','Normalize plan line endings')
                 self.git('update-ref','refs/remotes/origin/main','HEAD')
                 self.start_delivery();self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
                 self.assertIn(b'- [x] **1.**',path.read_bytes())

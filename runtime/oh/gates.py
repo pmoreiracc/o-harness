@@ -330,7 +330,10 @@ def ask(gate):
 def how(gate, root):
     typed = ', '.join(o['choice'] for o in gate['options']) + (', or refine: <what to change>' if gate['words'] else '')
     if gate['host'] == 'claude':
-        return ('Ask the person with AskUserQuestion, passing exactly `gate.ask` and never an `answers` field. '
+        panel=('Before asking, if `mcp__ccd_view__show_pane` is available, copy gate.preview into your scratchpad directory under its .md name, '
+               'open that copy with show_pane (pane `file`) while still showing the original path; the copy is display only and never goes back to OH, '
+               'and a missing or refused pane never blocks the question. ') if gate.get('preview') else ''
+        return (panel+'Ask the person with AskUserQuestion, passing exactly `gate.ask` and never an `answers` field. '
                 'After they answer, run OH `run`; OH reads the click from the saved transcript of the conversation that '
                 'owns this run, so ask only there. '
                 f'Typing works too: {typed}.')

@@ -56,11 +56,11 @@ TOOLS = [
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
     tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
     tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
-    tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with main: '
-         'fresh discards the branch to start over from main, keep finishes without main\'s changes.',
+    tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with the base branch: '
+         'fresh discards the branch to start over from the base branch, keep finishes without the base branch\'s changes.',
          {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),
     tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
-    tool('pr_summary', 'PR summary', 'Refresh the main reference and generate the review summary for this branch\'s pull request.', {'base': TEXT}),
+    tool('pr_summary', 'PR summary', 'Refresh the selected base reference and generate the review summary for this branch\'s pull request.', {'base': TEXT}),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
          'as a menu and records their click in OH. Prefer gate.native_ask with request_user_input_async when an interruptible wait tool can keep the turn open; '
          'choose is the fallback. Call it when OH output has a `gate`, in the conversation that '

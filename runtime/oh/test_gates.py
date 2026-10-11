@@ -111,6 +111,7 @@ class GateTest(unittest.TestCase):
         self.assertLess(len(question['question']),400)
         self.assertEqual(question['options'][0]['description'],'Run the next 1 task, up to 3 reviews each.')
         self.assertIn('AskUserQuestion', result['gate']['how'])
+        self.assertNotIn('show_pane', result['gate']['how'])  # no preview, so no side-pane copy
         choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))
         self.assertIsNone(current(self.root))  # running: nothing to choose
         after = run(self.root, self.fake)
@@ -166,6 +167,8 @@ class GateTest(unittest.TestCase):
         question=result['gate']['ask']['questions'][0]
         self.assertEqual(result['gate']['choices'],['approve','refine','cancel'])
         self.assertIn('Implement behavior',Path(result['gate']['preview']).read_text())
+        self.assertIn('scratchpad',result['gate']['how']);self.assertIn('show_pane',result['gate']['how'])  # Claude's side pane shows a display copy
+        self.assertNotIn('open_in_codex',result['gate']['how'])
         self.assertNotIn('Implement behavior',question['question'])
         self.assertEqual(run(self.root,self.fake)['status'],'prepared_checkpoint')
         self.assertEqual(self.calls,[]);self.assertEqual(self.git('branch','--show-current'),'main')
