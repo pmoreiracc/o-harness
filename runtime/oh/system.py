@@ -130,15 +130,18 @@ def stop(child,*,force=False):
         if live:raise
 
 
-def wait_for_exit(child):
+def wait_for_exit(child, timeout=None):
     """Observe completion without reaping the process group leader, so its group ID stays valid."""
     import select
     if WINDOWS:
         # The job object, not the leader's ID, holds the descendants here.
-        child.wait()
+        try:child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:return False
     elif hasattr(os, 'waitid'):
+        deadline=time.monotonic()+timeout if timeout is not None else None
         while os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
-            time.sleep(0.05)
+            if deadline is not None and time.monotonic()>=deadline:return False
+            time.sleep(.05 if deadline is None else min(.05,max(0,deadline-time.monotonic())))
     elif hasattr(select, 'kqueue'):
         import contextlib
         with contextlib.closing(select.kqueue()) as queue:
@@ -146,12 +149,13 @@ def wait_for_exit(child):
                 flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=select.KQ_NOTE_EXIT)
             try:
                 queue.control([event], 0, 0)
-                queue.control(None, 1, None)
+                return bool(queue.control(None, 1, timeout))
             except ProcessLookupError:
                 # Already exited, still unreaped because this scope owns the Popen object.
                 pass
     else:
         raise RuntimeError('OH process ownership requires Linux waitid or macOS kqueue')
+    return True
 
 
 def replace(source,target):

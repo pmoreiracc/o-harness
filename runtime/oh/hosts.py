@@ -263,7 +263,7 @@ def parse_usage(host,event,attempt):
     return []
 
 
-def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=1800):
+def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=None):
     authentication(host,root)
     from .capabilities import validate_profile
     validate_profile(host,profile,root)
@@ -312,9 +312,17 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
             'duration_ms':round((time.monotonic()-started)*1000),'failed':failed or status!=0 or cancelled.is_set(),'cancellation':reason}
 
 
+def failure_text(result):
+    reasons=result.get('cancellation',[])
+    reason=('Worker stopped by request.' if 'stopped' in reasons else
+            'Worker reached its execution timeout.' if 'timeout' in reasons else
+            f"Worker failed (exit status {result.get('returncode', 'unknown')}).")
+    return reason+('\nLast worker output:\n'+result['text'] if result.get('text') else '')
+
+
 def work_result(result):
     """Host success means the report arrived, not that the assigned implementation finished."""
-    if result['failed']:return 'failed',result['text']
+    if result['failed']:return 'failed',failure_text(result)
     value=result.get('structured')
     if (not isinstance(value,dict) or set(value)!=set(WORK_SCHEMA['required']) or
             value.get('status') not in ('completed','blocked') or

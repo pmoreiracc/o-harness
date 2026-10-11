@@ -16,7 +16,7 @@ from . import hosts
 from .config import HOME
 from .storage import Refused, atomic_json, changes, digest, git, identifier, lock, whole, git_env
 from .telemetry import best_effort
-from .verification import tree, verify, candidate_tree
+from .verification import tree, verify, candidate_tree, failure_summary
 from .workflow import checkpoint, committed, load_run, next_task, reduce, review_limit
 
 
@@ -254,6 +254,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     except Exception as exc:
         result={'failed':True,'returncode':-1,'text':str(exc),'structured':None,
                 'duration_ms':round((time.monotonic()-started)*1000),'usage_observed':False}
+    if role!='implementation' and result['failed']:result=result|{'text':hosts.failure_text(result)}
     try:after=tree(root)
     except Exception as exc:
         _,findings=hosts.review_result(result) if role=='review' else ('failed',[])
@@ -306,6 +307,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     atomic_json(directory/'result.json',result|{'outcome':outcome,'findings':findings,'tree':after},immutable=True)
     record={'found_along_way':notes,'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
       'findings':findings,'summary':result['text'][:state['config']['context']['result_chars']],
+      'returncode':result.get('returncode'),'cancellation':result.get('cancellation',[]),
       'duration_ms':result['duration_ms'],'evidence':str(directory),'git_tree':git_tree,'head':data['head'],'artifact':data.get('artifact')}
     if isinstance(answer,dict) and isinstance(answer.get('summary'),str):
         record['human_summary']=answer['summary'][:state['config']['context']['result_chars']]
@@ -523,7 +525,7 @@ def _run(root,invoke):
                     'OH has kept the completed implementation and existing allowances; no new approval is needed.')
             if any(r['returncode'] for r in check_results):
                 journal.append('verification.failed',{'attempt':work['id'],'task':task_id,
-                    'summary':json.dumps(check_results)[-state['config']['context']['result_chars']:]})
+                    'summary':failure_summary(check_results,state['config']['context']['result_chars'])})
                 continue
             apply_pending(root)
             from .controls import check
@@ -670,8 +672,16 @@ def finish_move(root,journal,state):
 def apply_pending(root):
     """Apply the person's menu answers and typed choices while the run works. A typed command that starts other
     work waits for the agent's next `run`, and never stops this one."""
+    # Pause/stop already reduced authority. Draining that step needs no fresh human record,
+    # which the host may not have saved yet when it interrupts the calling conversation.
+    controls=('pausing','paused','stopping','stopped')
+    if load_run(root)[1]['status'] in controls:return
     from .authority import materialize,waiting_work
-    if not waiting_work(root):materialize(root)
+    try:
+        if not waiting_work(root):materialize(root)
+    except Refused:
+        # A control can arrive during the native-record read as well as before it.
+        if load_run(root)[1]['status'] not in controls:raise
 
 
 def observe_completion(state,task_id):

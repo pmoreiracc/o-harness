@@ -18,6 +18,37 @@ class ControlsTest(unittest.TestCase):
     event=fixtures.WorkflowTest.event
     fake=fixtures.WorkflowTest.fake
 
+    def test_stop_during_worker_settles_without_rereading_unsaved_human_turn(self):
+        # docs/usage.md: an accepted stop drains its worker even if the host's newest turn is not yet readable.
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        def pending(*args,**kwargs):
+            if load_run(self.root)[1]['status']=='stopping':
+                raise Refused('Codex has not saved the calling human turn yet; retry the same OH operation.')
+        def stopped(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            self.assertEqual(request(self.root,'stop')['status'],'stopping')
+            return value|{'failed':True,'returncode':-15,'cancellation':['stopped'],'structured':None}
+        with patch('oh.authority.materialize',side_effect=pending):
+            result=run(self.root,stopped)
+        self.assertEqual(result['status'],'stopped')
+        self.assertEqual(result['completed'],0)
+        self.assertEqual(result['last_failure']['cancellation'],['stopped'])
+        self.assertEqual([c[0] for c in self.calls],['implementation'])
+        self.assertTrue((self.root/'output.txt').exists())
+
+    def test_stop_arriving_during_human_record_read_still_settles(self):
+        # The same control can race the read after the implementation has already returned.
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        def pending(*args,**kwargs):
+            if load_run(self.root)[1]['attempts']:
+                request(self.root,'stop')
+                raise Refused('Codex has not saved the calling human turn yet; retry the same OH operation.')
+        with patch('oh.authority.materialize',side_effect=pending):
+            result=run(self.root,self.fake)
+        self.assertEqual(result['status'],'stopped')
+        self.assertEqual(result['completed'],0)
+        self.assertEqual([c[0] for c in self.calls],['implementation'])
+
     def test_pause_drains_worker_and_resume_keeps_allowances_without_repeating_it(self):
         fixtures.configure(self.root,max_escalations=0)
         journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())

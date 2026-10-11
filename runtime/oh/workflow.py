@@ -154,7 +154,7 @@ def reduce(records):
         elif kind=='verification.failed':
             matches=[a for a in state['attempts'] if a['id']==d['attempt']]
             if len(matches)!=1:raise Refused('Verification failure without an admitted implementation')
-            matches[0].update(outcome='verification_failed',summary=d['summary'])
+            matches[0].update(outcome='verification_failed',summary=d['summary'],failed_at=record['at'])
         elif kind=='decision':
             state['decisions'].append(d['source'])
             if d['choice']=='pr':state['publication']=d
@@ -552,6 +552,17 @@ def checkpoint(root):
     left=len([t for t in state['tasks'] if t['id'] not in state['done']])
     reviewed=next((a['task'] for a in reversed(state['attempts']) if a['role']=='review' and a.get('finished')),None)
     last_review=review_progress(state,reviewed) if reviewed else None
+    task=next((t['id'] for t in state['tasks'] if t['id'] not in state['done']),None)
+    failed=max((a for a in state['attempts'] if a['task']==task and a.get('finished') and
+                a.get('outcome') in ('failed','blocked','interrupted','verification_failed')),
+               key=lambda a:a.get('failed_at',a.get('finished_at','')),default=None)
+    failure={}
+    if failed:
+        from .gates import report_text
+        failure={'last_failure':{'attempt':failed['id'],'task':task,'role':failed['role'],
+                 'outcome':failed['outcome'],'summary':report_text(failed)[:900]}}
+        if failed['outcome']!='verification_failed':
+            failure['last_failure'].update({k:failed[k] for k in ('returncode','cancellation') if k in failed})
     model_notices=list(dict.fromkeys(a['model_fallback']['notice'] for a in state['attempts'] if a.get('model_fallback')))[-5:]
     private_diff={}
     if state['status']=='approval_checkpoint' and state.get('plans',{}).get('location')=='private' and state.get('rendered',{}).get('files'):
@@ -562,7 +573,7 @@ def checkpoint(root):
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
             'last_results':state['summaries'][-2:],'evidence':str(journal.path),
             'review_rounds':sum(a['role']=='review' and a['task'] in state['done'] for a in state['attempts']),
-            'config_hash':state['config_hash'],'version':state['harness_version']} | (
+            'config_hash':state['config_hash'],'version':state['harness_version']} | failure | (
             {'model_notices':model_notices} if model_notices else {}) | (
             {'last_review':last_review} if last_review else {}) | running_progress(state) | (
             {'publication':state['publication']|{'next':'Execution is finished. Use pr_summary, push the approved branch and open one PR targeting publication.base_branch. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.'}}

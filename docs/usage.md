@@ -121,6 +121,13 @@ fresh worker implements it, your project checks run, an independent reviewer che
 exact result, blockers get fixed, and the reviewed tree is committed. Workers can't write
 OH's state, your settings or Git internals.
 
+Workers have no total execution deadline: implementation, planning and review can continue
+as long as the task needs. Explicit stop still terminates their process group. When a worker
+exits, OH cleans up its descendants so an inherited output pipe cannot keep the attempt waiting.
+Project checks and short host operations keep their own timeouts. Covered by
+`test_workers_outlive_elapsed_time_and_close_descendants_output` and
+`test_explicit_command_deadline_still_cancels` in `runtime/oh/test_system.py`.
+
 Claude workers can read this project's OH task inputs and repair feedback while those files
 remain protected from edits. A worker that reports blocked work keeps its edits and report;
 OH stops before checks or independent review and explains what must be resolved. A successful
@@ -152,6 +159,11 @@ as well as scope. At approval and completion checkpoints, `last_review` retains 
 finished review's outcome, round count and finding count, even when it finished between status
 polls. The chat reports that result once per attempt
 before the commit or saved document, explicitly identifying a clean review with no findings.
+`last_failure` explains the current task's latest failed attempt or check, including a worker's
+exit status and cancellation reason when available, even while a retry runs. Check repair feedback
+is plain text without terminal colour codes; the complete retained check result stays in the journal.
+Covered by `test_failed_worker_cause_reaches_status_and_retry` and
+`test_failed_review_then_verification_failure_consumes_worker_allowance` in `runtime/oh/test_workflow.py`.
 It avoids repeated promises to commit or publish. At a batch boundary, **Stop and take over** retains the work
 without publishing. Once all tasks finish, that option becomes **Finish without a PR**.
 The chat summarizes the work and finite Continue allowance; approval copies show their complete
@@ -228,6 +240,10 @@ You can still code, commit and open PRs without OH at any time.
 
 If the agent is busy, run `oh --root <project> pause` or `oh --root <project> stop` in a
 terminal. `oh --root <project> status` shows the current run.
+
+Once pause or stop is accepted, finishing that control does not require rereading the host's
+latest human turn. A stop settles after worker cleanup even when that turn is still being saved.
+Covered by `test_stop_during_worker_settles_without_rereading_unsaved_human_turn` in `runtime/oh/test_controls.py`.
 
 If files change while a batch is paused, OH refuses to resume until you restore them or
 stop the batch. It never discards your edits.
