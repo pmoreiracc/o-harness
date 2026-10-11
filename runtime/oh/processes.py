@@ -8,8 +8,8 @@ from . import system
 
 
 @contextlib.contextmanager
-def launch(root, command, *, controlled=False, timeout=1800, **kwargs):
-    from .controls import check, stopping
+def launch(root, command, *, controlled=False, timeout=None, interrupt=False, **kwargs):
+    from .controls import check
     gate = lock(checkout_file(root, 'oh-control.lock')) if controlled else contextlib.nullcontext()
     journal=None
     with gate:
@@ -24,17 +24,23 @@ def launch(root, command, *, controlled=False, timeout=1800, **kwargs):
     def watch():
         from .workflow import reduce
         stamp=None; current='running'
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while not done.wait(0.1):
+            if system.wait_for_exit(child, timeout=0):
+                # An exited worker's descendants may still hold its output pipe open.
+                # Close them before the consumer waits forever for EOF; keep the leader unreaped.
+                system.stop(child, force=True)
+                return
             if journal is not None:
                 updated=journal.path.stat().st_mtime_ns
                 if updated!=stamp:
                     current=reduce(journal.records())['status'];stamp=updated
             stop=current in ('stopping','stopped')
-            if stop or time.monotonic() >= deadline:
+            if stop or deadline is not None and time.monotonic() >= deadline:
                 reason.append('stopped' if stop else 'timeout')
                 cancelled.set()
-                system.stop(child)
+                # Host CLIs handle Ctrl-C by cancelling shell tools in their own sessions.
+                system.stop(child, interrupt=interrupt)
                 # Keep the group leader unreaped until escalation. Its PID cannot be reused.
                 done.wait(5)
                 system.stop(child, force=True)
@@ -49,6 +55,9 @@ def launch(root, command, *, controlled=False, timeout=1800, **kwargs):
         # Also reap descendants left behind by a completed command; all belong to this step.
         system.stop(child, force=True)
         child.wait(timeout=10)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream is not None:
+                with contextlib.suppress(BrokenPipeError):stream.close()
 
 
 def capture(root, command, *, controlled=False, timeout=900, env=None):
@@ -61,4 +70,3 @@ def capture(root, command, *, controlled=False, timeout=900, env=None):
         output.seek(0); error.seek(0)
         return subprocess.CompletedProcess(command, child.returncode,
             output.read().decode(errors='replace'), error.read().decode(errors='replace')), reason
-

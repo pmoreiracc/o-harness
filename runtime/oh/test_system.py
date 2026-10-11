@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -8,9 +9,65 @@ import unittest
 from unittest.mock import patch
 from . import system
 from .storage import Refused, lock, snapshot_guard
+from . import hosts
 
 
 class SystemTest(unittest.TestCase):
+    def test_workers_outlive_elapsed_time_and_close_descendants_output(self):
+        # docs/usage.md: elapsed task time is not failure; worker exit must still end the output stream.
+        for host in ('codex','claude'):
+            with self.subTest(host=host),tempfile.TemporaryDirectory() as tmp:
+                event=({'type':'item.completed','item':{'type':'agent_message','text':'finished'}} if host=='codex'
+                       else {'type':'result','result':'finished','is_error':False})
+                late=({'type':'item.completed','item':{'type':'agent_message','text':'descendant survived'}} if host=='codex'
+                      else {'type':'result','result':'descendant survived','is_error':False})
+                descendant='import time;time.sleep(.5);print('+repr(json.dumps(late))+',flush=True)'
+                script=('import subprocess,sys,time;sys.stdin.read();time.sleep(.2);'
+                        'subprocess.Popen([sys.executable,"-c",'+repr(descendant)+']);'
+                        'print('+repr(json.dumps(event))+',flush=True)')
+                with patch('oh.hosts.authentication'),patch('oh.capabilities.validate_profile'), \
+                     patch('oh.hosts.command',return_value=[sys.executable,'-c',script]), \
+                     patch('oh.processes.time') as clock:
+                    clock.monotonic.side_effect=[0]+[3600]*100
+                    result=hosts.invoke(host,Path(tmp),{},'work','implementation',Path(tmp)/'attempt',
+                                        {'project':'fixture','attempt':'worker','compact_tokens':60000,'standalone':True})
+                self.assertFalse(result['failed'],result)
+                self.assertEqual(result['text'],'finished')
+                self.assertEqual(result['cancellation'],[])
+
+    def test_explicit_command_deadline_still_cancels(self):
+        from .processes import capture
+        with tempfile.TemporaryDirectory() as tmp:
+            result,reasons=capture(Path(tmp),[sys.executable,'-c','import time;time.sleep(30)'],timeout=.1)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(reasons,['timeout'])
+
+    @unittest.skipIf(system.WINDOWS,'Windows contains detached commands in the worker job object')
+    def test_worker_cancellation_interrupts_the_host_to_clean_detached_commands(self):
+        # Codex starts shell tools in separate sessions; SIGTERM skips its interrupt cleanup.
+        for host in ('codex','claude'):
+            with self.subTest(host=host),tempfile.TemporaryDirectory() as tmp:
+                closed=Path(tmp)/'command-closed'
+                script='''import signal,subprocess,sys,time
+from pathlib import Path
+command=subprocess.Popen([sys.executable,'-c','import time;time.sleep(5)'],
+    start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+def interrupt(signum,frame):
+    command.terminate();command.wait(timeout=2)
+    Path(sys.argv[1]).touch()
+    raise SystemExit(130)
+signal.signal(signal.SIGINT,interrupt)
+sys.stdin.read()
+time.sleep(10)
+'''
+                with patch('oh.hosts.authentication'),patch('oh.capabilities.validate_profile'), \
+                     patch('oh.hosts.command',return_value=[sys.executable,'-c',script,str(closed)]):
+                    result=hosts.invoke(host,Path(tmp),{},'work','implementation',Path(tmp)/'attempt',
+                        {'project':'fixture','attempt':'worker','compact_tokens':60000,'standalone':True},timeout=1)
+                self.assertTrue(closed.exists(),'Host did not finish cleaning its detached command')
+                self.assertEqual(result['cancellation'],['timeout'])
+                self.assertTrue(result['failed'])
+
     def test_state_writers_share_the_snapshot_lock_and_a_backup_waits_for_all_of_them(self):
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
             together=threading.Barrier(3,timeout=5);release=threading.Event()

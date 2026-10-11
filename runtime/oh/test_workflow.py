@@ -294,15 +294,43 @@ class WorkflowTest(unittest.TestCase):
             value=self.fake(*args,**kwargs)
             if args[4]=='review':value['failed']=True
             return value
-        checks=[[{'returncode':0,'duration_ms':0,'reused':False}], [{'returncode':1,'duration_ms':0,'reused':False}]]
+        checks=[[{'name':'tests','returncode':0,'duration_ms':0,'reused':False}],
+                [{'name':'tests','returncode':1,'duration_ms':0,'reused':False,
+                  'output':'\x1b[31mExpected refund_links.SELECT\x1b[0m\nFix the privilege expectation.'}]]
         with patch('oh.runner.verify',side_effect=checks):result=run(self.root,failed_review)
         self.assertEqual(result['status'],'needs_attention')
         _,state=load_run(self.root)
         self.assertEqual(state['attempts'][0]['outcome'],'verification_failed')
         self.assertEqual(state['attempts'][1]['outcome'],'failed')
+        self.assertEqual(result['last_failure']['outcome'],'verification_failed')
+        self.assertEqual(result['last_failure']['summary'],
+                         'tests failed (exit 1).\nExpected refund_links.SELECT\nFix the privilege expectation.')
         before=len(self.calls);run(self.root,failed_review);self.assertEqual(len(self.calls),before)
         choose(self.root,'retry',self.event('2','retry'))
-        self.assertEqual(run(self.root,self.fake)['completed'],1)
+        def repaired(*args,**kwargs):
+            if args[4]=='implementation':self.assertIn('Expected refund_links.SELECT',args[3])
+            return self.fake(*args,**kwargs)
+        self.assertEqual(run(self.root,repaired)['completed'],1)
+
+    def test_failed_worker_cause_reaches_status_and_retry(self):
+        from .workflow import checkpoint
+        journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())
+        def recovering(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            if len(self.calls)==1:
+                return value|{'failed':True,'returncode':-15,'cancellation':['timeout'],
+                              'structured':None,'text':'Still implementing.'}
+            if args[4]=='implementation':
+                failure=checkpoint(self.root)['last_failure']
+                self.assertEqual(failure['returncode'],-15)
+                self.assertEqual(failure['cancellation'],['timeout'])
+                self.assertIn('execution timeout',failure['summary'])
+                self.assertIn('execution timeout',args[3])
+            return value
+        result=run(self.root,recovering)
+        self.assertEqual(result['completed'],1)
+        self.assertNotIn('last_failure',result)
+        self.assertEqual(sum(r['kind']=='grant' for r in journal.records()),1)
 
 
     def test_native_pr_evidence_binds_all_commits_and_refuses_tampering(self):

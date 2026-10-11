@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -133,6 +134,18 @@ def verify(root, checks, project_id, *, controlled=False):
         if reusable:
             atomic_json(cache,result)
     return results
+
+
+def failure_summary(results, limit):
+    """Readable bounded repair feedback; complete check evidence stays in the journal."""
+    failed=[r for r in results if r.get('returncode') or r.get('cancellation') or r.get('unavailable')]
+    header='\n'.join(f"{r['name']} failed (exit {r.get('returncode', 'unknown')}"+
+                     (', '+', '.join(r['cancellation']) if r.get('cancellation') else '')+').' for r in failed)
+    output='\n'.join(r.get('output','') for r in failed)
+    output=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',output)
+    header=(header+'\n')[:limit]
+    remaining=limit-len(header)
+    return header+(output[-remaining:] if remaining else '')
 
 
 def check_env():
