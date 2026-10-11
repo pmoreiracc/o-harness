@@ -236,6 +236,8 @@ def decision_summary(state):
     pending=[t for t in state['tasks'] if t['id'] not in state['done']]
     task=pending[0] if pending else state['tasks'][-1]
     status=state['status']
+    verification_status=('failed' if any(check_failed(check)
+        for result in state.get('verification',{}).values() for check in result['checks']) else 'passed')
     if status=='review_checkpoint':
         from .workflow import review_limit
         used=sum(a['role']=='review' and a['task']==task['id'] for a in state['attempts'])
@@ -244,12 +246,12 @@ def decision_summary(state):
                 'The current task still needs a completed review or a repair.')
         return f"OH has used {used} of {review_limit(state,task['id'])} allowed reviews. {reason}"
     if status=='checkpoint':
-        return (f"{len(state['done'])} of {len(state['tasks'])} tasks completed. Checks passed; independent review completed. Next: "
+        return (f"{len(state['done'])} of {len(state['tasks'])} tasks completed. Checks {verification_status}; independent review completed. Next: "
                 +(' '.join(task['title'].split())[:200] if pending else 'none')+'.')
     if status=='completed':
         count=len(state['done'])
         checks='Checks' if state.get('workflow','deliver')=='deliver' else 'Document validation'
-        return f"{count} task"+('s' if count!=1 else '')+f" completed. {checks} passed; independent review completed."
+        return f"{count} task"+('s' if count!=1 else '')+f" completed. {checks} {verification_status}; independent review completed."
     if status=='paused':return 'The run is paused. Resume continues the approved work with its remaining allowances.'
     last=next((a for a in reversed(state['attempts']) if a['task']==task['id']),{})
     text=last.get('human_summary') or ('A task needs your attention before OH can continue.' if status=='needs_attention' else 'Review findings need your decision.')

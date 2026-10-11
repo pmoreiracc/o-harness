@@ -193,7 +193,7 @@ class WorkflowTest(unittest.TestCase):
     def test_zero_exit_cancelled_check_blocks_delivery_and_is_reported_failed(self):
         # docs/configuration.md: cancellation is failure even when cleanup exits zero.
         from .cli import main
-        from .gates import full_summary
+        from .gates import describe, full_summary
         from .publication import readable
         configure(self.root,max_escalations=0,checks=[
             {'name':'timed check','command':[sys.executable,'-c','pass']},
@@ -208,7 +208,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual([c[0] for c in self.calls],['implementation'])
         self.assertEqual(self.git('rev-parse','HEAD'),head)
         self.assertTrue((self.root/'output.txt').exists())
-        _,state=load_run(self.root)
+        journal,state=load_run(self.root)
         checks=state['verification']['1']['checks']
         self.assertEqual((checks[0]['returncode'],checks[0]['cancellation']),(0,['timeout']))
         self.assertEqual(result['last_failure']['outcome'],'verification_failed')
@@ -218,6 +218,10 @@ class WorkflowTest(unittest.TestCase):
         historical={'evidence':{'run':state['id'],'task':'1','title':'Task 1',
             'attempts':[{'outcome':'clean','findings':[]}],'resolutions':{}}}
         self.assertIn('timed check (failed)',readable([historical],{state['id']:state}))
+        for status in ('completed','checkpoint'):
+            legacy=state|{'status':status,'done':['1'],'summaries':[{'task':'1','commit':head}],
+                          'tasks':self.tasks[:2] if status=='checkpoint' else self.tasks[:1]}
+            self.assertIn('Checks failed',describe(journal,legacy)['summary'])
         with patch('oh.checks.run',return_value=checks),patch('sys.stdout',new_callable=io.StringIO), \
              self.assertRaises(SystemExit) as exited:
             main(['--root',str(self.root),'verify'])
