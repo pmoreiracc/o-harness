@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from . import plans
 from .design_parse import freeze_render, plan
-from .storage import Final, Refused, atomic_json, git, matches_git, read_json
+from .storage import Final, Refused, atomic_json, git, matches_git, read_json, git_env
 
 
 def parse(arguments):
@@ -98,10 +98,10 @@ def progress_only(root,fork,paths,doc):
         for path in git(root,'diff','--name-only',base,'HEAD','--',*paths).splitlines():
             from .scope import undo_notes
             import subprocess
-            text=subprocess.check_output(['git','-C',str(root),'show','HEAD:'+path]).decode()
+            text=subprocess.check_output(['git','-C',str(root),'show','HEAD:'+path],env=git_env()).decode()
             records=[r for r in scope.values() if r.get('destination',{}).get('design')==str(Path(root)/path)]
             # Notes already merged on main are part of its plan, not this branch's progress.
-            base_text=subprocess.check_output(['git','-C',str(root),'show',base+':'+path]).decode()
+            base_text=subprocess.check_output(['git','-C',str(root),'show',base+':'+path],env=git_env()).decode()
             records=[r for r in records if r.get('change',{}).get('after','') not in base_text]
             if unticked(undo_notes(text,records),completed)!=base_text:return False
     except (CalledProcessError,KeyError,IndexError,Refused):return False

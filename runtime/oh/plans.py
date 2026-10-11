@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import threading
 from .design_parse import US, design_file, lines, link_prefix, plan, roadmap
-from .storage import Refused, changes
+from .storage import Refused, changes, git_env
 
 SLUG = r'[a-z0-9]+(-[a-z0-9]+)*'
 TABLE = ['| Slug | Initiative | Depends | Design |', '|---|---|---|---|']
@@ -643,7 +643,7 @@ def ignored(root, relative):
     """Which new paths Git ignores, so a commit would miss them. Tracked files are committed even when a pattern
     matches them; exit status 1 means none is ignored."""
     import subprocess
-    found = subprocess.run(['git', '-C', str(root), 'check-ignore', '--', *relative], capture_output=True)
+    found = subprocess.run(['git', '-C', str(root), 'check-ignore', '--', *relative], capture_output=True, env=git_env())
     if found.returncode not in (0, 1):raise Blocked(f'git check-ignore failed: {found.stderr.decode().strip()}')
     return found.stdout.decode().split()
 

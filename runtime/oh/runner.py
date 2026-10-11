@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from . import hosts
 from .config import HOME
-from .storage import Refused, atomic_json, changes, digest, git, identifier, lock, whole
+from .storage import Refused, atomic_json, changes, digest, git, identifier, lock, whole, git_env
 from .telemetry import best_effort
 from .verification import tree, verify, candidate_tree
 from .workflow import checkpoint, committed, load_run, next_task, reduce, review_limit
@@ -178,7 +178,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     if role=='review' and git_tree:
         # The exact code change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
         diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','--text','--no-textconv','HEAD',git_tree],capture_output=True,check=True,
-                            env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout
+                            env=git_env()).stdout
         (directory/'change.diff').write_bytes(diff)
         data['diff']={'path':str(directory/'change.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
         prompt+='\nThe exact code change under review, from HEAD to the reviewed tree, is in '+str(directory/'change.diff')+'.'
@@ -186,7 +186,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         # Commits OH didn't make: the person's own, and merges of the base branch resolved by the agent or the person (for those,
         # what the resolution changed beyond Git's own merge).
         text=b''.join(subprocess.run(['git','-C',str(root),'show','--remerge-diff','--no-color','--no-ext-diff',commit],capture_output=True,check=True,
-                                     env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}).stdout for commit in covers)
+                                     env=git_env()).stdout for commit in covers)
         (directory/'covered.diff').write_bytes(text)
         data['covers']={'commits':covers,'path':str(directory/'covered.diff'),'sha256':hashlib.sha256(text).hexdigest()}
         prompt+=('\nThis branch also holds commits OH did not make: '+', '.join(covers)+' (the person\'s own, or merges of the base branch '
@@ -254,7 +254,16 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     except Exception as exc:
         result={'failed':True,'returncode':-1,'text':str(exc),'structured':None,
                 'duration_ms':round((time.monotonic()-started)*1000),'usage_observed':False}
-    after=tree(root)
+    try:after=tree(root)
+    except Exception as exc:
+        _,findings=hosts.review_result(result) if role=='review' else ('failed',[])
+        detail=f'OH could not fingerprint the returned worker result: {exc}. Preserve the work, repair the checkout and resume this run.'
+        atomic_json(directory/'result.json',result|{'outcome':'failed','tree':None,'findings':findings,'fingerprint_error':str(exc)},immutable=True)
+        journal.append('attempt.finished',{'id':attempt_id,'task':task['id'],'role':role,'outcome':'failed','tree':None,
+            'findings':findings,'summary':detail,'fingerprint_error':str(exc),'duration_ms':result['duration_ms'],
+            'evidence':str(directory),'git_tree':git_tree,'head':data['head']})
+        status(journal,state,'needs_attention')
+        raise Refused(detail) from exc
     private_changed='private_inputs' in data and private_inputs(layout(root))!=data['private_inputs']
     delivery_changed=''
     try:guard(root,state)

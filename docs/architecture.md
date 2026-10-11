@@ -105,6 +105,30 @@ Workers run through the checked host CLI with API-key variables removed. They ca
 OH state or Git internals; reviewers are read-only. Pause and stop share a lock with commit,
 so a stop never leaves a half-recorded task.
 
+## Git subjects and recovery
+
+Local Git reads, review candidates and commits keep the same user configuration, including
+runtime line-ending settings, while discarding inherited selectors for another repository or index.
+The explicit checkout root is validated before fingerprinting or constructing a candidate. A candidate
+uses a temporary index; status reads do not refresh the person's index. Covered by
+`GitSubjectTest.test_git_configuration_agrees_and_inherited_selectors_cannot_choose_a_sibling`.
+
+Replacing a tracked file with a folder, or a folder with a file, has the same fingerprint before and
+after staging. Nonignored children and tracked files remain visible, even when newly ignored;
+child edits invalidate the reviewed subject. Only indexed gitlinks and actual embedded repositories
+are checked as child repositories, and dirty or uninitialized children require repair before review.
+This repository's nested worktrees remain separate. Conflicted index entries require resolution.
+Covered by `GitSubjectTest.test_file_folder_replacements_are_staging_independent_and_children_remain_visible`,
+`GitSubjectTest.test_real_gitlinks_embedded_repositories_and_nested_worktrees` and
+`GitSubjectTest.test_unmerged_index_is_not_an_arbitrary_review_subject`.
+
+If the final fingerprint fails after a worker returns, OH retains its complete answer, finishes the
+attempt as failed with an unknown post-tree, and stops for attention. Repair the checkout and use the
+existing retry choice; restarting does not call the worker again or replenish an allowance. A supported
+file/folder replacement also survives an interrupted commit without additional model calls. Covered by
+`WorkerCompletionTest.test_post_worker_fingerprint_failure_retains_result_and_spent_attempt` and
+`WorkflowTest.test_recover_clean_review_after_commit_without_new_model_calls`.
+
 ## Data
 
 The SQLite analytics database is rebuilt from saved events and never grants anything.
