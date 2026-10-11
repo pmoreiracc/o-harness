@@ -3,11 +3,11 @@ import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
-from .storage import Journal, Refused, git
+from .storage import Journal, Refused, git, git_env
 
 
 def contents(root,revision,path):
-    try:return subprocess.check_output(['git','-C',str(root),'show',revision+':'+path],stderr=subprocess.DEVNULL).decode()
+    try:return subprocess.check_output(['git','-C',str(root),'show',revision+':'+path],stderr=subprocess.DEVNULL,env=git_env()).decode()
     except (subprocess.CalledProcessError,UnicodeDecodeError):raise Refused(f'Delivery design {path} is missing or unreadable at {revision}; restore its approved path and review the repair') from None
 
 

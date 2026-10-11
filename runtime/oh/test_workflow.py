@@ -191,15 +191,22 @@ class WorkflowTest(unittest.TestCase):
         self.assertFalse(verify(self.root,checks,self.project_id)[0]['reused'])
 
     def test_recover_clean_review_after_commit_without_new_model_calls(self):
+        # docs/architecture.md: a supported file/folder replacement survives an interrupted commit without paid reruns.
         journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())
+        def replacement(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            if args[4]=='implementation':
+                (self.root/'product.txt').unlink();(self.root/'product.txt').mkdir()
+                (self.root/'product.txt/child').write_text('refactored')
+            return value
         original=Journal.append
         def crash(obj,kind,data):
             if kind=='task.completed':raise RuntimeError('simulated crash after commit')
             return original(obj,kind,data)
         with patch.object(Journal,'append',crash):
-            with self.assertRaises(RuntimeError):run(self.root,self.fake)
+            with self.assertRaises(RuntimeError):run(self.root,replacement)
         self.assertEqual(len(self.calls),2)
-        self.assertEqual(run(self.root,self.fake)['completed'],1)
+        self.assertEqual(run(self.root,replacement)['completed'],1)
         self.assertEqual(len(self.calls),2)
 
     def test_duplicate_concurrent_renewals_count_once(self):
@@ -492,6 +499,47 @@ class WorkerCompletionTest(unittest.TestCase):
         for key,value in (("status",None),("status","unknown"),("summary",""),("summary"," \n"),("found_along_way",[42])):
             broken=report["structured"]|{key:value}
             self.assertEqual(work_result(report|{"structured":broken})[0],"failed")
+
+    def test_post_worker_fingerprint_failure_retains_result_and_spent_attempt(self):
+        """docs/architecture.md: unknown post-worker state preserves raw evidence without a new allowance."""
+        from .runner import attempt
+        from .storage import read_json
+        from .workflow import review_limit
+        journal,initial=start(self.root,{'tasks':self.tasks[:1]},self.event())
+        report={'failed':False,'returncode':0,'duration_ms':1,'text':'usable worker result',
+                'structured':{'status':'completed','summary':'Kept work','found_along_way':['retained finding']},'usage_observed':False}
+        calls=[]
+        def worker(*args,**kwargs):
+            calls.append(args[4]);(self.root/'output').write_text('keep this')
+            return report
+        before=tree(self.root)
+        with patch('oh.runner.tree',side_effect=[before,Refused('fingerprint unavailable')]):
+            with self.assertRaisesRegex(Refused,'repair the checkout and resume'):
+                attempt(self.root,journal,initial,self.tasks[0],'implementation',initial['config']['models']['codex']['simple'],invoke=worker)
+        _,state=load_run(self.root);saved=read_json(Path(state['attempts'][0]['evidence'])/'result.json')
+        for key,value in report.items():self.assertEqual(saved[key],value)
+        self.assertIsNone(saved['tree']);self.assertIn('fingerprint unavailable',saved['fingerprint_error'])
+        self.assertEqual(state['status'],'needs_attention');self.assertEqual(state['granted'],initial['granted'])
+        self.assertEqual(state['done'],[]);self.assertEqual(len(state['attempts']),1)
+        self.assertTrue(state['attempts'][0]['finished']);self.assertEqual(state['attempts'][0]['outcome'],'failed')
+        self.assertIsNone(state['attempts'][0]['tree']);self.assertEqual(review_limit(state,'1'),review_limit(initial,'1'))
+        previous=len(journal.records());run(self.root,worker)
+        self.assertEqual(calls,['implementation']);self.assertEqual(len(journal.records()),previous)
+        choose(self.root,'retry',self.event('retry','retry'))
+        _,state=load_run(self.root);self.assertEqual(state['recovery_grants'][0]['spent_before'],1)
+        self.assertEqual((self.root/'output').read_text(),'keep this')
+        # The same failure during review retains every returned finding and spends that review round.
+        finding={'severity':'blocking','description':'Retained defect','path':'output','family':'kept-defect','relation':'original'}
+        report=report|{'structured':{'verdict':'blocking','summary':'Fix retained defect','findings':[finding],'evidence':EVIDENCE}}
+        with patch('oh.runner.tree',side_effect=[tree(self.root),Refused('review fingerprint unavailable')]):
+            with self.assertRaises(Refused):
+                attempt(self.root,journal,state,self.tasks[0],'review',state['config']['models']['codex']['review'],invoke=worker)
+        _,state=load_run(self.root);review=state['attempts'][-1]
+        self.assertEqual(review['findings'],[finding]);self.assertIsNone(review['tree']);self.assertTrue(review['finished'])
+        saved=read_json(Path(review['evidence'])/'result.json')
+        self.assertEqual(saved['structured'],report['structured']);self.assertEqual(saved['findings'],[finding])
+        self.assertEqual(len([a for a in state['attempts'] if a['role']=='review']),1)
+        self.assertEqual(review_limit(state,'1'),review_limit(initial,'1'));self.assertEqual(state['status'],'needs_attention')
 
     def test_host_schemas_avoid_string_length_keywords(self):
         """Codex strict structured output rejects string length rules; work_result enforces a non-blank summary."""

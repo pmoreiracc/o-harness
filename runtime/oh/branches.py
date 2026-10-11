@@ -1,7 +1,7 @@
 """Branch identity from Git's own reflog; OH writes no marker into a checkout."""
 import os
 from pathlib import Path
-from .storage import Refused,digest,git
+from .storage import Refused,digest,git, git_env
 
 
 def incarnation(root,branch,*,create=False):
@@ -74,7 +74,7 @@ def execution_branch(root,title,run):
 
 def run_git(root,*args,timeout=None):
     import subprocess
-    env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}|{'GIT_TERMINAL_PROMPT':'0'}
+    env=git_env()|{'GIT_TERMINAL_PROMPT':'0'}
     # UTF-8, whatever the platform's default, keeping other bytes (such as a latin-1 file's) exactly.
     try:return subprocess.run(['git','-C',str(root),*args],capture_output=True,text=True,encoding='utf-8',errors='surrogateescape',env=env,timeout=timeout)
     except subprocess.TimeoutExpired:return subprocess.CompletedProcess(args,1,'','timed out')
@@ -86,7 +86,7 @@ def squashed(root,into,start,end):
     import subprocess
     def ids(text):
         found=subprocess.run(['git','-C',str(root),'patch-id','--stable'],input=text,capture_output=True,text=True,encoding='utf-8',errors='surrogateescape',
-                             env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')})
+                             env=git_env())
         return {line.split()[0] for line in found.stdout.splitlines() if line.strip()}
     change=run_git(root,'diff','--no-color','--no-ext-diff',start,end).stdout
     if not change.strip():return False

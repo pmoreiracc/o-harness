@@ -127,3 +127,118 @@ class IntegrationTest(unittest.TestCase):
             with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err:
                 self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
             self.assertIn('oh trust-host codex /opt/native/codex',''.join(c.args[0] for c in err.write.call_args_list))
+
+
+class GitSubjectTest(unittest.TestCase):
+    """docs/architecture.md: Git subjects agree across review, staging and supported replacements."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)/'repo';self.root.mkdir()
+        self.git('init','-qb','main');self.git('config','user.name','Fixture');self.git('config','user.email','fixture@example.invalid')
+        self.git('config','core.autocrlf','false');self.git('config','diff.renames','true')
+        (self.root/'item').write_bytes(b'original\n')
+        self.git('add','.');self.git('commit','-qm','initial')
+
+    def git(self,*args):
+        from .storage import git
+        return git(self.root,*args)
+
+    def test_git_configuration_agrees_and_inherited_selectors_cannot_choose_a_sibling(self):
+        from .storage import git_env,git
+        from .verification import tree,candidate_tree
+        from .branches import run_git
+        from .registry import identity
+        global_config=Path(self.temp.name)/'global';global_config.write_bytes(b'[core]\n autocrlf = true\n')
+        # Local configuration still overrides global; injected runtime configuration overrides local.
+        with patch.dict(os.environ,{'GIT_CONFIG_GLOBAL':str(global_config)}):
+            self.assertEqual(self.git('config','core.autocrlf'),'false')
+        sibling=Path(self.temp.name)/'sibling'
+        self.git('worktree','add','-qb','sibling',str(sibling))
+        index=Path(self.git('rev-parse','--path-format=absolute','--git-path','index'))
+        before=index.read_bytes()
+        env={'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.autocrlf','GIT_CONFIG_VALUE_0':'true',
+             'GIT_CONFIG_GLOBAL':str(global_config),'GIT_SSH_COMMAND':'fixture ssh',
+             'GIT_DIR':str(sibling/'.git'),'GIT_WORK_TREE':str(sibling),'GIT_INDEX_FILE':str(Path(self.temp.name)/'wrong-index')}
+        (self.root/'item').write_bytes(b'changed\r\n')
+        with patch.dict(os.environ,env):
+            selected=git_env()
+            for key in ('GIT_CONFIG_COUNT','GIT_CONFIG_KEY_0','GIT_CONFIG_VALUE_0','GIT_CONFIG_GLOBAL','GIT_SSH_COMMAND'):
+                self.assertEqual(selected[key],env[key])
+            self.assertEqual(run_git(self.root,'config','core.autocrlf').stdout.strip(),'true')
+            subject=tree(self.root);candidate=candidate_tree(self.root)
+            self.assertEqual(index.read_bytes(),before)
+            self.assertEqual(os.environ['GIT_INDEX_FILE'],env['GIT_INDEX_FILE'])
+            self.git('add','--all')
+            self.assertEqual(candidate,self.git('write-tree'));self.assertEqual(subject,tree(self.root))
+            self.assertEqual(git(sibling,'status','--porcelain'),'')
+        self.assertFalse(Path(env['GIT_INDEX_FILE']).exists())
+        with patch.dict(os.environ,{'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.worktree','GIT_CONFIG_VALUE_0':str(sibling)}):
+            # Git versions that ignore injected core.worktree still resolve the authoritative root.
+            for action in (tree,candidate_tree,identity):
+                try:action(self.root)
+                except Refused:pass
+                else:self.assertEqual(Path(self.git('rev-parse','--show-toplevel')).resolve(),self.root.resolve())
+        self.git('config','core.worktree',str(sibling))
+        for action in (tree,candidate_tree,identity):
+            with self.assertRaises(Refused):action(self.root)
+
+
+    def test_file_folder_replacements_are_staging_independent_and_children_remain_visible(self):
+        from .verification import tree,candidate_tree
+        original=tree(self.root)
+        (self.root/'item').unlink();(self.root/'item').mkdir()
+        (self.root/'item/child').write_bytes(b'original\n')  # Same bytes trigger Git's rename detection.
+        before=tree(self.root);candidate=candidate_tree(self.root)
+        self.assertNotEqual(original,before)
+        self.git('add','--all');self.assertEqual(before,tree(self.root));self.assertEqual(candidate,self.git('write-tree'))
+        self.assertTrue(self.git('diff','--name-status','HEAD').startswith('R100'))
+        (self.root/'item/child').write_text('changed after review')
+        self.assertNotEqual(before,tree(self.root));self.assertNotEqual(candidate,candidate_tree(self.root))
+        self.git('add','--all');self.git('commit','-qm','folder')
+        (self.root/'item/child').unlink();(self.root/'item').rmdir();(self.root/'item').write_text('changed after review')
+        reverse=tree(self.root);candidate=candidate_tree(self.root)
+        self.git('add','--all');self.assertEqual(reverse,tree(self.root));self.assertEqual(candidate,self.git('write-tree'))
+        self.assertTrue(self.git('diff','--name-status','HEAD').startswith('R100'))
+        # Newly ignored tracked files still contribute. Empty and ignored-only folders add no Git content.
+        self.git('commit','-qm','file');(self.root/'.gitignore').write_bytes(b'item\nignored/\n')
+        (self.root/'empty').mkdir();(self.root/'ignored').mkdir();(self.root/'ignored/child').write_text('ignored')
+        before=tree(self.root);(self.root/'item').write_text('tracked edit')
+        self.assertNotEqual(before,tree(self.root))
+        self.git('add','--all');self.git('commit','-qm','ignore')
+        (self.root/'item').unlink();(self.root/'item').mkdir()
+        deleted=tree(self.root);self.git('add','--all');self.assertEqual(deleted,tree(self.root))
+
+    def test_real_gitlinks_embedded_repositories_and_nested_worktrees(self):
+        from .verification import tree,candidate_tree
+        from .storage import git
+        baseline=tree(self.root)
+        self.git('worktree','add','-qb','nested','nested')
+        (self.root/'nested/other').write_text('separate checkout')
+        self.assertEqual(baseline,tree(self.root))
+        (self.root/'item').unlink()
+        child=self.root/'item';child.mkdir();git(child,'init','-qb','main')
+        with self.assertRaises(Refused):tree(self.root)  # no child commit; never substitute parent HEAD
+        with self.assertRaises(subprocess.CalledProcessError):candidate_tree(self.root)
+        git(child,'config','user.name','Fixture');git(child,'config','user.email','fixture@example.invalid')
+        (child/'file').write_text('child');git(child,'add','.');git(child,'commit','-qm','child')
+        embedded=tree(self.root);self.assertNotEqual(baseline,embedded)
+        candidate=candidate_tree(self.root);self.git('add','--all','--','.',':(exclude,top)nested')
+        self.assertEqual(embedded,tree(self.root));self.assertEqual(candidate,self.git('write-tree'))
+        self.assertTrue(self.git('diff','--name-status','HEAD').startswith('T'))
+        (child/'file').write_text('dirty')
+        for action in (tree,candidate_tree):
+            with self.assertRaises(Refused):action(self.root)
+        (child/'file').write_text('child');git(child,'add','.');git(child,'commit','-qm','next','--allow-empty')
+        self.assertNotEqual(embedded,tree(self.root))
+        # An indexed gitlink whose checkout is absent is a deletion; an uninitialized folder is refused.
+        import shutil,stat
+        shutil.rmtree(child,onexc=lambda remove,path,_:(os.chmod(path,stat.S_IWRITE),remove(path)))
+        tree(self.root);child.mkdir()
+        with self.assertRaises(Refused):tree(self.root)
+
+    def test_unmerged_index_is_not_an_arbitrary_review_subject(self):
+        from .verification import tree
+        blob=self.git('rev-parse','HEAD:item')
+        self.git('update-index','--force-remove','item')
+        subprocess.run(['git','-C',str(self.root),'update-index','--index-info'],input=f'100644 {blob} 1\titem\n100644 {blob} 2\titem\n'.encode(),check=True)
+        with self.assertRaisesRegex(Refused,'Resolve Git conflicts'):tree(self.root)
