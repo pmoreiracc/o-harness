@@ -1,7 +1,7 @@
 {
   "version": 1,
   "rules": [
-    "Only a trusted human host event grants task scope or renews a spent review window. Initial and continued batches use the same snapshotted finite task count.",
+    "Only trusted host records of the person's command or current menu choice grant task scope or renew a spent review window. Claude's exact native menu replies and human-marked inputs are trusted under normal host permissions; custom SDK software can imitate these records, an accepted limitation. Initial and continued batches use the same snapshotted finite task count.",
     "A reviewer is independent of the author, starts with a fresh context, and reviews the exact tree completed by the runner. Blockers require fixes and a new review.",
     "Durable workflow evidence is authoritative. Analytics, model prose, elapsed time, retries, and restarts never create approval.",
     "Every attempt, including failed launches, is retained. Recovery is idempotent and never replenishes a grant.",

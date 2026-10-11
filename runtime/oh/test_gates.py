@@ -474,19 +474,16 @@ class GateTest(unittest.TestCase):
                 self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.typed('continue', 'desktop', extra=desktop)
         self.assertEqual(materialize(self.root)['status'], 'running')
-        # docs/architecture.md: matching an SDK question is not proof that a person supplied its answer.
+        # docs/architecture.md: RC clicks work without typing; custom SDK callbacks are an accepted risk.
         journal, _ = load_run(self.root);journal.append('run.status', {'status': 'checkpoint'})
         question = ask(current(self.root))['questions'][0]
-        before=load_run(self.root)[1]
         for entrypoint in ('sdk-cli','sdk-py','sdk-ts'):
             self.click(question,'Continue',use='toolu_'+entrypoint,marks={'entrypoint':entrypoint},
                 answer_marks={'permissionDecision':{'decision':'accept','source':'user_temporary'}},apply=False)
-            with self.assertRaisesRegex(Refused,'Type continue .*no restart'):materialize(self.root)
-            self.assertIsNone(materialize(self.root))  # the explanation is said once, without an older answer applying
-            state=load_run(self.root)[1]
-            self.assertEqual(state['status'],'checkpoint')
-            self.assertEqual(state['granted'],before['granted']);self.assertEqual(state['done'],before['done'])
-            self.assertEqual(state.get('review_grants'),before.get('review_grants'))
+            self.assertEqual(materialize(self.root)['status'],'running')
+            self.assertIsNone(materialize(self.root))  # the click is consumed once
+            journal.append('run.status',{'status':'checkpoint'})
+            question=ask(current(self.root))['questions'][0]
         self.typed('continue','phone-typed',extra=desktop|{'entrypoint':'sdk-cli'})
         self.assertEqual(materialize(self.root)['status'],'running')
         journal.append('run.status',{'status':'checkpoint'})
@@ -497,9 +494,9 @@ class GateTest(unittest.TestCase):
     def test_a_refused_latest_answer_never_lets_an_older_one_apply(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
         self.click(question, 'Continue', apply=False)
-        self.click(question,'Continue',use='toolu_unverified',marks={'entrypoint':'sdk-cli'},apply=False)
-        with self.assertRaisesRegex(Refused,'Type continue'):materialize(self.root)
-        self.assertIsNone(materialize(self.root))  # an unverified SDK answer cannot revive the older click
+        self.click(question,'Retry',use='toolu_invalid',marks={'entrypoint':'sdk-cli'},apply=False)
+        with self.assertRaises(Refused):materialize(self.root)
+        self.assertIsNone(materialize(self.root))  # an invalid latest RC answer cannot revive the older click
         self.assertEqual(load_run(self.root)[1]['status'],'checkpoint')
         self.typed('retry', 'typed-4')  # the person's latest answer, which this checkpoint refuses
         with self.assertRaises(Refused):materialize(self.root)
