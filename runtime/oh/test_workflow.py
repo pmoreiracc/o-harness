@@ -75,6 +75,9 @@ class WorkflowTest(unittest.TestCase):
                     self.assessment_calls.append((args[2],args[3]))
                     return {'failed':False,'returncode':0,'duration_ms':2,'text':'Assessed fixture',
                         'structured':dict(self.assessment_output),'usage_observed':False}
+                if args[4]=='review':
+                    from .worker_checks import admission
+                    admission(args[5])  # all existing repository/private/plan fixtures exercise the real binding check
                 result=invoke(*args,**kwargs)
                 if (self.auto_worker_checks and args[4]=='implementation' and not result.get('failed')
                         and (result.get('structured') or {}).get('status')=='completed'

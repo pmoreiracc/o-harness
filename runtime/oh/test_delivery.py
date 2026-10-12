@@ -217,7 +217,7 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['publication']['base_branch'],'master')
         from .publication import render
         public=render(self.root)
-        self.assertIn('Base branch: `origin/master`',public)
+        self.assertIn('Base branch: `master`',public)  # the approved PR target, not its local tracking ref
         self.assertIn('Task 2:',public)
         self.assertNotIn(str(self.root.parent),public)  # display redaction must not invalidate the original commit title
 
