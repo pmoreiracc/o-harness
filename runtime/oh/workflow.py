@@ -112,6 +112,10 @@ def reduce(records):
             if len(matches)!=1:raise Refused('Completion without exactly one admitted attempt')
             matches[0].update(d | {'finished':True,'finished_at':record['at']})
         elif kind=='verification':state.setdefault('verification',{})[d['task']]=d
+        elif kind=='report.submitted':state.setdefault('reports',{})[d['id']]=d
+        elif kind=='handoff.normalized':
+            author=next(a for a in state['attempts'] if a['id']==d['id'])
+            author.update(original_outcome=author['outcome'],outcome='implemented',normalized_report=d['report'])
         elif kind=='run.status':
             state['status']=d['status']
             if d['status'] not in ('approval_checkpoint','prepared_checkpoint'):state.pop('refinement',None)
@@ -559,6 +563,10 @@ def running_progress(state,directory=None):
                     all(isinstance(v,str) for v in focus.values()) and 0<len(focus['message'])<=600):
                 progress['focus']=focus
         except (OSError,ValueError,Refused):pass  # visibility cannot block a run or turn a partial save into a failure
+    if last and not last['finished'] and (submission:=state.get('reports',{}).get(last['id'])) and submission.get('issues'):
+        label='reviewer' if last['role']=='review' else 'implementation agent'
+        progress['focus']={'id':submission['hash'],'updated_at':last['started_at'],
+                           'message':'The '+label+' is correcting its report: '+'; '.join(submission['issues'])[:450]}
     if worker:progress['implementation']={'attempt':worker['id'],'summary':report_text(worker)[:900]}
     if review:=review_progress(state,task['id']):progress['review']=review
     return {'progress':progress}
@@ -577,7 +585,7 @@ def checkpoint(root):
     last_review=review_progress(state,reviewed) if reviewed else None
     task=next((t['id'] for t in state['tasks'] if t['id'] not in state['done']),None)
     latest=next((a for a in reversed(state['attempts']) if a['task']==task),None)
-    failed=latest if latest and latest.get('finished') and latest.get('outcome') in ('failed','blocked','interrupted','verification_failed') else None
+    failed=latest if latest and latest.get('finished') and latest.get('outcome') in ('failed','blocked','interrupted','verification_failed','report_invalid','review_incomplete') else None
     failure={}
     if failed:
         from .gates import report_text

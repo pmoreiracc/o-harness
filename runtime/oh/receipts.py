@@ -87,6 +87,11 @@ def completed(directory, admission, result, record, state):
         lines.extend(finding(f) for f in record.get('findings', []))
         if not record.get('findings'):lines.append('No findings.' if record['outcome'] == 'clean' else 'No completed verdict; inspect the retained result.')
     lines.extend(['', '## Summary', '', record.get('human_summary') or record.get('summary') or 'Not recorded.'])
+    if record.get('report_issues'):
+        lines.extend(['','## Report limitations','',*('- '+item for item in record['report_issues'])])
+    if record.get('review_fragments'):
+        import json
+        lines.extend(['','## Unclassified findings','',*('    '+json.dumps(item,ensure_ascii=False) for item in record['review_fragments'])])
     value = result.get('structured') or {}
     if isinstance(value, dict) and isinstance(value.get('evidence'), dict):
         for key in ('anchors', 'lenses', 'attacks', 'limits'):
@@ -122,9 +127,16 @@ def index(journal, state):
             scope = state.get('scope_records', {}).get(attempt['id'])
             if resolution:lines.append(f"| Decision | | {resolution['choice']} | |")
             if scope:lines.append(f"| Scope | | {scope['action']} | |")
+            if attempt.get('normalized_report'):
+                lines.append(f"| Handoff correction | | [Unambiguous legacy references](attempts/{attempt['id']}/normalized-report.json); original outcome retained | |")
         lines.append('')
         from .handoff import finding_index
         findings=finding_index(state,task['id'])
+        if findings['incomplete_reviews']:
+            lines.extend(['### Incomplete review evidence',''])
+            for item in findings['incomplete_reviews']:
+                lines.append(f"- [Original review](attempts/{item['attempt']}/result.json): "+'; '.join(item.get('issues') or [item['note']]))
+            lines.append('')
         if findings['families']:
             lines.extend(['### Finding dispositions', '', 'Author repair claims are separate from the last independent review and human decisions.', ''])
             from html import escape

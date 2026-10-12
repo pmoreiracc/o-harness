@@ -97,6 +97,7 @@ class CodexToolsTest(unittest.TestCase):
         from .workflow import start,load_run
         from .worker_checks import serve as check_server,service as native_checks
         self.auto_worker_checks=False
+        self.auto_reports=False
         fixtures.configure(self.root,checks=[{'name':'original environment','command':[sys.executable,'-c',
             "import os; assert os.environ['NODE_PATH']=='fixture-only-for-checks'"]}])
         journal,state=start(self.root,{'tasks':self.tasks[:1]},fixtures.WorkflowTest.event(self))
@@ -106,9 +107,13 @@ class CodexToolsTest(unittest.TestCase):
             messages=[{'id':1,'method':'initialize','params':{}},{'id':2,'method':'tools/list','params':{}},
                       {'id':3,'method':'tools/call','params':{'name':'verify','arguments':{'command':['unsafe']}}},
                       {'id':4,'method':'tools/call','params':{'name':'run','arguments':{}}},
-                      {'id':5,'method':'tools/call','params':{'name':'verify','arguments':{}}}]
+                      {'id':5,'method':'tools/call','params':{'name':'verify','arguments':{}}},
+                      {'id':6,'method':'tools/call','params':{'name':'submit_report','arguments':{'report':value['structured']|{'readiness':fixtures.READINESS|{'requirements':[]}}}}},
+                      {'id':7,'method':'tools/call','params':{'name':'submit_report','arguments':{'report':value['structured']}}},
+                      {'id':8,'method':'tools/call','params':{'name':'submit_report','arguments':{'report':value['structured']}}}]
             with native_checks(args[5]),patch('oh.test_mcp_server.serve',side_effect=service):
-                sent=play(messages)
+                sent=play(messages[:5])
+                for message in messages[5:]:sent.extend(play([message]))
                 # A real proxy process receives the restricted worker environment. Checks
                 # must still execute in the native parent's original environment.
                 import subprocess
@@ -121,10 +126,14 @@ class CodexToolsTest(unittest.TestCase):
                 self.assertEqual(child.returncode,0,child.stderr)
                 self.assertTrue(json.loads(child.stdout)['passed'])
             results={m['id']:m['result'] for m in sent if 'result' in m}
-            self.assertEqual([t['name'] for t in results[2]['tools']],['verify'])
+            self.assertEqual([t['name'] for t in results[2]['tools']],['verify','submit_report'])
             self.assertTrue(results[3]['isError']);self.assertTrue(results[4]['isError'])
             self.assertTrue(json.loads(results[5]['content'][0]['text'])['passed'])
-            return value
+            self.assertFalse(json.loads(results[6]['content'][0]['text'])['accepted'])
+            self.assertTrue(json.loads(results[7]['content'][0]['text'])['accepted'])
+            self.assertEqual(results[7],results[8])
+            self.assertEqual(len([r for r in journal.records() if r['kind']=='report.submitted']),2)
+            return value|{'structured':None,'text':'Final prose is not the report.'}
         with patch.dict(os.environ,{'NODE_PATH':'fixture-only-for-checks'}):
             result=attempt(self.root,journal,state,state['tasks'][0],'implementation',state['config']['models']['codex']['standard'],invoke=worker)
         self.assertEqual(result['outcome'],'implemented')
@@ -141,7 +150,7 @@ class CodexToolsTest(unittest.TestCase):
                     {'id':3,'method':'tools/call','params':{'name':'verify','arguments':{}}},
                     {'id':4,'method':'tools/call','params':{'name':'admission','arguments':{}}}])
                 replies={m['id']:m['result'] for m in sent if 'result' in m}
-                self.assertEqual([t['name'] for t in replies[2]['tools']],['admission'])
+                self.assertEqual([t['name'] for t in replies[2]['tools']],['admission','submit_report'])
                 self.assertTrue(replies[3]['isError'])  # reviewer cannot execute the implementer's checks
                 self.assertTrue(json.loads(replies[4]['content'][0]['text'])['valid'])
                 packet=args[5]/'task-context.json';original=read_json(packet)
@@ -151,7 +160,16 @@ class CodexToolsTest(unittest.TestCase):
                 (self.root/'output.txt').write_text('later edit')
                 with self.assertRaisesRegex(Refused,'no longer matches'):proxy(args[5])
                 (self.root/'output.txt').write_text(str(len(self.calls)))
-            return fixtures.WorkflowTest.fake(self,*args,**kwargs)
+                value=fixtures.WorkflowTest.fake(self,*args,**kwargs)
+                self.assertFalse(proxy(args[5],{'report':value['structured']|{'evidence':{}}})['accepted'])
+                self.assertTrue(proxy(args[5],{'report':value['structured']})['accepted'])
+                # A later invalid submission must invalidate an earlier clean one.
+                self.assertFalse(proxy(args[5],{'report':value['structured']|{'evidence':{}}})['accepted'])
+                from .worker_checks import returned
+                from .hosts import review_result
+                self.assertEqual(review_result(returned(args[5],value))[0],'review_incomplete')
+                self.assertTrue(proxy(args[5],{'report':value['structured']})['accepted'])
+            return value|{'structured':None}
         state=load_run(self.root)[1]
         before=len([r for r in journal.records() if r['kind']=='verification'])
         reviewed=attempt(self.root,journal,state,state['tasks'][0],'review',state['config']['models']['codex']['review'],invoke=reviewer)

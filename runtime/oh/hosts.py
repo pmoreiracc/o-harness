@@ -189,15 +189,25 @@ def codex_home():
     return Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
 
 
-def oh_plugins():
-    """OH's plugin as installed in Codex, under each marketplace that provides it."""
-    import re
+def codex_tool_overrides(root):
+    """Invocation-only isolation, matching Claude's strict native MCP configuration."""
     import tomllib
-    import os
-    home=codex_home()
-    try:plugins=tomllib.loads((home/'config.toml').read_text()).get('plugins',{})
-    except (OSError,ValueError):return []
-    return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
+    names={'plugins':set(),'mcp_servers':set()}
+    root=Path(root).resolve()
+    paths={codex_home()/'config.toml',*(p/'.codex/config.toml' for p in (root,*root.parents))}
+    for path in sorted(paths):
+        try:config=tomllib.loads(path.read_text())
+        except (OSError,ValueError):continue
+        profiles=config.get('profiles',{})
+        for layer in [config,*(profiles.values() if isinstance(profiles,dict) else [])]:
+            if not isinstance(layer,dict):continue
+            for key in names:
+                table=layer.get(key,{})
+                if isinstance(table,dict):names[key].update(table)
+    # CLI dotted-key overrides do not unquote individual path segments. Use TOML
+    # inline tables so server/plugin names containing punctuation remain literal keys.
+    return [key+'={'+','.join(json.dumps(name)+'={enabled=false}' for name in sorted(values))+'}'
+            for key,values in names.items() if values]
 
 
 def command(host,profile,root,role,schema_path,artifact_dir=None,*,standalone=False,read_only_paths=(),verification_dir=None):
@@ -213,8 +223,9 @@ def command(host,profile,root,role,schema_path,artifact_dir=None,*,standalone=Fa
             args+=['--strict-config',*codex_document_permissions([*read_only_paths,state_home(),*protected_paths()])]
         else:args+=['--sandbox','read-only' if role in READ_ONLY_ROLES else 'workspace-write']
         if standalone:args+=['--skip-git-repo-check']
-        # Workers never load OH itself: its menu server would run outside their sandbox.
-        for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
+        # Workers receive only their native tools, not inherited interactive MCP processes.
+        # User/project files remain unchanged; the native oh_checks definition below wins.
+        for override in codex_tool_overrides(root):args+=['--config',override]
         if verification_dir:
             from .storage import read_json
             server=verification_server(verification_dir)
@@ -223,7 +234,8 @@ def command(host,profile,root,role,schema_path,artifact_dir=None,*,standalone=Fa
             env=','.join(key+'='+json.dumps(value) for key,value in server['env'].items())
             timeout=read_json(Path(verification_dir)/'request.json').get('verification_timeout',60)
             operation='admission' if role=='review' else 'verify'
-            args+=['--config','mcp_servers.oh_checks={'+config+',env={'+env+'},enabled_tools=["'+operation+'"],tool_timeout_sec='+str(timeout)+'}']
+            enabled=[operation]+(['submit_report'] if read_json(Path(verification_dir)/'request.json').get('report_protocol') else [])
+            args+=['--config','mcp_servers.oh_checks={enabled=true,'+config+',env={'+env+'},enabled_tools='+json.dumps(enabled)+',tool_timeout_sec='+str(timeout)+'}']
         if schema_path:args+=['--output-schema',str(schema_path)]
         return args+['-']
     from .storage import state_home
@@ -248,10 +260,17 @@ def command(host,profile,root,role,schema_path,artifact_dir=None,*,standalone=Fa
         settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
           'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':deny}}
         tools='Read,Glob,Grep,Bash' if role in READ_ONLY_ROLES else 'Read,Glob,Grep,Bash,Edit,Write'
-    if verification_dir:settings['permissions']['allow']=['mcp__oh_checks__'+('admission' if role=='review' else 'verify')]
+    reporting=False
+    if verification_dir:
+        from .storage import read_json
+        reporting=bool(read_json(Path(verification_dir)/'request.json').get('report_protocol'))
+        operations=['admission' if role=='review' else 'verify']+(['submit_report'] if reporting else [])
+        settings['permissions']['allow']=['mcp__oh_checks__'+operation for operation in operations]
     args=[executable(host,root),'--settings',json.dumps(settings),'--tools',tools,'--print','--output-format','stream-json','--verbose',
           '--model',profile['model'],'--effort',profile['effort'],
-          '--permission-mode','plan' if role in READ_ONLY_ROLES else 'acceptEdits',
+          # Plan mode rejects even explicitly allowed evidence submission. Default mode
+          # permits that exact native tool; the read-only filesystem/deny rules above stay.
+          '--permission-mode','default' if role=='review' and reporting else 'plan' if role in READ_ONLY_ROLES else 'acceptEdits',
           '--permission-prompts','none','--strict-mcp-config','--disable-slash-commands']
     if schema_path:args+=['--json-schema',schema_path.read_text()]
     # Every role reads OH's project inputs, admissions and repair feedback. The existing protected
@@ -347,6 +366,9 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
     validate_profile(host,profile,root)
     attempt_dir=Path(attempt_dir);attempt_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     schema_path=None
+    if role in ('implementation','review'):
+        from .storage import read_json
+        if read_json(attempt_dir/'request.json').get('report_protocol'):schema=None
     if schema:
         schema_path=attempt_dir/'output-schema.json';atomic_json(schema_path,schema,immutable=True)
     from .storage import state_home
@@ -419,19 +441,19 @@ def work_result(result):
             not isinstance(value.get('summary'),str) or not value['summary'].strip() or
             not isinstance(value.get('found_along_way'),list) or
             any(not isinstance(note,str) for note in value['found_along_way'])):
-        return 'unfinished','The implementation report needs status, summary, found_along_way, obstacle and readiness. Preserve the implementation and finish the handoff.'
+        return 'report_invalid','The implementation report needs status, summary, found_along_way, obstacle and readiness. Preserve the implementation and finish the handoff.'
     obstacle=value['obstacle']
     if obstacle is not None and (not isinstance(obstacle,dict) or set(obstacle)!= {'kind','evidence','next_step'} or
             obstacle.get('kind') not in ('missing_authority','external_dependency') or
             any(not isinstance(obstacle.get(k),str) or not obstacle[k].strip() for k in ('evidence','next_step'))):
-        return 'unfinished','An obstacle needs its kind, concrete evidence and the external action or authority needed. Otherwise continue the approved work.'
+        return 'report_invalid','An obstacle needs its kind, concrete evidence and the external action or authority needed. Otherwise continue the approved work.'
     if value['status']=='blocked' and obstacle:
         return 'blocked','Obstacle: '+obstacle['evidence']+'\nNext: '+obstacle['next_step']+'\n\n'+value['summary']
     if value['status']!='completed' or obstacle:
         return 'unfinished',value['summary']
     from .handoff import validate_readiness
     if problem:=validate_readiness(value['readiness']):
-        return 'unfinished',value['summary']+'\nFinish self-review before requesting independent review: '+problem
+        return 'report_invalid',value['summary']+'\nCorrect the implementation report: '+problem
     return 'implemented',value['summary']
 
 
@@ -447,26 +469,55 @@ def assessment_result(result):
     return 'assessed',value['rationale']
 
 
+def review_details(result):
+    """Keep findings independently of presentation; only complete evidence can authorize clean."""
+    value=result.get('structured');issues=[];fragments=[];findings=[];positions=[]
+    if not isinstance(value,dict):
+        import re
+        fragments=[{'line':n,'value':line,'problem':'Unstructured finding; inspect the original report.'}
+                   for n,line in enumerate(result.get('text','').splitlines(),1)
+                   if re.search(r'\b(BLOCKING|CONCERN|SCOPE)\b',line,re.IGNORECASE)]
+        return {'outcome':'failed' if result.get('failed') else 'review_incomplete','findings':[],
+                'positions':[], 'fragments':fragments, 'issues':['No structured review report was retained.']}
+    items=value.get('findings')
+    if not isinstance(items,list):
+        issues.append('Review findings must be a list, including [] for no findings.')
+        if items is not None:fragments.append({'number':0,'value':items,'problem':'Unclassified findings field.'})
+        items=[]
+    shape=REVIEW_SCHEMA['properties']['findings']['items']['properties']
+    for number,item in enumerate(items,1):
+        if not isinstance(item,dict) or item.get('severity') not in shape['severity']['enum']:
+            fragments.append({'number':number,'value':item,'problem':'Finding severity is missing or unknown.'})
+            continue
+        finding={key:item[key] for key in shape if isinstance(item.get(key),str)}
+        for key in ('severity','description','path','family','relation'):finding.setdefault(key,'')
+        if finding['relation'] not in shape['relation']['enum']:finding['relation']=''
+        findings.append(finding);positions.append(number)
+        if not finding['description'].strip():
+            fragments.append({'number':number,'value':item,'problem':'Finding claim is missing.'})
+    if fragments:issues.append('Clarify incomplete findings: '+', '.join(str(f['number']) for f in fragments)+'.')
+    evidence=value.get('evidence')
+    if not isinstance(evidence,dict):issues.append('Review evidence is missing.')
+    else:
+        for key in ('anchors','attacks','limits'):
+            items=evidence.get(key)
+            if (not isinstance(items,list) or any(not isinstance(x,str) or not x.strip() for x in items)
+                    or key!='limits' and not items):issues.append('Complete review evidence.'+key+'.')
+        lenses=evidence.get('lenses')
+        missing=[lens for lens in LENSES if not isinstance(lenses,dict) or not isinstance(lenses.get(lens),str) or not lenses[lens].strip()]
+        if missing:issues.append('Complete review lenses: '+', '.join(missing)+'.')
+    if not isinstance(value.get('summary'),str) or not value['summary'].strip():issues.append('Provide a review summary.')
+    if value.get('verdict') not in REVIEW_SCHEMA['properties']['verdict']['enum']:issues.append('Provide an explicit review verdict.')
+    if result.get('failed'):outcome='failed'
+    elif any(f['severity']=='blocking' and f['description'].strip() for f in findings):outcome='blocking'
+    elif issues:outcome='review_incomplete'
+    elif findings:outcome='needs_resolution'
+    elif value.get('verdict')=='clean':outcome='clean'
+    else:
+        outcome='review_incomplete';issues.append('A non-clean verdict needs its findings; absence of findings is not a clean verdict.')
+    return {'outcome':outcome,'findings':findings,'positions':positions,'fragments':fragments,'issues':issues}
+
+
 def review_result(result):
-    value=result.get('structured')
-    if result['failed'] or not isinstance(value,dict) or set(value)!={'verdict','summary','findings','evidence'}:
-        return 'failed',[]
-    evidence=value['evidence']
-    if not isinstance(evidence,dict) or set(evidence)!={'anchors','attacks','limits','lenses'}:return 'failed',[]
-    if any(not isinstance(evidence[k],list) or any(not isinstance(x,str) or not x.strip() for x in evidence[k]) for k in ('anchors','attacks','limits')):return 'failed',[]
-    if not evidence['anchors'] or not evidence['attacks']:return 'failed',[]
-    if not isinstance(evidence['lenses'],dict) or set(evidence['lenses'])!=set(LENSES) or any(not isinstance(v,str) or not v.strip() for v in evidence['lenses'].values()):return 'failed',[]
-    findings=value['findings']
-    if value['verdict'] not in REVIEW_SCHEMA['properties']['verdict']['enum']:return 'failed',[]
-    if not isinstance(findings,list) or not isinstance(value['summary'],str):return 'failed',[]
-    shape=REVIEW_SCHEMA['properties']['findings']['items']
-    if any(not isinstance(f,dict) or set(f) not in (set(shape['required']),set(shape['required'])-{'anchor','failure','fix'})
-           or any(not isinstance(v,str) for v in f.values())
-           or f['severity'] not in shape['properties']['severity']['enum']
-           or f['relation'] not in shape['properties']['relation']['enum'] for f in findings):
-        return 'failed',[]
-    if value['verdict']=='clean' and not findings:return 'clean',[]
-    # Never trust a declared clean count over visible findings.
-    if any(f['severity']=='blocking' for f in findings):return 'blocking',findings
-    if findings:return 'needs_resolution',findings
-    return 'failed',[]
+    parsed=review_details(result)
+    return parsed['outcome'],parsed['findings']

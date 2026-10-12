@@ -1,6 +1,6 @@
 # OH harness refactor
 
-Status: implementation and local acceptance complete; awaiting the developer's Desktop trial.
+Status: handoff correction and local host acceptance passed; awaiting the developer's new Desktop trial.
 Branch: `codex/harness-refactor`. Independent review and publication remain pending.
 
 ## Objective and fixed decisions
@@ -22,6 +22,45 @@ condition and affected checks pass. Record evidence and deviations here. Do not 
 transcripts, receipts, tokens or local run state.
 
 ## Ordered tasks
+
+### Desktop-trial correction — ordered implementation and acceptance
+
+The 0005 trial proved Stop (about 1.1 seconds) and retained-work continuation, but exposed
+two finding identifiers presented as `id`. Thirteen completed author reports used the case
+hash while validation expected the receipt reference. OH classified rejected handoffs as
+unfinished code, producing repeated implementation and checks. Real-host acceptance had
+never exercised repair after a blocking review; mock reports used the validator's own helper.
+Tasks 3, 5, 6 and 7 below are reopened for these affected conditions. Task 8 remains pending.
+
+The golden reference's current semantic review reader preserves recognizable findings despite
+presentation anomalies; its strict receipt parser is historical compatibility code. Retain
+OH's substantive evidence requirements and structured tools, not that historical parser.
+There is no report-correction agent, new consumer gate, configuration or service.
+
+- [x] **C1. Canonical finding references.** Version 3 packets use receipt references as the only
+  finding IDs; grouping hashes become `case_key`. Return exact validation errors. Keep v2 readers.
+- [x] **C2. Native report submission.** Both active agents submit through the existing worker
+  connection. Validate role, subject, evidence and report; retain submissions externally and
+  revalidate the latest submission on exit. Final prose is not another authoritative report.
+- [x] **C3. Conservative review interpretation.** Preserve recognizable findings and uncertain
+  fragments independently of metadata validity. Never infer clean, family identity or approval.
+- [x] **C4. Accurate execution and visibility.** Invalid author reports cannot restart implementation.
+  Incomplete reviews retain findings and use existing fresh-review authority. Report failures
+  immediately; retain factual periodic progress, scope decisions, Stop and review allowances.
+- [x] **C5. Compatibility and paused continuation.** Convert only unambiguous v2 case IDs, preserving
+  original reports; reuse only exact verified work. Explicit Deliver may adopt a settled paused
+  run in the selected runtime without changing its grants. Keep actual 0005 paused and untouched.
+- [ ] **C6. Regression and host acceptance.** Extend current fixtures across both roles, invalid
+  submissions, repeat findings, stale evidence, Stop and upgrades. Derive fixture IDs independently.
+  Run affected checks/syntax with durations. Exercise seeded blocking review → real repair → fresh
+  review twice per host; record time, observed tokens, calls, checks and interruptions. A first-round
+  clean result does not satisfy the repair trial. Build a candidate for the developer's Desktop
+  trial before independent OH review and human-merged publication.
+
+Each item is checked only after its affected checks pass; evidence is recorded here. Immutable
+consumer evidence stays external. No consumer code or requirements are changed by this correction.
+
+### Original refactor tasks
 
 - [x] **1. Preserve and organize today's work.** No dependencies.
   Create the requested branch from the current checkout and preserve the existing patch and
@@ -82,7 +121,7 @@ transcripts, receipts, tokens or local run state.
   historical fields honestly, and keep raw transcripts and private local paths out of publication.
   **Done when:** receipts/PRs are readable, complete and traceable.
 
-- [x] **7. Unify the visible host experience.** Depends on 6.
+- [ ] **7. Unify the visible host experience.** Depends on 6.
   Shorten shared workflow instructions around runtime decisions. Report actual transitions and
   factual progress about every three to four minutes during long phases. Separate historical
   failures from current unresolved problems. Use one trusted native publication question naming
@@ -315,3 +354,55 @@ were removed instead. External logs include duration reports and original failur
 The initial recovery copy and all live test evidence remain outside Git. The final metrics and
 negative-oracle results are under `/private/tmp/oh-refactor-final-metrics.json` and
 `/private/tmp/oh-final-*/`; complete native receipts are linked from each fixture's `result.json`.
+
+
+### Desktop-trial correction evidence
+
+- Canonical IDs, incorrect-ID correction in the same author call, ambiguous legacy mapping,
+  immutable v2 recovery and exact subject/verification reuse pass targeted fixtures. The v2
+  recovery fixture is the one added test: no previous fixture imported this failed handoff.
+- The native worker-tool fixture exercises invalid → valid → duplicate submissions, rejection
+  of a later invalid reviewer submission, role isolation and zero reviewer check execution.
+- Stop/pause and worker-completion fixtures pass. Legacy optional finding fields are retained
+  without inventing empty metadata. All 22 affected test modules passed; follow-up host/platform
+  checks passed (52 cases, 12 native-Windows-only skips), as did the final return-boundary and
+  legacy-recovery fixtures. Syntax and Windows-risk checks passed. Native Linux/Windows CI remains
+  required before publication; macOS simulation is not a claim of native platform execution.
+- Read-only inspection of actual 0005: paused, unambiguous v2 mapping, request hash matches,
+  no verification errors, one of three review rounds consumed. No consumer mutation or resume.
+- The first live candidate exposed Claude plan mode rejecting the explicitly allowed native
+  report write. Its native assessment/review evidence is retained externally. Those trials do
+  not count as successful acceptance. The corrected reviewer uses default permission handling
+  with exact native-tool allows; its existing filesystem sandbox and write-deny rules remain.
+  The native Windows permission fixture verifies these restrictions. Codex also inherited
+  unrelated interactive MCP processes and stayed open after completing a report. Invocation-only
+  tool/plugin overrides now match Claude's native-tool isolation. Actual Codex config parsing and
+  complete live runs verify that boundary; installed settings remain unchanged. Independent OH
+  review/publication still follows the developer trial.
+
+
+### Corrected live acceptance
+
+All four trials completed blocking review → one real repair → clean fresh review, with zero
+missed seeded defects and zero human interruptions. Each preserved SPEC.md and passed the
+independent behavior oracle. The initial defective, test-passing author handoff was synthetic;
+assessment, repair and both reviews used real subscription agents. These fixtures measure the
+handoff boundary, not the expected time or cost of consumer task 0005.
+
+| Host trial | Seconds | Observed input | Output | Cached input subset | Reviews | Check calls | Rejected submissions |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Claude 1 | 159.99 | 682,665 | 18,585 | 576,194 | 2 | 2 | 2 |
+| Claude 2 | 175.86 | 784,172 | 24,067 | 677,582 | 2 | 3 | 3 |
+| Codex 1 | 262.44 | 806,308 | 13,317 | 710,144 | 2 | 2 | 3 |
+| Codex 2 | 366.02 | 799,009 | 13,296 | 711,680 | 2 | 2 | 3 |
+
+Cached input is already included in observed input; it is not added again. No savings claim is
+made. The extra Claude check followed another code/test edit, with a different tree; report
+correction did not rerun unchanged checks. The first Claude trial exercised reviewer rejection;
+the other three also injected an author-report rejection through the actual native connection.
+All corrections completed inside the original agent attempt and consumed no extra review round.
+Original failed exploratory trials are retained externally and excluded from these pass counts.
+
+C6 remains open only for the developer's Desktop resume/publication trial, fresh independent OH
+review and PR/CI. The paused consumer remains untouched: one of three review rounds was used,
+and its latest retained report and verification passed the read-only compatibility check.

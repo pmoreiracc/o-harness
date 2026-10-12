@@ -87,8 +87,8 @@ stop this run. Active steps interrupt/clean up their owned processes, and handof
 next check, review or commit. Covered by
 `test_stop_during_check_cancels_owned_group_and_preserves_results` and
 `test_codex_stop_after_worker_prevents_checks_review_and_commit`.
-Each implementation worker gets a separate `oh_checks` server with only an argument-free `verify`
-tool. A temporary loopback connection forwards that fixed request to OH, preserving the original
+Each implementation worker gets an argument-free `verify` tool on its separate `oh_checks`
+connection. A temporary loopback connection forwards that fixed request to OH, preserving the original
 check environment without copying it into the subscription worker. OH resolves commands from
 the run's saved project checks, runs them on the worker's request,
 and retains native results bound to the attempt, HEAD, check selection and unchanged working tree.
@@ -168,7 +168,8 @@ Backup and restore lock the data folder.
 `handoff.py` writes versioned immutable task packets and complete finding indexes. A packet
 binds approved scope, the current author claims and native verification to its admitted subject;
 old author transcripts are not mandatory context. Distinct findings within a family retain
-separate cases and every original locator. Missing readiness goes back to the implementer.
+separate cases and every original locator. Version 3 calls grouping hashes `case_key`; only
+`review-attempt#finding-number` is a finding ID. Report errors are returned to the active author.
 Historical four-list reports remain readable as older claims without invented missing fields.
 
 `actions.py` supplies the next-action and choice policy shared by execution, status and menus.
@@ -187,3 +188,29 @@ current checkout/runtime and packet/artifact hashes. It runs no project checks a
 workflow authority. Reviewers can focus on product correctness without reconstructing OH's
 hashing code or searching installed runtime copies. The existing worker-tool integration test
 covers role isolation, changed packets, changed code and reuse of a completed admission.
+
+Codex worker invocations disable inherited MCP servers and plugins using local CLI overrides;
+only the attempt's native tools are enabled. This matches Claude's strict MCP selection and
+does not rewrite user or project settings. Overrides use TOML tables to preserve literal
+names containing punctuation. See the [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+Claude reviewers retain read-only filesystem rules and use default permission handling with
+only the two native tools explicitly allowed; plan mode would reject report submission.
+
+Both roles also have `submit_report`. OH retains immutable submissions through the same native
+connection, validates their role and subject, and returns report/check errors before the agent
+exits. The latest submission supersedes earlier submissions, including when it is invalid;
+identical submissions are idempotent. Final chat prose is retained but is not another report.
+The runner rechecks the submission and current subject before admitting the next step.
+Pause may drain an existing agent's report; Stop accepts no further submissions or work.
+Review interpretation preserves recognizable findings and incomplete fragments independently
+of metadata validity. Only complete evidence without unresolved fragments can establish clean.
+An agent that ends without a usable implementation report exposes a handoff failure rather
+than starting implementation again. Incomplete reviews use fresh review authority already held.
+The worker-tool, repair and completion fixtures cover these boundaries.
+
+Legacy v2 case references are converted only when each maps to exactly one original finding.
+The native conversion appends derived evidence, revalidates the original passing checks and
+subject, and leaves original receipts and grants unchanged. A new explicit Deliver can adopt
+a fully paused run in the selected runtime, using its settled HEAD/tree and branch identity.
+`test_v2_handoff_reuses_verified_work_without_rewriting_receipts` and the stopped/paused
+continuation fixtures cover this compatibility path.

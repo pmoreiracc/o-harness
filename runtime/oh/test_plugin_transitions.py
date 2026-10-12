@@ -84,6 +84,9 @@ class PluginTransitions(unittest.TestCase):
         for command in ('start','run','resume','pause','stop'):
             self.assertEqual(call(command),'v2')
         self.assertEqual(call('deliver'),'v3')  # the explicit command can adopt this unchanged waiting checkpoint
+        atomic_json(journal/'000005.json',{'kind':'run.status','data':{'status':'paused'}})
+        self.assertEqual(call('deliver'),'v3')
+        self.assertEqual(call('resume'),'v2')
         atomic_json(journal/'000005.json',{'kind':'run.status','data':{'status':'running'}})
         self.assertEqual(call('deliver'),'v2')  # a live execution never switches underneath its worker
         atomic_json(journal/'000006.json',{'kind':'run.status','data':{'status':'stopped'}})
@@ -91,17 +94,80 @@ class PluginTransitions(unittest.TestCase):
         (home/'versions/v1/oh').unlink()
         self.assertEqual(call(),'v3')
 
+    def test_v2_handoff_reuses_verified_work_without_rewriting_receipts(self):
+        from .workflow import load_run
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        def old_worker(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            if args[4]=='review':
+                value['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':'Fix the boundary','path':'output.txt','family':'boundary','relation':'original'}])
+            if args[4]=='implementation':
+                index=read_json(args[5]/'finding-index.json')
+                if index['families']:
+                    value['structured']['readiness']['prior_findings'][0]['id']=index['families'][0]['cases'][0]['case_key']
+            return value
+        self.assertEqual(run(self.root,old_worker)['status'],'needs_attention')
+        journal,state=load_run(self.root);author=state['attempts'][-1];directory=Path(author['evidence'])
+        # Construct an old immutable fixture at its import boundary; production recovery
+        # must subsequently leave every original file and grant unchanged.
+        index=read_json(directory/'finding-index.json');index['schema']=2
+        for family in index['families']:
+            for case in family['cases']:case['id']=case.pop('case_key')
+            for item in family['occurrences']:item['case']=item.pop('case_key')
+        atomic_json(directory/'finding-index.json',index)
+        packet=read_json(directory/'task-context.json');packet['schema']=2;packet['findings']['hash']=digest(index)
+        atomic_json(directory/'task-context.json',packet)
+        admission=read_json(directory/'request.json');admission['context_version']=2;admission.pop('report_protocol')
+        admission['task_context']['hash']=digest(packet);atomic_json(directory/'request.json',admission)
+        raw=read_json(directory/'result.json');raw['outcome']='unfinished';atomic_json(directory/'result.json',raw)
+        for path in journal.path.glob('[0-9]*.json'):
+            record=read_json(path);data=record['data']
+            if data.get('id')!=author['id']:continue
+            if record['kind']=='attempt.started':data['context_version']=2;data.pop('report_protocol',None)
+            elif record['kind']=='attempt.admitted':data['hash']=digest(admission)
+            elif record['kind']=='attempt.finished':data['outcome']='unfinished'
+            atomic_json(path,record)
+        previous=None
+        for path in sorted(journal.path.glob('[0-9]*.json')):
+            record=read_json(path);record['previous']=previous
+            record['hash']=digest({k:v for k,v in record.items() if k!='hash'})
+            previous=record['hash'];atomic_json(path,record)
+        original={str(p):p.read_bytes() for p in directory.rglob('*.json')}
+        grant=state['granted'];assessment=state['assessments']
+        journal.append('run.status',{'status':'running','reason':'Fixture explicit continuation under retained authority'})
+        self.assertEqual(run(self.root,self.fake)['completed'],1)
+        after=load_run(self.root)[1]
+        self.assertEqual(after['granted'],grant);self.assertEqual(after['assessments'],assessment)
+        self.assertEqual([c[0] for c in self.calls],['implementation','review','implementation','review'])
+        self.assertEqual(sum(r['kind']=='verification' for r in journal.records()),2)
+        for path,content in original.items():self.assertEqual(Path(path).read_bytes(),content)
+        self.assertEqual(sum(r['kind']=='handoff.normalized' for r in journal.records()),1)
+
     def test_repair_review_retains_prior_family_and_exact_subject(self):
+        self.auto_worker_checks=False
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         manifests=[]
         repair_history=[]
         def review(*args,**kwargs):
             value=self.fake(*args,**kwargs)
             if args[4]=='implementation':
+                from .worker_checks import run as checks,submit_report
+                self.assertTrue(checks(args[5])['passed'])
                 request=read_json(args[5]/'request.json')
                 if (packet:=read_json(request['task_context']['path'])).get('current_work'):
                     binding=packet['findings'];prior=read_json(binding['path'])
                     self.assertEqual(digest(prior),binding['hash']);repair_history.append(prior)
+                    from copy import deepcopy
+                    bad=deepcopy(value['structured'])
+                    cases=[case['case_key'] for family in prior['families'] for case in family['cases']]
+                    for item,key in zip(bad['readiness']['prior_findings'],cases):item['id']=key
+                    before=digest(read_json(args[5]/'finding-index.json'))
+                    rejected=submit_report(args[5],bad)
+                    self.assertFalse(rejected['accepted'])
+                    self.assertIn('Missing finding ids:',str(rejected['issues']))
+                    self.assertIn('Unknown finding ids:',str(rejected['issues']))
+                    self.assertTrue(submit_report(args[5],value['structured'])['accepted'])
+                    self.assertEqual(digest(read_json(args[5]/'finding-index.json')),before)
             if args[4]=='review':
                 request=read_json(args[5]/'request.json');packet=read_json(request['task_context']['path']);binding=packet['findings'];prior=read_json(Path(binding['path']))
                 self.assertEqual(digest(prior),binding['hash']);manifests.append(prior)
@@ -121,7 +187,8 @@ class PluginTransitions(unittest.TestCase):
         journal,state=load_run(self.root)
         request=read_json(journal.path/'attempts'/state['attempts'][-1]['id']/'request.json')
         packet=read_json(request['task_context']['path'])
-        self.assertEqual(packet['schema'],2)
+        self.assertEqual(packet['schema'],3)
+        self.assertEqual(len([r for r in journal.records() if r['kind']=='verification']),2)
         self.assertEqual(packet['current_work']['attempt'],state['attempts'][-2]['id'])
         self.assertNotIn('implementer_reports',request)
         self.assertEqual(len(packet['current_work']['readiness']['prior_findings']),2)
@@ -132,6 +199,24 @@ class PluginTransitions(unittest.TestCase):
         self.assertEqual(read_json(ref['path'])['current_work'],packet['current_work'])
         self.assertIsNone(validate_readiness(packet['current_work']['readiness'],finding_ids(index)))
         self.assertIsNotNone(validate_readiness(packet['current_work']['readiness']|{'prior_findings':[]},finding_ids(index)))
+        from copy import deepcopy
+        from .handoff import legacy_report,report_schema
+        legacy=deepcopy(manifests[1]);legacy['schema']=2
+        for group in legacy['families']:
+            for case in group['cases']:case['id']=case.pop('case_key')
+            for item in group['occurrences']:item['case']=item.pop('case_key')
+        old=deepcopy(packet['current_work']['readiness'])
+        aliases={item['id']:item['case'] for group in legacy['families'] for item in group['occurrences']}
+        for item in old['prior_findings']:item['id']=aliases[item['id']]
+        value={'status':'completed','readiness':old};saved=digest(value)
+        self.assertEqual(legacy_report(value,legacy)['readiness'],packet['current_work']['readiness'])
+        self.assertEqual(digest(value),saved)
+        duplicate=deepcopy(legacy['families'][0]['occurrences'][0]);duplicate['id']='another-review#1'
+        legacy['families'][0]['occurrences'].append(duplicate)
+        self.assertIsNone(legacy_report(value,legacy))
+        choices=report_schema('implementation',index)['properties']['readiness']['properties']['prior_findings']['items']['properties']['id']['enum']
+        first_review=next(a for a in state['attempts'] if a['role']=='review')
+        self.assertEqual(choices,[first_review['id']+'#1',first_review['id']+'#2'])
         self.assertTrue(all(f['disposition']=='fixed' and f['reviewed_by']==state['attempts'][-1]['id'] for f in index['families'][0]['occurrences']))
         interrupted=older|{'id':'interrupted','outcome':'interrupted','evidence':str(journal.path/'attempts'/'interrupted')}
         missing,_=prepare(state|{'attempts':state['attempts']+[interrupted]},state['tasks'][0],'implementation',journal.path/'interrupted-context',request)

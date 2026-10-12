@@ -61,7 +61,7 @@ def public_value(root,state,value):
 
 def task_evidence(root,state,task,review,parent):
     attempts=[a for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
-    history=[{k:a.get(k) for k in ('id','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at')} for a in attempts]
+    history=[{k:a.get(k) for k in ('id','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions')} for a in attempts]
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
@@ -250,6 +250,9 @@ def readable(records,states,root=None):
                 for item in attempt['findings']:
                     lines.append(finding(item))
             else:lines.append('No findings.' if attempt['outcome']=='clean' else 'No completed verdict was recorded.')
+            for issue in attempt.get('report_issues') or []:lines.append('Report limitation: '+escape(issue))
+            for fragment in attempt.get('review_fragments') or []:
+                lines.append('Retained unclassified finding: '+escape(json.dumps(fragment,ensure_ascii=False)))
             resolution=evidence.get('resolutions',{}).get(attempt.get('id'))
             if resolution:lines.append('Decision: '+resolution['choice']+'.')
             scope=evidence.get('scope',{}).get(attempt.get('id'))

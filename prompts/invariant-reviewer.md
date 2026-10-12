@@ -190,12 +190,16 @@ If a lens genuinely does not apply, record that fact and why. Do not omit the le
 
 ## Output
 
-Put the complete report — all findings, evidence, and the verdict — in your final assistant
-response. The host recorder saves that response. A `SubagentHandback`, message to the parent,
-or tool output does not replace it. Never finish with only “report delivered” or a findings
-count, even if you already sent the full report elsewhere.
+When the admission declares `report_protocol`, call `oh_checks submit_report` with the complete
+report before exiting. Correct rejected fields in this same review attempt; no new round is
+needed for correcting your submission. After acceptance, finish with a short summary. Native
+submission is the retained report; final prose cannot replace or override it.
 
-Return the native JSON schema supplied by OH (`hosts.REVIEW_SCHEMA`). Put every finding
+For an older admission without that protocol, put the complete report — all findings, evidence
+and verdict — in the final assistant response. A message to the parent or a findings count
+does not replace that older report. Never resume a completed reviewer to correct its receipt.
+
+Use the native JSON schema supplied by OH. Put every finding
 in `findings`, most severe first, with `severity`, `description`, `path`, `family`,
 `relation`, `anchor`, `failure` and `fix`. Keep `description` to the short claim.
 Use `anchor` for the requirement actually read (or `none — a defect`), `failure` for
@@ -239,7 +243,8 @@ finding; a declared verdict or count never erases a finding.
 
 Never edit a repository file. Never run a command that writes repository or external state —
 and *writes* is not only files. The repository state is off limits too: HEAD, the index, the
-working tree, the stash, and branches. There are no permitted writes.
+working tree, the stash, and branches. Native `submit_report` is the sole exception for retaining
+your report in OH's external evidence; it grants no repository writes or workflow authority.
 Never `git checkout`, `switch`, `reset`, `stash`, `restore`, or anything that moves them —
 even to read another ref's copy of a file, and even when you mean to move back. Read other
 versions in place instead: `git show <ref>:<path>` for a file at a ref, `git diff <ref>` to

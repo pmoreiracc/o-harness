@@ -35,7 +35,8 @@ def next_action(state, current_tree=None, *, verified=False):
                   'review_allowance': 'review_checkpoint', 'approve_plan': 'approval_checkpoint', 'blocked': 'needs_attention'}
         return {'kind': kind, 'task': task_id, 'phase': phases.get(kind, kind)} | extra
     if history and not history[-1].get('finished'):
-        return result('working', phase=history[-1]['role'], attempt=history[-1]['id'])
+        pending=state.get('reports',{}).get(history[-1]['id'],{})
+        return result('working', phase='report_correction' if pending.get('issues') else history[-1]['role'], attempt=history[-1]['id'])
     if state.get('workflow', 'deliver') == 'deliver' and task_id not in state['task_started'] and task_id not in state.get('assessments', {}):
         attempts = [a for a in history if a['role'] == 'assessment']
         return result('blocked' if external_failures(attempts, state) else 'assess')
@@ -44,6 +45,8 @@ def next_action(state, current_tree=None, *, verified=False):
     last = previous[-1] if previous else None
     authors = [a for a in previous if a['role'] in ('implementation', 'analysis')]
     work = authors[-1] if authors else None
+    from .handoff import legacy_pending
+    if legacy_pending(work):return result('restore_report',work=work['id'])
     reviews = [a for a in previous if a['role'] == 'review']
     decided = state.get('proposals', {}).get(last['id']) if last and gated(state, task) else None
     if intake(task) and last and last['role'] == 'analysis' and last.get('outcome') == 'implemented':
@@ -60,14 +63,15 @@ def next_action(state, current_tree=None, *, verified=False):
     if (last and last.get('outcome') == 'blocking' and last['id'] not in state.get('scope_records', {}) and
             any(f['severity'] == 'scope' for f in last.get('findings', []))):
         return result('route_scope', review=last['id'])
+    if work and work.get('outcome')=='report_invalid':return result('blocked',attempt=work['id'])
     if external_failures(authors, state):return result('blocked')
     refined = bool(decided and decided['choice'] == 'refine')
     reusable = bool(work and work.get('outcome') == 'implemented' and
                     (current_tree is None or work.get('tree') == current_tree) and
-                    (last is work or last.get('outcome') in ('failed', 'interrupted')) and not refined)
+                    (last is work or last.get('outcome') in ('failed', 'interrupted','review_incomplete')) and not refined)
     if rerendered and last['id'] in state.get('resolutions', {}) and work and work.get('outcome') == 'implemented':reusable = True
     existing = bool(designing(task) and task['transition'].get('existing') and not refined and
-                    (not previous or all(a['role'] == 'review' and a.get('outcome') in ('failed', 'interrupted') for a in previous)))
+                    (not previous or all(a['role'] == 'review' and a.get('outcome') in ('failed', 'interrupted','review_incomplete') for a in previous)))
     if verified:
         return result('review_allowance' if len(reviews) >= review_limit(state, task_id) else 'review')
     return result('verify' if reusable or existing else 'implement',

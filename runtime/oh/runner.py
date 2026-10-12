@@ -45,7 +45,7 @@ def prompt_for(root,state,task,role,feedback='',packet=None):
     common=('Work only on the supplied task. Read the listed project contracts and relevant source files. '
       'You are not alone in this checkout: preserve other edits. Do not delegate, grant tasks, change OH '
       'configuration/evidence, commit, push, merge, or open a PR. The runner owns those transitions. '
-      'During long work, send a short public progress note about each new concrete focus, roughly every three minutes. Keep the final response in the required output format. '
+      'During long work, send a short public progress note about each new concrete focus, roughly every three minutes. Follow the report submission instructions for this role before finishing. '
       'Do not change task checkboxes or document lifecycle fields; the runner prepares them separately for review and publishes them only during completion. Do not read prior task transcripts. Report concise results with evidence paths.\n')
     if packet:
         common+=('Read task_context and its complete finding index first. They contain the approved task, current work, '
@@ -81,7 +81,7 @@ def prompt_for(root,state,task,role,feedback='',packet=None):
         common+=('You are the independent invariant reviewer with a fresh context. Read the actual diff '
           'and affected code. Challenge authorization, isolation, recovery, edge cases, dependency contracts, '
           'verification, and task scope. Do not modify any file. Only a fully clean result may say clean. '
-          'Return the required JSON with every finding; unknown or missing evidence is not approval.\n')
+          'Submit the structured review report with every finding; unknown or missing evidence is not approval.\n')
     elif role=='assessment':
         common+=('Assess this approved task before implementation. Read its referenced requirements and the relevant '
           'code; do not edit files, implement, run project checks, review the implementation or make product decisions. '
@@ -133,7 +133,7 @@ def prompt_for(root,state,task,role,feedback='',packet=None):
           'Return readiness with explicit requirements, rules, surfaces, proof, self_review, family_closure, '
           'prior_findings, verification, repairs and limits. Map every requirement to implementation and concrete proof. '
           'Name the rules checked and affected callers, alternate paths and documentation. Record self-review attacks '
-          'and observed outcomes, sibling searches and whole-family repairs. For every finding id in the supplied '
+          'and observed outcomes, sibling searches and whole-family repairs. For every receipt reference id (review-attempt#finding-number, never case_key) in the supplied '
           'index, return its disposition and concrete proof exactly once in prior_findings; preserve human choices. '
           'Verification names actual commands and outcomes. Repairs explain each failure, diagnosis against approved '
           'behavior, code/test/environment correction and proof. State why a section does not apply instead of omitting '
@@ -259,9 +259,12 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         from .plans import private_inputs,layout
         data['private_inputs']=private_inputs(layout(root))
     from .handoff import prepare
-    data['context_version']=2
+    data['context_version']=3
+    if role in ('implementation','review'):data['report_protocol']=1
     data['task_context'],finding_context=prepare(state,task,role,directory,data,feedback)
     prompt=prompt_for(root,state,task,role,feedback,packet=data['task_context'])
+    if role in ('implementation','review'):
+        prompt+='\nBefore exiting, call oh_checks submit_report with your complete structured report. Correct any returned issues in this same attempt. Once accepted, finish with a short plain summary; final prose is not another report. Do not repeat unchanged passing checks for report corrections.\n'
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
     if role=='review' and git_tree:
         # The exact code change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
@@ -326,8 +329,12 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     except Exception as exc:
         result={'failed':True,'returncode':-1,'text':str(exc),'structured':None,
                 'duration_ms':round((time.monotonic()-started)*1000),'usage_observed':False}
-    if role in ('analysis','review') and result['failed']:result=result|{'text':hosts.failure_text(result)}
-    try:after=tree(root)
+    try:
+        if role in ('implementation','review'):
+            from .worker_checks import returned
+            result=returned(directory,result)
+        if role in ('analysis','review') and result['failed']:result=result|{'text':hosts.failure_text(result)}
+        after=tree(root)
     except Exception as exc:
         _,findings=hosts.review_result(result) if role=='review' else ('failed',[])
         detail=f'OH could not fingerprint the returned worker result: {exc}. Preserve the work, repair the checkout and resume this run.'
@@ -348,7 +355,10 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         status(journal,state,'needs_attention')
         raise Refused('Child changed Git history; preserve its work and restore the recorded parent before resuming')
     if role=='review':
-        outcome,findings=hosts.review_result(result)
+        parsed=hosts.review_details(result)
+        outcome,findings=parsed['outcome'],parsed['findings']
+        if parsed['issues']:
+            result=result|{'text':result['text']+'\nReview report limitations: '+'; '.join(parsed['issues'])}
         if after!=before or private_changed:outcome='review_mutated_tree'
         if 'files' in (data.get('artifact') or {}):
             from .plans import current_files,file_identity,resolved
@@ -365,13 +375,13 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
             if outcome=='implemented':
                 from .handoff import validate_readiness,finding_ids
                 if problem:=validate_readiness(result['structured']['readiness'],finding_ids(finding_context)):
-                    outcome='unfinished';summary+='\n'+problem
+                    outcome='report_invalid';summary+='\n'+problem
             failed_check=(any(a['task']==task['id'] and a.get('outcome')=='verification_failed' for a in state['attempts'])
                           or any(r['kind']=='verification' and r['data'].get('attempt')==attempt_id
                                  and any(check_failed(c) for c in r['data']['checks']) for r in journal.records()))
             if (outcome=='implemented' and failed_check
                     and not result['structured']['readiness']['repairs']):
-                outcome='unfinished';summary+='\nExplain the failed-check diagnosis and repair against the approved behavior in readiness.repairs before review.'
+                outcome='report_invalid';summary+='\nExplain the failed-check diagnosis and repair against the approved behavior in readiness.repairs before review.'
             if outcome!='implemented':result=result|{'text':summary}
         if outcome=='implemented' and (designing(task) or intake(task)):
             from .plans import answer,proposal
@@ -387,13 +397,15 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     answer=result.get('structured')
     notes=answer.get('found_along_way',[]) if role=='implementation' and isinstance(answer,dict) else []
     if not isinstance(notes,list) or any(not isinstance(n,str) for n in notes):
-        notes=[];outcome='failed' if result['failed'] else 'unfinished';result=result|{'text':'The implementing report needs found_along_way as a list of strings'}
+        notes=[];outcome='failed' if result['failed'] else 'report_invalid';result=result|{'text':'The implementing report needs found_along_way as a list of strings'}
     # Preserve the full raw result outside the orchestrator context.
     atomic_json(directory/'result.json',result|{'outcome':outcome,'findings':findings,'tree':after},immutable=True)
     record={'found_along_way':notes,'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
       'findings':findings,'summary':result['text'][:state['config']['context']['result_chars']],
       'returncode':result.get('returncode'),'cancellation':result.get('cancellation',[]),
       'duration_ms':result['duration_ms'],'evidence':str(directory),'git_tree':git_tree,'head':data['head'],'artifact':data.get('artifact')}
+    if role=='review':record.update(report_issues=parsed['issues'],review_fragments=parsed['fragments'],finding_positions=parsed['positions'])
+    elif result.get('report_issues'):record['report_issues']=result['report_issues']
     if data.get('escalated_families'):record['escalated_families']=data['escalated_families']
     if role=='assessment' and outcome=='assessed':record['assessment']=answer
     if isinstance(answer,dict) and isinstance(answer.get('summary'),str):
@@ -401,6 +413,8 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     journal.append('attempt.finished',record)
     try:receipts.completed(directory,data,result,record,reduce(journal.records()))
     except (OSError,Refused) as exc:progress('Readable receipt unavailable; the original result is retained: '+str(exc))
+    if role=='review' and parsed['issues']:
+        progress('The review receipt is incomplete: '+'; '.join(parsed['issues'])[:900]+'. Findings are retained; this is not a clean review.')
     if role=='review':
         rounds=sum(a['role']=='review' and a['task']==task['id'] for a in reduce(journal.records())['attempts'])
         result_label={'clean':'clean','blocking':'blocking findings','needs_resolution':'findings need a decision'}.get(outcome,'could not complete the review')
@@ -414,7 +428,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                  +' '.join(summary.split('\n\n',1)[0].split())[:350])
     elif outcome=='unfinished':
         progress('The '+('assessment' if role=='assessment' else 'implementation')+' agent has remaining work; OH will continue on the same profile with useful work retained.')
-    elif outcome in ('failed','blocked','history_changed','delivery_context_changed'):
+    elif outcome in ('failed','blocked','report_invalid','history_changed','delivery_context_changed'):
         progress('The '+('implementation' if role=='implementation' else 'planning')+' agent could not finish: '
                  +' '.join(record['summary'].split())[:450])
     from .observability import review_metadata
@@ -504,6 +518,14 @@ def _run(root,invoke):
                 return checkpoint(root)
             task_id=task['id'];task_start=time.monotonic()
             decision=next_action(state,current_tree=tree(root))
+            if decision['kind']=='restore_report':
+                from .handoff import recover_legacy
+                with lock(checkout_file(root,'oh-control.lock')):
+                    from .controls import check
+                    check(root)
+                    recover_legacy(root,journal,state,next(a for a in state['attempts'] if a['id']==decision['work']))
+                progress('The retained implementation report now uses its original review references. Saved work and checks are unchanged.')
+                continue
             if decision['kind']=='blocked':
                 status(journal,state,'needs_attention');return checkpoint(root)
             history=[a for a in state['attempts'] if a['task']==task_id]
@@ -598,7 +620,7 @@ def _run(root,invoke):
                     extra=[p for p in changes(root) if p not in rendered.get('intent',[])]
                     if extra:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(extra[:5])}); a plan commit holds only its plan files")
                 work=attempt(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
-                if work['outcome']=='blocked':
+                if work['outcome'] in ('blocked','report_invalid'):
                     status(journal,state,'needs_attention');return checkpoint(root)
                 if work['outcome']!='implemented' or intake(task):continue  # a proposal is shown before it is written
             apply_pending(root)

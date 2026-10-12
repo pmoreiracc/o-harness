@@ -65,6 +65,7 @@ class WorkflowTest(unittest.TestCase):
         from . import runner,hosts
         actual_attempt=runner.attempt
         self.auto_worker_checks=True
+        self.auto_reports=True
         self.assessment_calls=[]
         self.assessment_output={'difficulty':'standard','rationale':'A contained fixture change','references':['product.txt'],'uncertainty':[]}
         self.auto_assessment=True
@@ -87,6 +88,10 @@ class WorkflowTest(unittest.TestCase):
                     if any(c.get('unavailable') for c in checked['checks']):
                         result['structured'].update(status='blocked',obstacle={'kind':'external_dependency',
                             'evidence':checked['failure'],'next_step':'Restore the registered tool, then continue.'})
+                if (self.auto_reports and args[4] in ('implementation','review') and result.get('structured') is not None
+                        and load_run(root)[1]['status'] in ('running','pausing')):
+                    from .worker_checks import submit_report
+                    submit_report(args[5],result['structured'])
                 return result
             if invoke is hosts.invoke:
                 with patch.object(hosts,'invoke',working):return actual_attempt(root,journal,state,task,role,profile,feedback,working)
@@ -104,9 +109,12 @@ class WorkflowTest(unittest.TestCase):
 
     def fake(self,host,root,profile,prompt,role,directory,context,**kw):
         self.calls.append((role,profile,prompt))
-        from .handoff import finding_ids
         from .storage import read_json
-        prior=[{'id':key,'disposition':'fixed','proof':'Synthetic fixture repair verified'} for key in sorted(finding_ids(read_json(directory/'finding-index.json')))]
+        # Derive references independently from retained receipts, not the validation helper.
+        _,state=load_run(root)
+        prior=[{'id':f"{a['id']}#{n}",'disposition':'fixed','proof':'Synthetic fixture repair verified'}
+               for a in state['attempts'] if a['task']==context['task'] and a['role']=='review'
+               for n,_ in enumerate(a.get('findings',[]),1)]
         if role!='review':(Path(root)/'output.txt').write_text(str(len(self.calls)))
         return {'failed':False,'returncode':0,'duration_ms':10,'text':'done',
                 'structured':({'status':'completed','readiness':READINESS|{'prior_findings':prior},'obstacle':None,'summary':'Checked behavior','found_along_way':[]} if role=='implementation'
@@ -241,34 +249,33 @@ class WorkflowTest(unittest.TestCase):
                 self.assertEqual(len(repeated_family([a for a in state['attempts'] if a['role']=='review'])),1)
 
     def test_review_requires_implementer_checks_for_the_final_unchanged_tree(self):
-        from .worker_checks import run as checks,evidence
-        self.auto_worker_checks=False
+        from .worker_checks import run as checks,submit_report
+        self.auto_worker_checks=False;self.auto_reports=False
         start(self.root,{'tasks':self.tasks[:1]},self.event())
-        calls=[];directories=[]
+        directories=[]
         def implement(*args,**kwargs):
             value=self.fake(*args,**kwargs)
             if args[4]=='implementation':
-                calls.append(args[6]['attempt']);directories.append(args[5])
-                if len(calls)==1:
-                    failed=[{'name':'fixture','returncode':1,'duration_ms':0,'reused':False,'output':'Wrong behavior'}]
-                    with patch('oh.worker_checks.verify',return_value=failed):self.assertFalse(checks(args[5])['passed'])
-                    self.assertTrue(checks(args[5])['passed'])
-                    value['structured']['readiness']=READINESS|{'repairs':[]}
-                    return value  # failures repaired within this worker still need an inspectable diagnosis
-                if len(calls)==2:return value  # a claim of completion is not check evidence
-                self.assertIn('verify',args[3])
+                directories.append(args[5])
+                self.assertFalse(submit_report(args[5],value['structured'])['accepted'])
+                failed=[{'name':'fixture','returncode':1,'duration_ms':0,'reused':False,'output':'Wrong behavior'}]
+                with patch('oh.worker_checks.verify',return_value=failed):self.assertFalse(checks(args[5])['passed'])
                 self.assertTrue(checks(args[5])['passed'])
-                if len(calls)==3:(self.root/'after-check.txt').write_text('requires verification',newline='\n')
+                self.assertFalse(submit_report(args[5],value['structured']|{'readiness':READINESS|{'repairs':[]}})['accepted'])
+                self.assertTrue(submit_report(args[5],value['structured'])['accepted'])
+                (self.root/'after-check.txt').write_text('requires verification',newline='\n')
+                self.assertFalse(submit_report(args[5],value['structured'])['accepted'])
+                self.assertTrue(checks(args[5])['passed'])
             else:
                 state=load_run(self.root)[1]
-                self.assertEqual(state['verification']['1']['attempt'],calls[-1])
                 self.assertEqual(state['verification']['1']['tree'],tree(self.root))
-            return value
-        result=run(self.root,implement)
-        self.assertEqual(result['completed'],1)
-        self.assertEqual([c[0] for c in self.calls],['implementation']*4+['review'])
-        with self.assertRaises(Refused):checks(directories[-1])  # a completed worker cannot execute more checks
-        state=load_run(self.root)[1]
+            self.assertTrue(submit_report(args[5],value['structured'])['accepted'])
+            return value|{'structured':None}
+        self.assertEqual(run(self.root,implement)['completed'],1)
+        self.assertEqual([c[0] for c in self.calls],['implementation','review'])
+        with self.assertRaises(Refused):checks(directories[-1])
+        journal,state=load_run(self.root)
+        self.assertEqual(sum(r['kind']=='verification' for r in journal.records()),3)
         self.assertEqual(sum(a['role']=='review' for a in state['attempts']),1)
 
     def test_failed_review_does_not_repeat_successful_implementation(self):
@@ -655,22 +662,40 @@ class ReviewResultTest(unittest.TestCase):
 
     def test_malformed_host_results_cannot_become_review_evidence(self):
         from copy import deepcopy
-        from .hosts import review_result
+        from .hosts import review_details,review_result
+        from .runner import repeated_family
         finding={'severity':'concern','description':'A claim exceeds its evidence','path':'docs/usage.md',
                  'family':'claims','relation':'original'}
         result={'failed':False,'structured':{'verdict':'concern','summary':'Reviewed','findings':[finding],'evidence':EVIDENCE}}
-        self.assertEqual(review_result(result),('needs_resolution',[finding]))
-        mutations=[('family',None),('relation','unknown'),('relation',None),('extra','field'),('path',42)]
-        for key,value in mutations:
+        parsed=review_details(result)
+        self.assertEqual(parsed['outcome'],'needs_resolution')
+        self.assertEqual(parsed['findings'][0]['description'],finding['description'])
+        # Presentation and missing classification metadata never erase the concrete finding.
+        for key,value in [('family',None),('relation','unknown'),('extra','field'),('path',42)]:
             broken=deepcopy(result)
             if value is None:del broken['structured']['findings'][0][key]
             else:broken['structured']['findings'][0][key]=value
-            with self.subTest(key=key,value=value):self.assertEqual(review_result(broken),('failed',[]))
-        broken=deepcopy(result);broken['structured']['verdict']='accepted'
-        self.assertEqual(review_result(broken),('failed',[]))
-        # A declared clean result never erases a visible, valid blocker.
-        result['structured']['verdict']='clean';finding['severity']='blocking'
-        self.assertEqual(review_result(result),('blocking',[finding]))
+            retained=review_details(broken)
+            self.assertEqual(retained['findings'][0]['description'],finding['description'])
+        broken=deepcopy(result);broken['structured']['verdict']='clean'
+        broken['structured']['findings'][0]['severity']='blocking'
+        broken['structured']['evidence']={'anchors':[]}
+        parsed=review_details(broken)
+        self.assertEqual(parsed['outcome'],'blocking');self.assertTrue(parsed['issues'])
+        self.assertEqual(len(parsed['findings']),1)
+        # A malformed neighbor retains its source position and cannot produce clean.
+        broken['structured']['findings'].insert(0,{'severity':'unknown','description':'Unclassified risk'})
+        parsed=review_details(broken)
+        self.assertEqual(parsed['positions'],[2]);self.assertEqual(parsed['fragments'][0]['number'],1)
+        broken['structured']['findings']=[]
+        self.assertEqual(review_result(broken)[0],'review_incomplete')
+        broken['structured']['evidence']=EVIDENCE
+        self.assertEqual(review_result(broken)[0],'clean')
+        no_family=dict(parsed['findings'][0],family='')
+        self.assertEqual(repeated_family([{'id':str(i),'outcome':'blocking','findings':[no_family]} for i in (1,2)]),[])
+        failed=deepcopy(result);failed['failed']=True
+        self.assertEqual(review_result(failed)[0],'failed')
+        self.assertEqual(len(review_result(failed)[1]),1)
 
 
 class WorkerCompletionTest(unittest.TestCase):
@@ -718,7 +743,7 @@ class WorkerCompletionTest(unittest.TestCase):
         self.assertEqual(work_result(completed),("implemented",reason))  # no tree-change requirement
         for key,value in (("status",None),("status","unknown"),("summary",""),("summary"," \n"),("found_along_way",[42])):
             broken=report["structured"]|{key:value}
-            self.assertEqual(work_result(report|{"structured":broken})[0],"unfinished")
+            self.assertEqual(work_result(report|{"structured":broken})[0],"report_invalid")
 
     def test_unfinished_work_continues_with_edits_and_remaining_steps_on_both_hosts(self):
         """docs/usage.md: incomplete work is continued, never a blocker, escalation or review grant."""
@@ -735,7 +760,7 @@ class WorkerCompletionTest(unittest.TestCase):
                         self.calls.append((args[4],args[2],args[3]))
                         (self.root/'partial.txt').write_text('selection rows')
                         return {'failed':False,'returncode':0,'duration_ms':1,'text':remaining,
-                          'structured':{'status':'blocked' if host=='codex' else 'completed','readiness':None,'summary':remaining,'found_along_way':[],'obstacle':None},
+                          'structured':{'status':'unfinished','readiness':None,'summary':remaining,'found_along_way':[],'obstacle':None},
                           'usage_observed':False}
                     if args[4]=='implementation':
                         self.assertEqual((self.root/'partial.txt').read_text(),'selection rows')
@@ -771,7 +796,7 @@ class WorkerCompletionTest(unittest.TestCase):
             with self.assertRaisesRegex(Refused,'repair the checkout and resume'):
                 attempt(self.root,journal,initial,self.tasks[0],'implementation',initial['config']['models']['codex']['simple'],invoke=worker)
         _,state=load_run(self.root);saved=read_json(Path(state['attempts'][0]['evidence'])/'result.json')
-        for key,value in report.items():self.assertEqual(saved[key],value)
+        for key,value in report.items():self.assertEqual(saved['final_text' if key=='text' else key],value)
         self.assertIsNone(saved['tree']);self.assertIn('fingerprint unavailable',saved['fingerprint_error'])
         self.assertEqual(state['status'],'needs_attention');self.assertEqual(state['granted'],initial['granted'])
         self.assertEqual(state['done'],[]);self.assertEqual(len(state['attempts']),1)

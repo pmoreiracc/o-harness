@@ -130,7 +130,7 @@ def continue_stopped(root,doc,track,event):
     _,state=load_run(root)
     waiting=state['status'] in ('review_checkpoint','findings_checkpoint') and state['harness_version']!=version()
     if ((state.get('workflow'),state.get('design'),state.get('track') or '')!=('deliver',doc,track)
-            or state['status']!='stopped' and not waiting):
+            or state['status'] not in ('stopped','paused') and not waiting):
         return None
     task=next_task(state|{'status':'running'})
     if not task:return None  # a completed-task boundary still follows normal task/PR admission
@@ -147,7 +147,7 @@ def continue_stopped(root,doc,track,event):
         if git(root,'branch','--show-current')!=state['branch'] or incarnation(root,state['branch'])!=state['incarnation']:
             raise Refused('The saved delivery branch changed; preserve your edits and return to its original checkout/branch before continuing')
         stop=state['status_history'][-1]
-        retained=stop.get('snapshot')
+        retained=state.get('pause_snapshot') if state['status']=='paused' else stop.get('snapshot')
         if retained is None:  # older OH saved the returned worker tree, before settled snapshots existed
             attempts=[a for a in state['attempts'] if a['task']==task['id']]
             last=attempts[-1] if attempts else None

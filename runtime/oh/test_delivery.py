@@ -46,7 +46,7 @@ class DeliveryTest(unittest.TestCase):
         # even before its first commit; a newer installed OH retains the original authority.
         from .controls import request, status_event
         from .workflow import review_limit
-        for host,location in (('codex','repo'),('claude','private')):
+        for host,location,control in (('codex','repo','stop'),('claude','private','pause')):
             with self.subTest(host=host,location=location):
                 case=DeliveryTest();case.setUp()
                 try:
@@ -54,14 +54,14 @@ class DeliveryTest(unittest.TestCase):
                     def stopped(*args,**kwargs):
                         value=case.fake(*args,**kwargs)
                         (case.root/'draft.txt').write_text('keep this implementation',newline='\n')
-                        request(case.root,'stop')
+                        request(case.root,control)
                         return value|{'failed':True,'returncode':-15,'cancellation':['stopped'],'structured':None}
                     # Exercise the actual retained-tree format of older installed OH too.
                     def legacy(journal,state,value,**extra):
                         if value=='stopped':extra.pop('snapshot',None)
                         status_event(journal,state,value,**extra)
                     with patch('oh.controls.status_event',side_effect=legacy if host=='codex' else status_event):
-                        self.assertEqual(run(case.root,stopped)['status'],'stopped')
+                        self.assertEqual(run(case.root,stopped)['status'],'stopped' if control=='stop' else 'paused')
                     journal,before=load_run(case.root);head=case.git('rev-parse','HEAD')
                     fixtures.configure(case.root,tasks_per_batch=2,review_rounds=10)
                     def finish(*args,**kwargs):
@@ -116,8 +116,9 @@ class DeliveryTest(unittest.TestCase):
         self.documents();self.start_delivery()
         def stopped(*args,**kwargs):
             value=self.fake(*args,**kwargs)
-            from .worker_checks import run as checks
+            from .worker_checks import run as checks,submit_report
             self.assertTrue(checks(args[5])['passed'])
+            self.assertTrue(submit_report(args[5],value['structured'])['accepted'])
             request(self.root,'stop');return value
         self.assertEqual(run(self.root,stopped)['status'],'stopped')
         self.start_delivery(turn='again',session='new-chat')
@@ -436,7 +437,10 @@ class DeliveryTest(unittest.TestCase):
         _,path=self.documents();original=path.read_bytes();self.start_delivery()
         def stopped(*args,**kwargs):
             value=self.fake(*args,**kwargs)
-            if args[4]=='review':request(self.root,'stop')
+            if args[4]=='review':
+                from .worker_checks import submit_report
+                self.assertTrue(submit_report(args[5],value['structured'])['accepted'])
+                request(self.root,'stop')
             return value
         self.assertEqual(run(self.root,stopped)['status'],'stopped')
         self.assertEqual(path.read_bytes(),original)

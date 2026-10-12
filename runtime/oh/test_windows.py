@@ -67,6 +67,9 @@ class WindowsTest(unittest.TestCase):
         root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root)
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
         document=root/'configured plans'/'approved.task.md';document.parent.mkdir();document.write_text('pending',newline='\n')
+        for role in ('attempt','review'):
+            (root/role).mkdir()
+            (root/role/'request.json').write_text(json.dumps({'report_protocol':1,'verification_timeout':60}),newline='\n')
         with patch('oh.hosts.executable', return_value='claude'), patch('oh.hosts.WINDOWS', True):
             work = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'implementation', None, root / 'artifacts',read_only_paths=[document],verification_dir=root/'attempt')
             review = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'review', None, root / 'run',verification_dir=root/'review')
@@ -79,7 +82,9 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(work[work.index('--tools') + 1], 'Read,Glob,Grep,Edit,Write')
         self.assertEqual(review[review.index('--tools') + 1], 'Read,Glob,Grep')
         self.assertIn('--strict-mcp-config',review);self.assertIn('--disable-slash-commands',review)
-        self.assertEqual(json.loads(review[review.index('--settings')+1])['permissions']['allow'],['mcp__oh_checks__admission'])
+        self.assertEqual(json.loads(review[review.index('--settings')+1])['permissions']['allow'],['mcp__oh_checks__admission','mcp__oh_checks__submit_report'])
+        self.assertEqual(review[review.index('--permission-mode')+1],'default')
+        self.assertIn('Write('+rule_path(root)+'/**)',json.loads(review[review.index('--settings')+1])['permissions']['deny'])
         settings = json.loads(work[work.index('--settings') + 1])
         self.assertEqual(settings['sandbox'], {'enabled': False})
         self.assertLessEqual({'Bash', 'PowerShell', 'Agent'}, set(settings['permissions']['deny']))

@@ -70,7 +70,7 @@ else:
                     if continued is not None:continued_revision=continued;break
                     if status in ('stopped','completed','pr'):break
                 # Only a new explicit Deliver can adopt an inactive review checkpoint in a newer runtime.
-                if status not in ('stopped','completed','pr') and not (command=='deliver' and status in ('review_checkpoint','findings_checkpoint')):
+                if status not in ('stopped','completed','pr') and not (command=='deliver' and status in ('paused','review_checkpoint','findings_checkpoint')):
                     revision=continued_revision or json.loads(start.read_bytes())['data']['harness_version']
                     if Path(revision).name!=revision:raise SystemExit('Invalid retained runtime revision')
     entry=home/'versions'/revision/'oh'

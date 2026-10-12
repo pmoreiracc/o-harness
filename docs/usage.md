@@ -163,11 +163,18 @@ remain protected from edits. Implementers persist through incomplete work, self-
 useful edits. If a worker returns unfinished work, OH continues the same task on the same profile
 with concrete remaining steps; no review is spent until implementation completes. A completed
 report includes a current task packet: requirements, rules, affected surfaces, proof, self-review,
-family closure, every prior finding disposition, verification, repair diagnoses and limits. Missing readiness returns to the
-implementer within the existing task. Tests are evidence to examine against approved behavior;
+family closure, every prior finding disposition, verification, repair diagnoses and limits.
+Both the implementer and reviewer submit reports before exiting and correct report errors in
+the same agent call. A malformed report does not restart implementation or rerun passing checks.
+OH preserves recognizable review findings even when other receipt fields are malformed;
+incomplete review evidence cannot approve completion. Tests are evidence to examine against approved behavior;
 a faulty assertion may be corrected with behavioral proof, but green tests never authorize
 changed requirements or lost behavior. The independent reviewer challenges these claims.
 Covered by `test_unfinished_work_continues_with_edits_and_remaining_steps_on_both_hosts`.
+Report correction and retained findings are covered by
+`test_worker_check_tool_runs_only_the_bound_projects_checks`,
+`test_repair_review_retains_prior_family_and_exact_subject` and
+`test_malformed_host_results_cannot_become_review_evidence`.
 A blocked report
 must name missing authority or an external dependency, concrete evidence and the next action.
 Such work keeps its edits and report; OH stops before checks or independent review and explains
