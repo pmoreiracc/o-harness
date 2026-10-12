@@ -68,8 +68,9 @@ Windows has been recorded yet, so treat Windows support as a preview.
 - Git for Windows converts line endings by default (`core.autocrlf`); OH accepts files whose
   only difference from what Git stores is their line endings.
 - **Claude workers have no shell on Windows.** Claude Code's sandbox doesn't run on native
-  Windows, so OH's Claude workers only read and edit files; OH runs your project's checks
-  after each task and sends failures back. Reviewers read the exact change from a file.
+  Windows, so OH's Claude workers use file tools and a restricted `verify` tool. Implementers
+  run your configured checks through that tool and repair failures before returning.
+  Reviewers read the exact change from a file.
   Codex workers keep Codex's own Windows sandbox. For full Claude workers, run OH inside WSL 2,
   where it behaves as on Linux.
 - Windows' search of the current folder is off for the commands OH starts (your checks keep

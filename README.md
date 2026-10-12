@@ -87,7 +87,7 @@ Open a new session in your project. Bring an idea:
 /oh-propose Add search to my notes app. Keep it simple.
 ```
 
-In Codex, use `$oh-propose`. First use sets up your project and checks; run the proposal again after setup.
+In Codex, use `$oh-propose`. First use sets up your project and carries the original request forward.
 Planning leaves your code untouched. Build when you're ready with `oh-deliver`.
 
 <sub>macOS, Linux or 64-bit Windows 11 (preview) · Python 3.12+ · Git</sub>

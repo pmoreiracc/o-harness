@@ -87,15 +87,18 @@ Workers can't write the settings folder. `oh backup` includes `settings.json`.
 |---|---|---|
 | `tasks_per_batch` | 5 | Tasks approved per batch, and per **continue** (1–100) |
 | `review_rounds` | 3 | Review rounds each task may use before OH asks you (1–100) |
-| `max_escalations` | 1 | Retries on the complex model after a failed attempt, before OH asks you (0–2) |
-| `context.handoff_chars` | 12000 | Maximum task handoff text sent to a worker |
-| `context.result_chars` | 4000 | Maximum feedback kept in model prompts |
-| `context.compact_at_tokens` | 60000 | Codex worker compaction threshold (Codex only) |
+| `context.handoff_chars` | 12000 | Maximum inline task context; complete scope and evidence are referenced externally |
+| `context.result_chars` | 4000 | Maximum concise feedback retained in attempt summaries |
 | `plans.location` | ask | Where roadmaps, design docs and decisions live: `repo` (committed in the repository) or `private` (OH's folder) |
 | `plans.private_folder` | ~/oh-plans | Parent of visible private project plan folders; absolute or home-relative |
 | `plans.roadmap` | docs/roadmap.md | Roadmap file, relative to where plans live |
 | `plans.designs` | docs/design | Design docs folder |
 | `plans.decisions` | docs/decisions | Decision records (ADRs) folder |
+
+Worker context compaction follows the native host/model settings. OH no longer overrides it
+with a fixed token threshold. Older `context.compact_at_tokens` settings are removed through
+the existing migration with a backup. Covered by `test_renamed_settings_are_moved_once_with_a_backup`
+and `test_codex_menu_is_never_shown_to_workers_or_by_a_different_runtime`.
 
 `oh plans path` shows where a project's plans live; `oh plans check` checks the roadmap and
 design docs against their rules. `oh plans list` shows each initiative's design and approval
@@ -112,6 +115,13 @@ is authoritative. `init --replace` preserves that document location but creates 
 authority. Profile export excludes private documents and approvals explicitly; copy those
 documents separately when moving machines and review them again. `oh backup` covers OH state,
 not the external `~/oh-plans` folder: include your visible plan folder in your regular backups.
+
+`max_escalations` is retired. OH removes it from older settings through the existing
+migration, preserving a backup. Checks are repaired automatically on the current profile;
+only a blocking defect family appearing in a second independent review escalates the
+implementer. No Retry approval is required for delivery. Covered by
+`test_checks_repair_without_escalation_and_only_repeated_review_families_escalate`
+and `test_renamed_settings_are_moved_once_with_a_backup`.
 
 ## Models
 
@@ -184,3 +194,13 @@ the remaining checks and cannot advance that attempt to review or commit. `oh ve
 returns failure, and task and PR summaries label the result failed while retaining the
 actual exit code and cancellation reason. Covered by
 `test_zero_exit_cancelled_check_blocks_delivery_and_is_reported_failed` in `runtime/oh/test_workflow.py`.
+
+
+Before each new Deliver task, a fresh read-only assessment uses the configured `standard`
+profile to examine the actual scope and relevant code. Its difficulty, rationale, references,
+uncertainty and usage stay in OH's external records, and select the configured simple, standard
+or complex implementation profile. Material uncertainty selects complex. The rating is reused
+for repairs and resume; already-started older tasks retain their original selection. Consumer
+design documents contain no model or effort recommendations. Covered by
+`test_initial_and_continue_same_batch_snapshot_and_idempotent_restart` and
+`test_ready_selection_skips_blocked_tasks_and_orders_dependencies`.

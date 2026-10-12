@@ -35,8 +35,9 @@ and code and picks one route:
 - or **unclear**, with the two readings and the question to answer.
 
 Proposal, design and quick-fix approvals provide a complete Markdown review copy in OH's
-external storage. In Codex Desktop, OH opens it in the right panel and uses the small native
-question, so you can keep reading and scrolling while deciding. In Claude desktop, the
+external storage. In Codex Desktop, OH opens it in the right panel and uses OH’s blocking
+menu, so you can keep reading and scrolling while deciding. The menu waits for your click
+without repeatedly waking the coordinator. Cancelling it grants nothing. In Claude desktop, the
 coordinator opens a scratchpad copy of it in the side pane (`show_pane`) when that pane tool is
 available; the stored preview stays the one OH checks, and without the pane you get the link only.
 Covered by `test_prepared_claude_menu_binds_scope_limits_and_expires`. The question names that exact
@@ -100,26 +101,52 @@ choose an option.
   it and shows the tasks and limits in an **Approve / Refine / Cancel** menu. Approve grants exactly
   that saved task list. The trigger `$o-harness:oh-deliver request:<id>` stays available as a typed fallback. The approved scope cannot grow afterwards.
 
-Ready tasks are selected in dependency order; blocked work stays pending. OH owns task
-checkboxes and freezes a design when its last task completes. For private plans, the reviewer
-sees the proposed document update alongside the code; OH publishes the update only after the
-reviewed code commit, with recovery if saving is interrupted. Private documents stay out of Git.
+Ready tasks are selected in dependency order; blocked work stays pending. Delivery workers
+have read-only access to the approved plan files at their configured paths. Codex uses an
+invocation-local permission profile; Claude denies document edits/writes and sandboxed shell
+writes (Windows workers have no shell). User settings and file permissions are not rewritten.
+Covered by `test_codex_document_permissions_preserve_configured_paths` and
+`test_claude_workers_on_windows_edit_files_but_have_no_shell`.
+
+The visible task stays unchecked during implementation, checks and independent review.
+OH prepares the proposed completion/freeze separately and includes it in the review subject.
+Only native completion can publish that document, after passing checks and an authorized
+review, and commit exactly the reviewed tree. An interrupted completion resumes from its
+recorded intent. Covered by `test_repository_task_stays_pending_through_check_repairs_and_review`,
+`test_stop_after_delivery_review_keeps_task_pending_until_explicit_continuation` and
+`test_repository_completion_recovers_after_document_publish_before_commit` in `runtime/oh/test_delivery.py`.
+Private progress is published after the reviewed code commit, with recovery if saving is
+interrupted. Private documents stay out of Git.
 Private progress also records its code revision: OH continues on the design's delivery branch,
 and progress made on any other branch needs that branch merged first. An older private plan with completed tasks but no recorded revision needs
 review and reapproval through `/oh-design <slug>` from the checkout containing that completed code.
 
 OH then runs the tasks on `deliver/0005` (`deliver/0005-<track>` for one track), made from
 the up-to-date base branch. If that branch still holds unfinished work, from a delivery you stopped,
-OH resumes it and merges the base branch into it; one pull request then publishes all of it. If the base branch
+OH first recognizes its saved unfinished task, preserves the draft and continues from the last valid
+implementation/check/review stage. This also works in a new conversation after Stop, including with a newer
+installed OH: the original scope, settings, findings and remaining review allowance stay intact. The checkout
+must match the saved branch, HEAD and file contents, and the previous runner must have stopped.
+OH finishes that admitted task before refreshing its branch for further work; it never merges or replaces a
+branch over the retained draft. One pull request then publishes all of it. For later task admission, if the base branch
 conflicts with that work, you choose: start over from the base branch (the branch is discarded), finish
 without the base branch's changes (you resolve the conflict when the pull request merges), or let the agent
 plan a resolution for you to approve; the next task's review then covers it, as it covers commits of
 your own on that branch. A branch that already holds the whole design goes to its pull request: typing the command
 again offers **pr** again, even after **stop**, and new tasks for that design come after it merges. Typing the
-same command while its run is open continues that run. For each task a
-fresh worker implements it, your project checks run, an independent reviewer checks the
+same command while its run is open continues that run. Covered by
+`test_stopped_draft_continues_in_new_session_and_version_on_both_hosts`,
+`test_stopped_continuation_rejects_changed_checkout_or_live_runner`,
+`test_stop_after_verified_implementation_continues_at_review_without_rebuilding` and
+`test_stopped_continuation_preserves_review_findings_and_spent_window` in `runtime/oh/test_delivery.py`. For each task a
+fresh worker implements it and runs your project checks, then an independent reviewer checks the
 exact result, blockers get fixed, and the reviewed tree is committed. Workers can't write
 OH's state, your settings or Git internals.
+
+If an OH update arrives while delivery awaits a review decision, invoking Deliver in a fresh
+session adopts the new runtime after checking the saved branch, HEAD and working tree. The
+same findings and spent review allowance remain pending; the command grants no extra reviews.
+There is no need to stop the waiting run first. The same continuation test covers this path.
 
 Workers have no total execution deadline: implementation, planning and review can continue
 as long as the task needs. Explicit stop first interrupts the host so it can cancel shell tools
@@ -132,16 +159,29 @@ Project checks and short host operations keep their own timeouts. Covered by
 `test_worker_cancellation_interrupts_the_host_to_clean_detached_commands` in `runtime/oh/test_system.py`.
 
 Claude workers can read this project's OH task inputs and repair feedback while those files
-remain protected from edits. A worker that reports blocked work keeps its edits and report;
-OH stops before checks or independent review and explains what must be resolved. A successful
+remain protected from edits. Implementers persist through incomplete work, self-review defects and failed checks, preserving
+useful edits. If a worker returns unfinished work, OH continues the same task on the same profile
+with concrete remaining steps; no review is spent until implementation completes. A completed
+report includes a current task packet: requirements, rules, affected surfaces, proof, self-review,
+family closure, every prior finding disposition, verification, repair diagnoses and limits. Missing readiness returns to the
+implementer within the existing task. Tests are evidence to examine against approved behavior;
+a faulty assertion may be corrected with behavioral proof, but green tests never authorize
+changed requirements or lost behavior. The independent reviewer challenges these claims.
+Covered by `test_unfinished_work_continues_with_edits_and_remaining_steps_on_both_hosts`.
+A blocked report
+must name missing authority or an external dependency, concrete evidence and the next action.
+Such work keeps its edits and report; OH stops before checks or independent review and explains
+what must be resolved. A successful
 host call alone cannot complete a task. Covered by
 `test_claude_workers_on_windows_edit_files_but_have_no_shell` and
-`test_blocked_or_missing_worker_completion_never_spends_a_review`.
+`test_blocked_or_missing_worker_completion_never_spends_a_review` and
+`test_unfinished_work_continues_with_edits_and_remaining_steps_on_both_hosts`.
 
 Proposal authors and reviewers receive the same routing policy, including new product areas.
 Planning handoffs state whether designs use private human approval or a repository PR merge.
-Reviewers receive saved planning-author reports as well as code implementation reports.
-Repair and refinement agents receive the existing review history and human dispositions;
+Reviewers receive the current author report and a complete finding index. Distinct cases and
+every original finding remain traceable; earlier author reports are available on demand instead
+of being mandatory reading. Repair and refinement agents receive current work and human dispositions;
 that history preserves earlier fixes and does not grant additional scope or reopen accepted,
 dismissed or routed findings. Recorded human refinements also reach subsequent reviewers and
 blocker-driven repairs; a review renewal does not replace the person's requested approach.
@@ -154,6 +194,31 @@ families before returning them. Covered by
 `test_repair_review_retains_prior_family_and_exact_subject`.
 
 Tasks continue automatically within the granted batch; another task does not need another approval.
+Failed lint, type or test checks go directly back to the implementation agent and are rerun
+before independent review. They never change the model or request Retry approval. The model
+escalates only after the same blocking defect family appears in two independent review
+receipts. Covered by `test_checks_repair_without_escalation_and_only_repeated_review_families_escalate`.
+The implementer calls its restricted `verify` tool to run the registered project checks and
+repairs failures before returning. The same tool works on native Windows Claude without a shell.
+It accepts no commands or paths from the worker and retains the actual results in OH's storage.
+The runner admits review only when those results cover the final unchanged work; it does not
+execute a second round of tests. Missing or stale results return to the implementer. Covered by
+`test_review_requires_implementer_checks_for_the_final_unchanged_tree` and
+`test_checks_repair_without_escalation_and_only_repeated_review_families_escalate`.
+During a command, the runner reports actual transitions and retains the latest bounded public
+worker update. The coordinating chat keeps one execution call active with yielding/background
+waits, reads status every 210 seconds and relays only new meaningful work in one short sentence.
+Reasoning and tool output never enter that update. The runner also emits fresh public focus
+through native progress at this cadence. Covered by
+`test_the_runner_reports_progress_where_the_server_forwards_it`,
+`test_workers_relay_public_focus_without_repetition_over_thirteen_minutes` and
+`test_initial_and_continue_same_batch_snapshot_and_idempotent_restart`.
+Persistent external obstacles preserve work and explain the concrete next action. Deliver
+has no Retry menu: after the obstacle is repaired, `run` continues the same approved work
+without renewing task or review allowances. Planning uses the same continuation after its
+external obstacle is resolved. Neither workflow offers a routine Retry approval.
+Covered by `test_blocked_or_missing_worker_completion_never_spends_a_review`
+and `test_planning_continues_after_external_obstacle_without_new_allowance`.
 `status` includes the current task and phase (specialist work, checks, independent review or completion)
 with bounded implementation reports and the last completed review’s findings, so the chat can
 explain what the implementation agent changed, what the independent reviewer agent found and who
@@ -163,17 +228,20 @@ finished review's outcome, round count and finding count, even when it finished 
 polls. The chat reports that result once per attempt
 before the commit or saved document, explicitly identifying a clean review with no findings.
 `last_failure` explains the current task's latest failed attempt or check, including a worker's
-exit status and cancellation reason when available, even while a retry runs. Check repair feedback
+exit status and cancellation reason when available. A newer active attempt or result supersedes
+that current-failure display; the original remains in the history. Check repair feedback
 is plain text without terminal colour codes; the complete retained check result stays in the journal.
-Covered by `test_failed_worker_cause_reaches_status_and_retry` and
-`test_failed_review_then_verification_failure_consumes_worker_allowance` in `runtime/oh/test_workflow.py`.
+Covered by `test_failed_worker_cause_reaches_status_and_automatic_continuation` and
+`test_review_requires_implementer_checks_for_the_final_unchanged_tree` in `runtime/oh/test_workflow.py`.
 It avoids repeated promises to commit or publish. At a batch boundary, **Stop and take over** retains the work
 without publishing. Once all tasks finish, that option becomes **Finish without a PR**.
 The chat summarizes the work and finite Continue allowance; approval copies show their complete
 scope and limits. Menus use short, neutral labels such as **Approve**, **Refine**, **Cancel** and
 **Open a PR**, without recommending approval or publication. A completed repository task asks
-“Open a pull request?”; an unfinished batch offers Continue, PR or Stop with the next task and finite
-allowance explained in chat. Choosing PR returns the retained
+a destination-bound publication question; an unfinished batch offers Continue, PR or Stop with
+the next task and finite allowance explained in chat. On Codex, publication uses the native question
+and actual human reply, so the same decision is visible to OH and Codex. It names the branch,
+destination and PR target, while keeping credentials out of the question and report. Choosing PR returns the retained
 publication grant and routes directly to push/PR, without executing or reviewing the work again.
 On the normal publication path, the next chat message is the PR number/link and result, including
 the recorded review-round count. The host may still require its own publication authorization; OH
@@ -235,11 +303,20 @@ You can still code, commit and open PRs without OH at any time.
 
 ## Pause, resume and stop
 
+Clicking **Stop in Codex** also stops the OH run owned by that execution turn, interrupts its
+worker or check and preserves edits, commits and evidence. The run settles as STOPPED after
+owned-process cleanup. This works even when the stopped call was a yielding wait rather than
+the original OH tool. A prior turn's interruption or a transport failure does not stop another
+execution. Covered by `test_stop_during_check_cancels_owned_group_and_preserves_results` and
+`test_codex_stop_after_worker_prevents_checks_review_and_commit`.
+
 - `/oh-pause` finishes the current step, then waits. The status is PAUSING until it is
   quiet, then PAUSED.
 - `/oh-resume` continues the same batch with what is left of its approval.
-- `/oh-stop` stops the batch and keeps all files, commits and evidence. A stopped batch
-  can't resume; new work needs a new approval.
+- `/oh-stop` stops the batch and keeps all files, commits and evidence. `/oh-resume` does
+  not restart a stopped batch. Explicitly invoking `/oh-deliver NNNN [track]` again can
+  continue its saved unfinished task with the remaining authority. It does not renew
+  a spent review window or accept findings; new scope still needs approval.
 
 If the agent is busy, run `oh --root <project> pause` or `oh --root <project> stop` in a
 terminal. `oh --root <project> status` shows the current run.
@@ -335,7 +412,7 @@ finalizing an already completed design remains separate. Quick fixes skip these 
 Covered by `test_repository_design_starts_once_and_uses_existing_batch_runner` and
 `test_ready_selection_skips_blocked_tasks_and_orders_dependencies`.
 
-`oh pr-summary` gives the PR a readable change summary, verification results, independent review
+`oh pr-summary` gives the PR a short summary of the original implementation and its repairs, recorded check results, independent review
 outcome, and actual findings, decisions and scope destinations. Execution logs remain in OH's journal.
 New publication evidence uses repository-relative paths and public references before its digest is
 sealed into the commit. Original local reports remain in OH’s journal. Portable machine evidence
@@ -352,3 +429,30 @@ over manually. Repository work also offers a stop with an unresolved PR handoff 
 it does not approve completion or normal publication. Private plans have no PR handoff.
 Private-plan completion and conversational refinements emit the same dashboard observations as
 code delivery. Durable spool events are indexed when the collector runs; observations never grant work.
+
+
+### Current task context and readable receipts
+
+`next_action` is the shared execution/status/menu decision. Known defects are repaired and
+verified within the task's existing approval before another review allowance is requested.
+A stopped older run preserves its work, initial model, findings and consumed allowance.
+Each new task receives a fresh runtime difficulty assessment on the standard profile; no
+harness difficulty or effort is written into the consumer design.
+
+The returned `report` links to an external Markdown index by task and review round. Each new
+attempt has a readable request and immutable result view beside its original structured evidence.
+Review receipts show the reviewed state, model, duration, outcome, findings and coverage;
+missing historical details are labelled. Native JSON and the journal remain authoritative.
+The index distinguishes author repair claims from fixes confirmed by later independent review;
+the original findings stay linked. Large proposal details and private designs are linked for
+approval instead of being repeated in each status response.
+
+PR descriptions contain concise whole-change summaries, actual verification, review outcomes,
+a delivery boundary and expandable review history. Earlier repair notes are not concatenated
+into the current summary. A recorded publication choice binds the actual push destination;
+changing that destination requires a new choice, while restoring it preserves the original grant.
+Older choices without a destination need that missing authority once, without repeating work.
+Covered by `test_repair_review_retains_prior_family_and_exact_subject`,
+`test_native_pr_evidence_binds_all_commits_and_refuses_tampering`,
+`test_codex_menu_records_the_click_itself` and
+`test_review_budget_survives_failures_and_restart`.

@@ -1,6 +1,7 @@
 # OH harness refactor
 
-Status: implementation in progress. Branch: `codex/harness-refactor`.
+Status: implementation and local acceptance complete; awaiting the developer's Desktop trial.
+Branch: `codex/harness-refactor`. Independent review and publication remain pending.
 
 ## Objective and fixed decisions
 
@@ -40,7 +41,7 @@ transcripts, receipts, tokens or local run state.
   Run affected checks and inspect durations; avoid repeated full-suite runs.
   **Done when:** the coverage/disposition map and baseline affected-check results are recorded.
 
-- [ ] **3. Replace accumulating history with a current task packet.** Depends on 2.
+- [x] **3. Replace accumulating history with a current task packet.** Depends on 2.
   Introduce a versioned internal packet for approved scope/references, current and remaining work,
   verification references and all finding dispositions. Readiness explicitly covers requirements,
   rules, affected surfaces, proof, self-review, family closure, prior findings, verification and limits.
@@ -50,7 +51,7 @@ transcripts, receipts, tokens or local run state.
   Native verification and independent review remain required; author claims grant nothing.
   **Done when:** more attempts do not grow the mandatory report bundle and every finding is traceable.
 
-- [ ] **4. Add fresh runtime difficulty assessment.** Depends on 3.
+- [x] **4. Add fresh runtime difficulty assessment.** Depends on 3.
   Before each new Deliver task, use the configured standard profile for one read-only assessment
   of approved scope, relevant code and referenced contracts. Return difficulty, rationale, examined
   references and uncertainty. Local bounded edits are simple; ordinary contained changes standard;
@@ -61,7 +62,7 @@ transcripts, receipts, tokens or local run state.
   Already-started tasks retain their recorded selection and all review allowances.
   **Done when:** new runtime selection needs no consumer metadata or repeated assessment calls.
 
-- [ ] **5. Consolidate workflow decisions.** Depends on 4.
+- [x] **5. Consolidate workflow decisions.** Depends on 4.
   Derive execution, status, menus and resume from one next-action function over recorded state and
   validated evidence. Preserve Propose/Design approvals and concern/scope decisions. In Deliver,
   repair implementation/check failures before asking for allowance when the next review is ready.
@@ -70,7 +71,7 @@ transcripts, receipts, tokens or local run state.
   implementation, findings and consumed allowances; scope never expands silently.
   **Done when:** execution and displayed next action agree in normal, interrupted and resumed runs.
 
-- [ ] **6. Restore readable receipts and organized PR descriptions.** Depends on 5.
+- [x] **6. Restore readable receipts and organized PR descriptions.** Depends on 5.
   Add deterministic Markdown requests/receipts and a run index organized by task and review round,
   alongside the authoritative structured evidence in OH's external storage. Include task, branch,
   reviewed state, reviewer, elapsed time, outcome, findings and evidence. Findings name the
@@ -81,13 +82,16 @@ transcripts, receipts, tokens or local run state.
   historical fields honestly, and keep raw transcripts and private local paths out of publication.
   **Done when:** receipts/PRs are readable, complete and traceable.
 
-- [ ] **7. Unify the visible host experience.** Depends on 6.
+- [x] **7. Unify the visible host experience.** Depends on 6.
   Shorten shared workflow instructions around runtime decisions. Report actual transitions and
   factual progress about every three to four minutes during long phases. Separate historical
   failures from current unresolved problems. Use one trusted native publication question naming
   branch, destination and PR target; retain it across recovery. Reuse existing PRs and completed
   work. Preserve host-required permissions; suppression of host-imposed citations is not promised.
   **Done when:** the known publication path needs no redundant OH decision and current status is accurate.
+  **Evidence:** native publication-question/destination tests, current-failure projection, repeated
+  public-focus timing, immutable recovery and both-host live Deliver trials passed. Actual Desktop
+  permission handling and Stop remain part of the developer's integrated trial in task 8.
 
 - [ ] **8. Validate, consolidate and prepare publication.** Depends on 7.
   Complete the test audit, remove superseded paths/tests, and document only verified behavior.
@@ -202,3 +206,112 @@ Concrete obsolete assertions identified: `test_design.test_a_repair_rewrites_the
 - 2026-10-12: no product files or run evidence in my-geoffrey will be changed by this refactor.
 - Baseline: all 22 affected modules passed (405 tests), 392.71 seconds with two processes. Slowest modules: delivery 240.85s, propose 111.44s, workflow 79.44s, design 73.24s. Per-test durations retained in the external baseline log. The initial sandbox run was discarded because process inspection was denied; no production behavior was weakened to satisfy that environment.
 - Integrated candidate, live trials, independent review and publication: pending.
+
+- Task 3: targeted multi-task handoff, final-check evidence, repair/family context, repo/private scope preservation, planning repair and private human-refinement scenarios passed. The old required historical report bundle was removed; older original records remain untouched. Also replaced Geoffrey-specific mandatory doc/test cross-link prose with the consumer's documentation conventions.
+
+- Task 4: runtime assessment, multi-task reuse, both-host repeated-family escalation, legacy design annotation independence, stopped-task continuation and read-only host permissions passed targeted checks. Assessment cost is retained as a separate role and included in task totals; no new model setting was introduced.
+
+- Task 5 validation so far: shared-policy review allowance, planning repair, private approvals and pause-after-review passed. The allowance scenario now also asserts that the last repair and its verification precede the renewal question. Legacy waiting runs use the same policy to complete already-authorized repairs without renewing reviews.
+
+- Task 5: allowance timing, stopped-version continuation, Stop after a worker, current-failure reporting and automatic same-authority continuation passed. Updated the two obsolete expectations (repair was previously withheld at a spent window; historical failure was previously displayed during its replacement). No new test method was needed.
+
+- Task 6: immutable readable receipts, complete indexed family history, current whole-change PR summaries, portable evidence validation/tamper rejection and native publication destination binding passed targeted checks. Removed obsolete repair-paragraph concatenation and a byte cap on the full PR audit section.
+- Test audit improvement: shared workflow fixtures capture the unchanged source runtime version once; consumer Git-tree checks and explicit upgrade overrides remain active. This avoids repeatedly hashing the OH source during a single synthetic run. Validate the measured effect with final affected-check durations.
+
+- Workflow skill validation: all four shortened workflows passed the skill-creator validator. PyYAML was installed only in a temporary validation environment because neither local Python runtime supplied it; project dependencies were unchanged. Shared host protocol now lives in `workflows/runtime.md`.
+
+- Broader affected run: 405 tests in 419.45s (baseline 392.71s). The new assessment adds native
+  lifecycle work; no speedup is claimed. Failures exposed obsolete direct-prompt, attempt-order and
+  Retry-menu assertions. They now check actual packets and authority instead. Follow-up modules
+  also exposed the PR base label using a Git remote ref and an older receipt missing an attempt ID;
+  presentation now uses the approved PR target and tolerates unavailable historical fields.
+- The reviewer prompt contained contradictory historical-report instructions; consolidated them
+  around the current packet. Distinct failures in one family are retained, author repair claims are
+  labelled, and later clean reviews are linked without editing earlier receipts. Terminated attempts
+  without a final report remain resumable. Large planning views are referenced, and private diffs
+  are no longer duplicated into coordinator status beside the complete approval preview.
+- First live trials: Claude clean and defective-test fixtures passed in 116.29s and 120.93s;
+  Codex clean passed in 261.01s. Each used one review and passed the separate contract oracle.
+  Codex spent much of review rediscovering OH's hash/config logic and inspected an older installed
+  runtime. The golden reference's `review-admission-check.sh` handles this natively. OH now reuses
+  its existing worker connection for a read-only `admission` operation bound to the current review;
+  it cannot run checks, change scope or grant completion. No additional service or model role.
+- Live Claude initialization also exposed unrelated connector tools and 40 inherited skills.
+  Child invocations now use its documented strict MCP/disabled-skill switches; Codex child apps
+  are disabled through an invocation override. User configuration remains untouched. Codex settings
+  were checked against the [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+  Repeat the final live matrix after these evidence-driven corrections; early trial results are
+  exploratory measurements, not final-candidate acceptance.
+- All 405 affected tests were exercised; failures were corrected and their modules/scenarios
+  rerun. The final native-admission/host checks passed after supplying the lifecycle fixture's
+  explicit role. Extended the existing worker-tool test with admission tamper, stale-tree,
+  finished-attempt and role-isolation checks. No additional test method or module was introduced.
+- Syntax and diff checks passed. macOS native host checks passed; native Windows-only cases
+  remain for Windows CI, with platform-neutral command/permission assertions checked locally.
+
+## Integrated candidate and final acceptance
+
+Tested build: `0.6.0-SNAPSHOT.1791828678964737000`. Both hosts were packaged together.
+The current production runtime, prompts, workflows and configuration match the tested package
+byte for byte (54 files compared). Test-only and documentation updates after packaging do not
+change the candidate's runtime. The installed development plugin has not been switched.
+
+Activate this exact candidate for the agreed Desktop trial:
+
+```sh
+oh-dev on --build "/Users/pedromoreira/.local/share/oh-dev/builds/0.6.0-SNAPSHOT.1791828678964737000"
+```
+
+Final live trials used actual subscription-authenticated CLI workers and reviewers, isolated
+synthetic consumer repositories and external OH records. The input command grants were fixture
+records for these explicitly authorized tests; they do not prove Desktop human-message provenance.
+Every trial used one assessment, one implementer and one independent review. Every review was
+clean; no review renewal, scope question or repair interruption occurred. No trial published code.
+
+| Host | Fixture | Repeat | Elapsed seconds | Input tokens | Output tokens | Cached input subset |
+|---|---|---:|---:|---:|---:|---:|
+| Claude | Clean implementation | 1 | 82.13 | 301,237 | 8,637 | 239,697 |
+| Claude | Clean implementation | 2 | 72.77 | 308,651 | 7,581 | 258,652 |
+| Claude | Defective assertion | 1 | 73.40 | 302,304 | 7,276 | 251,418 |
+| Claude | Defective assertion | 2 | 89.64 | 304,215 | 10,533 | 252,099 |
+| Codex | Clean implementation | 1 | 160.92 | 494,540 | 5,153 | 380,672 |
+| Codex | Clean implementation | 2 | 194.01 | 494,623 | 6,350 | 412,928 |
+| Codex | Defective assertion | 1 | 191.38 | 463,666 | 6,178 | 384,640 |
+| Codex | Defective assertion | 2 | 181.17 | 442,350 | 5,769 | 341,376 |
+
+These are observed totals across all calls, including assessment; cached input is already part
+of input and is not added again. They are workload observations, not API bills. No token saving
+against the golden reference is claimed. Median elapsed time was 77.77s on Claude and 186.28s
+on Codex. Assessment took 11–14s and 27–31s respectively, which is visible overhead on tiny tasks.
+These fixtures establish correctness and interruption behavior, not large-project performance.
+
+The defective fixture began with correct code and an assertion contradicting its approved
+contract. All four runs corrected the assertion and retained the correct behavior. A separate
+oracle checked required behavior and unchanged requirements. The retained tests also caught
+all five isolated seeded defects in every trial: lower/upper escapes, exclusion of the upper
+boundary, wrong equal-bound behavior and acceptance of reversed bounds. Missed seeded defects:
+0 of 40. No model or native completion claim substituted for these checks.
+
+Final regression work reused the existing fixtures. All 405 affected tests were exercised;
+obsolete assertions were corrected and their affected cases/modules rerun. Then 204 workflow
+scenarios exercised native admission validation across repository/private plans, Propose/Design,
+delivery, interrupted work and human dispositions. The one remaining old PR-target expectation
+was corrected and its full delivery scenario passed. The inventory remains 410 test methods;
+none was added to meet a count, and no whole scenario was deleted because each protects a
+distinct supported boundary. Superseded report-bundle, prompt-wording and Retry expectations
+were removed instead. External logs include duration reports and original failures.
+
+### Remaining acceptance, in order
+
+1. Developer trial in fresh Desktop sessions: meaningful progress, Stop during implementation
+   or review, fresh-session resume, and one native publication question with reuse of existing
+   completed work/PRs. Host-imposed permissions and citations remain host behavior.
+2. Fix any observed integration defect; preserve useful work, evidence and existing authority.
+3. Fresh independent invariant review of the final OH change, using the configured review
+   profile and immutable admission. Repair blocking findings before publication.
+4. PR for human merge, with affected Linux/Windows CI and measured durations. Local command
+   and permission tests cover platform-sensitive paths; native CI on those systems is pending.
+
+The initial recovery copy and all live test evidence remain outside Git. The final metrics and
+negative-oracle results are under `/private/tmp/oh-refactor-final-metrics.json` and
+`/private/tmp/oh-final-*/`; complete native receipts are linked from each fixture's `result.json`.
