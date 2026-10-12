@@ -60,14 +60,18 @@ else:
             if active_run.is_file():
                 binding=json.loads(active_run.read_bytes())
                 start=home/'projects'/binding['project']/'runs'/binding['run']/'000001.json'
-                status='running'
+                status=None;continued_revision=None
                 for record in sorted(start.parent.glob('[0-9]*.json'),reverse=True):
                     value=json.loads(record.read_bytes())
                     events=value['data'].get('events',[]) if value['kind']=='transition' else [value]
-                    found=next((e['data']['status'] for e in reversed(events) if e['kind']=='run.status'),None)
-                    if found is not None:status=found;break
-                if status not in ('stopped','completed','pr'):
-                    revision=json.loads(start.read_bytes())['data']['harness_version']
+                    if status is None:
+                        status=next((e['data']['status'] for e in reversed(events) if e['kind']=='run.status'),None)
+                    continued=next((e['data']['version'] for e in reversed(events) if e['kind']=='delivery.continued'),None)
+                    if continued is not None:continued_revision=continued;break
+                    if status in ('stopped','completed','pr'):break
+                # Only a new explicit Deliver can adopt an inactive review checkpoint in a newer runtime.
+                if status not in ('stopped','completed','pr') and not (command=='deliver' and status in ('review_checkpoint','findings_checkpoint')):
+                    revision=continued_revision or json.loads(start.read_bytes())['data']['harness_version']
                     if Path(revision).name!=revision:raise SystemExit('Invalid retained runtime revision')
     entry=home/'versions'/revision/'oh'
 if not entry.is_file():raise SystemExit('Shared OH core is missing. Rebuild/reinstall the plugin, then run setup.')
