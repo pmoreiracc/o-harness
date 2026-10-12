@@ -12,6 +12,8 @@ from unittest.mock import patch
 from .config import load
 from .hosts import LENSES
 EVIDENCE={'anchors':['Fixture task'],'attacks':['Fixture gate checked'],'limits':['Synthetic test reviewer'],'lenses':{k:'Fixture checked' for k in LENSES}}
+READINESS={'rules':['Fixture contract'], 'surfaces':['output.txt and its caller'], 'proof':['Fixture behavior check'],
+ 'family_closure':[], 'prior_findings':[], 'verification':['Fixture verify passed'], 'requirements':['Fixture requirement -> output.txt -> behavior check'], 'self_review':['Invalid input -> fixture check -> rejected'], 'repairs':['Fixture failure -> required behavior -> implementation correction -> checked'], 'limits':['Synthetic model fixture']}
 from .storage import Refused, atomic_json, identifier, Journal
 from .workflow import human_event, start, choose, load_run, reduce
 from .runner import run
@@ -34,6 +36,12 @@ def write_settings(root,section):
     settings_file().write_text(json.dumps({'projects':{project_name(root):section}}))
 
 
+def task_context(prompt):
+    from .storage import read_json
+    content=json.JSONDecoder().raw_decode(prompt[prompt.index('\n{"task":')+1:])[0]
+    return read_json(content['task_context']['path'])
+
+
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -48,36 +56,80 @@ class WorkflowTest(unittest.TestCase):
         self.git('add','.');self.git('commit','-qm','init');self.git('switch','-qc','work')
         self.tasks=[{'id':str(i),'title':f'Task {i}','instructions':'Implement behavior','needs':[] if i==1 else [str(i-1)]} for i in range(1,7)]
         self.calls=[]
+        # Production runs use a frozen runtime. Capture its unchanged source version once per fixture;
+        # explicit upgrade tests still override this patch, and consumer tree checks remain real.
+        from .config import version
+        runtime_version=patch('oh.config.version',return_value=version());runtime_version.start();self.addCleanup(runtime_version.stop)
+        # Synthetic implementers perform the same last tool call as a real worker, after
+        # the test's edits and before returning. Tests of missing/stale evidence disable it.
+        from . import runner,hosts
+        actual_attempt=runner.attempt
+        self.auto_worker_checks=True
+        self.assessment_calls=[]
+        self.assessment_output={'difficulty':'standard','rationale':'A contained fixture change','references':['product.txt'],'uncertainty':[]}
+        self.auto_assessment=True
+        def attempting(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke):
+            if root!=self.root:return actual_attempt(root,journal,state,task,role,profile,feedback,invoke)
+            def working(*args,**kwargs):
+                if args[4]=='assessment' and self.auto_assessment:
+                    self.assessment_calls.append((args[2],args[3]))
+                    return {'failed':False,'returncode':0,'duration_ms':2,'text':'Assessed fixture',
+                        'structured':dict(self.assessment_output),'usage_observed':False}
+                result=invoke(*args,**kwargs)
+                if (self.auto_worker_checks and args[4]=='implementation' and not result.get('failed')
+                        and (result.get('structured') or {}).get('status')=='completed'
+                        and load_run(root)[1]['status']=='running'):
+                    from .worker_checks import run as checks
+                    checked=checks(args[5])
+                    if any(c.get('unavailable') for c in checked['checks']):
+                        result['structured'].update(status='blocked',obstacle={'kind':'external_dependency',
+                            'evidence':checked['failure'],'next_step':'Restore the registered tool, then continue.'})
+                return result
+            if invoke is hosts.invoke:
+                with patch.object(hosts,'invoke',working):return actual_attempt(root,journal,state,task,role,profile,feedback,working)
+            return actual_attempt(root,journal,state,task,role,profile,feedback,working)
+        instrument=patch.object(runner,'attempt',side_effect=attempting);instrument.start();self.addCleanup(instrument.stop)
 
     def git(self,*args):return subprocess.check_output(['git','-C',str(self.root),*args],stderr=subprocess.DEVNULL).decode().strip()
 
     def event(self,turn='1',prompt='oh start .oh/tasks.json'):
+        if prompt=='pr':
+            # Publication fixtures need a destination; self-fetch remains local and preserves the task base.
+            result=subprocess.run(['git','-C',str(self.root),'remote','get-url','origin'],capture_output=True)
+            if result.returncode:self.git('remote','add','origin',str(self.root))
         return human_event({'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':turn,'prompt':prompt},'codex')
 
     def fake(self,host,root,profile,prompt,role,directory,context,**kw):
         self.calls.append((role,profile,prompt))
+        from .handoff import finding_ids
+        from .storage import read_json
+        prior=[{'id':key,'disposition':'fixed','proof':'Synthetic fixture repair verified'} for key in sorted(finding_ids(read_json(directory/'finding-index.json')))]
         if role!='review':(Path(root)/'output.txt').write_text(str(len(self.calls)))
         return {'failed':False,'returncode':0,'duration_ms':10,'text':'done',
-                'structured':({'status':'completed','summary':'Checked behavior','found_along_way':[]} if role=='implementation'
+                'structured':({'status':'completed','readiness':READINESS|{'prior_findings':prior},'obstacle':None,'summary':'Checked behavior','found_along_way':[]} if role=='implementation'
                               else {'verdict':'clean','summary':'Checked behavior','findings':[],'evidence':EVIDENCE}),'usage_observed':False}
 
     def test_initial_and_continue_same_batch_snapshot_and_idempotent_restart(self):
         from .workflow import checkpoint
         observed=[]
         def working(*args,**kwargs):
+            from .hosts import worker_focus
+            message='Checking the fixture boundary.' if args[4]=='review' else 'Implementing the fixture boundary.'
+            worker_focus(args[0],{'type':'item.completed','item':{'type':'agent_message','text':message}},args[5])
             progress=checkpoint(self.root)['progress']
             self.assertEqual(progress['phase'],args[4])
             self.assertEqual(progress['profile'],args[2])
+            self.assertEqual(progress['focus']['message'],message)
             if args[4]=='review':
                 self.assertEqual(progress['implementation']['summary'],'Checked behavior')
                 self.assertIn('attempt',progress['implementation'])
             observed.append((progress['task'],progress['phase']))
             return self.fake(*args,**kwargs)
         def checking(*args,**kwargs):
-            self.assertEqual(checkpoint(self.root)['progress']['phase'],'checks')
+            self.assertEqual(checkpoint(self.root)['progress']['phase'],'implementation')
             return verify(*args,**kwargs)
         journal,_=start(self.root,{'tasks':self.tasks},self.event())
-        with patch('oh.runner.verify',side_effect=checking):result=run(self.root,working)
+        with patch('oh.worker_checks.verify',side_effect=checking):result=run(self.root,working)
         self.assertEqual((result['completed'],result['status']),(5,'checkpoint'))
         self.assertTrue(result['limits'].startswith('Continue runs 1 of the 1 remaining task, up to 3 review rounds each.'))
         self.assertEqual(len(self.calls),10)
@@ -92,6 +144,10 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(state['config']['tasks_per_batch'],5)
         self.assertEqual(state['granted'],['6'])
         self.assertEqual(run(self.root,self.fake)['completed'],6)
+        self.assertEqual(len(self.assessment_calls),6)
+        _,assessed=load_run(self.root)
+        self.assertEqual(len(assessed['assessments']),6)
+        self.assertTrue(all(p==assessed['config']['models']['codex']['standard'] for p,_ in self.assessment_calls))
         # Replaying the same host response cannot create another grant.
         before=len(journal.records());choose(self.root,'continue',self.event('2','continue'))
         self.assertEqual(len(journal.records()),before)
@@ -117,6 +173,10 @@ class WorkflowTest(unittest.TestCase):
         for detail in ('Round 3 of 3','Reviews used/granted: 3/3','Wrong','repeats an earlier finding','Open findings: blocking'):
             self.assertIn(detail,result['gate']['details'])
         reviews=sum(c[0]=='review' for c in self.calls);self.assertEqual(reviews,3)
+        self.assertEqual(self.calls[-1][0],'implementation')  # the third receipt's findings were repaired before renewal
+        self.assertEqual(result['next_action']['phase'],'review_checkpoint')
+        _,ready=load_run(self.root)
+        self.assertEqual(ready['verification']['1']['attempt'],ready['attempts'][-1]['id'])
         run(self.root,blocked);self.assertEqual(sum(c[0]=='review' for c in self.calls),3)
         choose(self.root,'grant review',self.event('2','grant review'))
         finished=run(self.root,self.fake)
@@ -125,6 +185,88 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(finished['last_review']['finding_count'],0)
         self.assertEqual(finished['last_review']['round'],4)
         self.assertNotIn('progress',finished)  # a completed task still reports its final review, not a running phase
+
+    def test_checks_repair_without_escalation_and_only_repeated_review_families_escalate(self):
+        # docs/usage.md: both hosts repair checks without a gate; only two
+        # independent receipts of one family escalate. Failure history survives run calls.
+        from .workflow import checkpoint
+        from .runner import repeated_family
+        from .verification import failure_summary
+        first={'id':'one','outcome':'blocking','findings':[{'severity':'blocking','family':'binding'}]}
+        different={'id':'two','outcome':'blocking','findings':[{'severity':'blocking','family':'different'}]}
+        self.assertEqual(repeated_family([first,first]),[])  # replaying one receipt never escalates
+        self.assertEqual(repeated_family([first,different]),[])
+        self.assertEqual(repeated_family([first,different,first|{'id':'three'}]),['binding'])
+        for host in ('codex','claude'):
+            with self.subTest(host=host):
+                self.auto_worker_checks=False
+                self.calls=[]
+                reviews=[]
+                start(self.root,{'tasks':self.tasks[:1]},self.event(host)|{'host':host})
+                def implement(*args,**kwargs):
+                    value=self.fake(*args,**kwargs)
+                    if args[4]=='implementation':
+                        expected='complex' if len(reviews)>=2 else load_run(self.root)[1]['tasks'][0]['difficulty']
+                        self.assertEqual(args[2],load_run(self.root)[1]['config']['models'][host][expected])
+                        self.assertEqual(checkpoint(self.root)['status'],'running')
+                        self.assertNotIn('gate',checkpoint(self.root))
+                        from .worker_checks import run as checks
+                        while not (checked:=checks(args[5]))['passed']:
+                            self.assertIn('AssertionError: expected 1, received 2',checked['failure'])
+                            self.assertEqual(load_run(self.root)[1]['attempts'][-1]['id'],args[6]['attempt'])
+                    else:
+                        family='binding'
+                        if len(reviews)<2:
+                            finding={'severity':'blocking','description':'Fix '+family,'path':'output.txt','family':family,'relation':'original'}
+                            value['structured'].update(verdict='blocking',findings=[finding])
+                        reviews.append(family)
+                    return value
+                failure={'name':'tests','returncode':1,'duration_ms':0,'reused':False,
+                         'output':'\n'.join(['PASS other test']*80)+'\nFAIL output.test\nAssertionError: expected 1, received 2'}
+                self.assertIn('AssertionError: expected 1, received 2',failure_summary([failure],900))
+                # Multiple check failures do not consume a repair limit or escalate.
+                outcomes=iter([[failure]]*2)
+                def check(*args,**kwargs):
+                    return next(outcomes,[{'name':'tests','returncode':0,'duration_ms':0,'reused':False}])
+                with patch('oh.worker_checks.verify',side_effect=check):result=run(self.root,implement)
+                self.assertEqual(result['completed'],1)
+                self.assertEqual(result['review_rounds'],3)
+                self.assertEqual([c[0] for c in self.calls],['implementation','review']*3)
+                journal,state=load_run(self.root)
+                self.assertEqual(sum(r['kind']=='grant' for r in journal.records()),1)
+                self.assertNotIn('recovery_grants',state)
+                self.assertEqual(len(repeated_family([a for a in state['attempts'] if a['role']=='review'])),1)
+
+    def test_review_requires_implementer_checks_for_the_final_unchanged_tree(self):
+        from .worker_checks import run as checks,evidence
+        self.auto_worker_checks=False
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        calls=[];directories=[]
+        def implement(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            if args[4]=='implementation':
+                calls.append(args[6]['attempt']);directories.append(args[5])
+                if len(calls)==1:
+                    failed=[{'name':'fixture','returncode':1,'duration_ms':0,'reused':False,'output':'Wrong behavior'}]
+                    with patch('oh.worker_checks.verify',return_value=failed):self.assertFalse(checks(args[5])['passed'])
+                    self.assertTrue(checks(args[5])['passed'])
+                    value['structured']['readiness']=READINESS|{'repairs':[]}
+                    return value  # failures repaired within this worker still need an inspectable diagnosis
+                if len(calls)==2:return value  # a claim of completion is not check evidence
+                self.assertIn('verify',args[3])
+                self.assertTrue(checks(args[5])['passed'])
+                if len(calls)==3:(self.root/'after-check.txt').write_text('requires verification',newline='\n')
+            else:
+                state=load_run(self.root)[1]
+                self.assertEqual(state['verification']['1']['attempt'],calls[-1])
+                self.assertEqual(state['verification']['1']['tree'],tree(self.root))
+            return value
+        result=run(self.root,implement)
+        self.assertEqual(result['completed'],1)
+        self.assertEqual([c[0] for c in self.calls],['implementation']*4+['review'])
+        with self.assertRaises(Refused):checks(directories[-1])  # a completed worker cannot execute more checks
+        state=load_run(self.root)[1]
+        self.assertEqual(sum(a['role']=='review' for a in state['attempts']),1)
 
     def test_failed_review_does_not_repeat_successful_implementation(self):
         # A host keeps its own worktrees inside the checkout: they are never its changes, reviewed or committed.
@@ -140,8 +282,9 @@ class WorkflowTest(unittest.TestCase):
         from . import hosts
         catalog={'gpt-6-luna':{'high'},'gpt-6-sol':{'medium','high'},'gpt-6-astra':{'high'}}
         with patch.object(hosts,'invoke',side_effect=review_failure) as native,patch('sys.stderr',new_callable=io.StringIO) as messages, \
-                patch('oh.capabilities.codex_models',return_value=catalog):
+                patch('oh.capabilities.codex_models',return_value=catalog), patch('oh.worker_checks.verify',wraps=verify) as checked:
             completed=run(self.root,native)
+        self.assertEqual(checked.call_count,1)  # a failed reviewer cannot trigger another test execution
         self.assertEqual(completed['completed'],1)
         self.assertEqual(len(completed['model_notices']),2)  # implementation/medium and review/high
         self.assertEqual(messages.getvalue().count('Continuing with'),2)  # review retry never repeats the notice
@@ -195,24 +338,31 @@ class WorkflowTest(unittest.TestCase):
         from .cli import main
         from .gates import describe, full_summary
         from .publication import readable
-        configure(self.root,max_escalations=0,checks=[
+        configure(self.root,checks=[
             {'name':'timed check','command':[sys.executable,'-c','pass']},
             {'name':'remaining check','command':[sys.executable,'-c','pass']}])
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         head=self.git('rev-parse','HEAD')
         # The process layer retains both the cleanup exit code and its cancellation reason.
         with patch('oh.processes.capture',return_value=(subprocess.CompletedProcess([],0,'cleanup finished',''),['timeout'])) as capture:
-            result=run(self.root,self.fake)
+            def blocked_check(*args,**kwargs):
+                value=self.fake(*args,**kwargs)
+                if len(self.calls)>1:value['structured'].update(status='blocked',summary='The check is timing out; restore its required service.',
+                    obstacle={'kind':'external_dependency','evidence':'The required service cannot be reached.',
+                              'next_step':'Restore that service.'})
+                return value
+            result=run(self.root,blocked_check)
         self.assertEqual(capture.call_count,1)  # No remaining check ran after cancellation.
         self.assertEqual(result['status'],'needs_attention')
-        self.assertEqual([c[0] for c in self.calls],['implementation'])
+        self.assertEqual([c[0] for c in self.calls],['implementation','implementation'])
         self.assertEqual(self.git('rev-parse','HEAD'),head)
         self.assertTrue((self.root/'output.txt').exists())
         journal,state=load_run(self.root)
         checks=state['verification']['1']['checks']
         self.assertEqual((checks[0]['returncode'],checks[0]['cancellation']),(0,['timeout']))
-        self.assertEqual(result['last_failure']['outcome'],'verification_failed')
-        self.assertIn('exit 0, timeout',result['last_failure']['summary'])
+        self.assertEqual(result['last_failure']['outcome'],'blocked')
+        self.assertIn('exit 0, timeout',next(a for a in state['attempts'] if a['role']=='implementation')['summary'])
+        self.assertNotIn('gate',result)
         self.assertIn('timed check: failed',full_summary(state))
         # Existing publication histories can contain this falsely accepted result.
         historical={'evidence':{'run':state['id'],'task':'1','title':'Task 1',
@@ -321,53 +471,38 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(Refused):run(self.root,committing)
         _,state=load_run(self.root)
         self.assertEqual(state['status'],'needs_attention');self.assertEqual(state['done'],[])
-        choose(self.root,'retry',self.event('2','retry'))
+        from .cli import executable_run
+        executable_run(self.root,None)
         with self.assertRaises(Refused):run(self.root,self.fake)
 
-    def test_failed_review_then_verification_failure_consumes_worker_allowance(self):
-        configure(self.root,max_escalations=0)
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        def failed_review(*args,**kwargs):
-            value=self.fake(*args,**kwargs)
-            if args[4]=='review':value['failed']=True
-            return value
-        checks=[[{'name':'tests','returncode':0,'duration_ms':0,'reused':False}],
-                [{'name':'tests','returncode':1,'duration_ms':0,'reused':False,
-                  'output':'\x1b[31mExpected refund_links.SELECT\x1b[0m\nFix the privilege expectation.'}]]
-        with patch('oh.runner.verify',side_effect=checks):result=run(self.root,failed_review)
-        self.assertEqual(result['status'],'needs_attention')
-        _,state=load_run(self.root)
-        self.assertEqual(state['attempts'][0]['outcome'],'verification_failed')
-        self.assertEqual(state['attempts'][1]['outcome'],'failed')
-        self.assertEqual(result['last_failure']['outcome'],'verification_failed')
-        self.assertEqual(result['last_failure']['summary'],
-                         'tests failed (exit 1).\nExpected refund_links.SELECT\nFix the privilege expectation.')
-        before=len(self.calls);run(self.root,failed_review);self.assertEqual(len(self.calls),before)
-        choose(self.root,'retry',self.event('2','retry'))
-        def repaired(*args,**kwargs):
-            if args[4]=='implementation':self.assertIn('Expected refund_links.SELECT',args[3])
-            return self.fake(*args,**kwargs)
-        self.assertEqual(run(self.root,repaired)['completed'],1)
-
-    def test_failed_worker_cause_reaches_status_and_retry(self):
+    def test_failed_worker_cause_reaches_status_and_automatic_continuation(self):
         from .workflow import checkpoint
         journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())
         def recovering(*args,**kwargs):
             value=self.fake(*args,**kwargs)
-            if len(self.calls)==1:
+            if args[4]=='implementation':
+                self.assertEqual(args[2],load_run(self.root)[1]['config']['models']['codex']['standard'])
+            if len(self.calls)<=2:
                 return value|{'failed':True,'returncode':-15,'cancellation':['timeout'],
                               'structured':None,'text':'Still implementing.'}
             if args[4]=='implementation':
-                failure=checkpoint(self.root)['last_failure']
-                self.assertEqual(failure['returncode'],-15)
-                self.assertEqual(failure['cancellation'],['timeout'])
-                self.assertIn('execution timeout',failure['summary'])
-                self.assertIn('execution timeout',args[3])
+                self.assertNotIn('last_failure',checkpoint(self.root))  # a live replacement is not the old failure
+                from .storage import read_json
+                packet=read_json(args[5]/'task-context.json')
+                self.assertIn('execution timeout',packet['remaining_work'])
             return value
+        result=run(self.root,recovering)
+        self.assertEqual(result['status'],'needs_attention');self.assertNotIn('gate',result)
+        self.assertIn('execution timeout',result['blocked']['reason'])
+        self.assertEqual(result['last_failure']['returncode'],-15)
+        self.assertEqual(result['last_failure']['cancellation'],['timeout'])
+        from .cli import executable_run
+        executable_run(self.root,None)  # after the external obstacle is fixed; no new human grant
         result=run(self.root,recovering)
         self.assertEqual(result['completed'],1)
         self.assertNotIn('last_failure',result)
         self.assertEqual(sum(r['kind']=='grant' for r in journal.records()),1)
+        self.assertNotIn('recovery_grants',load_run(self.root)[1])
 
 
     def test_native_pr_evidence_binds_all_commits_and_refuses_tampering(self):
@@ -375,7 +510,7 @@ class WorkflowTest(unittest.TestCase):
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         def report(*args,**kwargs):
             result=self.fake(*args,**kwargs)
-            if args[4]=='implementation':result['structured']={'status':'completed','found_along_way':['Follow-up outside this quick fix --> <tag> & '+str(self.root/'other.py')+' '+('x'*4100)],
+            if args[4]=='implementation':result['structured']={'status':'completed','readiness':READINESS,'obstacle':None,'found_along_way':['Follow-up outside this quick fix --> <tag> & '+str(self.root/'other.py')+' '+('x'*4100)],
                 'summary':f'Implemented the timeout. See [output.txt]({self.root}/output.txt).'}
             result['text']=json.dumps(result['structured'])  # actual Codex structured output, not the fixture's plain 'done'
             return result
@@ -402,7 +537,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('Found along the way (task 1)',body)  # docs/usage.md: quick-fix observations reach the PR
         self.assertIn('Follow-up outside this quick fix',body)
         prose=body.split(START)[0]  # docs/usage.md: work and outcomes, not execution logs or machine JSON
-        for detail in ('### Task 1:', 'Implemented the timeout.', 'Verification: fixture (passed).', 'Independent invariant review: clean; 1 round.'):
+        for detail in ('### Task 1:', 'Implemented the timeout.', 'Task 1: fixture (passed).', 'Task 1: clean; 1 round.'):
             self.assertIn(detail,prose)
         for detail in ('Run history:', 'Task history:', 'Reviews used/granted:', '```json', '\"verdict\":'):
             self.assertNotIn(detail,prose)
@@ -414,6 +549,18 @@ class WorkflowTest(unittest.TestCase):
         event={'pull_request':{'head':{'ref':'work','sha':self.git('rev-parse','HEAD')},'body':body}}
         self.assertEqual(validate_event(self.root,event,'origin/main')['commits'],2)
         packet=json.loads(body.split('```json\n')[1].split('\n```')[0])
+        # docs/usage.md: the public summary includes original work and repairs,
+        # and final runner checks supersede a worker's local sandbox limitation.
+        from .publication import readable
+        _,state=load_run(self.root)
+        repairs=[{'task':'1','role':'implementation','outcome':'verification_failed',
+                  'human_summary':'Preserved staged approvals through FX recovery.\n\nLint failed in the new tests.'},
+                 {'task':'1','role':'implementation','outcome':'implemented',
+                  'human_summary':'Implemented the timeout and preserved staged approvals through FX recovery; verified the refund query.\n\nDatabase tests could not run in the worker sandbox.'}]
+        short=readable(packet['records'][:1],{state['id']:state|{'attempts':state['attempts']+repairs}},self.root)
+        self.assertIn(repairs[-1]['human_summary'].split('\n\n')[0],short)
+        self.assertIn('Task 1: fixture (passed).',short)
+        self.assertNotIn('Database tests could not run',short);self.assertNotIn('Lint failed',short)
         published_note=next(iter(packet['records'][0]['evidence']['scope'].values()))['findings'][0]['description']
         self.assertIn('--> <tag> &',published_note)
         self.assertNotIn(str(self.root),published_note)  # decoded Windows paths cannot hide behind JSON escaping
@@ -532,38 +679,77 @@ class WorkerCompletionTest(unittest.TestCase):
         """docs/usage.md: blocked work preserves edits, evidence and review allowance."""
         from .storage import read_json
         from .hosts import work_result
-        configure(self.root,max_escalations=0)
         _,initial=start(self.root,{"tasks":self.tasks[:1]},self.event())
         reason="Required input is inaccessible; restore its read access before retrying."
         report={"failed":False,"returncode":0,"duration_ms":1,"text":"host succeeded",
-            "structured":{"status":"blocked","summary":reason,"found_along_way":[]},"usage_observed":False}
+            "structured":{"status":"blocked","readiness":READINESS,"summary":reason,"found_along_way":[],
+                "obstacle":{"kind":"external_dependency","evidence":"Read access to the required input is denied.","next_step":"Restore read access to that input."}},"usage_observed":False}
         def blocked(*args,**kwargs):
             self.assertEqual(args[4],"implementation")
             (self.root/"partial.txt").write_text("keep this work")
             return report
-        with patch("oh.runner.verify") as checks:
+        with patch("oh.worker_checks.verify") as checks:
             result=run(self.root,blocked)
             checks.assert_not_called()
             self.assertEqual(result["status"],"needs_attention")
-            self.assertIn(reason,result["gate"]["details"])
+            self.assertNotIn("gate",result)
+            self.assertIn(reason,result["blocked"]["reason"])
+            self.assertIn('Restore read access to that input.',result['blocked']['reason'])
             journal,state=load_run(self.root)
             self.assertEqual(state["granted"],initial["granted"]);self.assertEqual(state["done"],[])
-            self.assertEqual([a["outcome"] for a in state["attempts"]],["blocked"])
+            self.assertEqual([a["outcome"] for a in state["attempts"] if a['role']=='implementation'],["blocked"])
             self.assertEqual(state["config"],initial["config"])
             self.assertEqual((self.root/"partial.txt").read_text(),"keep this work")
-            self.assertEqual(read_json(Path(state["attempts"][0]["evidence"])/"result.json")["structured"],report["structured"])
+            self.assertEqual(read_json(Path(state["attempts"][-1]["evidence"])/"result.json")["structured"],report["structured"])
             before=len(journal.records());run(self.root,blocked)
             self.assertEqual(len(journal.records()),before)
-        choose(self.root,"retry",self.event("2","retry"))
+        with self.assertRaisesRegex(Refused,"No Retry approval is needed"):
+            choose(self.root,"retry",self.event("2","retry"))
+        from .cli import executable_run
+        executable_run(self.root,None)
         _,state=load_run(self.root)
-        self.assertEqual(state["recovery_grants"][0]["spent_before"],1)
+        self.assertNotIn("recovery_grants",state)
         self.assertFalse(any(a["role"]=="review" for a in state["attempts"]))
-        self.assertEqual(work_result(report),("blocked",reason))
-        completed=report|{"structured":report["structured"]|{"status":"completed"}}
+        self.assertEqual(work_result(report)[0],"blocked")
+        completed=report|{"structured":report["structured"]|{"status":"completed","obstacle":None}}
         self.assertEqual(work_result(completed),("implemented",reason))  # no tree-change requirement
         for key,value in (("status",None),("status","unknown"),("summary",""),("summary"," \n"),("found_along_way",[42])):
             broken=report["structured"]|{key:value}
-            self.assertEqual(work_result(report|{"structured":broken})[0],"failed")
+            self.assertEqual(work_result(report|{"structured":broken})[0],"unfinished")
+
+    def test_unfinished_work_continues_with_edits_and_remaining_steps_on_both_hosts(self):
+        """docs/usage.md: incomplete work is continued, never a blocker, escalation or review grant."""
+        from .hosts import work_result
+        for host in ('codex','claude'):
+            with self.subTest(host=host):
+                configure(self.root,tasks_per_batch=1)
+                event=self.event(host,'deliver fixture');event['host']=host
+                _,initial=start(self.root,{'tasks':self.tasks[:1]},event)
+                self.calls=[]
+                remaining='Selection rows are implemented; finish preview/save binding and its tests.'
+                def continuing(*args,**kwargs):
+                    if args[4]=='implementation' and not self.calls:
+                        self.calls.append((args[4],args[2],args[3]))
+                        (self.root/'partial.txt').write_text('selection rows')
+                        return {'failed':False,'returncode':0,'duration_ms':1,'text':remaining,
+                          'structured':{'status':'blocked' if host=='codex' else 'completed','readiness':None,'summary':remaining,'found_along_way':[],'obstacle':None},
+                          'usage_observed':False}
+                    if args[4]=='implementation':
+                        self.assertEqual((self.root/'partial.txt').read_text(),'selection rows')
+                        self.assertIn(remaining,task_context(args[3])['remaining_work'])
+                    return WorkflowTest.fake(self,*args,**kwargs)
+                result=run(self.root,continuing)
+                self.assertEqual(result['status'],'completed');self.assertEqual(result['review_rounds'],1)
+                self.assertEqual([c[0] for c in self.calls],['implementation','implementation','review'])
+                self.assertEqual(self.calls[0][1],self.calls[1][1])
+                journal,state=load_run(self.root)
+                self.assertEqual([a['outcome'] for a in state['attempts']],['assessed','unfinished','implemented','clean'])
+                self.assertEqual(state['granted'],initial['granted']);self.assertEqual(state['config'],initial['config'])
+                self.assertFalse(any(r['kind']=='run.status' and r['data']['status']=='needs_attention' for r in journal.records()))
+                self.assertNotIn('recovery_grants',state)
+                report={'failed':False,'structured':{'status':'unfinished','readiness':None,'summary':remaining,'found_along_way':[],'obstacle':None}}
+                self.assertEqual(work_result(report),('unfinished',remaining))
+                self.git('switch','main');self.git('switch','-C','work')
 
     def test_post_worker_fingerprint_failure_retains_result_and_spent_attempt(self):
         """docs/architecture.md: unknown post-worker state preserves raw evidence without a new allowance."""
@@ -572,7 +758,7 @@ class WorkerCompletionTest(unittest.TestCase):
         from .workflow import review_limit
         journal,initial=start(self.root,{'tasks':self.tasks[:1]},self.event())
         report={'failed':False,'returncode':0,'duration_ms':1,'text':'usable worker result',
-                'structured':{'status':'completed','summary':'Kept work','found_along_way':['retained finding']},'usage_observed':False}
+                'structured':{'status':'completed','readiness':READINESS,'obstacle':None,'summary':'Kept work','found_along_way':['retained finding']},'usage_observed':False}
         calls=[]
         def worker(*args,**kwargs):
             calls.append(args[4]);(self.root/'output').write_text('keep this')
@@ -590,8 +776,9 @@ class WorkerCompletionTest(unittest.TestCase):
         self.assertIsNone(state['attempts'][0]['tree']);self.assertEqual(review_limit(state,'1'),review_limit(initial,'1'))
         previous=len(journal.records());run(self.root,worker)
         self.assertEqual(calls,['implementation']);self.assertEqual(len(journal.records()),previous)
-        choose(self.root,'retry',self.event('retry','retry'))
-        _,state=load_run(self.root);self.assertEqual(state['recovery_grants'][0]['spent_before'],1)
+        from .cli import executable_run
+        executable_run(self.root,None)
+        _,state=load_run(self.root);self.assertNotIn('recovery_grants',state)
         self.assertEqual((self.root/'output').read_text(),'keep this')
         # The same failure during review retains every returned finding and spends that review round.
         finding={'severity':'blocking','description':'Retained defect','path':'output','family':'kept-defect','relation':'original'}

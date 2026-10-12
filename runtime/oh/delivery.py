@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from . import plans
 from .design_parse import freeze_render, plan
-from .storage import Final, Refused, atomic_json, git, matches_git, read_json, git_env
+from .storage import Final, Refused, atomic_json, git, matches_git, read_json, git_env, state_writer
 
 
 def parse(arguments):
@@ -115,6 +115,61 @@ def unticked(text,tasks):
     return text
 
 
+@state_writer
+def continue_stopped(root,doc,track,event):
+    """An explicit Deliver continues the retained granted task, never issues another window.
+
+    Keep the original journal/config and immutable admissions, including when a newer
+    installed OH executes the continuation. Classify before fresh branch/clean checks.
+    """
+    from .config import version
+    from .storage import checkout_file, digest, lock, changes
+    from .verification import tree
+    from .workflow import active_file, checkpoint, load_run, next_task
+    if not active_file(root).exists():return None
+    _,state=load_run(root)
+    waiting=state['status'] in ('review_checkpoint','findings_checkpoint') and state['harness_version']!=version()
+    if ((state.get('workflow'),state.get('design'),state.get('track') or '')!=('deliver',doc,track)
+            or state['status']!='stopped' and not waiting):
+        return None
+    task=next_task(state|{'status':'running'})
+    if not task:return None  # a completed-task boundary still follows normal task/PR admission
+    if task['id'] not in state['task_started'] and not any(a['task']==task['id'] for a in state['attempts']):
+        return None  # admitted but never begun: normal branch refresh and task selection still apply
+    expected_run=state['id'];expected_status=state['status']
+    # The runner holds this lock through owned-process cleanup. Never transfer a live run.
+    with lock(checkout_file(root,'oh-runner.lock'),wait=False), lock(checkout_file(root,'oh-control.lock')):
+        journal,state=load_run(root)
+        if state['id']!=expected_run:raise Refused('The active delivery changed; inspect status before continuing')
+        if state['status']!=expected_status:raise Refused('The delivery state changed; inspect status before continuing')
+        if state['host']!=event['host']:raise Final(f"This delivery belongs to {state['host'].title()}; invoke Deliver there to continue it")
+        from .branches import incarnation
+        if git(root,'branch','--show-current')!=state['branch'] or incarnation(root,state['branch'])!=state['incarnation']:
+            raise Refused('The saved delivery branch changed; preserve your edits and return to its original checkout/branch before continuing')
+        stop=state['status_history'][-1]
+        retained=stop.get('snapshot')
+        if retained is None:  # older OH saved the returned worker tree, before settled snapshots existed
+            attempts=[a for a in state['attempts'] if a['task']==task['id']]
+            last=attempts[-1] if attempts else None
+            retained=({'tree':last.get('tree'),'head':last.get('head')} if last and last.get('finished')
+                      else {'tree':tree(root),'head':state['summaries'][-1]['commit'] if state['summaries'] else state['base']}
+                      if not attempts and not changes(root) else {})
+        if retained.get('head')!=git(root,'rev-parse','HEAD') or retained.get('tree')!=tree(root):
+            raise Refused('The checkout differs from OH’s saved delivery work. Preserve the edits and inspect that difference before continuing; OH will not discard or claim them.')
+        guard(root,state)
+        # Preserve a pending semantic review decision; the command cannot accept findings.
+        boundary=next((s['status'] for s in reversed(state['status_history'])
+                       if s['status'] not in ('stopped','stopping','paused','pausing')),None)
+        target=boundary if boundary in ('findings_checkpoint','review_checkpoint') else 'running'
+        source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+        journal.append('transition',{'source':event,'events':[
+            {'kind':'delivery.continued','data':{'task':task['id'],'human':event,'source':source,
+                'previous_version':state['harness_version'],'version':version(),'snapshot':retained}},
+            {'kind':'run.status','data':{'status':target,'reason':'The person invoked Deliver to continue the saved approved task.'}}]})
+        result=checkpoint(root)
+    return result|{'continuation':{'task':task['id'],'message':f'Resuming task {task["id"]}: {task["title"][:200]}. Saved work, findings and remaining review allowance are retained.'}}
+
+
 def finished(root,doc,track,branch,event):
     """A resumed delivery branch that already holds all its work goes to its pull request, as the pre-separation
     harness did: OH offers that run's PR choice again, even after the person stopped it, and never merges main
@@ -218,12 +273,6 @@ def unreviewed(root,fork,base):
     return [commit for commit in found if commit not in covered]
 
 
-def difficulty(block):
-    """The difficulty the design gives a task on its `Difficulty: <level> — <why>` line, or nothing."""
-    found=re.search(r'^[ \t]*Difficulty:[ \t]*(simple|standard|complex)\b[ \t—–:-]*(.*)$',block,re.M|re.I)
-    return {'difficulty':found[1].lower(),'difficulty_reason':'Set by the design'+(': '+found[2].strip() if found[2].strip() else '')} if found else {}
-
-
 def selection(root,doc,track='',*,claim=True):
     where=plans.layout(root,claim=claim);path=document(root,where,doc)
     status=plans.approval(root,where,doc)
@@ -294,7 +343,7 @@ def selection(root,doc,track='',*,claim=True):
             if not match:raise Refused('Cannot extract the approved design task')
             tasks.append({'id':task_id,'title':title,'instructions':match[0].strip(),
                           'needs':sorted(set(filter(None,needs.split(',')))-completed),
-                          'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':task_id}}|difficulty(match[0]))
+                          'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':task_id}})
             available.add(task_id);pending.remove(row)
     if not tasks:
         if any(row[1]=='pending' for row in rows):raise Refused('No ready tasks in this design or track; resolve its dependencies or open questions')
@@ -334,10 +383,13 @@ def guard(root,state):
     if not state.get('delivery'):return
     where=plans.layout(root);bound=state['delivery'];render=state.get('delivery_render')
     if plans.layout_snapshot(where)!=bound['layout']:raise Refused('Plan paths changed during delivery; restore them or stop the run')
-    expected=render['after_inputs'] if render else bound['inputs']
+    pending=render and render['task'] not in state['done']
+    deferred=pending and 'candidate' in render
+    expected=render['before_inputs'] if deferred else render['after_inputs'] if render else bound['inputs']
     actual=inputs(where)
-    pending=render and where['location']=='private' and render['task'] not in state['done']
-    if actual!=expected and not (pending and actual==render['before_inputs']):
+    publishing=render and (render['task'] in state.get('commit_intents',{}) or
+                          (state.get('delivery_approval') or {}).get('task')==render['task'])
+    if actual!=expected and not (publishing and actual==render['after_inputs']):
         raise Refused('Plan documents changed outside this delivery run; preserve the edits and stop the run')
     if where['location']=='private':
         records=read_json(plans.approvals_file(root));intent=state.get('delivery_approval')
@@ -360,7 +412,7 @@ def render(root,journal,state,task):
     after=before|{str(path):hashlib.sha256(text.encode()).hexdigest()}
     value={'task':task['id'],'path':str(path),'text':text,'before_inputs':before,'after_inputs':after,
            'before_identity':plans.file_identity(path),'write_before':plans.file_identity(path)}
-    if where['location']=='private':value['candidate']=str(journal.path/'delivery'/f'{task["id"]}.md')
+    value['candidate']=str(journal.path/'delivery'/f'{task["id"]}.md')
     journal.append('delivery.render',value)
     plans.write(Path(value.get('candidate',path)),text)
 
@@ -374,7 +426,7 @@ def recover(root,state):
         actual=inputs(where);expected=render['after_inputs']
         if {p:h for p,h in actual.items() if p!=render['path']}!={p:h for p,h in expected.items() if p!=render['path']}:
             raise Refused('Plan documents changed outside this delivery run; preserve the edits and stop the run')
-        if where['location']=='private':
+        if 'candidate' in render:
             candidate=Path(render['candidate'])
             if not candidate.exists() or plans.file_identity(candidate)==render.get('write_before'):plans.write(candidate,render['text'])
             if plans.digest_of(candidate)!=render['after_inputs'][render['path']]:raise Refused('Delivery candidate changed outside the runner')
@@ -385,16 +437,34 @@ def recover(root,state):
 
 def reviewed(root,state,review):
     guard(root,state)
-    if not state.get('delivery') or state['delivery']['layout']['location']!='private':return
+    if not state.get('delivery'):return
     artifact=review.get('artifact') or {}
     render=state.get('delivery_render')
+    if render and 'candidate' not in render:return  # legacy repository admission
     if not render or artifact.get('files')!={render['candidate']:render['after_inputs'][render['path']]}:
-        raise Refused('The review does not bind the private delivery progress')
+        raise Refused('The review does not bind the proposed delivery progress')
     if artifact.get('identities')!={render['candidate']:plans.file_identity(Path(render['candidate']))}:
-        raise Refused('Private delivery candidate changed after review')
+        raise Refused('Delivery candidate changed after review')
     identity=plans.file_identity(Path(render['path']))
     if identity not in (render['before_identity'],render['before_identity']|{'hash':render['after_inputs'][render['path']]}):
-        raise Refused('Private design identity changed after review')
+        raise Refused('Design identity changed after review')
+
+
+def replacements(root,state):
+    """The proposed repository document belongs to the reviewed tree, not the live checkout yet."""
+    render=state.get('delivery_render')
+    if not render or 'candidate' not in render or state['delivery']['layout']['location']!='repo':return {}
+    return {Path(render['path']).relative_to(root).as_posix():Path(render['candidate'])}
+
+
+def publish_progress(root,state):
+    """Only the native completion path, after recording its reviewed commit intent, calls this."""
+    render=state.get('delivery_render')
+    if not replacements(root,state):return
+    intent=state['commit_intents'].get(render['task'])
+    if not intent or not intent.get('publication'):raise Refused('Delivery progress requires a reviewed completion intent')
+    path=Path(render['path'])
+    if plans.digest_of(path)!=render['after_inputs'][render['path']]:plans.write(path,render['text'])
 
 
 def finish(root,journal,state,review):

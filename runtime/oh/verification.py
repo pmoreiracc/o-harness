@@ -148,9 +148,18 @@ def failure_summary(results, limit):
                      (', '+', '.join(r['cancellation']) if r.get('cancellation') else '')+').' for r in failed)
     output='\n'.join(r.get('output','') for r in failed)
     output=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',output)
+    # A tail can start with hundreds of passing tests and hide the actual assertion
+    # when status further bounds it. Put error locations/messages first, retaining
+    # surrounding context and the original full output in the journal.
+    lines=output.splitlines()
+    errors=[i for i,line in enumerate(lines) if re.search(
+        r'\b(?:FAIL|ERROR|AssertionError|Traceback|error TS\d+|error:)|^\s*Error:|\d+:\d+\s+error\b',line)]
+    if errors:
+        indices=sorted({j for i in errors[:5] for j in range(max(0,i-1),min(len(lines),i+8))})
+        output='\n'.join(lines[i] for i in indices)+'\n\n'+output
     header=(header+'\n')[:limit]
     remaining=limit-len(header)
-    return header+(output[-remaining:] if remaining else '')
+    return header+(output[:remaining] if errors else output[-remaining:] if remaining else '')
 
 
 def check_env():
@@ -184,6 +193,11 @@ def candidate_tree(root,replacements=None):
             if Path(name).is_absolute() or '..' in Path(name).parts:raise Refused('Invalid final-tree replacement')
             info=command('ls-files','--stage','--',name).decode().split()
             if not info or info[0] not in ('100644','100755'):raise Refused('Final-tree replacement requires an ordinary tracked file')
-            blob=command('hash-object','-w','--',str(replacement)).decode().strip()
+            # Apply this tracked path's Git attributes to the proposed bytes, just as
+            # staging the published file will (including core.autocrlf on Windows).
+            blob=command('hash-object','-w','--path='+name,'--',str(replacement)).decode().strip()
+            data=Path(replacement).read_bytes();stored=command('cat-file','blob',blob)
+            if data!=stored and data.replace(b'\r\n',b'\n')!=stored:
+                raise Refused(f'Git filters transform proposed {name} beyond line endings')
             command('update-index','--cacheinfo',info[0],blob,name)
         return command('write-tree').decode().strip() if replacements else oid

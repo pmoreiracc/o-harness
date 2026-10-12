@@ -189,7 +189,7 @@ class ProposeTest(unittest.TestCase):
     def test_contested_proposal_controls_return_as_feedback(self):
         bad=idea(decision_title='Choice?',decision_context='A\x00B',decision_alternatives='Options',decision_consequences='Effects')
         self.propose();run(self.root,self.worker([bad,idea()]))
-        self.assertIn('control characters',[c[1] for c in self.calls if c[0]=='analysis'][1])
+        self.assertIn('control characters',fixtures.task_context([c[1] for c in self.calls if c[0]=='analysis'][1])['remaining_work'])
         self.assertFalse(self.where['decisions'].exists())
 
     def test_a_task_joins_an_approved_design(self):
@@ -208,7 +208,7 @@ class ProposeTest(unittest.TestCase):
             plans.add_task(self.root, self.where, '0001', 'Core', 'More', [])
         self.propose('Rate-limit sign-in')
         result = run(self.root, self.worker([idea('task'), idea()]))
-        self.assertIn('frozen design has shipped', [c[1] for c in self.calls if c[0] == 'analysis'][1])
+        self.assertIn('frozen design has shipped', fixtures.task_context([c[1] for c in self.calls if c[0] == 'analysis'][1])['remaining_work'])
         self.assertEqual(result['proposal']['route'], 'roadmap')
 
     def test_an_improvement_or_unclear_idea_is_shown_with_no_review(self):
@@ -261,7 +261,8 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['proposal_answers'][-1]['feedback'],words)
         result=run(self.root,self.worker([idea(milestone='M2',milestone_title='Find things',milestone_done_when='Found')]))
         prompts=[c[1] for c in self.calls if c[0]=='analysis']
-        self.assertIn(json.dumps(words)[1:-1],prompts[1]);self.assertEqual(result['proposal']['lines'][0],'### M2 — Find things')
+        self.assertEqual(fixtures.task_context(prompts[1])['human_refinements'][-1]['feedback'],words)
+        self.assertEqual(result['proposal']['lines'][0],'### M2 — Find things')
         self.assertIn('gate',result);self.assertNotIn('waiting',result)
         # The MCP fallback asks only the choice, then uses the same chat continuation.
         server=Server(io.StringIO(),io.StringIO());server.client={'capabilities':{'elicitation':{}}}

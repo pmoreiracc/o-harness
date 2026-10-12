@@ -78,8 +78,8 @@ class AnalyticsTest(unittest.TestCase):
                 patch('oh.storage.git',side_effect=AssertionError('Standalone analysis must not require Git')):
             for windows in (False,True):
                 with patch('oh.hosts.WINDOWS',windows):
-                    codex=command('codex',{'model':'gpt-6.1-sol','effort':'medium'},Path(self.tmp.name),'analysis',None,60000,standalone=True)
-                    claude=command('claude',{'model':'opus','effort':'high'},Path(self.tmp.name),'analysis',None,60000,standalone=True)
+                    codex=command('codex',{'model':'gpt-6.1-sol','effort':'medium'},Path(self.tmp.name),'analysis',None,standalone=True)
+                    claude=command('claude',{'model':'opus','effort':'high'},Path(self.tmp.name),'analysis',None,standalone=True)
                 self.assertIn('--skip-git-repo-check',codex)
                 self.assertEqual(codex[codex.index('--sandbox')+1],'read-only')
                 self.assertEqual(claude[claude.index('--permission-mode')+1],'plan')

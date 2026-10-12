@@ -77,6 +77,9 @@ def host_hook(root,host,payload,*,verified,idea=None,request=None):
         return delivery or {'prepare':True,'authorized':False,'next':'Prepare the agreed tasks and show the returned approval menu.'}
     if delivery and delivery['kind']=='design':
         from .workflow import carry_on,load_run,occupied,unfinished
+        if not delivery['request'] and not started(root,verified):
+            from .delivery import continue_stopped
+            if continued:=continue_stopped(root,delivery['doc'],delivery['track'],verified):return continued
         if unfinished(root,verified):
             _,state=load_run(root)
             # The same design typed again carries on with its run.
@@ -143,7 +146,9 @@ def ask_for(root,event,kind):
 def started(root,event):
     """Whether this very command already started the checkout's run, so carrying it out again only continues it."""
     from .workflow import active_file,load_run
-    return active_file(root).exists() and load_run(root)[1]['source']==digest({k:event[k] for k in ('host','session','turn','prompt')})
+    if not active_file(root).exists():return False
+    _,state=load_run(root);source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+    return state['source']==source or any(c['source']==source for c in state.get('continuations',[]))
 
 
 def git_branch(root):
@@ -162,6 +167,14 @@ def executable_run(root,admitted):
                       '; use status to inspect it, or invoke the intended OH skill in this checkout.')
     if os.environ.get('CODEX_THREAD_ID') and (state['host']!='codex' or state['human']['session']!=os.environ['CODEX_THREAD_ID']):
         raise Refused('This run belongs to another conversation; continue it there, or stop it before starting new work here.')
+    if state['status']=='needs_attention':
+        from .storage import checkout_file,lock
+        with lock(checkout_file(root,'oh-control.lock')):
+            journal,current=load_run(root)
+            if current['status']=='needs_attention':
+                # Continuation repairs the same granted work. It renews neither task
+                # scope nor review rounds; past attempts remain in the journal.
+                journal.append('run.status',{'status':'running','reason':'Continuing the existing approved task after repairing its obstacle.'})
 
 
 class Tolerant:
@@ -194,6 +207,7 @@ def main(argv=None):
     clash=sub.add_parser('conflict');clash.add_argument('choice',choices=['fresh','keep']);clash.add_argument('doc');clash.add_argument('track',nargs='?',default='')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
+    worker_checks=sub.add_parser('worker-checks',help=argparse.SUPPRESS);worker_checks.add_argument('attempt',type=Path)
     publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?');publication.add_argument('--validate-event',type=Path)
     trusted=sub.add_parser('trust-host');trusted.add_argument('host',choices=['codex','claude']);trusted.add_argument('path',type=Path,nargs='?')
     init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
@@ -233,6 +247,10 @@ def main(argv=None):
         elif args.command in ('prepare','prepare-design'):
             from .prepared import prepare
             result=prepare(root,manifest=args.manifest) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
+        elif args.command=='worker-checks':
+            from .worker_checks import serve
+            serve(args.attempt,sys.stdin,sys.stdout)
+            return
         elif args.command=='verify':
             from .checks import run
             from .verification import check_failed
@@ -318,6 +336,7 @@ def main(argv=None):
             from .authority import materialize
             admitted=materialize(root)
             if admitted and admitted.get('note'):print(admitted['note'],flush=True)
+            if admitted and admitted.get('continuation'):print(admitted['continuation']['message'],file=sys.stderr,flush=True)
             if admitted and (admitted.get('waiting') or admitted.get('prepare') or admitted.get('kind') in ('quick_fix','list') or admitted.get('authorized') is False):
                 print(json.dumps(admitted,indent=2));return  # preparation/waiting cannot run an older batch
             executable_run(root,admitted)
@@ -360,6 +379,7 @@ def main(argv=None):
             else:
                 from .authority import materialize
                 admitted=materialize(root)
+                if admitted and admitted.get('continuation'):print(admitted['continuation']['message'],file=sys.stderr,flush=True)
                 if admitted and admitted.get('waiting'):
                     print(json.dumps(admitted,indent=2));return
                 executable_run(root,admitted)

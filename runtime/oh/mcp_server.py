@@ -31,7 +31,11 @@ def tool(name, title, description, properties=None, required=(), read_only=False
             'annotations': {'readOnlyHint': read_only, 'destructiveHint': destructive, 'idempotentHint': read_only, 'openWorldHint': False}}
 
 
-LONG = ' It can take a long time. Stopping this call does not stop OH: call `status` to follow it and `stop` to end it.'
+LONG = (' Keep this execution call in flight using the host\'s yielding/background support. '
+        'Every 210 seconds, read status once and relay a new progress.focus in one short sentence; '
+        'deduplicate its id and never repeat unchanged status or start another execution call. '
+        'Native progress reports actual transitions. Codex Stop stops the owning OH run and preserves edits. '
+        'After a transport failure, inspect status before continuing existing work.')
 
 
 TOOLS = [
@@ -62,8 +66,7 @@ TOOLS = [
     tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
     tool('pr_summary', 'PR summary', 'Refresh the selected base reference and generate the review summary for this branch\'s pull request.', {'base': TEXT}),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
-         'as a menu and records their click in OH. Prefer gate.native_ask with request_user_input_async when an interruptible wait tool can keep the turn open; '
-         'choose is the fallback. Call it when OH output has a `gate`, in the conversation that '
+         'as a blocking menu and records their click in OH. Call it directly and wait for its result; do not poll or use a sleep loop while the person decides. Call it when OH output has a `gate`, in the conversation that '
          'started the run. The result says what was recorded and whether to call `run`.'),
     tool('confirm', 'Ask the person', 'Shows the person a question and its options as a menu and waits for their click. '
          'Use it for a question outside an OH `gate`; use the returned gate menu for workflow decisions. The result '
@@ -174,6 +177,7 @@ def shell_environment():
 
 
 class Server:
+    tools=TOOLS
     def __init__(self, stdin, stdout, launcher=None):
         self.stdin, self.stdout, self.launcher, self.client = stdin, stdout, launcher, {}
         self.lock, self.reading, self.replies, self.cancelled, self.shell = threading.Lock(), threading.Lock(), {}, {}, None
@@ -198,7 +202,7 @@ class Server:
                 self.client = message.get('params') or {}
                 self.send({'id': ident, 'result': {'protocolVersion': self.client.get('protocolVersion', VERSION),
                     'capabilities': {'tools': {}}, 'serverInfo': {'name': 'o-harness', 'version': '1'}}})
-            elif method == 'tools/list':self.send({'id': ident, 'result': {'tools': TOOLS}})
+            elif method == 'tools/list':self.send({'id': ident, 'result': {'tools': self.tools}})
             elif method == 'tools/call':
                 self.cancelled[ident] = threading.Event()
                 threading.Thread(target=self.call, args=(message,), daemon=True).start()
@@ -212,7 +216,8 @@ class Server:
         except Exception as exc:text, error = f'OH failed unexpectedly: {exc!r}', True  # never leave a call unanswered
         cancelled = self.cancelled.pop(ident)
         # The host gave up on this call (the person interrupted it, or it timed out): it expects no reply.
-        # OH itself was not stopped; `status` shows where it is.
+        # A transport cancellation alone is not a human stop. The runner observes the owning
+        # native turn_aborted record even when Codex cancelled a yielding wait instead of this call.
         if not cancelled.is_set():self.send({'id': ident, 'result': {'content': [{'type': 'text', 'text': text}], 'isError': error}})
 
     def tool(self, name, arguments, meta, ident):
@@ -324,6 +329,9 @@ class Server:
             return 'The person already typed a choice; call `run` to apply it instead of asking again.'
         if state['harness_version'] != version():
             return 'OH was updated after this run started, so its menu is not shown. ' + fallback
+        if gate.get('native_publication'):
+            from .gates import native_ask,how
+            return json.dumps({'native_ask':native_ask(gate),'next':how(gate,root)})
         if 'elicitation' not in (self.client.get('capabilities') or {}):
             return 'This Codex surface cannot show OH menus. ' + fallback
         menu = gate['options']

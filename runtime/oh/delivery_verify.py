@@ -58,7 +58,8 @@ def verify_run(root,state,*,current=False):
     tracks={row[2] for row in approved.values()}
     from .branches import delivery_branch
     if len(tracks)>1 and not state.get('track') and any(t['id']!='finalize' for t in state['tasks']):raise Refused('A design with several tracks needs its per-track delivery branch')
-    if state['branch']!=delivery_branch(bound['doc'],state.get('track') or ''):raise Refused('Delivery is on the wrong design/track branch; return to '+delivery_branch(bound['doc'],state.get('track') or ''))
+    expected_branch=source.get('branch') or delivery_branch(bound['doc'],state.get('track') or '')
+    if state['branch']!=expected_branch:raise Refused('Delivery is on the wrong design/track branch; return to '+expected_branch)
     records=Journal(state['project'],state['id']).records()
     renders={r['data']['task']:r['data'] for r in records if r['kind']=='delivery.render'}
     # Scope records can retain a later version of the same private candidate.

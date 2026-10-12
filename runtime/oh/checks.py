@@ -12,13 +12,13 @@ def selected(root,base=None,mode='review'):
     return resolve(root,checks,base,mode)
 
 
-def resolve(root,checks,base=None,mode='review'):
+def resolve(root,checks,base=None,mode='review',*,proposed_paths=()):
     if not isinstance(checks,list) or not checks:raise Refused('At least one project verification check is required')
     from .branches import main_ref
     base=base or main_ref(root)
     if not base:raise Refused('No base branch found; set base_branch with oh config')
     ancestor=git(root,'merge-base','HEAD',base)
-    changed=set(git(root,'diff','--name-only',ancestor).splitlines()+changes(root))
+    changed=set(git(root,'diff','--name-only',ancestor).splitlines()+changes(root))|set(proposed_paths)
     result=[]
     for check in checks:
         if not isinstance(check,dict) or not isinstance(check.get('name'),str):raise Refused('Invalid project check')

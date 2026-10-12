@@ -67,3 +67,22 @@ def render(root, task):
     except Refused as exc:raise Refused('Cannot render final design lifecycle: '+str(exc)[-2000:]) from None
     text=text.replace('\r\n','\n').replace('\r','\n')  # newlines as the former text-mode subprocess read them
     if path.read_text()!=text:path.write_text(text,newline='\n')
+
+
+def binding(root,value):
+    """Give prepared consumer-v1 work the shared protected/deferred completion path."""
+    if not isinstance(value.get('design'),str):raise Refused('Prepared design delivery needs its approved design ID')
+    expected=manifest(root,value['design'],value.get('track') or '')
+    by_id={task['id']:task for task in expected['tasks']}
+    for task in value['tasks']:
+        admitted=by_id.get(task['id'])
+        if not admitted or any(task.get(key)!=item for key,item in admitted.items()):
+            raise Refused('Prepared delivery must preserve its approved design task definitions')
+    from . import plans
+    from .delivery import inputs
+    from .delivery_verify import authority
+    where=plans.layout(root);path=document(root,value['design']);text=path.read_bytes().decode()
+    # This older prepared workflow permits the already-selected execution branch.
+    approved=authority(root,where,path,text,None)|{'branch':git(root,'branch','--show-current')}
+    return {'layout':plans.layout_snapshot(where),'inputs':inputs(where),'path':str(path),
+            'doc':value['design'],'status':'approved','approvals':{},'authority':approved}

@@ -12,7 +12,7 @@ LABELS = {'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committ
           'handoff pr': ('Stop and hand off to a PR', 'End OH and retain unresolved work for human PR triage; this does not approve completion or publication.'), 'approve': ('Approve', ''),
           'refine': ('Refine', 'Tell OH what to change in the chat.'),
           'cancel': ('Cancel', 'Discard this unapproved proposal and end the run.'),
-          'retry': ('Retry', 'Try the unfinished task again within one bounded recovery window.'), 'grant review': ('More reviews', 'Allow another window of reviews; this does not accept any findings.'),
+          'grant review': ('More reviews', 'Allow another window of reviews; this does not accept any findings.'),
           'fix concerns': ('Fix concerns', 'Send the concerns back to be fixed.'),
           'dismiss scope': ('Dismiss scope', 'Record the finding as dismissed; add no work.'),
           'accept concerns': ('Accept concerns', 'Keep the work as it is; the concerns stay on record.'),
@@ -157,7 +157,8 @@ def full_summary(state,root=None):
              'approval_checkpoint':'The proposal or plan is ready to review. Choose Approve, Refine or Cancel.',
              'review_checkpoint':'This review window is used. Choose more reviews or take over the retained work.',
              'findings_checkpoint':'Review found the issues below. Choose how to handle them.',
-             'needs_attention':'The task did not finish. Review the problem below, then retry or take over.',
+             'needs_attention':'The task needs an external action. Resolve the reported obstacle, then continue the retained work.',
+             'pr':'Completed work is retained. Confirm its publication destination.',
              'paused':'The work is paused. Resume continues from here.'}
     lines.append(reasons[status])
     if status=='prepared_checkpoint':
@@ -195,40 +196,8 @@ def summary(state,root=None,journal=None):
 
 
 def options(state):
-    """The choices this run is waiting for, as (choice, description) pairs; None when it waits for none."""
-    from .workflow import committed, continue_limits
-    status = state['status']
-    if status=='prepared_checkpoint':
-        from .prepared import limits
-        return [('approve',limits(len(state['tasks']),state['config'])),('refine',''),('cancel','Discard this preparation without running any task.')]
-    if status == 'checkpoint':
-        left = len([t for t in state['tasks'] if t['id'] not in state['done']])
-        found = ([('continue', continue_limits(left, state['config']))] if left else [])
-        found += [('pr', '')] if committed(state) and any('commit' in s for s in state['summaries']) else []
-        return found + [('stop', '')]
-    if status == 'completed':
-        if not committed(state) or not any('commit' in s for s in state['summaries']):return None
-        return [('pr', ''), ('stop', '')]
-    if status == 'approval_checkpoint':
-        if state.get('workflow') == 'propose':
-            return [('approve', approval_effect(state)), ('refine',''),
-                    ('cancel', 'End this proposal without saving it.')]
-        return [('approve', approval_effect(state)), ('refine',''), ('cancel', 'Discard this unapproved draft and end the run.')]
-    if status == 'review_checkpoint':
-        found=[('grant review', f"Allow up to {state['config']['review_rounds']} fresh independent reviews for this task; approved scope stays the same."),
-               ('stop', 'End OH here and keep the work for you to finish manually.')]
-        return found+[('handoff pr','')] if committed(state) else found
-    if status == 'paused':return [('resume',''),('stop','')]
-    if status == 'needs_attention':
-        task = next((t['id'] for t in state['tasks'] if t['id'] not in state['done']), None)
-        return ([('retry', '')] if task and task in state['granted'] else []) + [('stop', '')]
-    if status == 'findings_checkpoint':
-        severities = {f['severity'] for f in state['attempts'][-1].get('findings', [])}
-        pairs = {frozenset({'concern'}): ('fix concerns', 'accept concerns'), frozenset({'scope'}): ('route scope', 'dismiss scope'),
-                 frozenset({'concern', 'scope'}): ('fix concerns and route scope', 'fix concerns and dismiss scope', 'accept concerns and route scope', 'accept concerns and dismiss scope')}
-        found = pairs.get(frozenset(severities), ())
-        return [(choice, '') for choice in found] + ([('stop', '')] if len(found)<4 else [])
-    return None
+    from .actions import choices
+    return choices(state)
 
 
 def decision_summary(state):
@@ -236,6 +205,7 @@ def decision_summary(state):
     pending=[t for t in state['tasks'] if t['id'] not in state['done']]
     task=pending[0] if pending else state['tasks'][-1]
     status=state['status']
+    if status=='pr':return 'Confirm the destination for the completed reviewed work.'
     verification_status=('failed' if any(check_failed(check)
         for result in state.get('verification',{}).values() for check in result['checks']) else 'passed')
     if status=='review_checkpoint':
@@ -243,7 +213,7 @@ def decision_summary(state):
         used=sum(a['role']=='review' and a['task']==task['id'] for a in state['attempts'])
         reason=('Your requested revision still needs an independent review.'
                 if (state.get('proposal_answers') or [{}])[-1].get('choice')=='refine' else
-                'The current task still needs a completed review or a repair.')
+                'The implementation and checks are ready for the next independent review.')
         return f"OH has used {used} of {review_limit(state,task['id'])} allowed reviews. {reason}"
     if status=='checkpoint':
         return (f"{len(state['done'])} of {len(state['tasks'])} tasks completed. Checks {verification_status}; independent review completed. Next: "
@@ -267,16 +237,28 @@ def menu_record(journal,state):
 def describe(journal, state, root=None):
     """The menu for the current choice, or None. Its id binds the run, its status and the journal head, so a
     click on an older menu never applies to a later state."""
+    if root is not None:
+        from .publication import destination_state
+        state=destination_state(root,state)
     found = options(state)
     if not found or len(found) < 2:return None
     head = menu_record(journal,state)['hash']
-    ident = digest({'run': state['id'], 'status': state['status'], 'head': head})[:12]
-    title = {'checkpoint': 'What would you like to do next?', 'completed': 'Open a pull request?',
+    target=None
+    if root is not None and any(choice=='pr' for choice,_ in found):
+        from .publication import destination
+        target=destination(root)
+    binding={'run': state['id'], 'status': state['status'], 'head': head}
+    if target:binding['publication']=target
+    ident = digest(binding)[:12]
+    title = {'checkpoint': 'What would you like to do next?', 'completed': 'Open a pull request?', 'pr':'Confirm publication?',
              'prepared_checkpoint':'Approve this task list?',
              'approval_checkpoint': 'Approve the proposal?' if state.get('workflow') == 'propose' else 'Approve this plan?',
              'review_checkpoint': f"Allow {state['config']['review_rounds']} more reviews for this task?",
              'paused':'Resume this paused run?', 'needs_attention': 'Retry this task after resolving the problem?',
              'findings_checkpoint': 'Fix the concerns or accept the current work?'}[state['status']]
+    if target:
+        from .branches import trunk
+        title+=f" Open a PR pushes the reviewed repository code on {state['branch']} to {target['destination']} and opens its PR against {trunk(root,state['config'])}."
     if state['status']=='findings_checkpoint':
         severities={f['severity'] for f in state['attempts'][-1].get('findings',[])}
         if severities=={'scope'}:title='Record the scope as future work or dismiss it?'
@@ -313,7 +295,7 @@ def describe(journal, state, root=None):
             batch=min(len(state['tasks'])-len(state['done']),state['config']['tasks_per_batch'])
             explanation+=f" Continue allows {batch} more task(s), up to {state['config']['review_rounds']} reviews each."
         question=f'{title} [{MARK}{ident}]'
-    return {'id': ident, 'run': state['id'], 'status': state['status'], 'host': state['host'],
+    return {'id': ident, 'run': state['id'], 'status': state['status'], 'host': state['host'],'native_publication':bool(target),
             'summary':explanation,'details':summary(state,root,journal) if not document else '', 'question':question, 'options': menu, 'words': state['status'] == 'approval_checkpoint'}|({'preview':document} if document else {})
 
 
@@ -341,13 +323,17 @@ def how(gate, root):
                 'owns this run, so ask only there. '
                 f'Typing works too: {typed}.')
     panel='Open gate.preview in the right panel with open_in_codex when available. Show its link. ' if gate.get('preview') else ''
-    return (panel+'Use request_user_input_async with exactly gate.native_ask when an interruptible wait tool is available; '
-            'keep the turn open and wait quietly with clock.sleep (at most 60 seconds per call), without a separate '
-            'final response, until the human answers. Then call OH run to read that answer. Tool acceptance is not a human answer. '
-            'Otherwise use the OH choose tool, which records the click itself. If the result has status pr, '
+    if gate.get('native_publication'):
+        return ('Ask once with request_user_input_async using exactly gate.native_ask, then end the turn while awaiting the human reply. '
+                'The native reply records publication permission in Codex as well as OH. After the reply call OH run. '
+                'If this native question tool is unavailable, show the full question and typed choices once and wait for a direct human reply. '
+                'Do not use an MCP confirmation for publication or poll while waiting. '+f'Typed choices: {typed}.')
+    return (panel+'Call the OH choose tool directly. It waits for and records the human click; do not use a yielding '
+            'execution wrapper, status polling or repeated sleeps while awaiting this decision. Follow its returned next step. '
+            'A cancelled or missing menu grants nothing. If the result has status pr, '
             'execution is finished: publish with pr_summary, without calling run again. '
             'If the person says the menu is missing, refresh status and reopen the current menu with choose. '
-            f'If no menu can be shown, ask the person to type one of: {typed}.')
+            f'If no menu can be shown, present these typed choices once and end the turn: {typed}.')
 
 
 def pick(gate, answer):

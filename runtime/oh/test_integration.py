@@ -12,6 +12,23 @@ class IntegrationTest(unittest.TestCase):
     @staticmethod
     def git(root,*args):return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.DEVNULL,text=True).strip()
 
+    def test_codex_document_permissions_preserve_configured_paths(self):
+        # docs/usage.md: the invocation-local profile protects actual configured paths,
+        # including dots/spaces, without changing user settings or removing workspace protections.
+        import tomllib
+        from .hosts import command
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'product';root.mkdir()
+            documents=[root/'my plans'/'approved.task.md',Path(tmp)/'private plans'/'approved.task.md']
+            for doc in documents:doc.parent.mkdir();doc.write_text('pending',newline='\n')
+            with patch('oh.hosts.executable',return_value='codex'),patch('oh.hosts.oh_plugins',return_value=[]):
+                args=command('codex',{'model':'gpt-6.1-sol','effort':'medium'},root,'implementation',None,read_only_paths=documents)
+            self.assertIn('--strict-config',args);self.assertNotIn('--sandbox',args)
+            raw=next(arg.split('=',1)[1] for arg in args if arg.startswith('permissions.oh-delivery='))
+            profile=tomllib.loads('profile='+raw)['profile']
+            self.assertEqual(profile['extends'],':workspace')
+            for doc in documents:self.assertEqual(profile['filesystem'][str(doc.resolve())],'read')
+
     def test_missing_codex_model_uses_only_an_earlier_compatible_family(self):
         from .capabilities import select_profile
         requested={'model':'gpt-6.11-sol','effort':'high'}

@@ -86,7 +86,7 @@ def load_run(root):
 def reduce(records):
     if not records or records[0]['kind']!='run.started':
         raise Refused('Missing run start')
-    state=dict(records[0]['data']);state.update(done=[],granted=[],attempts=[],status='running',decisions=[],summaries=[],task_started={},commit_intents={},resolutions={},interventions={})
+    state=dict(records[0]['data']);state['tasks']=[dict(t) for t in state['tasks']];state.update(done=[],granted=[],attempts=[],status='running',decisions=[],summaries=[],task_started={},commit_intents={},resolutions={},interventions={})
     expanded=[]
     for record in records[1:]:
         if record['kind']=='transition':expanded.extend(e|{'at':record['at']} for e in record['data']['events'])
@@ -95,9 +95,18 @@ def reduce(records):
         kind=record['kind'];d=record['data']
         if kind=='grant':state['granted']=d['tasks'];state['decisions'].append(d['source'])
         elif kind=='commit.intent':state['commit_intents'][d['task']]=d
-        elif kind=='task.started':state['task_started'][d['task']]=record['at']
+        elif kind=='task.started':state['task_started'][d['task']]=d.get('started_at',record['at'])
+        elif kind=='task.assessed':
+            if not any(a['id']==d['attempt'] and a['task']==d['task'] and a['role']=='assessment' and a.get('outcome')=='assessed' for a in state['attempts']):
+                raise Refused('Difficulty selection requires its retained read-only assessment')
+            state.setdefault('assessments',{})[d['task']]=d
+            selected=next(t for t in state['tasks'] if t['id']==d['task'])
+            selected.update(difficulty=d['difficulty'],difficulty_reason=d['rationale'])
         elif kind=='task.completed':state['done'].append(d['task']);state['summaries'].append(d)
         elif kind=='attempt.started':state['attempts'].append(d | {'finished':False,'started_at':record['at']})
+        elif kind=='attempt.admitted':
+            admitted=next(a for a in state['attempts'] if a['id']==d['id'])
+            admitted['request_hash']=d['hash']
         elif kind=='attempt.finished':
             matches=[a for a in state['attempts'] if a['id']==d['id']]
             if len(matches)!=1:raise Refused('Completion without exactly one admitted attempt')
@@ -112,6 +121,9 @@ def reduce(records):
         elif kind=='task.intervention':state['interventions'][d['task']]=state['interventions'].get(d['task'],0)+1
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
         elif kind=='run.owner':state['human']=d['human']
+        elif kind=='delivery.continued':
+            state['human']=d['human'];state['harness_version']=d['version']
+            state.setdefault('continuations',[]).append(d|{'at':record['at']})
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='preparation.activating':state['activation']=d
@@ -210,9 +222,10 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
         from .branches import incarnation
         branch_incarnation=incarnation(root,git(root,'branch','--show-current'),create=True)
         for task in tasks:
-            # The design or the agent that prepared the tasks decides each task's difficulty; the rubric decides
-            # only when they didn't.
-            if task.get('difficulty') not in ('simple','standard','complex') or not isinstance(task.get('difficulty_reason'),str) or not task['difficulty_reason'].strip():
+            # New delivery work is assessed at runtime. Old started runs retain their recorded choice.
+            if workflow=='deliver':
+                task.pop('difficulty',None);task.pop('difficulty_reason',None)
+            elif task.get('difficulty') not in ('simple','standard','complex') or not isinstance(task.get('difficulty_reason'),str) or not task['difficulty_reason'].strip():
                 task['difficulty'],task['difficulty_reason']=classify(task)
         data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],
               'host':event['host'],'checkout':checkout,'source':source,'human':event,
@@ -220,6 +233,9 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
               'workflow':manifest.get('workflow','deliver'),'design':manifest.get('design'),'track':manifest.get('track'),
               **(plan or {}),
               'tasks':tasks,'checks':manifest.get('checks',[]),'project_checks':required,**config}
+        if any((t.get('transition') or {}).get('profile')=='consumer-v1' for t in tasks):
+            from .design_adapter import binding
+            data['delivery']=binding(root,manifest)
         if waiting:data['prepared_request']=waiting
         journal=Journal(p['id'],run)
         journal.append('run.started',data)
@@ -289,22 +305,17 @@ def _choose(root, choice, event):
         if not tasks:raise Refused('No remaining tasks')
         append('grant',{'tasks':tasks,'source':source,'kind':'continue','config_hash':state['config_hash']})
         append('run.status',{'status':'running'})
-    elif choice in ('resume','retry'):
-        expected='paused' if choice=='resume' else 'needs_attention'
-        if state['status']!=expected:raise Refused('This choice does not match the current recovery checkpoint')
+    elif choice=='retry':
+        raise Refused('No Retry approval is needed. Resolve the reported obstacle, then run OH run with the existing approval.')
+    elif choice=='resume':
+        if state['status']!='paused':raise Refused('This run is not paused')
         task=next((t['id'] for t in state['tasks'] if t['id'] not in state['done']),None)
-        if (not task or task not in state['granted']) and choice!='resume':raise Refused('No unfinished task remains in the existing grant')
-        if choice=='resume':
-            from .verification import tree
-            retained=state.get('pause_snapshot') or {}
-            if retained.get('head')!=git(root,'rev-parse','HEAD') or retained.get('tree')!=tree(root):
-                raise Refused('Files changed while paused; preserve them and reconcile the run before resuming')
-        if choice=='retry':
-            # A new, explicit human retry grants one bounded recovery window. Restart alone does not.
-            spent=sum(a.get('outcome') in ('failed','blocked','interrupted','verification_failed') for a in state['attempts'] if a['task']==task and a['role'] in ('implementation','analysis'))
-            append('recovery.grant',{'task':task,'source':source,'spent_before':spent})
+        from .verification import tree
+        retained=state.get('pause_snapshot') or {}
+        if retained.get('head')!=git(root,'rev-parse','HEAD') or retained.get('tree')!=tree(root):
+            raise Refused('Files changed while paused; preserve them and reconcile the run before resuming')
         append('decision',{'source':source,'choice':choice})
-        append('run.status',{'status':state.get('pause_return_status','running') if choice=='resume' else 'running'})
+        append('run.status',{'status':state.get('pause_return_status','running')})
         append('task.intervention',{'task':task})
     elif choice in ('approve','cancel') or choice.startswith('refine:'):
         if state['status']!='approval_checkpoint':raise Refused('No proposal is waiting for approve, refine or cancel')
@@ -344,10 +355,12 @@ def _choose(root, choice, event):
         append('run.status',{'status':'stopped'})
     elif choice in ('pr','stop'):
         if choice=='pr' and not committed(state):raise Refused('Planning does not authorize product publication')
-        if choice=='pr' and state['status'] not in ('checkpoint','completed'):
+        if choice=='pr' and state['status'] not in ('checkpoint','completed','pr'):
             raise Refused('PR choice requires completed work at a checkpoint')
         decision={'source':source,'choice':choice}
         if choice=='pr':
+            from .publication import destination
+            target=destination(root,required=True)
             from .branches import fetched,trunk
             if main:=trunk(root,state['config']):fetched(root,main)
             from .delivery_verify import verify
@@ -358,6 +371,7 @@ def _choose(root, choice, event):
             if head!=commits[-1] or branch!=state['branch']:
                 raise Refused('PR choice must cover the exact completed branch head')
             decision.update(head=head,branch=branch,base_branch=trunk(root,state['config']),commits=adopted(root,state,commits)+commits)
+            decision.update(target)
         append('decision',decision)
         append('run.status',{'status':'pr' if choice=='pr' else 'stopped'})
     elif choice in ('accept concerns','route scope','dismiss scope','accept concerns and route scope',
@@ -368,7 +382,8 @@ def _choose(root, choice, event):
         expected=({'concern','scope'} if ' and ' in choice else {'scope'} if choice in ('route scope','dismiss scope') else {'concern'})
         if severities!=expected:raise Refused('The choice must resolve every retained finding without dismissing blockers')
         from .verification import candidate_tree,tree
-        if tree(root)!=review['tree'] or candidate_tree(root)!=review['git_tree']:raise Refused('Findings no longer describe the current tree; repair and review it again')
+        from .delivery import replacements
+        if tree(root)!=review['tree'] or candidate_tree(root,replacements(root,state))!=review['git_tree']:raise Refused('Findings no longer describe the current tree; repair and review it again')
         from .delivery import guard
         guard(root,state)
         scope=None
@@ -523,24 +538,27 @@ def review_progress(state,task):
             'findings':[{k:str(f.get(k,''))[:250] for k in ('severity','description','path','family')} for f in findings[:5]]}
 
 
-def running_progress(state):
+def running_progress(state,directory=None):
     """Describe the current task from retained execution evidence, without inspecting worker transcripts."""
     if state['status']!='running':return {}
     task=next((t for t in state['tasks'] if t['id'] in state['granted'] and t['id'] not in state['done']),None)
     if not task:return {}
     attempts=[a for a in state['attempts'] if a['task']==task['id']]
     last=attempts[-1] if attempts else None
-    phase='preparing'
-    if last:
-        if not last['finished']:
-            phase=last['role']
-        elif last['role']=='review':
-            phase='completing' if last.get('outcome')=='clean' or last['id'] in state['resolutions'] else 'preparing'
-        elif last.get('outcome')=='implemented':phase='checks'
+    from .actions import next_action
+    phase=next_action(state)['phase']
     from .gates import report_text
     worker=next((a for a in reversed(attempts) if a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
     progress={'task':task['id'],'title':' '.join(task['title'].split())[:200], 'phase':phase}
     if last and not last['finished']:progress|={'attempt':last['id'],'profile':last['profile']}
+    if directory is not None and last and not last['finished']:
+        from .storage import read_json
+        try:
+            focus=read_json(Path(directory)/'attempts'/last['id']/'focus.json')
+            if (isinstance(focus,dict) and set(focus)=={'message','id','updated_at'} and
+                    all(isinstance(v,str) for v in focus.values()) and 0<len(focus['message'])<=600):
+                progress['focus']=focus
+        except (OSError,ValueError,Refused):pass  # visibility cannot block a run or turn a partial save into a failure
     if worker:progress['implementation']={'attempt':worker['id'],'summary':report_text(worker)[:900]}
     if review:=review_progress(state,task['id']):progress['review']=review
     return {'progress':progress}
@@ -548,14 +566,18 @@ def running_progress(state):
 
 def checkpoint(root):
     journal,state=load_run(root)
+    from .publication import destination_state
+    state=destination_state(root,state)
+    from . import receipts
+    try:receipts.index(journal,state)
+    except (OSError,Refused):pass  # A derived view cannot create a workflow gate.
     from .prepared import limits
     left=len([t for t in state['tasks'] if t['id'] not in state['done']])
     reviewed=next((a['task'] for a in reversed(state['attempts']) if a['role']=='review' and a.get('finished')),None)
     last_review=review_progress(state,reviewed) if reviewed else None
     task=next((t['id'] for t in state['tasks'] if t['id'] not in state['done']),None)
-    failed=max((a for a in state['attempts'] if a['task']==task and a.get('finished') and
-                a.get('outcome') in ('failed','blocked','interrupted','verification_failed')),
-               key=lambda a:a.get('failed_at',a.get('finished_at','')),default=None)
+    latest=next((a for a in reversed(state['attempts']) if a['task']==task),None)
+    failed=latest if latest and latest.get('finished') and latest.get('outcome') in ('failed','blocked','interrupted','verification_failed') else None
     failure={}
     if failed:
         from .gates import report_text
@@ -564,30 +586,36 @@ def checkpoint(root):
         if failed['outcome']!='verification_failed':
             failure['last_failure'].update({k:failed[k] for k in ('returncode','cancellation') if k in failed})
     model_notices=list(dict.fromkeys(a['model_fallback']['notice'] for a in state['attempts'] if a.get('model_fallback')))[-5:]
-    private_diff={}
     if state['status']=='approval_checkpoint' and state.get('plans',{}).get('location')=='private' and state.get('rendered',{}).get('files'):
-        from .plans import changed_text,validate_outputs
+        from .plans import validate_outputs
         validate_outputs(root,state['rendered'],state['plans']['base'])
-        private_diff={'private_diff':changed_text(root,state['rendered'])}
+    from .actions import next_action
+    from .handoff import coordinator_view
+    action=next_action(state)
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
+            'next_action':{k:v for k,v in action.items() if k in ('kind','phase','task','attempt','resume')},
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
-            'last_results':state['summaries'][-2:],'evidence':str(journal.path),
+            'last_results':state['summaries'][-2:],'evidence':str(journal.path),'report':str(journal.path/'index.md'),
             'review_rounds':sum(a['role']=='review' and a['task'] in state['done'] for a in state['attempts']),
             'config_hash':state['config_hash'],'version':state['harness_version']} | failure | (
+            {'blocked':{'reason':failure.get('last_failure',{}).get('summary') or
+                next((a.get('summary','') for a in reversed(state['attempts'])), 'The checkout needs repair.'),
+                'next':'Repair what OH owns within the existing approval, then call run. Ask only for missing authority or an external action OH cannot perform. Do not show a Retry menu.'}}
+            if state['status']=='needs_attention' else {}) | (
             {'model_notices':model_notices} if model_notices else {}) | (
-            {'last_review':last_review} if last_review else {}) | running_progress(state) | (
-            {'publication':state['publication']|{'next':'Execution is finished. Use pr_summary, push the approved branch and open one PR targeting publication.base_branch. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.'}}
+            {'last_review':last_review} if last_review else {}) | running_progress(state,journal.path) | (
+            {'publication':state['publication']|{'next':('Execution is finished. Use pr_summary, push only publication.head to publication.branch on publication.remote, and open one PR targeting publication.base_branch. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.' if state['publication'].get('destination') and not state.get('publication_changed') else 'Confirm the current publication destination with the returned native question; all completed work and review are retained.')}}
             if state['status']=='pr' and state.get('publication') else {}) | (
             {'handoff':state['review_handoff']|{'next':'OH stopped with unresolved work for human PR triage. No task completion, review renewal or publication approval was granted.'}}
             if state.get('review_handoff') else {})|(
             {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}
                     |({'choices':['approve','refine: <what to change>','cancel']} if state['status']=='approval_checkpoint' else {})}
              if state.get('rendered',{}).get('files') and state.get('workflow')=='design' else {})|(
-            {'proposal':{k:v for k,v in state['preview']['plan'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent','writes')}
-                        |({'choices':['approve','refine: <what to change>','cancel']} if state['status']=='approval_checkpoint' else {})}
+            {'proposal':coordinator_view(journal,{k:v for k,v in state['preview']['plan'].items() if k in ('route','understanding','reason','evidence','text','summary','lines','intent','writes')}
+                        |({'choices':['approve','refine: <what to change>','cancel']} if state['status']=='approval_checkpoint' else {}),state['config']['context']['result_chars'])}
              if state.get('workflow')=='propose' and state.get('preview') else {})|(
             {'limits':continue_limits(left,state['config'])} if state['status']=='checkpoint' and left else
-            {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | private_diff | menu(root,journal,state) | waiting(root,state)
+            {'limits':limits(left,state['config'])} if state['status']=='running' and left else {}) | menu(root,journal,state) | waiting(root,state)
 
 
 def refinement_for(root,host,session):

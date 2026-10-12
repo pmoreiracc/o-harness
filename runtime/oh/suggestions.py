@@ -75,7 +75,7 @@ def generate(root=None,host='codex'):
           'Rank these supplied improvement hypotheses by expected usefulness. Return each supplied key exactly once. '
           'Do not use tools. Measurements and explanations are calculated by OH.\n'+json.dumps(evidence),
           'analysis',directory,{'project':p['id'],'run':analysis_run,'task':None,'attempt':attempt,
-                               'compact_tokens':config['context']['compact_at_tokens'],'standalone':root is None},schema=schema,timeout=120)
+                               'standalone':root is None},schema=schema,timeout=120)
     except Exception as exc:
         result={'failed':True,'error':str(exc),'duration_ms':None,'structured':None}
     structured=result.get('structured')

@@ -40,7 +40,7 @@ class ControlsTest(unittest.TestCase):
         # The same control can race the read after the implementation has already returned.
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         def pending(*args,**kwargs):
-            if load_run(self.root)[1]['attempts']:
+            if any(a['role']=='implementation' for a in load_run(self.root)[1]['attempts']):
                 request(self.root,'stop')
                 raise Refused('Codex has not saved the calling human turn yet; retry the same OH operation.')
         with patch('oh.authority.materialize',side_effect=pending):
@@ -50,11 +50,12 @@ class ControlsTest(unittest.TestCase):
         self.assertEqual([c[0] for c in self.calls],['implementation'])
 
     def test_pause_drains_worker_and_resume_keeps_allowances_without_repeating_it(self):
-        fixtures.configure(self.root,max_escalations=0)
         journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())
         def paused(*args,**kwargs):
             result=self.fake(*args,**kwargs)
             if args[4]!='review':
+                from .worker_checks import run as checks
+                self.assertTrue(checks(args[5])['passed'])
                 self.assertEqual(request(self.root,'pause')['status'],'pausing')
             return result
         self.assertEqual(run(self.root,paused)['status'],'paused')
@@ -63,14 +64,7 @@ class ControlsTest(unittest.TestCase):
         request(self.root,'pause');self.assertEqual(len(journal.records()),before)
         _,state=load_run(self.root);granted=state['granted']
         choose(self.root,'resume',self.event('2','oh-resume'))
-        # docs/usage.md: a missing executable must keep the same completed worker, even with no repair allowance.
-        with patch('oh.system.spawn',side_effect=FileNotFoundError('registered tool unavailable')):
-            with self.assertRaisesRegex(Refused,'no new approval is needed'):run(self.root,self.fake)
-        _,state=load_run(self.root)
-        self.assertEqual(state['attempts'][0]['outcome'],'implemented')
-        self.assertEqual(state['granted'],granted);self.assertNotIn('recovery_grants',state)
-        self.assertTrue(state['verification']['1']['checks'][0]['unavailable'])
-        self.assertEqual([c[0] for c in self.calls],['implementation'])
+        # Already checked implementation resumes directly at review; a paused run grants nothing new.
         from .verification import verify
         import subprocess
         with patch('oh.processes.capture',return_value=(subprocess.CompletedProcess([],1,'','version unavailable'),[])):
@@ -96,7 +90,11 @@ class ControlsTest(unittest.TestCase):
         self.assertEqual(len(self.calls),2)
 
     def test_stopped_is_terminal_and_manual_edits_invalidate_paused_resume(self):
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        journal,state=start(self.root,{'tasks':self.tasks[:1]},self.event())
+        before=len(journal.records())
+        self.assertEqual(request(self.root,'stop',expected_run=state['id'],source={'session':'previous-owner'})['status'],'running')
+        self.assertEqual(request(self.root,'stop',expected_run='previous-run',source={'session':'s'})['status'],'running')
+        self.assertEqual(len(journal.records()),before)
         self.assertEqual(request(self.root,'pause')['status'],'paused')
         (self.root/'manual').write_text('preserve')
         with self.assertRaises(Refused):choose(self.root,'resume',self.event('2','oh-resume'))
@@ -106,12 +104,22 @@ class ControlsTest(unittest.TestCase):
         self.assertEqual((self.root/'manual').read_text(),'preserve')
 
     def test_stop_during_check_cancels_owned_group_and_preserves_results(self):
+        # docs/usage.md: Codex Stop cancels the owned step even without MCP cancellation delivery.
         from .registry import profile_path
         from .storage import atomic_json
         signal_file=Path(self.temp.name)/'check-started'
         code='import pathlib,time,signal; signal.signal(signal.SIGTERM,signal.SIG_IGN); pathlib.Path('+repr(str(signal_file))+').touch(); time.sleep(90)'
         from .test_workflow import configure
         configure(self.root,checks=[{'name':'blocking','command':[sys.executable,'-c',code]}])
+        home=Path(self.temp.name)/'codex'
+        transcript=home/'sessions/2026/10/11/rollout-s.jsonl';transcript.parent.mkdir(parents=True)
+        import json
+        transcript.write_bytes(('\n'.join(json.dumps(e) for e in [
+            {'type':'session_meta','payload':{'id':'s','source':'cli','cwd':str(self.root)}},
+            {'type':'event_msg','payload':{'type':'task_started','turn_id':'current-turn'}},
+            {'type':'event_msg','payload':{'type':'user_message','turn_id':'current-turn','message':'Please wait.'}}])+'\n').encode())
+        environment=patch.dict(os.environ,{'CODEX_HOME':str(home),'CODEX_THREAD_ID':'s','OH_CODEX_TURN_ID':'current-turn'})
+        environment.start();self.addCleanup(environment.stop)
         start(self.root,{'tasks':self.tasks[:1]},self.event())
         outcomes=[]
         def execute():
@@ -121,7 +129,16 @@ class ControlsTest(unittest.TestCase):
         deadline=time.monotonic()+15
         while not signal_file.exists() and thread.is_alive() and time.monotonic()<deadline:time.sleep(.05)
         self.assertTrue(signal_file.exists(),outcomes)
-        self.assertEqual(request(self.root,'stop')['status'],'stopping')
+        def aborted(turn,reason='interrupted'):
+            return json.dumps({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':turn,'reason':reason}})+'\n'
+        with transcript.open('a',newline='\n') as saved:
+            saved.write(aborted('1'))  # an earlier authority turn cannot stop a new execution turn
+            saved.write(aborted('current-turn','failed'))  # an ordinary host failure is not Codex Stop
+        time.sleep(.2);self.assertEqual(load_run(self.root)[1]['status'],'running')
+        native=aborted('current-turn');middle=len(native)//2
+        with transcript.open('a',newline='\n') as saved:saved.write(native[:middle])
+        time.sleep(.2);self.assertEqual(load_run(self.root)[1]['status'],'running')
+        with transcript.open('a',newline='\n') as saved:saved.write(native[middle:])
         thread.join(12)
         self.assertFalse(thread.is_alive())
         self.assertIsInstance(outcomes[0],dict)
@@ -129,6 +146,36 @@ class ControlsTest(unittest.TestCase):
         self.assertEqual(outcomes[0]['completed'],0)
         self.assertTrue((self.root/'output.txt').exists())
         self.assertEqual([c[0] for c in self.calls],['implementation'])
+        journal,state=load_run(self.root)
+        stopping=next(r['data'] for r in journal.records() if r['kind']=='run.status' and r['data']['status']=='stopping')
+        self.assertEqual(stopping['source']['turn'],'current-turn')
+        self.assertEqual(stopping['source']['session'],'s')
+        self.assertIn('record_hash',stopping['source']);self.assertNotIn('recovery_grants',state)
+
+    def test_codex_stop_after_worker_prevents_checks_review_and_commit(self):
+        """docs/usage.md: a saved native Stop also fences the handoff between execution steps."""
+        import json
+        home=Path(self.temp.name)/'codex'
+        transcript=home/'sessions/rollout-s.jsonl';transcript.parent.mkdir(parents=True)
+        transcript.write_bytes(('\n'.join(json.dumps(e) for e in [
+            {'type':'session_meta','payload':{'id':'s','source':'cli','cwd':str(self.root)}},
+            {'type':'event_msg','payload':{'type':'task_started','turn_id':'1'}},
+            {'type':'event_msg','payload':{'type':'user_message','turn_id':'1','message':'Please wait.'}}])+'\n').encode())
+        start(self.root,{'tasks':self.tasks[:1]},self.event())
+        head=self.git('rev-parse','HEAD')
+        def stopped(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            with transcript.open('a',newline='\n') as saved:
+                # Many small host records must not hide the final Stop at a handoff.
+                for _ in range(120):saved.write(json.dumps({'type':'event_msg','payload':{'type':'token_count'}})+'\n')
+                saved.write(json.dumps({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':'1','reason':'interrupted'}})+'\n')
+            return value
+        with patch.dict(os.environ,{'CODEX_HOME':str(home),'CODEX_THREAD_ID':'s','OH_CODEX_TURN_ID':'1'}),patch('oh.worker_checks.verify') as checks:
+            result=run(self.root,stopped)
+        checks.assert_not_called();self.assertEqual(result['status'],'stopped')
+        self.assertEqual(result['completed'],0);self.assertEqual(result['review_rounds'],0)
+        self.assertEqual([c[0] for c in self.calls],['implementation'])
+        self.assertEqual(self.git('rev-parse','HEAD'),head);self.assertTrue((self.root/'output.txt').exists())
 
     def test_pause_at_batch_checkpoint_cannot_grant_next_batch_on_resume(self):
         fixtures.configure(self.root,tasks_per_batch=1)  # one task per batch shows it; more only add Git work

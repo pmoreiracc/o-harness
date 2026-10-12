@@ -62,20 +62,34 @@ class PluginTransitions(unittest.TestCase):
         home=Path(os.environ['OH_DATA_HOME']);key=digest(str(self.root.resolve()))
         checkout=read_json(home/'registry/checkouts'/(key+'.json'))['checkout']
         atomic_json(home/'runtime/active.json',{'revision':'v2'})
-        for revision in ('v1','v2'):
+        for revision in ('v1','v2','v3'):
             path=home/'versions'/revision/'oh';path.parent.mkdir(parents=True)
             path.write_text('print('+repr(revision)+')')
         atomic_json(home/'checkout-state'/checkout/'oh-active-run.json',{'project':self.project_id,'run':'fixture'})
         journal=home/'projects'/self.project_id/'runs/fixture'
         atomic_json(journal/'000001.json',{'kind':'run.started','data':{'harness_version':'v1'}})
         entry=HOME/'plugins/o-harness/scripts/oh'
-        def call():return subprocess.check_output([*RUN,str(entry),'--root',str(self.root),'start'],text=True).strip()
+        def call(command='start'):return subprocess.check_output([*RUN,str(entry),'--root',str(self.root),command],text=True).strip()
         self.assertEqual(call(),'v1')
         for terminal in ('completed','stopped','pr'):
             atomic_json(journal/'000002.json',{'kind':'transition','data':{'events':[{'kind':'run.status','data':{'status':terminal}}]}})
             self.assertEqual(call(),'v2')
+        # docs/architecture.md: an explicit stopped-task continuation pins its newer runtime,
+        # while a later plugin upgrade still cannot switch the live execution underneath it.
+        atomic_json(journal/'000003.json',{'kind':'transition','data':{'events':[
+            {'kind':'delivery.continued','data':{'version':'v2'}},
+            {'kind':'run.status','data':{'status':'running'}}]}})
+        atomic_json(journal/'000004.json',{'kind':'run.status','data':{'status':'review_checkpoint'}})
+        atomic_json(home/'runtime/active.json',{'revision':'v3'})
+        for command in ('start','run','resume','pause','stop'):
+            self.assertEqual(call(command),'v2')
+        self.assertEqual(call('deliver'),'v3')  # the explicit command can adopt this unchanged waiting checkpoint
+        atomic_json(journal/'000005.json',{'kind':'run.status','data':{'status':'running'}})
+        self.assertEqual(call('deliver'),'v2')  # a live execution never switches underneath its worker
+        atomic_json(journal/'000006.json',{'kind':'run.status','data':{'status':'stopped'}})
+        self.assertEqual(call(),'v3')
         (home/'versions/v1/oh').unlink()
-        self.assertEqual(call(),'v2')
+        self.assertEqual(call(),'v3')
 
     def test_repair_review_retains_prior_family_and_exact_subject(self):
         start(self.root,{'tasks':self.tasks[:1]},self.event())
@@ -85,20 +99,51 @@ class PluginTransitions(unittest.TestCase):
             value=self.fake(*args,**kwargs)
             if args[4]=='implementation':
                 request=read_json(args[5]/'request.json')
-                if request.get('prior_reviews'):
-                    binding=request['prior_reviews'];prior=read_json(binding['path'])
+                if (packet:=read_json(request['task_context']['path'])).get('current_work'):
+                    binding=packet['findings'];prior=read_json(binding['path'])
                     self.assertEqual(digest(prior),binding['hash']);repair_history.append(prior)
             if args[4]=='review':
-                request=read_json(args[5]/'request.json');binding=request['prior_reviews'];prior=read_json(Path(binding['path']))
+                request=read_json(args[5]/'request.json');packet=read_json(request['task_context']['path']);binding=packet['findings'];prior=read_json(Path(binding['path']))
                 self.assertEqual(digest(prior),binding['hash']);manifests.append(prior)
                 if len(manifests)==1:
-                    value['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':'Fix both sibling paths','path':'output.txt','family':'sibling-paths','relation':'original'}])
+                    value['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':description,'path':'output.txt','family':'sibling-paths','relation':'original'} for description in ('Fix first sibling path','Fix second sibling path')])
             return value
         self.assertEqual(run(self.root,review)['completed'],1)
-        self.assertEqual(manifests[0],[])
-        self.assertEqual(manifests[1][0]['findings'][0]['family'],'sibling-paths')
-        self.assertEqual(repair_history,[manifests[1]])
-        self.assertTrue(manifests[1][0]['git_tree'])
+        self.assertEqual(manifests[0]['families'],[])
+        self.assertEqual(manifests[1]['families'][0]['family'],'sibling-paths')
+        from .handoff import finding_ids
+        self.assertEqual(finding_ids(repair_history[0]),finding_ids(manifests[1]))
+        family=manifests[1]['families'][0]
+        self.assertEqual(len(family['cases']),2)  # same family never erases a distinct original failure
+        self.assertTrue(all(f['disposition']=='still-open' and f['author_claim']['disposition']=='fixed' for f in family['occurrences']))
+        self.assertTrue(manifests[1]['families'][0]['occurrences'][0]['tree'])
+        from .workflow import load_run
+        journal,state=load_run(self.root)
+        request=read_json(journal.path/'attempts'/state['attempts'][-1]['id']/'request.json')
+        packet=read_json(request['task_context']['path'])
+        self.assertEqual(packet['schema'],2)
+        self.assertEqual(packet['current_work']['attempt'],state['attempts'][-2]['id'])
+        self.assertNotIn('implementer_reports',request)
+        self.assertEqual(len(packet['current_work']['readiness']['prior_findings']),2)
+        from .handoff import prepare,validate_readiness,finding_ids
+        older=next(a for a in state['attempts'] if a['role']=='implementation')
+        expanded=state|{'attempts':[older|{'id':'retained-'+str(n)} for n in range(50)]+state['attempts']}
+        ref,index=prepare(expanded,state['tasks'][0],'review',journal.path/'context-check',request)
+        self.assertEqual(read_json(ref['path'])['current_work'],packet['current_work'])
+        self.assertIsNone(validate_readiness(packet['current_work']['readiness'],finding_ids(index)))
+        self.assertIsNotNone(validate_readiness(packet['current_work']['readiness']|{'prior_findings':[]},finding_ids(index)))
+        self.assertTrue(all(f['disposition']=='fixed' and f['reviewed_by']==state['attempts'][-1]['id'] for f in index['families'][0]['occurrences']))
+        interrupted=older|{'id':'interrupted','outcome':'interrupted','evidence':str(journal.path/'attempts'/'interrupted')}
+        missing,_=prepare(state|{'attempts':state['attempts']+[interrupted]},state['tasks'][0],'implementation',journal.path/'interrupted-context',request)
+        self.assertFalse(read_json(missing['path'])['current_work']['report']['available'])
+        receipt=journal.path/'attempts'/state['attempts'][-1]['id']/'review.md'
+        saved=receipt.read_bytes()
+        self.assertIn(b'No findings.',saved)
+        self.assertIn(b'Result SHA-256',saved)
+        self.assertIn('Review 2',(journal.path/'index.md').read_text())
+        self.assertIn('Confirmed by [review]',(journal.path/'index.md').read_text())
+        run(self.root,self.fake)
+        self.assertEqual(receipt.read_bytes(),saved)
 
     def tracked_script(self):
         script=self.root/'checks.sh';script.write_text('#!/bin/sh\nexit 0\n',newline='\n')

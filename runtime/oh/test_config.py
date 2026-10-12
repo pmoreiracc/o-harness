@@ -46,7 +46,7 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(value['models']['codex'][role],profile)
         self.assertEqual(project_checks(self.root),[{'name':'tests','command':['true']}])
         listed={item['key']:item for item in describe(self.root)['settings']}
-        self.assertEqual([listed[k]['source'] for k in ('tasks_per_batch','review_rounds','max_escalations')],['global','project','default'])
+        self.assertEqual([listed[k]['source'] for k in ('tasks_per_batch','review_rounds','context.result_chars')],['global','project','default'])
         self.assertNotIn('Other',json.dumps(describe(self.root)))  # one project never mentions another
         for bad,words in (({'projects':{'Fixture':{'tasks_per_batch':0}}},'projects.Fixture.tasks_per_batch must be whole number from 1 to 100'),
                           ({'taskz':1},'Unknown setting: taskz'),({'checks':[]},'checks belong to one project'),
@@ -72,7 +72,8 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(Refused):change(self.root,key,value)
             self.assertEqual(settings_file().read_text(),written)
         with self.assertRaisesRegex(Refused,'belong to one project'):change(self.root,'checks','[]',scope='global')
-        self.assertTrue(change(self.root,'tasks_per_batch','15')['unchanged']);self.assertTrue(change(self.root,'max_escalations',None)['unchanged'])
+        self.assertTrue(change(self.root,'tasks_per_batch','15')['unchanged'])
+        with self.assertRaisesRegex(Refused,'Unknown setting: max_escalations'):change(self.root,'max_escalations','1')
         self.assertEqual(settings_file().read_text(),written)
         change(self.root,'tasks_per_batch','9',scope='global')
         self.assertIn('projects.Fixture sets its own value',change(self.root,'tasks_per_batch','8',scope='global')['note'])
@@ -127,14 +128,14 @@ class ConfigTest(unittest.TestCase):
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
         for path in project.glob('c*.json'):path.chmod(0o444)
         value=load(self.root)
-        self.assertEqual((value['max_escalations'],value['tasks_per_batch'],value['review_rounds']),(1,11,3))  # as before the move
+        self.assertEqual((value['tasks_per_batch'],value['review_rounds']),(11,3))  # as before the move
         self.assertEqual({k:v for k,v in self.read().items() if k!='projects'},
-            {'$schema':'./settings.schema.json','max_escalations':2,'tasks_per_batch':15,'models':{
+            {'$schema':'./settings.schema.json','tasks_per_batch':15,'models':{
                 'codex':{'insights':{'model':'global-codex','effort':'low'}},
                 'claude':{'insights':{'model':'global-claude','effort':'medium'}}}})
         expected={'codex':{'insights':{'model':'local-codex','effort':'high'}},
                   'claude':{'insights':{'model':'local-claude','effort':'max'}}}
-        self.assertEqual(self.read()['projects']['Fixture'],{'max_escalations':1,'tasks_per_batch':11,
+        self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':11,
             'models':expected,'checks':[{'name':'tests','command':['true']}]})
         for host in ('codex','claude'):self.assertEqual(value['models'][host]['insights'],expected[host]['insights'])
         self.assertFalse(config.legacy_files())
@@ -149,7 +150,7 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.legacy_files());self.assertFalse((home/'settings-moved.json').exists())
         # Any other older file must match the section every project with this name shares.
         (project/'checks.json').write_text('[{"name": "tests", "command": ["true"]}]')
-        with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.max_escalations') as conflict:load(self.root)
+        with self.assertRaisesRegex(Refused,'differs from .*checks.json in projects.Fixture.') as conflict:load(self.root)
         self.assertIn('projects.Fixture.tasks_per_batch',str(conflict.exception))
         self.assertTrue((project/'checks.json').exists())
         (project/'checks.json').unlink()
@@ -263,15 +264,18 @@ class ConfigTest(unittest.TestCase):
 
     def test_renamed_settings_are_moved_once_with_a_backup(self):
         # docs/configuration.md: migrate/alias old names without losing either override layer.
-        legacy={'review_rounds':4,'models':{'codex':{'orchestrator':{'model':'old-model','effort':'low'},
+        legacy={'max_escalations':2,'context':{'compact_at_tokens':60000},'review_rounds':4,'models':{'codex':{'orchestrator':{'model':'old-model','effort':'low'},
             'insights':{'model':'gpt-6.1-sol'}},'claude':{'orchestrator':{'model':'sonnet','effort':'medium'}}},
-            'projects':{'Fixture':{'review_rounds':6,'models':{'codex':{'orchestrator':{'effort':'high'}},'claude':{'orchestrator':{}}}}}}
+            'projects':{'Fixture':{'max_escalations':0,'context':{'compact_at_tokens':40000},'review_rounds':6,'models':{'codex':{'orchestrator':{'effort':'high'}},'claude':{'orchestrator':{}}}}}}
         self.write(legacy)
         with patch.dict(config.RENAMED,{'review_rounds':'tasks_per_batch'}):
             self.assertEqual(load(self.root)['tasks_per_batch'],6)
             self.assertEqual(load(self.root)['models']['codex']['insights'],{'model':'gpt-6.1-sol','effort':'high'})
         self.assertEqual(self.read()['models'],{'codex':{'insights':{'model':'gpt-6.1-sol','effort':'low'}},
             'claude':{'insights':{'model':'sonnet','effort':'medium'}}})
+        self.assertNotIn('max_escalations',self.read())
+        self.assertNotIn('context',self.read())
+        self.assertNotIn('compact_at_tokens',load(self.root)['context'])
         self.assertEqual(self.read()['projects']['Fixture'],{'tasks_per_batch':6,'models':{'codex':{'insights':{'effort':'high'}}}})
         backup,=(config_home()/'backups').glob('*-settings/settings.json')
         self.assertEqual(json.loads(backup.read_text()),legacy)
@@ -309,7 +313,7 @@ class ConfigTest(unittest.TestCase):
     def test_claude_workers_cannot_write_the_settings_folder(self):
         from .hosts import command
         with patch('oh.hosts.executable',return_value='claude'):
-            args=command('claude',{'model':'opus','effort':'high'},self.root,'implementation',None,60000)
+            args=command('claude',{'model':'opus','effort':'high'},self.root,'implementation',None)
         sandbox=json.loads(args[args.index('--settings')+1])
         if os.name!='nt':self.assertIn(str(config_home()),sandbox['sandbox']['filesystem']['denyWrite'])
         else:self.assertEqual(sandbox['sandbox'],{'enabled':False})

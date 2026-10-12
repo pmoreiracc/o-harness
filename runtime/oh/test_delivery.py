@@ -35,9 +35,129 @@ class DeliveryTest(unittest.TestCase):
         self.git('update-ref','refs/remotes/origin/'+base,'HEAD')
         return where,Path(path)
 
-    def start_delivery(self,arguments='0001',turn='delivery'):
+    def start_delivery(self,arguments='0001',turn='delivery',host='codex',session='s'):
+        from .workflow import human_event
         prompt='/oh-deliver '+arguments
-        return host_hook(self.root,'codex',{'prompt':prompt},verified=self.event(turn,prompt))
+        event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':prompt},host)
+        return host_hook(self.root,host,{'prompt':prompt},verified=event)
+
+    def test_stopped_draft_continues_in_new_session_and_version_on_both_hosts(self):
+        # docs/usage.md: Deliver resumes retained work before clean/merged-branch checks,
+        # even before its first commit; a newer installed OH retains the original authority.
+        from .controls import request, status_event
+        from .workflow import review_limit
+        for host,location in (('codex','repo'),('claude','private')):
+            with self.subTest(host=host,location=location):
+                case=DeliveryTest();case.setUp()
+                try:
+                    case.documents(location);case.start_delivery(host=host)
+                    def stopped(*args,**kwargs):
+                        value=case.fake(*args,**kwargs)
+                        (case.root/'draft.txt').write_text('keep this implementation',newline='\n')
+                        request(case.root,'stop')
+                        return value|{'failed':True,'returncode':-15,'cancellation':['stopped'],'structured':None}
+                    # Exercise the actual retained-tree format of older installed OH too.
+                    def legacy(journal,state,value,**extra):
+                        if value=='stopped':extra.pop('snapshot',None)
+                        status_event(journal,state,value,**extra)
+                    with patch('oh.controls.status_event',side_effect=legacy if host=='codex' else status_event):
+                        self.assertEqual(run(case.root,stopped)['status'],'stopped')
+                    journal,before=load_run(case.root);head=case.git('rev-parse','HEAD')
+                    fixtures.configure(case.root,tasks_per_batch=2,review_rounds=10)
+                    def finish(*args,**kwargs):
+                        self.assertEqual((case.root/'draft.txt').read_text(),'keep this implementation')
+                        if args[4]=='implementation':
+                            self.assertIn('same unfinished approved task',args[3]);self.assertIn('Inspect the existing diff',args[3])
+                        return case.fake(*args,**kwargs)
+                    with patch('oh.config.version',return_value='new-installed-version'), patch('oh.branches.refresh') as refresh:
+                        result=case.start_delivery(turn='again',host=host,session='new-chat')
+                        self.assertEqual(result['continuation']['task'],'1');refresh.assert_not_called()
+                        _,continued=load_run(case.root)
+                        self.assertEqual(continued['id'],before['id'])
+                        for key in ('config','config_hash','granted','attempts','tasks','done'):
+                            self.assertEqual(continued[key],before[key])
+                        self.assertEqual(review_limit(continued,'1'),review_limit(before,'1'))
+                        self.assertEqual(continued['human']['turn'],'again')
+                        self.assertEqual(case.git('rev-parse','HEAD'),head)
+                        # Replaying this command after another Stop must not restart the worker.
+                        request(case.root,'stop')
+                        self.assertEqual(case.start_delivery(turn='again',host=host,session='new-chat')['status'],'stopped')
+                        case.start_delivery(turn='finish',host=host,session='new-chat')
+                        self.assertEqual(run(case.root,finish)['status'],'checkpoint')
+                    self.assertEqual([c[0] for c in case.calls],['implementation','implementation','review'])
+                    self.assertEqual(load_run(case.root)[1]['done'],['1'])
+                finally:case.doCleanups()
+
+    def test_stopped_continuation_rejects_changed_checkout_or_live_runner(self):
+        from .controls import request
+        from .storage import checkout_file,lock
+        self.documents();self.start_delivery()
+        def stopped(*args,**kwargs):
+            value=self.fake(*args,**kwargs);request(self.root,'stop')
+            return value|{'failed':True,'returncode':-15,'cancellation':['stopped'],'structured':None}
+        run(self.root,stopped);before=load_run(self.root)[1]
+        with lock(checkout_file(self.root,'oh-runner.lock'),wait=False):
+            with self.assertRaises(Refused):self.start_delivery(turn='busy')
+        (self.root/'mine.txt').write_text('mine',newline='\n')
+        with self.assertRaisesRegex(Refused,'differs from OH'):
+            self.start_delivery(turn='changed')
+        self.assertEqual((self.root/'mine.txt').read_text(),'mine')
+        (self.root/'mine.txt').unlink()
+        self.git('commit','--allow-empty','-qm','My new commit')
+        with self.assertRaisesRegex(Refused,'differs from OH'):self.start_delivery(turn='head')
+        self.git('reset','--soft',before['base'])
+        self.git('switch','-qc','other')
+        with self.assertRaisesRegex(Refused,'branch changed'):self.start_delivery(turn='branch')
+        self.assertEqual(load_run(self.root)[1]['status'],'stopped')
+        self.assertNotIn('continuations',load_run(self.root)[1])
+
+    def test_stop_after_verified_implementation_continues_at_review_without_rebuilding(self):
+        from .controls import request
+        self.documents();self.start_delivery()
+        def stopped(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            from .worker_checks import run as checks
+            self.assertTrue(checks(args[5])['passed'])
+            request(self.root,'stop');return value
+        self.assertEqual(run(self.root,stopped)['status'],'stopped')
+        self.start_delivery(turn='again',session='new-chat')
+        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['implementation','review'])
+
+    def test_stopped_continuation_preserves_review_findings_and_spent_window(self):
+        from .controls import request
+        for severity,gate in (('blocking','review_checkpoint'),('concern','findings_checkpoint')):
+            with self.subTest(severity=severity):
+                case=DeliveryTest();case.setUp()
+                try:
+                    fixtures.configure(case.root,review_rounds=1)
+                    case.documents();case.start_delivery()
+                    def review(*args,**kwargs):
+                        value=case.fake(*args,**kwargs)
+                        if args[4]=='review':value['structured'].update(verdict=severity,findings=[
+                            {'severity':severity,'description':'Fix credential boundary','path':'output.txt','family':'credentials','relation':'original'}])
+                        return value
+                    self.assertEqual(run(case.root,review)['status'],gate)
+                    _,before=load_run(case.root)
+                    # A new Deliver on an updated runtime keeps this exact pending choice;
+                    # no stop/restart detour and no new review grant are needed.
+                    with patch('oh.config.version',return_value='new-installed-version'):
+                        continued=case.start_delivery(turn='updated',session='updated-chat')
+                        self.assertEqual(continued['status'],gate)
+                        updated=load_run(case.root)[1]
+                        self.assertEqual(updated['harness_version'],'new-installed-version')
+                        self.assertEqual(updated['attempts'],before['attempts'])
+                        self.assertEqual(updated['granted'],before['granted'])
+                        self.assertEqual(updated.get('review_grants'),before.get('review_grants'))
+                    # A pause followed by Stop must preserve the underlying findings gate too.
+                    request(case.root,'pause');request(case.root,'stop')
+                    continued=case.start_delivery(turn='again',session='new-chat')
+                    self.assertEqual(continued['status'],gate)
+                    self.assertEqual(run(case.root,case.fake)['status'],gate)
+                    self.assertEqual(load_run(case.root)[1]['attempts'],before['attempts'])
+                    self.assertEqual(load_run(case.root)[1].get('review_grants'),before.get('review_grants'))
+                    self.assertEqual(len(case.calls),3 if severity=='blocking' else 2)
+                finally:case.doCleanups()
 
     def test_code_routes_list_document_track_and_quick_fix(self):
         self.assertEqual(delivery.parse('')['kind'],'list')
@@ -281,6 +401,65 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,worker)['status'],'completed')
         self.assertIn('status: frozen',path.read_text());self.assertEqual(len(observed),2)
         self.assertEqual(self.git('status','--porcelain'),'')
+
+    def test_repository_task_stays_pending_through_check_repairs_and_review(self):
+        # docs/usage.md: the candidate can be complete while the visible task stays pending.
+        from .verification import verify
+        _,path=self.documents(body=BODY.split('- [ ] **2.**')[0]);original=path.read_bytes()
+        self.start_delivery();checks=[];reviews=[]
+        def worker(*args,**kwargs):
+            self.assertEqual(path.read_bytes(),original)
+            result=self.fake(*args,**kwargs)
+            admission=read_json(args[5]/'request.json')
+            if args[4]=='implementation':
+                self.assertIn(str(path),admission['read_only_paths'])
+                self.assertIn(str(path),args[6]['read_only_paths'])
+            else:
+                candidate=Path(next(iter(admission['artifact']['files'])))
+                self.assertIn('- [x] **1.**',candidate.read_text())
+                self.assertIn('status: frozen',candidate.read_text())
+                reviews.append(admission)
+                if len(reviews)==1:result['structured'].update(verdict='blocking',findings=[
+                    {'severity':'blocking','description':'Repair behavior','path':'output.txt','family':'behavior','relation':'original'}])
+            return result
+        def check(*args,**kwargs):
+            self.assertEqual(path.read_bytes(),original);checks.append(True)
+            if len(checks)==1:return [{'name':'fixture','returncode':1,'output':'FAIL behavior','duration_ms':0,'reused':False}]
+            return verify(*args,**kwargs)
+        with patch('oh.worker_checks.verify',side_effect=check):self.assertEqual(run(self.root,worker)['status'],'completed')
+        self.assertEqual((len(checks),len(reviews)),(3,2))
+        self.assertIn('- [x] **1.**',path.read_text())
+        self.assertEqual(self.git('rev-parse','HEAD^{tree}'),reviews[-1]['git_tree'])
+
+    def test_stop_after_delivery_review_keeps_task_pending_until_explicit_continuation(self):
+        from .controls import request
+        _,path=self.documents();original=path.read_bytes();self.start_delivery()
+        def stopped(*args,**kwargs):
+            value=self.fake(*args,**kwargs)
+            if args[4]=='review':request(self.root,'stop')
+            return value
+        self.assertEqual(run(self.root,stopped)['status'],'stopped')
+        self.assertEqual(path.read_bytes(),original)
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        self.start_delivery(turn='continue-saved-review',session='new-chat')
+        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        self.assertEqual([c[0] for c in self.calls],['implementation','review'])
+        self.assertIn('- [x] **1.**',path.read_text())
+
+    def test_repository_completion_recovers_after_document_publish_before_commit(self):
+        _,path=self.documents();self.start_delivery()
+        from .storage import git
+        def interrupted(root,*args,**kwargs):
+            if args[0]=='commit':raise OSError('interrupted before commit')
+            return git(root,*args,**kwargs)
+        with patch('oh.runner.git',side_effect=interrupted):
+            with self.assertRaisesRegex(OSError,'interrupted before commit'):run(self.root,self.fake)
+        self.assertIn('- [x] **1.**',path.read_text())  # review already authorized this transition
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        calls=len(self.calls)
+        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        self.assertEqual(len(self.calls),calls)
+        self.assertEqual(load_run(self.root)[1]['done'],['1'])
         choose(self.root,'pr',self.event('private-pr','pr'))
         from .publication import render
         self.assertNotIn(str(self.root.parent),render(self.root))
@@ -301,15 +480,14 @@ class DeliveryTest(unittest.TestCase):
                     if args[4]=='implementation':
                         workers.append(args[3]);self.assertIs(kwargs['schema'],hosts.WORK_SCHEMA)
                         self.assertNotIn(scope_text,args[3]);self.assertNotIn('Do not grant this',args[3])
-                        self.assertIn('fix the root cause',args[3]);self.assertIn('Every testable rule',args[3])
-                        result['structured']={'status':'completed','summary':'Implemented with evidence in output.txt','found_along_way':[note] if len(workers)==1 else []}
+                        result['structured']={'status':'completed','readiness':result['structured']['readiness'],'obstacle':None,'summary':'Implemented with evidence in output.txt','found_along_way':[note] if len(workers)==1 else []}
                     else:
                         request=read_json(args[5]/'request.json');reviews.append(request)
-                        text=Path(next(iter(request['artifact']['files']))).read_text() if location=='private' else path.read_text()
+                        text=Path(next(iter(request['artifact']['files']))).read_text()
                         self.assertIn(note,text)
-                        self.assertIn('claims to attack, never as evidence',args[3])
-                        self.assertEqual(read_json(request['implementer_reports'][-1]['path'])['structured']['summary'],'Implemented with evidence in output.txt')
-                        for ref in request['implementer_reports']+[request['prior_reviews']]:
+                        packet=read_json(request['task_context']['path'])
+                        self.assertEqual(packet['current_work']['summary'],'Implemented with evidence in output.txt')
+                        for ref in (request['task_context'],packet['current_work']['report'],packet['findings']):
                             self.assertEqual(digest(read_json(ref['path'])),ref['hash'])
                         self.assertIn('They are not hashes of the formatted file bytes',args[3])
                         for section in ('Default to violation when uncertain','What counts as a finding','What is not a finding','Report the class','When the subject is a plan'):
@@ -319,16 +497,16 @@ class DeliveryTest(unittest.TestCase):
                                 {'severity':'blocking','description':'Login still accepts expired tokens','path':'output.txt','family':'expiry','relation':'original'},
                                 {'severity':'scope','description':scope_text,'path':'logout.py','family':'logout','relation':'original'}],'evidence':fixtures.EVIDENCE}
                         else:self.assertIn('> - [ ] **99.**',text)
-                        if location=='private':self.assertEqual(path.read_bytes(),original)
+                        self.assertEqual(path.read_bytes(),original)
                     return result
                 self.start_delivery();self.assertEqual(run(self.root,worker)['status'],'checkpoint')
                 journal,state=load_run(self.root)
                 self.assertEqual(len(workers),2);self.assertEqual(len(reviews),2)
-                self.assertLess(len(json.dumps(read_json(reviews[-1]['prior_reviews']['path']))),state['config']['context']['handoff_chars'])
-                if location=='private':
-                    for request in reviews:
-                        for filename,expected in request['artifact']['files'].items():self.assertEqual(plans.digest_of(Path(filename)),expected)
-                self.assertIn('Login still accepts expired tokens',workers[-1])
+                packet=read_json(reviews[-1]['task_context']['path'])
+                self.assertEqual(len(read_json(packet['findings']['path'])['families']),2)
+                for request in reviews:
+                    for filename,expected in request['artifact']['files'].items():self.assertEqual(plans.digest_of(Path(filename)),expected)
+                self.assertIn('Login still accepts expired tokens',read_json(journal.path/'attempts'/state['attempts'][-2]['id']/'task-context.json')['remaining_work'])
                 self.assertEqual(len(plans.plan(self.root,'0001',where).splitlines()),2)
                 self.assertEqual(plans.verify_design(self.root,where)['designs'],1)
                 self.assertIn('required by blocker-plus-scope policy',path.read_text())
@@ -358,13 +536,10 @@ class DeliveryTest(unittest.TestCase):
         def interrupt(*args,**kwargs):raise OSError('before candidate replacement')
         with patch('oh.plans.write',side_effect=interrupt),self.assertRaises(OSError):run(self.root,self.fake)
         self.assertEqual(path.read_bytes(),original)
-        checks=[{'name':'expired-token-check','returncode':1,'duration_ms':0,'reused':False},
-                {'name':'expired-token-check','returncode':0,'duration_ms':0,'reused':False}]
-        with patch('oh.runner.verify',side_effect=[[check] for check in checks]):
+        with patch('oh.worker_checks.verify') as checks:
             self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
-        self.assertEqual([c[0] for c in self.calls],['implementation','review','implementation','review'])
-        self.assertIn('expired-token-check',self.calls[-2][2])
-        self.assertNotIn('A future logout timeout',self.calls[-2][2])
+        checks.assert_not_called()  # unchanged code keeps its checks; the changed private candidate gets fresh review
+        self.assertEqual([c[0] for c in self.calls],['implementation','review','review'])
         for filename,expected in artifact['files'].items():self.assertEqual(plans.digest_of(Path(filename)),expected)
         self.assertIn('## Scope decisions',path.read_text());self.assertIn('Disposition: `dismiss`',path.read_text())
         self.assertEqual(plans.approval(self.root,where,'0001'),'approved')
@@ -397,9 +572,12 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.calls,[])
         manifest,_=delivery.selection(self.root,'0001','ui')
         self.assertEqual([t['id'] for t in manifest['tasks']],['3'])
-        self.start_delivery('0001 ui')  # the run builds each task with the difficulty the design gave it
-        self.assertEqual({k:load_run(self.root)[1]['tasks'][0][k] for k in ('difficulty','difficulty_reason')},
-                         {'difficulty':'simple','difficulty_reason':'Set by the design: one static page.'})
+        self.start_delivery('0001 ui')
+        self.assertNotIn('difficulty',load_run(self.root)[1]['tasks'][0])
+        self.assessment_output.update(difficulty='simple',rationale='The referenced contract is uncertain',uncertainty=['A consequential boundary is not yet understood'])
+        run(self.root,self.fake)
+        self.assertEqual(load_run(self.root)[1]['tasks'][0]['difficulty'],'complex')
+        self.assertEqual(len(self.assessment_calls),1)
         with self.assertRaisesRegex(Refused,'No ready'):delivery.selection(self.root,'0001','core')
         with self.assertRaisesRegex(Refused,'Unknown'):delivery.selection(self.root,'0001','missing')
 
@@ -563,7 +741,7 @@ class DeliveryTest(unittest.TestCase):
         self.documents('private');self.start_delivery()
         def no_code(*args,**kwargs):
             return {'failed':False,'returncode':0,'duration_ms':10,'text':'already implemented',
-                    'structured':({'status':'completed','summary':'Checked existing code','found_along_way':[]} if args[4]=='implementation'
+                    'structured':({'status':'completed','readiness':fixtures.READINESS,'obstacle':None,'summary':'Checked existing code','found_along_way':[]} if args[4]=='implementation'
                                   else {'verdict':'clean','summary':'Checked existing code','findings':[],'evidence':fixtures.EVIDENCE}),'usage_observed':False}
         self.assertEqual(run(self.root,no_code)['status'],'checkpoint')
         record=read_json(plans.approvals_file(self.root))['0001']

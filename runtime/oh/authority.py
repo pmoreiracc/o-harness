@@ -80,6 +80,51 @@ def codex_history(path,session):
     return meta,turn,messages,cwd
 
 
+def owner_stop_reader(state):
+    """Incrementally observe a native stop of this execution's owning turn, not tool cancellation."""
+    if state['host']!='codex':return lambda: None
+    from .hosts import codex_home
+    human=state['human'];session=human['session']
+    if os.environ.get('CODEX_THREAD_ID')!=session:return lambda: None
+    turn=os.environ.get('OH_CODEX_TURN_ID') or human['turn']
+    allowed=(codex_home()/'sessions').resolve()
+    if not re.fullmatch(r'[a-zA-Z0-9_-]+',session):return lambda: None
+    paths=([Path(human['transcript_path']).expanduser().resolve()] if human.get('transcript_path') else
+           list(allowed.rglob('*'+session+'*.jsonl')))
+    if len(paths)!=1 or not paths[0].resolve().is_relative_to(allowed):return lambda: None
+    path=paths[0]
+    try:
+        with path.open('rb') as stream:
+            first=stream.readline();record=json.loads(first)
+            if not isinstance(record,dict):return lambda: None
+            meta=record.get('payload',{})
+        if (record.get('type')!='session_meta' or not isinstance(meta,dict) or meta.get('id')!=session or
+                isinstance(meta.get('source'),dict) or meta.get('source') in ('exec','subagent')):return lambda: None
+        offset=max(len(first),path.stat().st_size-1024*1024)
+    except (OSError,ValueError):return lambda: None
+    def read():
+        nonlocal offset
+        try:
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                end=offset+1024*1024
+                while stream.tell()<end:
+                    line=stream.readline()
+                    if not line or not line.endswith(b'\n'):break  # leave an incomplete save for the next observation
+                    offset=stream.tell()
+                    try:record=json.loads(line)
+                    except ValueError:continue
+                    if not isinstance(record,dict):continue
+                    event=record.get('payload',{})
+                    if (record.get('type')=='event_msg' and isinstance(event,dict) and event.get('type')=='turn_aborted' and
+                            event.get('turn_id')==turn and event.get('reason')=='interrupted'):
+                        return {'host':'codex','session':session,'turn':turn,'record_hash':digest(record),
+                                'transcript_path':str(path)}
+        except OSError:pass  # a missing/partial host save is not evidence of a human stop
+        return None
+    return read
+
+
 def stage(root,host,payload,idea=None):
     """Keep a typed command until OH verifies it. `idea`: the command ('propose' or 'design') whose argument the
     text is, because OH asked for it (see `wait_for`)."""

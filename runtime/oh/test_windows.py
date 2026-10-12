@@ -66,23 +66,37 @@ class WindowsTest(unittest.TestCase):
         from .hosts import command,rule_path
         root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root)
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        document=root/'configured plans'/'approved.task.md';document.parent.mkdir();document.write_text('pending',newline='\n')
         with patch('oh.hosts.executable', return_value='claude'), patch('oh.hosts.WINDOWS', True):
-            work = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'implementation', None, 60000, root / 'artifacts')
-            review = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'review', None, 60000, root / 'run')
+            work = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'implementation', None, root / 'artifacts',read_only_paths=[document],verification_dir=root/'attempt')
+            review = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'review', None, root / 'run',verification_dir=root/'review')
+            for host in ('codex','claude'):
+                assessed=command(host,{'model':'fixture','effort':'medium'},root,'assessment',None,root/'run')
+                if host=='codex':self.assertEqual(assessed[assessed.index('--sandbox')+1],'read-only')
+                else:
+                    self.assertEqual(assessed[assessed.index('--tools')+1],'Read,Glob,Grep')
+                    self.assertEqual(assessed[assessed.index('--permission-mode')+1],'plan')
         self.assertEqual(work[work.index('--tools') + 1], 'Read,Glob,Grep,Edit,Write')
         self.assertEqual(review[review.index('--tools') + 1], 'Read,Glob,Grep')
+        self.assertIn('--strict-mcp-config',review);self.assertIn('--disable-slash-commands',review)
+        self.assertEqual(json.loads(review[review.index('--settings')+1])['permissions']['allow'],['mcp__oh_checks__admission'])
         settings = json.loads(work[work.index('--settings') + 1])
         self.assertEqual(settings['sandbox'], {'enabled': False})
         self.assertLessEqual({'Bash', 'PowerShell', 'Agent'}, set(settings['permissions']['deny']))
+        self.assertIn('mcp__oh_checks__verify',settings['permissions']['allow'])
+        server=json.loads(work[work.index('--mcp-config')+1])['mcpServers']['oh_checks']
+        self.assertEqual(server['args'][-2:],['worker-checks',str(root/'attempt')])
         self.assertEqual(review[review.index('--add-dir') + 1], str(root / 'run'))
         # docs/usage.md: workers read this project's OH inputs while edits there stay denied.
         self.assertEqual(work[work.index('--add-dir')+1],str(root/'artifacts'))
         self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
+        for tool in ('Edit','Write'):self.assertIn(tool+'('+rule_path(document.resolve())+')',settings['permissions']['deny'])
         with patch('oh.hosts.executable',return_value='claude'),patch('oh.hosts.WINDOWS',False):
-            posix=command('claude',{'model':'opus','effort':'high'},root,'implementation',None,60000,root/'artifacts')
+            posix=command('claude',{'model':'opus','effort':'high'},root,'implementation',None,root/'artifacts',read_only_paths=[document])
         settings=json.loads(posix[posix.index('--settings')+1])
         self.assertEqual(posix[posix.index('--add-dir')+1],str(root/'artifacts'))
         self.assertIn(str(root/'artifacts'),settings['sandbox']['filesystem']['denyWrite'])
+        self.assertIn(str(document.resolve()),settings['sandbox']['filesystem']['denyWrite'])
         self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
 
     @unittest.skipIf(os.name == 'nt', 'Uses POSIX sh and symlinks')

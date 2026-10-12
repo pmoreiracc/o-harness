@@ -10,6 +10,31 @@ START='<!-- oh-review:start -->'
 END='<!-- oh-review:end -->'
 
 
+def destination(root, *, required=False):
+    """Bind Git's actual push destination without copying credentials into questions or receipts."""
+    from .branches import run_git
+    from urllib.parse import urlsplit, urlunsplit
+    result=run_git(root,'remote','get-url','--push','--all','origin')
+    urls=result.stdout.strip().splitlines() if result.returncode==0 else []
+    if len(urls)!=1:
+        if required:raise Refused('Publication needs one origin push destination. Configure the intended repository as origin, then use the current publication choice; completed work and review are retained.')
+        return None
+    raw=urls[0]
+    if '://' in raw:
+        parsed=urlsplit(raw)
+        display=urlunsplit((parsed.scheme,parsed.netloc.rsplit('@',1)[-1],parsed.path,'',''))
+    else:
+        display=re.sub(r'^[^/@:]+@([^:]+):',r'ssh://\1/',raw).split('?',1)[0].split('#',1)[0]
+    return {'remote':'origin','destination':display,'remote_fingerprint':digest(urls)}
+
+
+def destination_state(root, state):
+    if state['status']!='pr':return state
+    grant=state.get('publication') or {}
+    expected={k:grant.get(k) for k in ('remote','destination','remote_fingerprint')}
+    return state|{'publication_changed':destination(root)!=expected}
+
+
 def public_value(root,state,value):
     """Prepare public text before sealing evidence; local journals keep original paths and reports."""
     from .storage import state_home
@@ -36,7 +61,7 @@ def public_value(root,state,value):
 
 def task_evidence(root,state,task,review,parent):
     attempts=[a for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
-    history=[{k:a.get(k) for k in ('id','outcome','duration_ms','profile','findings','git_tree','head')} for a in attempts]
+    history=[{k:a.get(k) for k in ('id','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at')} for a in attempts]
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
@@ -156,7 +181,11 @@ def render(root,base=None):
         # A stopped run's commits, or those of a completed run nobody chose to publish, are published by the PR
         # choice of the run that resumed its branch.
         if state['status'] not in ('pr','stopped','completed'):raise Refused('A recorded human PR choice is required before exporting native evidence')
-        if state['status']=='pr':grants[run]=state.get('publication')
+        if state['status']=='pr':
+            grant=state.get('publication')
+            if grant and grant.get('remote_fingerprint') and destination(root)!= {k:grant[k] for k in ('remote','destination','remote_fingerprint')}:
+                raise Refused('The publication destination changed after approval. Restore the approved remote or request publication for the new destination; do not rerun completed tasks.')
+            grants[run]=grant
         done=[t for t in state['summaries'] if t['commit']==commit]
         if len(done)!=1:raise Refused('Commit has no unique authoritative task completion')
         evidence=state['commit_intents'][done[0]['task']].get('publication')
@@ -166,52 +195,76 @@ def render(root,base=None):
         records.append({'commit':commit,'evidence':evidence})
     if commits(root,base,reviewed=covered(records))!=[record['commit'] for record in records]:
         raise Refused('This branch holds commits that OH neither made nor reviewed, so OH cannot publish it as reviewed')
-    value={'schema':1,'branch':branch,'head':git(root,'rev-parse','HEAD'),'records':records,'grants':grants}
+    value=public_value(root,{}, {'schema':1,'branch':branch,'head':git(root,'rev-parse','HEAD'),'records':records,'grants':grants})
     validate_grants(value)
-    notes=''.join('\n\nFound along the way (task '+r['evidence']['task']+'):\n'+''.join('\n> '+line for f in record['findings'] for line in f['description'].splitlines()) for r in records for record in r['evidence'].get('scope',{}).values() if record['action']=='noted' and record['destination'].get('pr'))
+    from html import escape
+    notes=''.join('\n\nFound along the way (task '+r['evidence']['task']+'):\n'+''.join('\n> '+escape(line) for f in record['findings'] for line in f['description'].splitlines()) for r in records for record in r['evidence'].get('scope',{}).values() if record['action']=='noted' and record['destination'].get('pr'))
     notes=public_value(root,{},notes)
     # Keep portable evidence in the PR source, not its rendered description. Escape HTML so
     # finding text containing a comment terminator cannot expose the machine packet.
     packet=json.dumps(value,separators=(',',':')).replace('&',r'\u0026').replace('<',r'\u003c').replace('>',r'\u003e')
-    body='Base branch: `'+base+'`.\n\n'+readable(records,states,root)+notes+'\n\n'+START+'\n<!--\n```json\n'+packet+'\n```\n-->\n'+END
+    target=next((g.get('base_branch',base) for g in grants.values() if g.get('head')==value['head']),base)
+    body='Base branch: `'+target+'`.\n\n'+readable(records,states,root)+notes+'\n\n'+START+'\n<!--\n```json\n'+packet+'\n```\n-->\n'+END
     if len(body.encode())>60000:raise Refused('Review evidence exceeds the PR body budget; publish a smaller reviewed batch')
     return body
 
 
 def readable(records,states,root=None):
-    """Work, verification and review decisions; full execution history remains in the journal."""
-    from .gates import finding_text,report_text
-    lines=[]
+    """Short whole-change summaries, native verification, and complete expandable review history."""
+    from html import escape
+    from .handoff import report
+    from .receipts import finding, seconds
+    lines=['## Completed tasks','']
     for record in records:
         evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']
-        lines.append(f"### Task {task}: {evidence['title']}")
-        worker=next((a for a in reversed(state['attempts']) if a['task']==task and a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
-        lines.extend(['',report_text(worker) or 'No implementing report recorded.' if worker else 'No implementing report recorded.',''])
+        author=next((a for a in reversed(state['attempts']) if a['task']==task and
+                     a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
+        value=report(author)
+        summary=value.get('summary') or (author or {}).get('human_summary') or (author or {}).get('summary')
+        summary=(summary or 'No author summary was recorded.').split('\n\n',1)[0].strip()
+        lines.extend([f"### Task {task}: {escape(evidence['title'])}",'',escape(public_value(root,state,summary)),''])
+    lines.extend(['## Verification',''])
+    for record in records:
+        evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']
         verification=state.get('verification',{}).get(task)
         checks=verification.get('checks',[]) if verification else []
-        lines.append('Verification: '+('; '.join(c['name']+' ('+('failed' if check_failed(c) else 'passed')+')' for c in checks) if checks else
-                     'document validation passed' if state.get('workflow') in ('design','propose') else
-                     'no project checks applied' if verification else 'no check results recorded')+'.')
-        reviews=evidence['attempts'];final=reviews[-1]
-        outcome='clean' if final['outcome']=='clean' else 'completed with recorded finding decisions'
-        lines.append(f"Independent invariant review: {outcome}; {len(reviews)} round"+('s' if len(reviews)!=1 else '')+'.')
-        for number,attempt in enumerate(reviews,1):
-            if not attempt.get('findings'):continue
-            lines.extend(['',f'Review {number} findings:'])
-            lines.extend('- '+finding_text(f) for f in attempt['findings'])
-            resolution=evidence['resolutions'].get(attempt['id'])
-            if resolution:
-                lines.append('Decision: '+resolution['choice']+'.')
-            scope=evidence.get('scope',{}).get(attempt['id'])
+        checked='; '.join(c['name']+' ('+('failed' if check_failed(c) else 'passed')+')' for c in checks)
+        if not checked:checked=('document validation passed' if state.get('workflow') in ('design','propose') else
+                               'no project checks applied' if verification else 'not recorded')
+        lines.append(f'- Task {task}: '+escape(checked)+'.')
+    lines.extend(['','## Independent review',''])
+    for record in records:
+        evidence=record['evidence'];reviews=evidence['attempts']
+        outcome='clean' if reviews[-1]['outcome']=='clean' else 'completed with recorded finding decisions'
+        lines.append(f"- Task {evidence['task']}: {outcome}; {len(reviews)} round"+('s' if len(reviews)!=1 else '')+'.')
+    lines.extend(['','<details><summary>Review history, findings and decisions</summary>',''])
+    for record in records:
+        evidence=record['evidence']
+        lines.extend([f"### Task {evidence['task']}",'', '| Round | Outcome | Model | Elapsed |', '|---|---|---|---|'])
+        for number,attempt in enumerate(evidence['attempts'],1):
+            profile=attempt.get('profile') or {}
+            lines.append(f"| {number} | {attempt['outcome']} | {profile.get('model','Not recorded')} | {seconds(attempt.get('duration_ms'))} |")
+        for number,attempt in enumerate(evidence['attempts'],1):
+            lines.extend(['',f'#### Review {number}',''])
+            if attempt.get('findings'):
+                for item in attempt['findings']:
+                    lines.append(finding(item))
+            else:lines.append('No findings.' if attempt['outcome']=='clean' else 'No completed verdict was recorded.')
+            resolution=evidence.get('resolutions',{}).get(attempt.get('id'))
+            if resolution:lines.append('Decision: '+resolution['choice']+'.')
+            scope=evidence.get('scope',{}).get(attempt.get('id'))
             if scope:
-                from pathlib import Path
                 destination=scope['destination']
                 where=(destination['issue']['url'] if destination.get('issue') else
                        Path(destination['design']).name+' '+destination['section'] if destination.get('design') else 'this PR')
-                lines.append('Scope: '+scope['action']+'; recorded in '+where+'.')
+                lines.append('Scope: '+scope['action']+'; recorded in '+escape(where)+'.')
             elif resolution and resolution.get('issue'):lines.append('Destination: '+resolution['issue']['url']+'.')
-        lines.append('')
-    return public_value(root,{},'\n'.join(lines))
+    lines.extend(['','</details>','','## Delivery boundary',''])
+    latest=states[records[-1]['evidence']['run']]
+    pending=[t for t in latest.get('tasks',[]) if t['id'] not in latest.get('done',[])]
+    lines.append('Publication was chosen for the completed reviewed work. '+
+                 (f"Next planned task: {pending[0]['id']} — {escape(public_value(root,latest,pending[0]['title']))}. It has not been delivered in this PR." if pending else 'No planned tasks remain in this run.'))
+    return public_value(root,{},'\n'.join(lines)+'\n')
 
 
 def covered(records):

@@ -65,6 +65,7 @@ class PrivatePlansTest(unittest.TestCase):
         preview=Path(result['gate']['preview']).read_text()
         self.assertIn(path.read_text(),preview)
         self.assertIn('Implementation does not start here',preview)
+        self.assertNotIn('private_diff',result)  # complete preview is linked, never duplicated into coordinator status
         journal,state=load_run(self.root);review=state['attempts'][-1]
         self.assertEqual(review['artifact']['files'][str(path)],plans.digest_of(path))
         from .cli import host_hook
@@ -79,27 +80,22 @@ class PrivatePlansTest(unittest.TestCase):
         self.assertEqual(result['last_review']['outcome'],'clean')
         self.assertEqual(result['last_review']['round'],3)
         self.assertEqual(result['last_review']['finding_count'],0)
-        self.assertIn(words,[c[1] for c in self.calls if c[0]=='analysis'][-1])
         from .storage import read_json,digest
         journal,state=load_run(self.root)
         repair=read_json(journal.path/'attempts'/state['attempts'][-2]['id']/'request.json')
-        history=read_json(repair['prior_reviews']['path'])
-        self.assertEqual(digest(history),repair['prior_reviews']['hash'])
-        self.assertEqual(history[0]['id'],first_review[0])
-        self.assertEqual(history[0]['resolution']['choice'],'accept concerns')
-        self.assertIn('not additional task scope',repair['prompt'])
-        # docs/usage.md: human direction survives the next reviewer and blocker-driven repair.
+        packet=read_json(repair['task_context']['path'])
+        history=read_json(packet['findings']['path'])
+        self.assertEqual(digest(history),packet['findings']['hash'])
+        occurrence=history['families'][0]['occurrences'][0]
+        self.assertTrue(occurrence['id'].startswith(first_review[0]+'#'))
+        self.assertEqual(occurrence['decision'],'accept concerns')
+        # Human direction survives the next reviewer and blocker-driven repair.
         for attempt in state['attempts'][2:]:
             request=read_json(journal.path/'attempts'/attempt['id']/'request.json')
-            handoff=json.JSONDecoder().raw_decode(request['prompt'][request['prompt'].index('\n{"task":')+1:])[0]
+            handoff=read_json(request['task_context']['path'])
             self.assertEqual([r['feedback'] for r in handoff['human_refinements']],[words])
             self.assertTrue(handoff['human_refinements'][0]['source'])
-        repair_input=json.JSONDecoder().raw_decode(repair['prompt'][repair['prompt'].index('\n{"task":')+1:])[0]
-        self.assertEqual(json.loads(repair_input['feedback'])[0]['severity'],'blocking')
-        for host in ('codex','claude'):
-            text=prompt_for(self.root,state|{'host':host},state['tasks'][0],'review')
-            handoff=json.JSONDecoder().raw_decode(text[text.index('\n{"task":')+1:])[0]
-            self.assertEqual(handoff['human_refinements'],repair_input['human_refinements'])
+        self.assertEqual(json.loads(packet['remaining_work'])[0]['severity'],'blocking')
         self.assertIn('first delivery slice',Path(result['gate']['preview']).read_text())
         self.assertNotIn('waiting',result);self.assertEqual(plans.approval(self.root,self.where,'0001'),'draft')
         self.say('approve')

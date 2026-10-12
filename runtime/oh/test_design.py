@@ -136,7 +136,7 @@ class DesignRunTest(unittest.TestCase):
                                           'summary': 'Two tasks.'})
         (role, prompt, schema, _), (review, review_prompt, _, seen) = self.calls
         self.assertEqual((role, schema, review), ('analysis', DESIGN_SCHEMA, 'review'))
-        self.assertIn('Writing a design', prompt);self.assertIn('Sign-in with passkeys', prompt)
+        self.assertIn('Sign-in with passkeys',fixtures.task_context(prompt)['task']['instructions'])
         from .runner import prompt_for
         state=load_run(self.root)[1]
         for host in ('codex','claude'):
@@ -185,7 +185,7 @@ class DesignRunTest(unittest.TestCase):
                 result = run(self.root, self.worker([bad, design()]))
                 self.assertEqual(result['status'], 'completed')
                 prompts = [prompt for role, prompt, _, _ in self.calls if role == 'analysis']
-                self.assertIn(words, prompts[1])
+                self.assertIn(words, fixtures.task_context(prompts[1])['remaining_work'])
                 self.assertEqual(sorted(p.name for p in (self.root / 'docs/design').iterdir()), ['0001-auth.md'])
 
     def test_a_repair_rewrites_the_same_doc_from_the_reviewed_parent(self):
@@ -196,20 +196,20 @@ class DesignRunTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.root / 'docs/design').iterdir()), ['0001-auth.md'])
         self.assertIn('# 0001 — Sign-in, split', (self.root / 'docs/design/0001-auth.md').read_text())
         self.assertEqual(self.where['roadmap'].read_text().count('[0001]'), 1)
-        # docs/usage.md: planning repairs see history, and reviewers see author reports.
+        # Planning repairs and reviews receive current claims and complete indexed findings.
         from .storage import digest
         journal,state=load_run(self.root)
         requests=[read_json(journal.path/'attempts'/a['id']/'request.json') for a in state['attempts']]
-        repair=requests[2];history=read_json(repair['prior_reviews']['path'])
-        self.assertEqual(history[0]['findings'][0]['family'],'size')
-        self.assertEqual(digest(history),repair['prior_reviews']['hash'])
-        self.assertIn('whole defect family',repair['prompt'])
-        self.assertIn('not additional task scope',repair['prompt'])
-        for request,count in ((requests[1],1),(requests[3],2)):
-            self.assertEqual(len(request['implementer_reports']),count)
-            for report in request['implementer_reports']:
-                self.assertEqual(digest(read_json(report['path'])),report['hash'])
-                self.assertIn('Sign-in',read_json(report['path'])['structured']['title'])
+        packet=read_json(requests[2]['task_context']['path'])
+        history=read_json(packet['findings']['path'])
+        self.assertEqual(history['families'][0]['family'],'size')
+        self.assertEqual(digest(history),packet['findings']['hash'])
+        for request,author in ((requests[1],state['attempts'][0]),(requests[3],state['attempts'][2])):
+            packet=read_json(request['task_context']['path'])
+            self.assertEqual(packet['current_work']['attempt'],author['id'])
+            self.assertNotIn('implementer_reports',request)
+            ref=packet['current_work']['report']
+            self.assertEqual(digest(read_json(ref['path'])),ref['hash'])
 
     def test_an_owed_decision_is_proposed_without_a_design(self):
         self.design_run()
@@ -370,10 +370,14 @@ class DesignRunTest(unittest.TestCase):
         self.where['roadmap'].write_text(text)
         with self.assertRaisesRegex(Refused, '(?s)Fix the roadmap first.*cycle'):plans.design_manifest(self.root, 'auth')
 
-    def test_retry_gives_a_design_worker_a_fresh_attempt(self):
+    def test_planning_continues_after_external_obstacle_without_new_allowance(self):
         self.design_run()
         self.assertEqual(run(self.root, self.worker([None, None]))['status'], 'needs_attention')
-        choose(self.root, 'retry', self.event('2', 'retry'))
+        from .cli import executable_run
+        before=load_run(self.root)[1]
+        self.assertNotIn('gate',run(self.root,self.worker([])))
+        executable_run(self.root,None)
+        self.assertEqual(load_run(self.root)[1].get('review_grants'),before.get('review_grants'))
         calls = len(self.calls)
         self.assertEqual(run(self.root, self.worker([design()]))['status'], 'completed')
         self.assertEqual([c[0] for c in self.calls[calls:]], ['analysis', 'review'])

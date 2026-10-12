@@ -11,13 +11,20 @@ from . import system
 def launch(root, command, *, controlled=False, timeout=None, interrupt=False, **kwargs):
     from .controls import check
     gate = lock(checkout_file(root, 'oh-control.lock')) if controlled else contextlib.nullcontext()
-    journal=None
+    journal=None;owner_stop=lambda: None;source=None
     with gate:
         if controlled:
             check(root)
             from .workflow import load_run
-            journal,_=load_run(root)
-        child = system.spawn(command, **kwargs)
+            journal,state=load_run(root)
+            from .authority import owner_stop_reader
+            owner_stop=owner_stop_reader(state)
+            source=owner_stop()
+        if not source:child = system.spawn(command, **kwargs)
+    if source:
+        from .controls import request, Interrupted
+        request(root,'stop',expected_run=state['id'],source=source)
+        raise Interrupted('Codex stopped the owning turn; no new step was launched')
     done = threading.Event()
     cancelled = threading.Event()
     reason = []
@@ -31,6 +38,9 @@ def launch(root, command, *, controlled=False, timeout=None, interrupt=False, **
                 # Close them before the consumer waits forever for EOF; keep the leader unreaped.
                 system.stop(child, force=True)
                 return
+            if source:=owner_stop():
+                from .controls import request
+                current=request(root,'stop',expected_run=state['id'],source=source)['status']
             if journal is not None:
                 updated=journal.path.stat().st_mtime_ns
                 if updated!=stamp:

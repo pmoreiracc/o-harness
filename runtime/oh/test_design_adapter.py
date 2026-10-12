@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from . import test_workflow as fixtures
 from .registry import profile_path
 from .storage import atomic_json, read_json, Refused
@@ -29,7 +30,10 @@ class DesignAdapterTest(unittest.TestCase):
         start(self.root,data,self.event())
         observed=[]
         def review_final(*args,**kwargs):
-            if args[4]=='review':observed.append(self.design.read_text())
+            if args[4]=='review':
+                admitted=read_json(args[5]/'request.json')
+                observed.append(Path(next(iter(admitted['artifact']['files']))).read_text())
+                self.assertIn('- [ ] **'+args[6]['task']+'.**',self.design.read_text())
             return self.fake(*args,**kwargs)
         self.assertEqual(run(self.root,review_final)['status'],'checkpoint')
         self.assertIn('- [x] **1.**',observed[0])
@@ -41,6 +45,8 @@ class DesignAdapterTest(unittest.TestCase):
         self.assertIn('delivered: M1',observed[1])
         self.assertEqual(self.git('show','HEAD:docs/design/0900-fixture.md'),observed[1].strip())
         self.assertEqual([x[0] for x in self.calls],['implementation','review','implementation','review'])
+        from .delivery_verify import verify_run
+        verify_run(self.root,load_run(self.root)[1],current=True)
 
     def test_unapproved_or_blocked_design_cannot_become_native_task_scope(self):
         # docs/usage.md: a local approved label cannot replace the merged origin base.

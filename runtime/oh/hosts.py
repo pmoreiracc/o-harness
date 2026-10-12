@@ -7,6 +7,7 @@ import signal
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from .storage import Refused, atomic_json, identifier
 from .system import WINDOWS
 from .telemetry import best_effort
@@ -15,11 +16,18 @@ LENSES=('task-and-design','invariants-and-decisions','affected-surfaces-and-nega
  'correctness-and-failure-paths','security-authorization-and-concurrency',
  'tests-claims-docs-and-generated-artifacts','prior-findings-and-family-closure')
 STRINGS={'type':'array','items':{'type':'string'}}
+from .handoff import READINESS_LISTS, DISPOSITIONS
+READ_ONLY_ROLES=('review','analysis','assessment')
+ASSESSMENT_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['difficulty','rationale','references','uncertainty'],'properties':{
+ 'difficulty':{'type':'string','enum':['simple','standard','complex']},
+ 'rationale':{'type':'string'},'references':STRINGS,'uncertainty':STRINGS}}
 REVIEW_SCHEMA={'type':'object','additionalProperties':False,
  'required':['verdict','summary','findings','evidence'],'properties':{
  'verdict':{'type':'string','enum':['clean','blocking','concern','scope']},'summary':{'type':'string'},
  'findings':{'type':'array','items':{'type':'object','additionalProperties':False,
-   'required':['severity','description','path','family','relation'],'properties':{
+   'required':['severity','description','path','family','relation','anchor','failure','fix'],'properties':{
+     **{key:{'type':'string'} for key in ('anchor','failure','fix')},
      'severity':{'type':'string','enum':['blocking','concern','scope']},'description':{'type':'string'},'path':{'type':'string'},'family':{'type':'string'},'relation':{'type':'string','enum':['original','repeat-family','fix-regression','first-round-escape','newly-exposed','scope']}}}},
  'evidence':{'type':'object','additionalProperties':False,'required':['anchors','lenses','attacks','limits'],
    'properties':{'anchors':STRINGS,'attacks':STRINGS,'limits':STRINGS,
@@ -27,9 +35,19 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
 # Implementation reports keep unrelated observations separate from the authorized change.
-WORK_SCHEMA={'type':'object','additionalProperties':False,'required':['status','summary','found_along_way'],
- 'properties':{'status':{'type':'string','enum':['completed','blocked']},
-               'summary':{'type':'string'},'found_along_way':STRINGS}}
+WORK_SCHEMA={'type':'object','additionalProperties':False,'required':['status','summary','found_along_way','obstacle','readiness'],
+ 'properties':{'status':{'type':'string','enum':['completed','unfinished','blocked']},
+               'summary':{'type':'string'},'found_along_way':STRINGS,
+               'readiness':{'type':['object','null'],'additionalProperties':False,
+                 'required':[*READINESS_LISTS,'prior_findings'],
+                 'properties':{**{key:STRINGS for key in READINESS_LISTS},
+                    'prior_findings':{'type':'array','items':{'type':'object','additionalProperties':False,
+                        'required':['id','disposition','proof'],'properties':{'id':{'type':'string'},
+                            'disposition':{'type':'string','enum':list(DISPOSITIONS)},'proof':{'type':'string'}}}}}},
+               'obstacle':{'type':['object','null'],'additionalProperties':False,
+                 'required':['kind','evidence','next_step'],'properties':{
+                   'kind':{'type':'string','enum':['missing_authority','external_dependency']},
+                   'evidence':{'type':'string'},'next_step':{'type':'string'}}}}}
 
 # A design worker returns prose only; OH adds the number, frontmatter, roadmap link and decision log row.
 DESIGN_SCHEMA={'type':'object','additionalProperties':False,
@@ -182,18 +200,30 @@ def oh_plugins():
     return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
 
 
-def command(host,profile,root,role,schema_path,compact_tokens,artifact_dir=None,*,standalone=False):
+def command(host,profile,root,role,schema_path,artifact_dir=None,*,standalone=False,read_only_paths=(),verification_dir=None):
     if standalone and role!='analysis':raise Refused('Standalone execution is only for read-only insights analysis')
     if host=='codex':
         args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
-          '--config','features.multi_agent=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
+          '--config','features.multi_agent=false','--config','features.apps=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
           '--config',f'model_reasoning_effort="{profile["effort"]}"',
-          '--config',f'model_auto_compact_token_limit={compact_tokens}',
-          '--sandbox','read-only' if role in ('review','analysis') else 'workspace-write',
           '--cd',str(root)]
+        if role=='implementation' and read_only_paths:
+            from .storage import state_home
+            from .config import protected_paths
+            args+=['--strict-config',*codex_document_permissions([*read_only_paths,state_home(),*protected_paths()])]
+        else:args+=['--sandbox','read-only' if role in READ_ONLY_ROLES else 'workspace-write']
         if standalone:args+=['--skip-git-repo-check']
         # Workers never load OH itself: its menu server would run outside their sandbox.
         for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
+        if verification_dir:
+            from .storage import read_json
+            server=verification_server(verification_dir)
+            # Fixed commands and an argument-free tool; no arbitrary execution or state access.
+            config=','.join(key+'='+json.dumps(value) for key,value in server.items() if key!='env')
+            env=','.join(key+'='+json.dumps(value) for key,value in server['env'].items())
+            timeout=read_json(Path(verification_dir)/'request.json').get('verification_timeout',60)
+            operation='admission' if role=='review' else 'verify'
+            args+=['--config','mcp_servers.oh_checks={'+config+',env={'+env+'},enabled_tools=["'+operation+'"],tool_timeout_sec='+str(timeout)+'}']
         if schema_path:args+=['--output-schema',str(schema_path)]
         return args+['-']
     from .storage import state_home
@@ -202,29 +232,51 @@ def command(host,profile,root,role,schema_path,compact_tokens,artifact_dir=None,
     from .config import protected_paths
     protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
     if artifact_dir:protected.append(str(artifact_dir))
-    if role in ('review','analysis'):protected.append(str(root))
+    if role in READ_ONLY_ROLES:protected.append(str(root))
     private=None if standalone else private_plans(root)
     if private:protected.append(str(private))  # workers read private plans; only OH writes them
-    deny=['Agent','Task']+[f'Edit({rule_path(p)}/**)' for p in protected]
+    deny=['Agent','Task']+[f'{tool}({rule_path(p)}/**)' for p in protected for tool in ('Edit','Write')]
+    documents=sorted({str(Path(p).resolve()) for p in read_only_paths})
+    protected+=documents
+    deny += [f'{tool}({rule_path(p)})' for p in documents for tool in ('Edit','Write')]
     if WINDOWS:
         # Claude Code's sandbox doesn't run on native Windows, so workers there get no shell at all: they read
-        # and edit files. OH runs the project's checks after each task and gives the results to the reviewer.
+        # and edit files. Their argument-free verify tool runs configured checks without granting a shell.
         settings={'sandbox':{'enabled':False},'permissions':{'deny':deny+['Bash','PowerShell']}}
-        tools='Read,Glob,Grep' if role in ('review','analysis') else 'Read,Glob,Grep,Edit,Write'
+        tools='Read,Glob,Grep' if role in READ_ONLY_ROLES else 'Read,Glob,Grep,Edit,Write'
     else:
         settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
           'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':deny}}
-        tools='Read,Glob,Grep,Bash' if role in ('review','analysis') else 'Read,Glob,Grep,Bash,Edit,Write'
+        tools='Read,Glob,Grep,Bash' if role in READ_ONLY_ROLES else 'Read,Glob,Grep,Bash,Edit,Write'
+    if verification_dir:settings['permissions']['allow']=['mcp__oh_checks__'+('admission' if role=='review' else 'verify')]
     args=[executable(host,root),'--settings',json.dumps(settings),'--tools',tools,'--print','--output-format','stream-json','--verbose',
           '--model',profile['model'],'--effort',profile['effort'],
-          '--permission-mode','plan' if role in ('review','analysis') else 'acceptEdits',
-          '--permission-prompts','none']
+          '--permission-mode','plan' if role in READ_ONLY_ROLES else 'acceptEdits',
+          '--permission-prompts','none','--strict-mcp-config','--disable-slash-commands']
     if schema_path:args+=['--json-schema',schema_path.read_text()]
     # Every role reads OH's project inputs, admissions and repair feedback. The existing protected
     # paths still deny edits there: adding a readable directory never grants authority to change it.
     if artifact_dir:args+=['--add-dir',str(artifact_dir)]
     if private:args+=['--add-dir',str(private)]
+    if verification_dir:args+=['--mcp-config',json.dumps({'mcpServers':{'oh_checks':verification_server(verification_dir)}})]
     return args
+
+
+def verification_server(directory):
+    import sys
+    from .config import HOME
+    from .storage import state_home
+    return {'command':sys.executable,'args':['-I',str(HOME/'oh'),'worker-checks',str(directory)],
+            'env':{'OH_DATA_HOME':str(state_home())}}
+
+
+def codex_document_permissions(paths):
+    """Invocation-local profile: keep the host's workspace protections, narrow only approved files."""
+    entries=','.join(json.dumps(path)+'="read"' for path in sorted({str(Path(p).resolve()) for p in paths}))
+    # CLI dotted-key parsing does not preserve quoted path segments. Put paths in
+    # a TOML inline table so dots, spaces and Windows separators retain their meaning.
+    return ['--config','default_permissions="oh-delivery"','--config',
+            'permissions.oh-delivery={extends=":workspace",filesystem={'+entries+'}}']
 
 
 def rule_path(path):
@@ -263,6 +315,32 @@ def parse_usage(host,event,attempt):
     return []
 
 
+def public_message(host,event):
+    """Only public assistant text, never reasoning, tool output or a structured final report."""
+    if host=='codex' and event.get('type')=='item.completed':
+        item=event.get('item',{})
+        text=item.get('text') if item.get('type')=='agent_message' else None
+    elif host=='claude' and event.get('type')=='assistant':
+        text=' '.join(part.get('text','') for part in event.get('message',{}).get('content',[])
+                      if part.get('type')=='text')
+    else:return None
+    if not isinstance(text,str) or not text.strip():return None
+    try:json.loads(text)
+    except ValueError:return ' '.join(text.split())[:600]
+    return None
+
+
+def worker_focus(host,event,directory,previous=None):
+    """A bounded latest public update for status; informational, never execution authority."""
+    message=public_message(host,event)
+    if not message or previous and message==previous['message']:return previous
+    from .storage import digest
+    focus={'message':message,'id':digest(message),'updated_at':datetime.now(timezone.utc).isoformat()}
+    try:atomic_json(Path(directory)/'focus.json',focus)
+    except OSError:pass  # a visibility failure cannot interrupt implementation or review
+    return focus
+
+
 def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=None):
     authentication(host,root)
     from .capabilities import validate_profile
@@ -274,37 +352,49 @@ def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeo
     from .storage import state_home
     artifact_dir=(state_home()/'projects'/context['project'] if not context.get('standalone')
                   else attempt_dir.parent.parent)
-    args=command(host,profile,root,role,schema_path,context['compact_tokens'],artifact_dir,
-                 standalone=context.get('standalone',False))
-    started=time.monotonic();final='';usage_seen=False;structured=None;failed=False
+    args=command(host,profile,root,role,schema_path,artifact_dir,
+                 standalone=context.get('standalone',False),read_only_paths=context.get('read_only_paths',()),
+                 verification_dir=attempt_dir if role in ('implementation','review') else None)
+    started=time.monotonic();final='';usage_seen=False;structured=None;failed=False;focus=None
+    reported=set();last_progress=started
     with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
         from .processes import launch
         controlled=context.get('controlled',False)
-        with launch(root,args,controlled=controlled,timeout=timeout,interrupt=True,cwd=root,
-                    env=subscription_env(root)|{'OH_CHILD_ATTEMPT':context['attempt']},
-                    stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error) as (child,cancelled,reason):
-            try:
-                child.stdin.write(prompt.encode());child.stdin.close()
-            except BrokenPipeError:
-                failed=True
-            turn=0
-            for line in child.stdout:
-                raw.write(line)
-                try:event=json.loads(line)
-                except ValueError:continue
-                if event.get('type')=='turn.completed':turn+=1;event['turn_id']=event.get('turn_id',str(turn))
-                for usage in parse_usage(host,event,context['attempt']):
-                    usage_seen=True
-                    best_effort('usage',context['project'],context['run'],context.get('task'),context['attempt'],**usage)
-                if event.get('type')=='item.completed':
-                    item=event.get('item',{})
-                    if item.get('type')=='agent_message':final=item.get('text','')
-                if event.get('type')=='result':
-                    final=event.get('result','');structured=event.get('structured_output')
-                    failed=bool(event.get('is_error'))
-                if event.get('type') in ('turn.failed','error'):failed=True
-            raw.flush();os.fsync(raw.fileno())
-        status=child.returncode
+        from contextlib import nullcontext
+        from .worker_checks import service
+        with service(attempt_dir) if role in ('implementation','review') else nullcontext():
+            with launch(root,args,controlled=controlled,timeout=timeout,interrupt=True,cwd=root,
+                        env=subscription_env(root)|{'OH_CHILD_ATTEMPT':context['attempt']},
+                        stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error) as (child,cancelled,reason):
+                try:
+                    child.stdin.write(prompt.encode());child.stdin.close()
+                except BrokenPipeError:
+                    failed=True
+                turn=0
+                for line in child.stdout:
+                    raw.write(line)
+                    try:event=json.loads(line)
+                    except ValueError:continue
+                    focus=worker_focus(host,event,attempt_dir,focus)
+                    now=time.monotonic()
+                    if focus and focus['id'] not in reported and now-last_progress>=210:
+                        import sys
+                        label='independent reviewer' if role=='review' else 'implementation' if role=='implementation' else 'assessment' if role=='assessment' else 'planning'
+                        print(f"The {label} agent: {focus['message']}",file=sys.stderr,flush=True)
+                        reported.add(focus['id']);last_progress=now
+                    if event.get('type')=='turn.completed':turn+=1;event['turn_id']=event.get('turn_id',str(turn))
+                    for usage in parse_usage(host,event,context['attempt']):
+                        usage_seen=True
+                        best_effort('usage',context['project'],context['run'],context.get('task'),context['attempt'],**usage)
+                    if event.get('type')=='item.completed':
+                        item=event.get('item',{})
+                        if item.get('type')=='agent_message':final=item.get('text','')
+                    if event.get('type')=='result':
+                        final=event.get('result','');structured=event.get('structured_output')
+                        failed=bool(event.get('is_error'))
+                    if event.get('type') in ('turn.failed','error'):failed=True
+                raw.flush();os.fsync(raw.fileno())
+            status=child.returncode
     if schema and structured is None:
         try:structured=json.loads(final)
         except ValueError:pass
@@ -325,12 +415,36 @@ def work_result(result):
     if result['failed']:return 'failed',failure_text(result)
     value=result.get('structured')
     if (not isinstance(value,dict) or set(value)!=set(WORK_SCHEMA['required']) or
-            value.get('status') not in ('completed','blocked') or
+            value.get('status') not in ('completed','unfinished','blocked') or
             not isinstance(value.get('summary'),str) or not value['summary'].strip() or
             not isinstance(value.get('found_along_way'),list) or
             any(not isinstance(note,str) for note in value['found_along_way'])):
-        return 'failed','The implementation report needs an explicit completed or blocked status, a summary and found_along_way'
-    return ('blocked' if value['status']=='blocked' else 'implemented'),value['summary']
+        return 'unfinished','The implementation report needs status, summary, found_along_way, obstacle and readiness. Preserve the implementation and finish the handoff.'
+    obstacle=value['obstacle']
+    if obstacle is not None and (not isinstance(obstacle,dict) or set(obstacle)!= {'kind','evidence','next_step'} or
+            obstacle.get('kind') not in ('missing_authority','external_dependency') or
+            any(not isinstance(obstacle.get(k),str) or not obstacle[k].strip() for k in ('evidence','next_step'))):
+        return 'unfinished','An obstacle needs its kind, concrete evidence and the external action or authority needed. Otherwise continue the approved work.'
+    if value['status']=='blocked' and obstacle:
+        return 'blocked','Obstacle: '+obstacle['evidence']+'\nNext: '+obstacle['next_step']+'\n\n'+value['summary']
+    if value['status']!='completed' or obstacle:
+        return 'unfinished',value['summary']
+    from .handoff import validate_readiness
+    if problem:=validate_readiness(value['readiness']):
+        return 'unfinished',value['summary']+'\nFinish self-review before requesting independent review: '+problem
+    return 'implemented',value['summary']
+
+
+def assessment_result(result):
+    if result['failed']:return 'failed',failure_text(result)
+    value=result.get('structured')
+    if (not isinstance(value,dict) or set(value)!=set(ASSESSMENT_SCHEMA['required']) or
+            value.get('difficulty') not in ('simple','standard','complex') or
+            not isinstance(value.get('rationale'),str) or not value['rationale'].strip() or
+            any(not isinstance(value.get(k),list) or any(not isinstance(x,str) or not x.strip() for x in value[k])
+                for k in ('references','uncertainty')) or not value['references']):
+        return 'unfinished','Difficulty assessment needs a level, scope-based rationale, examined references and remaining uncertainty.'
+    return 'assessed',value['rationale']
 
 
 def review_result(result):
@@ -346,7 +460,7 @@ def review_result(result):
     if value['verdict'] not in REVIEW_SCHEMA['properties']['verdict']['enum']:return 'failed',[]
     if not isinstance(findings,list) or not isinstance(value['summary'],str):return 'failed',[]
     shape=REVIEW_SCHEMA['properties']['findings']['items']
-    if any(not isinstance(f,dict) or set(f)!=set(shape['required'])
+    if any(not isinstance(f,dict) or set(f) not in (set(shape['required']),set(shape['required'])-{'anchor','failure','fix'})
            or any(not isinstance(v,str) for v in f.values())
            or f['severity'] not in shape['properties']['severity']['enum']
            or f['relation'] not in shape['properties']['relation']['enum'] for f in findings):

@@ -92,6 +92,75 @@ class CodexToolsTest(unittest.TestCase):
         init = next(t for t in TOOLS if t['name'] == 'init')
         self.assertEqual(set(init['inputSchema']['properties']), {'root', 'name'})  # never --replace, --attach or --reattach
 
+    def test_worker_check_tool_runs_only_the_bound_projects_checks(self):
+        from .runner import attempt
+        from .workflow import start,load_run
+        from .worker_checks import serve as check_server,service as native_checks
+        self.auto_worker_checks=False
+        fixtures.configure(self.root,checks=[{'name':'original environment','command':[sys.executable,'-c',
+            "import os; assert os.environ['NODE_PATH']=='fixture-only-for-checks'"]}])
+        journal,state=start(self.root,{'tasks':self.tasks[:1]},fixtures.WorkflowTest.event(self))
+        def worker(*args,**kwargs):
+            value=fixtures.WorkflowTest.fake(self,*args,**kwargs)
+            def service(stdin,stdout,launcher):check_server(args[5],stdin,stdout)
+            messages=[{'id':1,'method':'initialize','params':{}},{'id':2,'method':'tools/list','params':{}},
+                      {'id':3,'method':'tools/call','params':{'name':'verify','arguments':{'command':['unsafe']}}},
+                      {'id':4,'method':'tools/call','params':{'name':'run','arguments':{}}},
+                      {'id':5,'method':'tools/call','params':{'name':'verify','arguments':{}}}]
+            with native_checks(args[5]),patch('oh.test_mcp_server.serve',side_effect=service):
+                sent=play(messages)
+                # A real proxy process receives the restricted worker environment. Checks
+                # must still execute in the native parent's original environment.
+                import subprocess
+                from .hosts import subscription_env
+                env=subscription_env(self.root)|{'OH_CHILD_ATTEMPT':'fixture-worker'}
+                self.assertNotIn('NODE_PATH',env)
+                code='import sys,json;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from oh.worker_checks import proxy;print(json.dumps(proxy(Path(sys.argv[2]))))'
+                child=subprocess.run([sys.executable,'-I','-c',code,str(HOME/'runtime'),str(args[5])],
+                                     env=env,capture_output=True,text=True,timeout=15)
+                self.assertEqual(child.returncode,0,child.stderr)
+                self.assertTrue(json.loads(child.stdout)['passed'])
+            results={m['id']:m['result'] for m in sent if 'result' in m}
+            self.assertEqual([t['name'] for t in results[2]['tools']],['verify'])
+            self.assertTrue(results[3]['isError']);self.assertTrue(results[4]['isError'])
+            self.assertTrue(json.loads(results[5]['content'][0]['text'])['passed'])
+            return value
+        with patch.dict(os.environ,{'NODE_PATH':'fixture-only-for-checks'}):
+            result=attempt(self.root,journal,state,state['tasks'][0],'implementation',state['config']['models']['codex']['standard'],invoke=worker)
+        self.assertEqual(result['outcome'],'implemented')
+        records=[r for r in journal.records() if r['kind']=='verification']
+        self.assertEqual(len(records),2)
+        self.assertEqual(records[0]['data']['attempt'],result['id'])
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        def reviewer(*args,**kwargs):
+            from .worker_checks import proxy
+            from .storage import read_json,atomic_json,Refused
+            def service(stdin,stdout,launcher):check_server(args[5],stdin,stdout)
+            with native_checks(args[5]),patch('oh.test_mcp_server.serve',side_effect=service):
+                sent=play([{'id':1,'method':'initialize','params':{}},{'id':2,'method':'tools/list','params':{}},
+                    {'id':3,'method':'tools/call','params':{'name':'verify','arguments':{}}},
+                    {'id':4,'method':'tools/call','params':{'name':'admission','arguments':{}}}])
+                replies={m['id']:m['result'] for m in sent if 'result' in m}
+                self.assertEqual([t['name'] for t in replies[2]['tools']],['admission'])
+                self.assertTrue(replies[3]['isError'])  # reviewer cannot execute the implementer's checks
+                self.assertTrue(json.loads(replies[4]['content'][0]['text'])['valid'])
+                packet=args[5]/'task-context.json';original=read_json(packet)
+                atomic_json(packet,original|{'task':original['task']|{'title':'tampered scope'}})
+                with self.assertRaisesRegex(Refused,'JSON binding changed'):proxy(args[5])
+                atomic_json(packet,original)
+                (self.root/'output.txt').write_text('later edit')
+                with self.assertRaisesRegex(Refused,'no longer matches'):proxy(args[5])
+                (self.root/'output.txt').write_text(str(len(self.calls)))
+            return fixtures.WorkflowTest.fake(self,*args,**kwargs)
+        state=load_run(self.root)[1]
+        before=len([r for r in journal.records() if r['kind']=='verification'])
+        reviewed=attempt(self.root,journal,state,state['tasks'][0],'review',state['config']['models']['codex']['review'],invoke=reviewer)
+        self.assertEqual(reviewed['outcome'],'clean',reviewed.get('summary'))
+        self.assertEqual(len([r for r in journal.records() if r['kind']=='verification']),before)
+        from .worker_checks import admission
+        from .storage import Refused
+        with self.assertRaisesRegex(Refused,'current running review'):admission(Path(reviewed['evidence']))
+
     def test_confirm_waits_for_the_person_and_never_answers_for_them(self):
         codex_session(self.home, 't1', self.root)
         def ask(arguments, reply, capabilities=None):
@@ -296,7 +365,13 @@ class CodexToolsTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             run(self.root, lambda *a, **k: fixtures.WorkflowTest.fake(self, *a, **k))
-        self.assertIn('task 1: One',err.getvalue())
+        messages=err.getvalue().splitlines()
+        self.assertEqual(len(messages),4)  # implementation (including checks) and review start/finish
+        self.assertIn('task 1: One',messages[0])
+        self.assertIn('no findings',messages[-1])
+        with contextlib.redirect_stderr(err):
+            run(self.root, lambda *a, **k: fixtures.WorkflowTest.fake(self, *a, **k))
+        self.assertEqual(err.getvalue().splitlines(),messages)  # completed batches emit nothing twice
         self.assertEqual(out.getvalue(),'')  # progress stays off the machine-readable result stream
 
     def test_a_cancelled_call_gets_no_reply_and_an_unexpected_error_gets_one(self):
@@ -352,6 +427,8 @@ class CodexToolsTest(unittest.TestCase):
         self.assertLess(order.index(3), order.index(2))  # the ping was answered while the run worked
         progress = next(m for m in sent if m.get('method') == 'notifications/progress')
         self.assertEqual(progress['params'], {'progressToken': 'p', 'progress': 1, 'message': 'OH task 1: implementation'})
+        self.assertEqual(len([m for m in sent if m.get('method')=='notifications/progress']),2)
+        # The server forwards the launcher's two real events; waiting adds no heartbeat.
 
     def test_an_oh_refusal_is_the_tool_s_error(self):
         self.assertEqual(self.call('deliver', {'root': str(self.root), 'arguments': ['fail']}), ('OH: nothing to run', True))

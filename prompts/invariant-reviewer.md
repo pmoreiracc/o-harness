@@ -4,7 +4,14 @@ Every review, including plan, design, ad-hoc tooling and any request described a
 “advisory,” must have an immutable OH admission before reading the subject.
 Read the `request.json` supplied by `OH NATIVE REVIEW ADMISSION:`. Validate its task,
 root, HEAD, tree, configuration and harness bindings against the actual subject. Validate
-any supplied diff, artifact, implementer-report and prior-review hashes.
+any supplied diff, artifact, task-context and finding-index hashes. Older admissions may
+instead bind implementer-report and prior-review manifests; honor those recorded bindings.
+For a current runner admission, call `oh_checks admission` first. This read-only native
+tool verifies those mechanical bindings against the exact runtime that admitted you.
+Match its attempt/task to the supplied request, then review the consumer's subject.
+Do not reconstruct OH's hashing algorithms or search other installed OH versions.
+The native validation proves the bindings only; it says nothing about product correctness.
+For an older admission without this tool, validate its recorded bindings as described below.
 `sha256` and artifact `files` values hash raw file bytes. JSON `hash` values use SHA-256 of
 UTF-8 JSON encoded with sorted keys, compact separators (`,`, `:`), and `ensure_ascii=False`;
 parse the JSON before encoding it this way. They are not hashes of the formatted file bytes. When reviewing
@@ -42,11 +49,28 @@ opinion, read:
 If a doc required by the project does not exist, that is itself a finding — say which one
 and why the change cannot be judged without it. Do not invent documentation requirements.
 
-For a delivery review, the admitted request contains the immutable implementing-agent
-reports and prior-review manifest. Read those exact attempt files.
-The implementer wrote those claims: they are an attack map, never evidence and never the
-boundary of your review. A missing start-bound report when an implementer ran is a runner
-failure, not something you waive in prose.
+Read the admitted current task packet, its latest readiness report and complete finding
+index, including returned reports without a completed verdict. Prior author reports are
+consulted only for a specific unresolved question; their accumulation is not required
+review context. Validate the packet and index bindings before using their contents.
+The implementer wrote the readiness claims: they are an attack map, never proof and never
+the boundary of your review. A missing bound current report when an implementer ran is a
+runner failure, not something you waive in prose.
+
+For implementation reports with `readiness`, challenge the requirement-to-proof mapping,
+self-review outcomes and each repair diagnosis against the approved behavior and actual
+code. A passing check does not establish that its assertion is correct. When code or tests
+were changed to repair a failure, establish which was wrong and whether the correction
+preserves the required behavior and meaningful failure coverage. Report a concrete defect
+when a green check masks lost behavior or an unauthorized requirement change. This belongs
+to the existing task/design and tests lenses, without a separate review or approval stage.
+
+Cover the full affected task in the first round, even after finding a blocker. Trace complete
+operations from accepted inputs through stored state to returned results. Where applicable,
+challenge combinations of individually valid limits, replay after authorization changes,
+and exact public error contracts. An isolated boundary test or a test accepting any exception
+does not prove those complete paths. Use the changed-file index to keep source, tests and
+affected documentation visible when generated artifacts dominate the diff.
 
 **Never cite a rule you have not read in this session.** A confidently misquoted
 invariant is worse than a missed one: it sends the implementer to fix the wrong thing.
@@ -172,10 +196,12 @@ or tool output does not replace it. Never finish with only “report delivered�
 count, even if you already sent the full report elsewhere.
 
 Return the native JSON schema supplied by OH (`hosts.REVIEW_SCHEMA`). Put every finding
-in `findings`, most severe first, with `severity`, `description`, `path`, `family` and
-`relation`. In `description`, include the anchor actually read (or `none — a defect`),
-the concrete inputs and failure outcome, and the smallest remedy. A plan's `path` names
-its step. Put the verdict in `verdict` and the concise report in `summary`.
+in `findings`, most severe first, with `severity`, `description`, `path`, `family`,
+`relation`, `anchor`, `failure` and `fix`. Keep `description` to the short claim.
+Use `anchor` for the requirement actually read (or `none — a defect`), `failure` for
+the concrete inputs and observable wrong outcome, and `fix` for the smallest correction
+that closes the family. A plan's `path` names its step. Put the verdict in `verdict`
+and the concise report in `summary`.
 
 Use `blocking`, `concern` and `scope` with the same meanings as the markers below.
 

@@ -311,7 +311,7 @@ class GateTest(unittest.TestCase):
             self.assertEqual(len(load_run(self.root)[0].records()),count)
 
     def test_large_menus_bound_the_handoff_and_preserve_complete_details(self):
-        """docs/usage.md: long approval and recovery menus link complete retained reports."""
+        """docs/usage.md: long decisions link complete retained reports; recovery has no menu."""
         from .config import load
         from .gates import describe,review_history,summary
         from .storage import digest,read_json
@@ -329,6 +329,11 @@ class GateTest(unittest.TestCase):
                                 'summary':'raw protocol','human_summary':'Timeout remains'}]
             state['scope_records']={'r':{'action':'route','destination':{'design':'design.md'},'findings':[scope]}}
             state['granted']=['0'];state['summaries']=[{'commit':'completed-task'}]
+            state.pop('workflow',None)
+            if status=='needs_attention':
+                for workflow in ('deliver','design','propose'):
+                    self.assertIsNone(describe(journal,state|{'workflow':workflow}))
+                continue
             gate=describe(journal,state)
             self.assertLessEqual(len(summary(state)),8000)
             self.assertLess(len(json.dumps(ask(gate)))+len(gate['summary']),state['config']['context']['handoff_chars'])
@@ -361,6 +366,13 @@ class GateTest(unittest.TestCase):
             self.assertIn('Scope: '+action+'; design: design.md',history)
             self.assertIn('scope: Future work',history)
             self.assertEqual(history.split('Open findings: ')[1],'blocking: Fix timeout')
+        from .handoff import coordinator_view
+        proposal={'route':'roadmap','summary':'Large approved subject','text':'full details '*10000,'choices':['approve','refine','cancel']}
+        view=coordinator_view(journal,proposal,4000)
+        self.assertLess(len(json.dumps(view)),4000)
+        self.assertEqual(read_json(view['details']),proposal)
+        self.assertEqual(view['hash'],digest(proposal))
+        self.assertEqual(view['choices'],proposal['choices'])
 
     def test_a_click_on_claude_is_read_from_its_transcript_and_applied(self):
         question = self.begin('claude')['gate']['ask']['questions'][0]
@@ -692,7 +704,13 @@ class GateTest(unittest.TestCase):
         self.begin('codex')
         pending=[(host,self.staged_conversation(host,session)[0]) for host,session in
                  (('codex','a'),('claude','other-host'),('codex','b'))]
-        sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}})
+        records=load_run(self.root)[0].records()
+        def delayed():
+            # The blocking tool keeps the decision pending without another coordinator call.
+            import time
+            time.sleep(.1)
+            self.assertEqual(load_run(self.root)[0].records(),records)
+        sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}},while_open=delayed)
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
         self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
         self.assertIn('Recorded', text)
@@ -707,22 +725,17 @@ class GateTest(unittest.TestCase):
             self.assertIn('Superseded',read_json(used_file(self.root,human_event(payload,host)))['refused'])
         self.delayed_menu_commands(superseded=True)
 
-        # Publication is a handoff to push/PR, not another execution of the task runner.
+        # Publication uses a native human reply so Codex and OH share the same permission.
         self.begin('codex')
         self.git('remote','add','origin','https://user:secret@github.com/example/product.git?token=private')
-        with patch('oh.branches.fetched',return_value='main'):  # display fixture URLs, never contact GitHub
-            sent,text=self.server(self.root,{'action':'accept','content':{'choice':'pr'}})
-        shown=next(m for m in sent if m.get('method')=='elicitation/create')['params']
-        question=shown['message']
-        publication=json.loads(text)['publication']
-        offered=' '.join(shown['requestedSchema']['properties']['choice']['enumNames'])
-        self.assertNotIn(publication['head'][:12],question)
-        self.assertNotIn(publication['head'][:12],offered)
-        self.assertEqual(shown['requestedSchema']['properties']['choice']['enumNames'],['Continue','Open a PR','Stop and take over'])
-        self.assertNotIn('.git',offered);self.assertNotIn('secret',offered);self.assertNotIn('private',offered)
-        self.assertIn('Execution is finished',publication['next'])
-        self.assertNotIn('Call `run`',text)
-        self.assertEqual(load_run(self.root)[1]['status'],'pr')
+        sent,text=self.server(self.root,{'action':'accept','content':{'choice':'pr'}})
+        self.assertFalse(any(m.get('method')=='elicitation/create' for m in sent))
+        requested=json.loads(text)
+        question=requested['native_ask']['questions'][0]
+        self.assertIn('https://github.com/example/product.git',question['title'])
+        self.assertIn('pushes the reviewed repository code',question['title'])
+        self.assertNotIn('secret',text);self.assertNotIn('private',text)
+        self.assertEqual(load_run(self.root)[1]['status'],'checkpoint')  # an MCP result never grants publication
 
         # Short native labels still bind the actual human click to the exact saved publication scope.
         self.begin('codex')
@@ -731,7 +744,7 @@ class GateTest(unittest.TestCase):
         gate=checkpoint(self.root)['gate'];question=gate['native_ask']['questions'][0]
         self.assertIn('request_user_input_async',gate['how'])
         self.assertNotIn('right panel',gate['how'])
-        self.assertNotIn('github.com',question['title'])
+        self.assertIn('github.com',question['title'])
         self.assertEqual(question['options'],['Continue','Open a PR','Stop and take over'])
         from .test_mcp_server import codex_session
         codex_session(self.home,'s',self.root)
@@ -751,6 +764,11 @@ class GateTest(unittest.TestCase):
         with patch.dict(os.environ,{'CODEX_THREAD_ID':'s','CODEX_HOME':str(self.home/'.codex'),'OH_CODEX_TURN_ID':''}), patch('oh.branches.fetched',return_value='main'):
             self.assertEqual(materialize(self.root)['status'],'pr')
         self.assertEqual(checkpoint(self.root)['publication']['head'],self.git('rev-parse','HEAD'))
+        self.assertEqual(checkpoint(self.root)['publication']['destination'],'ssh://github.com/example/product.git')
+        self.git('remote','set-url','origin','git@github.com:example/different.git')
+        from .publication import render
+        with patch('oh.branches.fetched',return_value='main'),self.assertRaisesRegex(Refused,'destination changed'):
+            render(self.root)
 
     def delayed_menu_commands(self,superseded):
         """A native command predates the menu click, but reaches OH only after its cleanup finished."""
@@ -851,9 +869,10 @@ class GateTest(unittest.TestCase):
         config = self.home / 'codex-home/config.toml';config.parent.mkdir(parents=True)
         config.write_text('[plugins."o-harness@o-harness"]\nenabled = true\n[plugins."other@x"]\nenabled = true\n', newline='\n')
         with patch('oh.hosts.executable', return_value='codex'), patch.dict(os.environ, {'CODEX_HOME': str(config.parent)}):
-            args = command('codex', {'model': 'm', 'effort': 'low'}, self.root, 'implementation', None, 1000)
+            args = command('codex', {'model': 'm', 'effort': 'low'}, self.root, 'implementation', None)
         self.assertIn('plugins."o-harness@o-harness".enabled=false', args)
         self.assertFalse(any('other@x' in a for a in args))
+        self.assertFalse(any('model_auto_compact_token_limit' in a for a in args))
 
     def test_each_host_gets_its_own_menu_mechanism(self):
         from .installation import build
