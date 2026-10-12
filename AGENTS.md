@@ -1,21 +1,54 @@
 # Working on OH
 
+These instructions guide development of OH itself. Use the product goals below to
+evaluate every proposed fix or improvement to OH.
+
 Read `config/invariants.json`, `CONTRIBUTING.md` and the relevant implementation.
 OH has no mandatory ADR process. Product policies belong to consumers.
+
+For workflow changes, use the golden reference in `my-geoffrey` at tag
+`harness-before-separation` (`b508bdc`) as a strong reference point. Consult the relevant
+skill and supporting scripts before redesigning a working flow. Prefer its proven approach
+when it fits OH's goals; explain a concrete reason when departing from it. Its implementation
+and Geoffrey-specific policies are not requirements for OH.
+
+## Product goals and experience
+
+OH helps independent developers turn an idea into code they can confidently ship,
+with less supervision than prompting an agent directly. Approved work should be
+easier to complete with OH than with a simple skill.
+
+- **Clear work:** Propose shapes the idea; Design defines scope, ordered tasks and
+  acceptance checks; Deliver builds approved designs or bounded quick fixes.
+- **Autonomous delivery:** Approved work progresses automatically within its scope.
+  Project checks and a fresh independent reviewer establish whether it is ready;
+  blocking findings are repaired before reviewed work is committed.
+- **Minimal interruption:** Routine failures are repaired within existing authority.
+  The developer should not need to repeat valid commands, manage agents or debug OH.
+  Questions belong to real decisions, missing authority or unavoidable external actions.
+- **Useful visibility:** Show meaningful transitions and short results: what changed,
+  what was checked, what review found and what remains unresolved. Repeating unchanged
+  status does not improve confidence.
+- **Human control:** Scope stays fixed. The developer controls further allowances and
+  publication, and decides what ships. Agent claims never substitute for human approval.
+- **Natural fit:** Support Claude and Codex through existing subscriptions across
+  macOS, Linux and Windows. Respect each project's standards and keep OH configuration
+  outside consumer repositories.
+
+Judge changes by the complete developer workflow, not by what makes an isolated test pass.
+Do not weaken useful production behavior just to accommodate a local test setup.
+Explain changes through what the developer will see or do, with a brief before/after example
+when useful; internal mechanism names alone do not explain the behavior.
+
+## Development workflow
 
 Use branches from main, independent review, and human-merged PRs. Keep the coordinator
 small: the native OH runner owns automatic task execution; do not reproduce its loop in
 the parent conversation. Parallel task implementation is deferred.
 
-The standard is whether OH helps a developer complete the work with quality.
-OH must make approved work easier than prompting an AI directly or using a simple skill.
 Reliable execution with minimal interruption is a development requirement on both Claude
 and Codex, across macOS, Linux and Windows. Reuse the working host entry paths and shared
 runner; prefer the smallest complete fix over new machinery, abstractions or approval gates.
-Judge changes by the complete developer workflow, not by what makes an isolated test pass.
-Do not weaken useful production behavior just to accommodate a local test setup.
-Explain changes through what the developer will see or do, with a brief before/after example
-when useful; internal mechanism names alone do not explain the behavior.
 
 Handle routine recoverable failures automatically within the existing authorization:
 preserve valid commands and choices, repair what OH owns, and retry with a short bounded
@@ -32,11 +65,14 @@ is for developing OH, not an extra gate in a consumer's delivery workflow.
 
 A fresh `invariant-reviewer` must review each change through the shared prompt and a
 bound immutable admission before publication. Use the configured review profile. Apply
-all lenses in one round, preserve every finding, and fix blockers. Reviews are read-only.
+all lenses together in each review round, preserve every finding, and fix blockers.
+Reviews are read-only.
 Do not resume a completed reviewer. Never treat model prose as a human grant.
 
-Run affected checks with `./oh verify origin/main` (needs this checkout registered with
-its checks) or `bash integrations/test.sh native|syntax`. Do not read old backlog files.
+Run affected checks and syntax with `./oh verify origin/main` (needs this checkout
+registered with its checks), or run `bash integrations/test.sh affected origin/main`
+and `bash integrations/test.sh syntax`. Use `bash integrations/test.sh native` when
+the full behavioral suite is needed. Do not read old backlog files.
 
 Keep tests as fast as practical while preserving required behavioral coverage. Avoid runtime
 regressions and use measured durations to find unnecessary work; there is no fixed time limit.
