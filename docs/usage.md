@@ -266,9 +266,14 @@ Reinvoking the same Deliver design from a fresh session at a saved completed-tas
 to that decision. An updated OH runtime verifies the retained commit and plan evidence before
 taking over; task/review allowances and any recorded publication choice remain unchanged.
 No implementation, checks or review are repeated just to reopen that gate.
-If publication was already chosen and the branch now has later descendant commits, a new session
-resumes observation of the existing PR. Those commits are not covered by the earlier OH review;
-the retained publication grant cannot push them or create a new PR for them.
+Publication approval and successful PR creation are separate records. OH verifies the PR against
+the approved repository, branch/base and commit before recording publication. Interrupted
+publication discovers and reuses an existing PR, including in older runs without this receipt.
+Resume of a published run reports that delivery finished and links the PR; it transfers no
+ownership and starts no tasks or new publication gate. Opening a session alone does nothing.
+Later commits do not inherit the saved OH review. Merged or closed PRs remain finished cycles.
+A new Deliver command follows normal admission for the next approved work; the previous
+delivery branch must be merged or resolved before it can hold another batch.
 On the normal publication path, the chat links the PR and observes CI for its current commit.
 It reports pending, failed or unavailable checks honestly, diagnoses failures and gives a concrete
 next step. A changed PR head needs fresh CI observations and is not covered by an earlier OH review.
@@ -342,10 +347,11 @@ execution. Covered by `test_stop_during_check_cancels_owned_group_and_preserves_
 
 - `/oh-pause` finishes the current step, then waits. The status is PAUSING until it is
   quiet, then PAUSED.
-- `/oh-resume` continues the same batch with what is left of its approval.
-- `/oh-stop` stops the batch and keeps all files, commits and evidence. `/oh-resume` does
-  not restart a stopped batch. Explicitly invoking `/oh-deliver NNNN [track]` again can
-  continue its saved unfinished task with the remaining authority. It does not renew
+- `/oh-resume` continues unfinished work with what is left of its approval, in the same
+  checkout on either host. If its PR already exists, it reports the finished delivery instead.
+- `/oh-stop` stops the batch and keeps all files, commits and evidence. Explicitly invoking
+  `/oh-resume` or `/oh-deliver NNNN [track]` again can continue saved unfinished work with
+  the remaining authority. It does not renew
   a spent review window or accept findings; new scope still needs approval.
 
 If the agent is busy, run `oh --root <project> pause` or `oh --root <project> stop` in a

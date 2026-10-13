@@ -103,6 +103,12 @@ def reduce(records):
             selected=next(t for t in state['tasks'] if t['id']==d['task'])
             selected.update(difficulty=d['difficulty'],difficulty_reason=d['rationale'])
         elif kind=='task.completed':state['done'].append(d['task']);state['summaries'].append(d)
+        elif kind=='publication.completed':
+            grant=state.get('publication') or {}
+            if state['status']!='pr' or d['run']!=state['id'] or (d['grant'],d['approved_head'])!=(grant.get('source'),grant.get('head')):
+                raise Refused('Publication receipt does not match this run\'s approval')
+            if state.get('published') and state['published']!=d:raise Refused('Publication receipt cannot be replaced')
+            state['published']=d
         elif kind=='attempt.started':state['attempts'].append({'host':state['host']} | d | {'finished':False,'started_at':record['at']})
         elif kind=='attempt.admitted':
             admitted=next(a for a in state['attempts'] if a['id']==d['id'])
@@ -270,6 +276,7 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
 def _choose(root, choice, event):
     from .runner import approved
     journal,state=load_run(root)
+    if state.get('published'):raise Refused('This delivery already finished: '+state['published']['url']+'. Use Deliver for further approved work.')
     events=[]
     def append(kind,data):events.append({'kind':kind,'data':data})
     if (event['host'],event['session'])!=(state['host'],state['human']['session']):
@@ -529,14 +536,20 @@ def reopen(root,state,event):
     journal=Journal(state['project'],state['id'])
     with settled_owner(root):
         current=reduce(journal.records())
-        owned(root,journal,current,event)
+        if current['status']!='pr':owned(root,journal,current,event)
         atomic_json(active_file(root),{'project':current['project'],'run':current['id'],'checkout':checkout_id(root)})
+    if current['status']=='pr':return carry_on(root,event)
     return checkpoint(root)
 
 
 def carry_on(root,event):
     """A current human invocation moves control of retained work, never its authority."""
     _,before=load_run(root)
+    if before['status']=='pr' and before.get('publication',{}).get('destination'):
+        from .publication import reconcile
+        result=reconcile(root)
+        if result['run']!=before['id']:raise Refused('The active run changed; inspect the current work before continuing.')
+        if result.get('published'):return result
     source=digest({k:event[k] for k in ('host','session','turn','prompt')})
     if source in before['decisions'] or any(c['source']==source for c in before.get('continuations',[])):
         return checkpoint(root)
@@ -575,10 +588,7 @@ def owned(root,journal,state,event):
         last=state['summaries'][-1]
         if any(not a.get('finished') for a in state['attempts']) or changes(root):
             raise Refused('The checkout differs from OH’s completed delivery work; preserve new edits before continuing.')
-        later=(state['status']=='pr' and state.get('publication',{}).get('head')==last.get('commit') and
-               run_git(root,'merge-base','--is-ancestor',last['commit'],head).returncode==0)
-        if ((head!=last.get('commit') and not later) or
-                (head==last.get('commit') and git(root,'rev-parse','HEAD^{tree}')!=last.get('tree'))):
+        if head!=last.get('commit') or git(root,'rev-parse','HEAD^{tree}')!=last.get('tree'):
             raise Refused('The checkout differs from OH’s completed delivery work; preserve the edits and reconcile that difference before reopening its decision.')
         from .delivery_verify import verify_run
         verify_run(root,state,current=True)
@@ -697,8 +707,9 @@ def checkpoint(root):
             if state['status']=='needs_attention' else {}) | (
             {'model_notices':model_notices} if model_notices else {}) | (
             {'last_review':last_review} if last_review else {}) | running_progress(state,journal.path) | (
-            {'publication':state['publication']|{'observe_only':bool(state.get('publication_observe_only')),'next':('The branch contains later commits. Observe the existing PR on the recorded destination; do not push or describe later work as reviewed.' if state.get('publication_observe_only') else 'Execution is finished. Use pr_summary, push only publication.head to publication.branch on publication.remote, and open one PR targeting publication.base_branch. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.' if state['publication'].get('destination') and not state.get('publication_changed') else 'Confirm the current publication destination with the returned native question; all completed work and review are retained.')}}
-            if state['status']=='pr' and state.get('publication') else {}) | (
+            {'published':state['published'],'publication_status':'last verified'} if state.get('published') else {}) | (
+            {'publication':state['publication']|{'next':('Execution is finished. Call publication to check for an existing PR before pushing. If none exists, use pr_summary, push only publication.head to publication.branch on publication.remote, and open one PR targeting publication.base_branch. Call publication again to record the verified result. Do not ask for PR approval again or repeat implementation/review.' if state['publication'].get('destination') and not state.get('publication_changed') else 'Confirm the current publication destination with the returned native question; all completed work and review are retained.')}}
+            if state['status']=='pr' and state.get('publication') and not state.get('published') else {}) | (
             {'handoff':state['review_handoff']|{'next':'OH stopped with unresolved work for human PR triage. No task completion, review renewal or publication approval was granted.'}}
             if state.get('review_handoff') else {})|(
             {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}

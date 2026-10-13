@@ -103,6 +103,11 @@ def host_hook(root,host,payload,*,verified,idea=None,request=None):
             from .delivery import finished
             name=delivery_branch(delivery['doc'],delivery['track'])
             if base:=to_delivery(root,name):
+                if active_file(root).exists():
+                    _,prior=load_run(root)
+                    if prior.get('published') and prior['branch']==name:
+                        raise Refused('The previous delivery is already published: '+prior['published']['url']+
+                                      '. Its branch still has unmerged work. Finish or resolve that PR before delivering the next batch on this branch, or select another approved task.')
                 if again:=finished(root,delivery['doc'],delivery['track'],name,verified):return again
                 refresh(root,name,base)
             from .delivery import selection
@@ -166,6 +171,10 @@ def executable_run(root,admitted):
     _,state=load_run(root)
     if admitted and admitted.get('run') and admitted['run']!=state['id']:
         raise Refused('That command belongs to an earlier run. Use status to inspect the current run; no work was started.')
+    if admitted and admitted.get('published'):
+        if admitted['published'].get('id')!=(state.get('published') or {}).get('id'):
+            raise Refused('The publication result does not match the current run; inspect its saved status.')
+        return  # reporting a verified finished cycle needs no execution owner
     if admitted is None and state['status'] in ('stopped','completed','pr'):
         raise Refused('No new OH command was recognized. The previous run is '+state['status']+
                       '; use status to inspect it, or invoke the intended OH skill in this checkout.')
@@ -213,6 +222,7 @@ def main(argv=None):
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
     worker_checks=sub.add_parser('worker-checks',help=argparse.SUPPRESS);worker_checks.add_argument('attempt',type=Path)
     publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?');publication.add_argument('--validate-event',type=Path)
+    published=sub.add_parser('publication');published.add_argument('--pr',type=int)
     trusted=sub.add_parser('trust-host');trusted.add_argument('host',choices=['codex','claude']);trusted.add_argument('path',type=Path,nargs='?')
     init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
@@ -261,6 +271,10 @@ def main(argv=None):
             result=run(root,args.base,args.mode)
             print(json.dumps(result,indent=2))
             raise SystemExit(1 if any(check_failed(x) for x in result) else 0)
+        elif args.command=='publication':
+            from .publication import reconcile
+            if args.pr is not None and args.pr<=0:raise Refused('The PR number must be positive')
+            result=reconcile(root,args.pr)
         elif args.command=='pr-summary':
             from .publication import has_native_history,reference,render,validate_event
             args.base=args.base or reference(root)
@@ -327,6 +341,9 @@ def main(argv=None):
         elif args.command=='resume':
             from .authority import materialize
             admitted=materialize(root)
+            if admitted and admitted.get('published'):
+                executable_run(root,admitted)
+                print(json.dumps(admitted,indent=2));return
             executable_run(root,admitted)
             from .workflow import load_run
             _,state=load_run(root)
@@ -339,6 +356,9 @@ def main(argv=None):
         elif args.command in ('run','start'):
             from .authority import materialize
             admitted=materialize(root)
+            if admitted and admitted.get('published'):
+                executable_run(root,admitted)
+                print(json.dumps(admitted,indent=2));return
             if admitted and admitted.get('note'):print(admitted['note'],flush=True)
             if admitted and admitted.get('continuation'):print(admitted['continuation']['message'],file=sys.stderr,flush=True)
             if admitted and (admitted.get('waiting') or admitted.get('prepare') or admitted.get('kind') in ('quick_fix','list') or admitted.get('authorized') is False):
@@ -383,6 +403,9 @@ def main(argv=None):
             else:
                 from .authority import materialize
                 admitted=materialize(root)
+                if admitted and admitted.get('published'):
+                    executable_run(root,admitted)
+                    print(json.dumps(admitted,indent=2));return
                 if admitted and admitted.get('continuation'):print(admitted['continuation']['message'],file=sys.stderr,flush=True)
                 if admitted and admitted.get('waiting'):
                     print(json.dumps(admitted,indent=2));return

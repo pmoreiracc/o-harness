@@ -119,16 +119,33 @@ class DeliveryTest(unittest.TestCase):
                         case.git('remote','add','origin','https://github.com/example/fixture.git')
                         with patch('oh.branches.fetched',return_value='origin/main'):choose(case.root,'pr',human)
                         grant=load_run(case.root)[1]['publication']
-                        # Later user commits only allow observation, never republishing as reviewed.
+                        # Later commits prove no publication. GitHub confirms the original reviewed head is in the PR.
                         case.git('commit','--allow-empty','-qm','Human post-publication change')
-                        with patch('oh.config.version',return_value='publication-runtime'):
-                            resumed=case.start_delivery(turn='publication-boundary',host=target,session='publication-chat')
-                            self.assertEqual(resumed['next_action']['kind'],'observe_publication')
-                            self.assertTrue(resumed['publication']['observe_only'])
+                        from .test_workflow import pull_request
+                        pr=pull_request(load_run(case.root)[1],head=case.git('rev-parse','HEAD'))
+                        def github(root,host,endpoint,**kw):
+                            if '/commits?' in endpoint:return [{'sha':grant['head']},{'sha':pr['head']['sha']}]
+                            return [pr] if kw.get('pages') else pr
+                        with patch('oh.config.version',return_value='publication-runtime'),patch('oh.publication.github',side_effect=github):
+                            event=human_event({'hook_event_name':'UserPromptSubmit','session_id':'publication-chat','turn_id':'resume','prompt':'/oh-resume'},host)
+                            resumed=host_hook(case.root,host,{'prompt':'/oh-resume'},verified=event)
+                            self.assertEqual(resumed['next_action']['kind'],'published')
+                            self.assertEqual(resumed['published']['number'],144)
                             self.assertNotIn('gate',resumed)
                             self.assertEqual(load_run(case.root)[1]['publication'],grant)
+                            self.assertEqual((load_run(case.root)[1]['host'],load_run(case.root)[1]['human']['session']),(target,'gate-chat'))
                             from .publication import render
                             with self.assertRaises(Refused):render(case.root,base='origin/main')
+                            with patch('oh.branches.to_delivery',return_value='origin/main'):
+                                with self.assertRaisesRegex(Refused,'previous delivery is already published'):
+                                    case.start_delivery(turn='before-merge',host=host,session='publication-chat')
+                            refresh.assert_not_called()  # no new tasks merged into an open PR
+                            case.git('switch','-q','main');case.git('merge','-q','deliver/0001')
+                            case.git('update-ref','refs/remotes/origin/main','HEAD')
+                            with patch('oh.branches.fetched',return_value='origin/main'):
+                                fresh=case.start_delivery(turn='after-merge',host=host,session='publication-chat')
+                            self.assertNotEqual(fresh['run'],before['id'])
+                            self.assertEqual([t['id'] for t in load_run(case.root)[1]['tasks']],['2'])
                     self.assertEqual([c[0] for c in case.calls],['implementation','implementation','review'])
                 finally:case.doCleanups()
 
@@ -357,11 +374,13 @@ class DeliveryTest(unittest.TestCase):
             self.assertEqual(load_run(self.root)[1]['harness_version'],'new-completion-runtime')
             self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertEqual(load_run(self.root)[1]['human']['session'],'new')
-        _choose(self.root,'pr',self.event('pr','pr')|{'session':'new'})
+        self.git('remote','add','origin','https://github.com/example/fixture.git')
+        with patch('oh.branches.fetched',return_value='origin/main'):
+            _choose(self.root,'pr',self.event('pr','pr')|{'session':'new'})
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
         # The person amends OH's last commit: OH can't offer that head's PR any more, and says so once.
         (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-q','--amend','--no-edit')
-        with self.assertRaises(Refused):typed('new',turn='amended')
+        with patch('oh.publication.github',return_value=[]),self.assertRaisesRegex(Refused,'later or different work'):typed('new',turn='amended')
 
     def stopped_in_conflict(self,location='repo'):
         """A delivery stopped after task 1 while someone else's change on main touches the file it wrote."""
@@ -590,9 +609,17 @@ class DeliveryTest(unittest.TestCase):
                 self.assertIn('required by blocker-plus-scope policy',path.read_text())
                 self.assertEqual(undo_notes(path.read_text(),state['scope_records'].values()).replace('- [x] **1.**','- [ ] **1.**'),original.decode())
                 self.assertEqual(plans.approval(self.root,where,'0001'),'approved')
-                choose(self.root,'pr',self.event('pr','pr'));self.assertIn('logout',render(self.root))
-                # A later delivery can resume this branch; recorded notes are progress, not newly granted tasks.
-                self.start_delivery(turn='again')
+                self.git('remote','add','origin','https://github.com/example/fixture.git')
+                with patch('oh.branches.fetched',return_value='origin/main'):choose(self.root,'pr',self.event('pr','pr'))
+                self.assertIn('logout',render(self.root))
+                # A new cycle starts after publication and merge. Routed notes are progress, not new task authority.
+                from .publication import reconcile
+                pr=fixtures.pull_request(load_run(self.root)[1],status='merged')
+                with patch('oh.publication.github',return_value=[pr]):reconcile(self.root)
+                self.git('switch','-q','main');self.git('merge','-q','deliver/0001')
+                self.git('update-ref','refs/remotes/origin/main','HEAD')
+                with patch('oh.publication.github',return_value=pr),patch('oh.branches.fetched',return_value='origin/main'):
+                    self.start_delivery(turn='again')
                 self.assertEqual([t['id'] for t in load_run(self.root)[1]['tasks']],['2'])
                 self.assertIn('last pending task across all tracks',load_run(self.root)[1]['tasks'][0]['instructions'])
 

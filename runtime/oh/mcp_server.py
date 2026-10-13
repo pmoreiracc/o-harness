@@ -58,13 +58,15 @@ TOOLS = [
     tool('start', 'Start prepared work', 'Verifies the person\'s approval and runs the prepared work.' + LONG, {'request': TEXT}),
     tool('run', 'Run OH', 'Verifies the person\'s latest choice and carries it out, or continues the current run.' + LONG),
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
-    tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
+    tool('resume', 'Resume', 'Continues unfinished work with existing allowances, or reports the PR if that delivery already finished.' + LONG),
     tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
     tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with the base branch: '
          'fresh discards the branch to start over from the base branch, keep finishes without the base branch\'s changes.',
          {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),
     tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
     tool('pr_summary', 'PR summary', 'Refresh the selected base reference and generate the review summary for this branch\'s pull request.', {'base': TEXT}),
+    tool('publication', 'Verify publication', 'Checks GitHub for this run\'s approved PR and records successful publication. Call before publishing and after creating a PR; reuses interrupted publication without another approval.',
+         {'pr': {'type':'integer','minimum':1,'description':'Only to resolve ambiguous matching PRs'}}),
     tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
          'as a blocking menu and records their click in OH. Call it directly and wait for its result; do not poll or use a sleep loop while the person decides. Call it when OH output has a `gate`, in the conversation that '
          'started the run. The result says what was recorded and whether to call `run`.'),
@@ -102,6 +104,10 @@ def command(name, arguments, root):
     if name == 'prepare_design':return ['prepare-design', '--', text('doc', True)] + ([text('track')] if text('track') else [])
     if name == 'start':return ['start'] + (['--', text('request')] if text('request') else [])
     if name == 'pr_summary':return ['pr-summary'] + (['--', text('base')] if text('base') else [])
+    if name == 'publication':
+        number=arguments.get('pr')
+        if number is not None and (type(number) is not int or number<=0):raise Refused('The PR number must be positive')
+        return ['publication']+(['--pr',str(number)] if number is not None else [])
     raise Refused('Unknown tool')
 
 

@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from .storage import Refused,Journal,changes,digest,git,project
+from .storage import Refused,Journal,changes,digest,git,project,state_writer
 from .workflow import reduce
 from .verification import check_failed
 
@@ -29,11 +29,127 @@ def destination(root, *, required=False):
 
 
 def destination_state(root, state):
-    if state['status']!='pr':return state
+    if state['status']!='pr' or state.get('published'):return state
     grant=state.get('publication') or {}
     expected={k:grant.get(k) for k in ('remote','destination','remote_fingerprint')}
-    return state|{'publication_changed':destination(root)!=expected,
-                  'publication_observe_only':bool(grant.get('head') and git(root,'rev-parse','HEAD')!=grant['head'])}
+    return state|{'publication_changed':destination(root)!=expected}
+
+
+def repository(grant):
+    """Use the approved push destination, never the checkout's possibly changed remote."""
+    from urllib.parse import urlsplit
+    url=urlsplit(grant.get('destination',''))
+    path=url.path.strip('/').removesuffix('.git')
+    if (url.scheme not in ('https','http','ssh','git') or not url.hostname or
+            not re.fullmatch(r'[A-Za-z0-9.-]+',url.hostname) or
+            not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',path)):
+        raise Refused('OH cannot verify a PR at the saved publication destination. Check the approved GitHub repository before publishing; saved work and approval are retained.')
+    return url.hostname,path
+
+
+def github(root,host,endpoint,*,pages=False):
+    """Read GitHub facts through the person's existing gh login; never create or update a PR."""
+    import subprocess
+    args=['gh','api','--hostname',host,endpoint]+(['--paginate','--slurp'] if pages else [])
+    try:
+        result=subprocess.run(args,cwd=Path(__file__).resolve().parent,capture_output=True,text=True,encoding='utf-8',timeout=30)
+    except FileNotFoundError:
+        raise Refused('GitHub verification needs gh. Install GitHub CLI, then repeat publication; do not create another PR before checking for the existing one.') from None
+    except (OSError,subprocess.TimeoutExpired):
+        raise Refused('GitHub verification could not finish. Check the connection and gh authentication, then repeat publication; do not create another PR while its result is unknown.') from None
+    if result.returncode:
+        raise Refused('GitHub could not verify publication. Check gh auth status and access to the approved repository, then repeat publication; no duplicate PR should be created.')
+    try:
+        value=json.loads(result.stdout)
+        if pages:
+            if not isinstance(value,list) or any(not isinstance(page,list) for page in value):raise ValueError()
+            return [item for page in value for item in page]
+        if not isinstance(value,dict):raise ValueError()
+        return value
+    except ValueError:
+        raise Refused('GitHub returned an incomplete publication result. Repeat publication once the API is available; keep the existing approval.') from None
+
+
+def discover(root,state,number=None):
+    """Find this run's PR, including creation that succeeded before OH saved its receipt."""
+    from urllib.parse import urlencode,urlsplit
+    grant=state.get('publication') or {}
+    host,repo=repository(grant)
+    saved=state.get('published')
+    if saved:
+        if number is not None and number!=saved['number']:raise Refused('This delivery already has a recorded PR; use its saved link.')
+        number=saved['number']
+    prefix=f'repos/{repo}/pulls'
+    candidates=([github(root,host,f'{prefix}/{number}')] if number else
+                github(root,host,prefix+'?'+urlencode({'state':'all','head':repo.split('/')[0]+':'+grant['branch'],
+                                                       'base':grant['base_branch'],'per_page':100}),pages=True))
+    matches=[];open_other=False
+    for pr in candidates:
+        try:
+            if (type(pr['id']) is not int or type(pr['number']) is not int or pr['number']<=0 or
+                    pr['state'] not in ('open','closed') or not re.fullmatch('[0-9a-f]{40,64}',pr['head']['sha'])):raise ValueError()
+            if number is not None and pr['number']!=number:raise ValueError()
+            url=urlsplit(pr['html_url'])
+            identity=(url.scheme=='https' and url.hostname==host and
+                      url.path.casefold()==f'/{repo}/pull/{pr["number"]}'.casefold() and
+                      pr['base']['repo']['full_name'].casefold()==repo.casefold())
+            if saved:
+                if not identity or pr['number']!=number or pr['id']!=saved['id']:raise ValueError()
+                matches.append(pr);continue  # the receipt remains valid after later head/base edits
+            bound=(identity and pr['base']['ref']==grant['base_branch'] and pr['head']['ref']==grant['branch'] and
+                   (pr['head'].get('repo') or {}).get('full_name','').casefold()==repo.casefold())
+            if not bound:
+                if number:raise ValueError()
+                if pr['state']=='open':open_other=True
+                continue
+            holds=pr['head']['sha']==grant['head']
+            if not holds:
+                history=github(root,host,f'{prefix}/{pr["number"]}/commits?per_page=100',pages=True)
+                holds=any(c['sha']==grant['head'] for c in history)
+                # GitHub caps this endpoint at 250 commits. Absence in a truncated list is not proof.
+                if not holds and len(history)>=250:
+                    raise Refused('This PR has too many commits to confirm the saved delivery through GitHub. Inspect the PR against the approved commit before proceeding; OH will not create a duplicate.')
+            if holds:matches.append(pr)
+            elif pr['state']=='open':open_other=True
+        except (KeyError,TypeError,ValueError):
+            raise Refused('GitHub PR details do not match the saved delivery. Check the repository and PR identity before proceeding; no publication result was recorded.') from None
+    if len(matches)>1:
+        raise Refused('Several PRs contain this delivery: '+', '.join(str(p['number']) for p in matches)+
+                      '. Identify the intended PR, then run publication --pr NUMBER to verify it; do not create another.')
+    if not matches:
+        if number or open_other:raise Refused('The existing PR does not contain the approved delivery commit. Reconcile that PR with the saved work before publishing; OH will not create a competing PR.')
+        return None
+    pr=matches[0]
+    return {'id':pr['id'],'number':pr['number'],'url':pr['html_url'],'repository':repo,'host':host,
+            'state':'merged' if pr.get('merged_at') else pr['state'],'observed_head':pr['head']['sha']}
+
+
+@state_writer
+def reconcile(root,number=None):
+    """Append only verified publication evidence, independent of the publishing session's lifetime."""
+    import os
+    from .storage import now
+    from .workflow import load_run,checkpoint,settled_owner
+    if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('Workers cannot record their parent run\'s publication')
+    with settled_owner(root):
+        journal,state=load_run(root)
+        if state['status']!='pr' or not state.get('publication'):
+            raise Refused('This run has no publication approval. Use the current delivery decision first.')
+        try:found=discover(root,state,number)
+        except Refused as exc:
+            if not state.get('published'):raise
+            return checkpoint(root)|{'publication_notice':str(exc),'publication_status':'last verified'}
+        if found and not state.get('published'):
+            grant=state['publication']
+            journal.append('publication.completed',found|{'run':state['id'],'grant':grant['source'],
+                'approved_head':grant['head'],'branch':grant['branch'],'base_branch':grant['base_branch'],
+                'destination':grant['destination'],'verified_at':now()})
+        result=checkpoint(root)
+        if found:return result|{'published':result['published']|found,'publication_status':'current'}
+        # No PR exists. A later local head is not permission to push those edits (or rewind them).
+        if git(root,'rev-parse','HEAD')!=state['publication']['head']:
+            raise Refused('No matching PR exists, and this checkout has later or different work. Reconcile it with the approved commit before publication; no later work is approved by this run.')
+        return result|{'publication_status':'not published'}
 
 
 def public_value(root,state,value):
@@ -167,6 +283,9 @@ def reference(root):
 
 
 def render(root,base=None):
+    from .workflow import active_file,load_run
+    if active_file(root).exists() and (state:=load_run(root)[1]).get('published'):
+        raise Refused('This delivery is already published: '+state['published']['url']+'. Use its PR; a new Deliver request starts further approved work.')
     base=base or reference(root)
     if not base:raise Refused('No base branch found; set base_branch with oh config')
     if changes(root):raise Refused('Publish only from a clean reviewed checkout')

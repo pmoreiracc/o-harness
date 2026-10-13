@@ -95,12 +95,19 @@ limitations. Link `report` for readable receipts. Author claims never mean compl
 native completion updates task marks. Never implement findings outside the approved scope.
 
 When `gate` is absent and `next_action.kind` is `publish`, publication is already authorized.
-Use `pr_summary` (Claude: `pr-summary`), preserving its entire body and hidden review metadata in
+First call `publication` (Claude: `publication`). It checks the approved repository for this run's
+PR and records verified publication. If it returns `published`, use that result below without
+pushing again. If discovery fails, explain its concrete next step; never treat a failed lookup
+as permission to create another PR. If it returns a gate, follow that decision before publishing.
+
+Only when it confirms `publication_status: not published`, use `pr_summary` (Claude: `pr-summary`), preserving its entire body and hidden review metadata in
 an external temporary file. It revalidates the reviewed commits and destination. Push only
 `publication.head` to `refs/heads/<publication.branch>` on `publication.remote`, using quoted
 arguments. Check for an existing PR, then create or reuse one against `publication.base_branch`;
-use `gh pr create --body-file` for the saved body. In Codex attach its URL with `attach_artifact`.
-Report the PR link, then observe its checks with `gh pr view --json headRefOid,statusCheckRollup,url`.
+use `gh pr create --body-file` for the saved body. Call `publication` again to verify and retain
+the result; if creation's response was lost, this same call discovers it. In Codex attach its URL
+with `attach_artifact`. Report the PR link, then observe its checks with
+`gh pr view <PR-URL> --json headRefOid,statusCheckRollup,url`.
 Keep each observation compact: current head, check names and states; read job logs only to
 diagnose a failure. Do not accumulate complete check responses in the conversation.
 Bind observations to that head: if it changes, discard the previous head's readiness result and
@@ -120,11 +127,13 @@ prevents completion, name the check and next step. When interrupted, reuse the P
 current head rather than republishing. End with the PR link, delivered work and actual CI result.
 Human merging remains separate. Never rerun implementation or reviews to recover publication.
 
-For `next_action.kind: observe_publication`, the branch contains later commits beyond OH's
-publication grant. Find the existing PR for the recorded branch/destination and observe its
-current head and CI as above. Do not push, create a PR, call pr_summary or claim those later
-commits are reviewed. If no matching PR exists, preserve the branch and explain that the later
-work needs an authorized review/publication path; this resume grants no new work or publication.
+For `next_action.kind: published`, the delivery cycle already finished. State that briefly and
+show `published.url` and its reported status. `publication_status: last verified` is historical,
+not a fresh GitHub observation; explain any `publication_notice`. No ownership transfer, new
+task, review or publication question is needed. For an open PR, follow current-head CI as above;
+merged or closed PRs remain finished and must not be reopened automatically. Later commits
+are not covered by the saved review. A new Deliver command uses normal task admission and
+branch safeguards; never suggest Resume as a way to start the next batch.
 
 If the host rejects publication, retain the work and grant, explain its actual reason and obtain
 only the specific missing native authorization. Never bypass a rejection through another tool.

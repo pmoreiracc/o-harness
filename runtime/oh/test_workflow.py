@@ -42,6 +42,16 @@ def task_context(prompt):
     return read_json(content['task_context']['path'])
 
 
+def pull_request(state, *, head=None, number=144, status='open'):
+    """GitHub's public PR facts; no model claim of publication is used by the fixture."""
+    from .publication import repository
+    grant=state['publication'];host,repo=repository(grant)
+    return {'id':1000+number,'number':number,'html_url':f'https://{host}/{repo}/pull/{number}',
+            'state':'closed' if status=='merged' else status,'merged_at':'2026-10-13T00:00:00Z' if status=='merged' else None,
+            'base':{'ref':grant['base_branch'],'repo':{'full_name':repo}},
+            'head':{'ref':grant['branch'],'sha':head or grant['head'],'repo':{'full_name':repo}}}
+
+
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -611,6 +621,88 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
         packet=json.loads(render(self.root,'origin/master').split('```json\n')[1].split('\n```')[0])
         self.assertEqual(packet['grants'][load_run(self.root)[1]['id']]['choice'],'pr')
+
+    def test_publication_recovery_records_verified_pr_without_reopening_work(self):
+        from .publication import reconcile,discover,github
+        from .workflow import carry_on,checkpoint
+        from .cli import main
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        start(self.root,{'tasks':self.tasks[:1]},self.event());run(self.root,self.fake)
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        with patch('oh.branches.fetched',return_value='origin/main'):choose(self.root,'pr',self.event('publish','pr'))
+        journal,before=load_run(self.root);head=before['publication']['head']
+        # Publication interrupted before creation can still move to the other host, retaining its grant.
+        with patch('oh.publication.github',return_value=[]):
+            transferred=carry_on(self.root,{'host':'claude','session':'publisher','turn':'resume','prompt':'/oh-resume'})
+        self.assertEqual(transferred['next_action']['kind'],'publish')
+        after_transfer=load_run(self.root)[1]
+        self.assertEqual(after_transfer['publication'],before['publication'])
+        self.assertEqual(after_transfer['host'],'claude')
+        before=after_transfer;original=journal.records()
+        # Before push or after push but before creation, the same approved publication remains.
+        with patch('oh.publication.github',return_value=[]):
+            for _ in range(2):self.assertEqual(reconcile(self.root)['publication_status'],'not published')
+        self.assertEqual(journal.records(),original)
+        # Real transport failures cannot become an empty successful discovery.
+        for failure in (FileNotFoundError(),subprocess.TimeoutExpired('gh',30)):
+            with patch('subprocess.run',side_effect=failure):
+                with self.assertRaises(Refused):github(self.root,'github.com','repos/example/product/pulls',pages=True)
+        with patch('subprocess.run',return_value=subprocess.CompletedProcess([],0,'not JSON','')):
+            with self.assertRaises(Refused):github(self.root,'github.com','repos/example/product/pulls',pages=True)
+        pr=pull_request(before)
+        with patch('subprocess.run',return_value=subprocess.CompletedProcess([],0,json.dumps([[pr],[]]),'')):
+            self.assertEqual(discover(self.root,before)['number'],144)  # paginated gh output
+        # A reused branch, different base/repository, or another open PR cannot prove publication.
+        for other in (pr|{'base':pr['base']|{'ref':'other'}},pr|{'head':pr['head']|{'repo':{'full_name':'other/repo'}}}):
+            with patch('oh.publication.github',return_value=other),self.assertRaises(Refused):reconcile(self.root,144)
+        unrelated=pull_request(before,head='f'*40)
+        with patch('oh.publication.github',side_effect=lambda r,h,e,**kw:[] if '/commits?' in e else [unrelated]):
+            with self.assertRaisesRegex(Refused,'competing PR'):reconcile(self.root)
+        with patch('oh.publication.github',return_value=[pr,pull_request(before,number=145)]):
+            with self.assertRaisesRegex(Refused,'Several PRs'):reconcile(self.root)
+        self.assertEqual(journal.records(),original)
+        # HEAD changes prove neither publication nor review coverage.
+        self.git('commit','--allow-empty','-qm','Human change after publication')
+        later=self.git('rev-parse','HEAD');pr=pull_request(before,head=later)
+        with patch('oh.publication.github',return_value=[]),self.assertRaisesRegex(Refused,'later or different work'):reconcile(self.root)
+        def response(root,host,endpoint,**kw):
+            if '/commits?' in endpoint:return [{'sha':head},{'sha':later}]
+            return [pr] if kw.get('pages') else pr
+        # A lost response after saving the receipt is recovered without replacing it or transferring control.
+        with patch('oh.publication.github',side_effect=response):
+            with patch('oh.workflow.checkpoint',side_effect=OSError('lost result')):
+                with self.assertRaisesRegex(OSError,'lost result'):reconcile(self.root)
+            for host in ('claude','codex'):
+                result=carry_on(self.root,{'host':host,'session':'fresh','turn':'resume','prompt':'/oh-resume'})
+                self.assertEqual(result['next_action']['kind'],'published');self.assertNotIn('gate',result)
+                self.assertEqual(result['published']['approved_head'],head)
+                self.assertEqual(result['published']['observed_head'],later)
+            receipt=load_run(self.root)[1]['published']
+            for status in ('closed','merged'):
+                pr=pull_request(before,head=later,status=status)
+                self.assertEqual(reconcile(self.root)['published']['state'],status)
+                self.assertEqual(load_run(self.root)[1]['published'],receipt)  # observations do not rewrite history
+        after=load_run(self.root)[1]
+        for key in ('host','human','done','granted','publication','attempts'):self.assertEqual(after[key],before[key])
+        self.assertEqual(journal.records()[:-1],original)
+        self.assertEqual(journal.records()[-1]['kind'],'publication.completed')
+        record=journal.records()[-1]
+        with self.assertRaises(Refused):reduce(original+[record|{'data':record['data']|{'approved_head':'f'*40}}])
+        # A saved receipt remains terminal after remote changes, dirty files, or a GitHub outage.
+        self.git('remote','set-url','origin','https://github.com/other/product.git')
+        (self.root/'mine.txt').write_text('unsaved human edit',newline='\n')
+        with patch('oh.publication.github',side_effect=Refused('GitHub is offline')):
+            result=reconcile(self.root)
+        self.assertEqual(result['publication_status'],'last verified');self.assertNotIn('gate',result)
+        self.assertEqual(checkpoint(self.root)['next_action']['kind'],'published')
+        # Both host entry commands return the finished result before execution's owner check.
+        for command in ('resume','run','deliver'):
+            with patch('oh.authority.materialize',return_value=result),patch('oh.runner.run') as execute,patch.dict(os.environ,{'CODEX_THREAD_ID':'new-reader'}),patch('sys.stdout',new=io.StringIO()) as out:
+                main(['--root',str(self.root),command]+(['0001'] if command=='deliver' else []))
+                self.assertEqual(json.loads(out.getvalue())['next_action']['kind'],'published');execute.assert_not_called()
+        from .cli import executable_run
+        with self.assertRaisesRegex(Refused,'earlier run'):executable_run(self.root,result|{'run':identifier()})
+        with self.assertRaises(Refused):choose(self.root,'pr',self.event('again','pr'))
 
 
     def test_publication_stopped_and_mixed_cli_paths_refuse(self):

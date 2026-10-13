@@ -111,8 +111,11 @@ def index(journal, state):
     def artifact(label, relative):
         return f'[{label}]({relative})' if (journal.path/relative).is_file() else label+' (not yet available)'
     lines = [f"# {state.get('name', 'Project')} — {state.get('workflow', 'deliver')}", '',
-             f"**Branch:** {state['branch']}", f"**Current state:** {state['status']}",
+             f"**Branch:** {state['branch']}", f"**Current state:** {'published' if state.get('published') else state['status']}",
              f"**Completed tasks:** {', '.join(state['done']) or 'None'}", '']
+    if published:=state.get('published'):
+        lines.extend([f"**Delivery finished:** [PR #{published['number']}]({published['url']})",
+                      f"Publication verified at {published['verified_at']}; reviewed commit `{published['approved_head']}`. Current PR checks and later commits are separate from this receipt.", ''])
     for task in state['tasks']:
         attempts = [a for a in state['attempts'] if a['task'] == task['id']]
         if not attempts:continue

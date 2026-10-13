@@ -123,6 +123,11 @@ def continue_stopped(root,doc,track,event):
     if not active_file(root).exists():return None
     _,state=load_run(root)
     if (state.get('workflow'),state.get('design'),state.get('track') or '')!=('deliver',doc,track):return None
+    if state['status']=='pr' and state.get('publication',{}).get('destination'):
+        result=carry_on(root,event)
+        # A new Deliver is new admission after publication, not a replay of the old cycle.
+        if result.get('published'):return None
+        return result
     moving=((state['host'],state['human']['session'])!=(event['host'],event['session']) or state['harness_version']!=version())
     boundary=state['status'] in ('checkpoint','completed','pr') or state['status']=='stopped' and not next_task(state|{'status':'running'})
     if boundary:

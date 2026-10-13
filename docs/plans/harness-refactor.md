@@ -693,3 +693,67 @@ hosts on that exact source. The remaining manual trial is Desktop Stop during wo
 Deliver/Resume in a fresh session in either host; 0005 currently resumes its existing PR observation.
 This activation record is a documentation-only follow-up. Independent review remains after the
 developer host trial, and no OH PR has been opened or merged by this change.
+
+### Publication completion and finished delivery cycles
+
+Approved follow-up: a new session alone does nothing. Resume continues unfinished work or
+interrupted publication; a published run reports its PR without reopening delivery. A new
+Deliver request follows normal task admission and branch safeguards. PR creation ends the
+implementation cycle, while current-head CI reporting remains separate from review approval.
+
+- [x] H1: Add a verified, immutable publication receipt separate from the human publication
+  grant. One shared CLI/MCP command discovers or verifies the PR using its approved destination,
+  branch/base and commit evidence; interrupted calls are idempotent.
+- [x] H2 (H1): Recognize publication before transferring ownership. Update shared next-action,
+  Resume, Deliver and publication recovery; replace the changed-HEAD observation shortcut.
+  Preserve older runs, original approvals, consumed allowances and current-head CI reporting.
+- [x] H3 (H1–H2): Extend existing publication, host-transfer and admission fixtures for interrupted
+  publication, later commits, closed/merged PRs, branch reuse and GitHub failures. Run affected
+  checks and syntax with duration evidence. No additional orchestration or test framework.
+- [ ] H4 (H3): Update verified documentation, commit the candidate and prepare the development
+  snapshot. Remaining developer trials under C6: Resume 0005 on either host reports its PR; a genuinely stopped
+  run resumes work; a new Deliver after merge selects the next approved batch. Independent
+  review and publication follow that host trial, as required by AGENTS.md.
+
+Reference: golden Deliver's Finish with PR opens one PR and follows current-head checks;
+next.sh treats the PR choice as terminal for task admission. OH adds a durable verified
+publication result because fresh host sessions cannot depend on the publishing chat's memory.
+Existing status `pr` remains compatible as publication approval; the additive receipt supplies
+completion evidence. No consumer gate, configuration or background service is introduced.
+
+Test disposition: retain the existing review-evidence tamper test; add one integrated publication
+recovery case using the existing workflow fixture, because this external completion boundary had
+no coverage. Replace the host-transfer fixture's changed-HEAD inference with verified PR
+completion. Extend existing delivery admission and CLI/MCP command fixtures rather than
+duplicating model-run setup. GitHub failures must preserve saved evidence and never authorize
+a duplicate PR; later commits must never inherit the saved review.
+
+H1–H3 implemented with one additive `publication.completed` journal event and one CLI/MCP
+`publication` command. It reads the approved GitHub destination using the existing gh login,
+matches branch/base and the approved commit in the PR, and pins the verified PR identity.
+Reads paginate; a truncated commit list cannot establish absence. Repeated calls preserve the
+original receipt and return current observations separately; an outage retains a clearly labelled
+last verified result. No remote writes occur in this command. The readable run index links the PR.
+
+Resume checks publication before transferring ownership or applying checkout-tree restrictions.
+The existing execution entrypoints return a verified finished result without running workers,
+while still rejecting a result belonging to another active run. New Deliver uses normal branch
+admission after publication: it cannot append tasks to an unmerged published branch, and after
+merge selects the next task. The previous changed-HEAD shortcut is removed. CI follow-through
+remains separate, and the immutable reviewed commit never expands to cover later changes.
+
+Validation: all 16 modules selected by `affected HEAD` were exercised. Fifteen passed directly;
+the delivery module's two affected cases needed fixture corrections (a local Git remote could
+not stand in for GitHub publication, and the old scope test started another batch immediately
+after PR approval). The final delivery cases plus publication regression passed together:
+3 tests, 42.57s. All other delivery cases passed, including the four-direction Stop/Pause →
+resume → publication → next-batch matrix (45.84s in the module run). The shared workflow module
+also passed, including the final command-result binding. Syntax and Windows-risk checks pass.
+No full suite or real consumer checks were run. These are macOS runs of both host fixtures and
+platform checks, not claims of native Windows/Linux or Desktop trial completion.
+
+A read-only probe of the real 0005 journal and GitHub recognized PR #144 as merged, including
+its later head, while confirming the original journal was unchanged. No consumer checkout,
+approval, ownership or receipt was modified by the probe. External logs are
+`/tmp/oh-publication-{focus2,affected,regressions,syntax}.log`. The candidate still needs the
+developer's fresh-session host trial and the subsequent independent review under C6.
