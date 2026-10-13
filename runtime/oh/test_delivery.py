@@ -46,8 +46,9 @@ class DeliveryTest(unittest.TestCase):
         # even before its first commit; a newer installed OH retains the original authority.
         from .controls import request, status_event
         from .workflow import review_limit
-        for host,location,control in (('codex','repo','stop'),('claude','private','pause')):
-            with self.subTest(host=host,location=location):
+        for host,target,location,control in (('codex','codex','repo','stop'),('claude','claude','private','pause'),
+                                             ('codex','claude','repo','stop'),('claude','codex','private','pause')):
+            with self.subTest(host=host,target=target,location=location):
                 case=DeliveryTest();case.setUp()
                 try:
                     case.documents(location);case.start_delivery(host=host)
@@ -66,11 +67,13 @@ class DeliveryTest(unittest.TestCase):
                     fixtures.configure(case.root,tasks_per_batch=2,review_rounds=10)
                     def finish(*args,**kwargs):
                         self.assertEqual((case.root/'draft.txt').read_text(),'keep this implementation')
+                        self.assertEqual(args[0],target)
                         if args[4]=='implementation':
+                            self.assertEqual(args[2],before['config']['models'][target][before['tasks'][0]['difficulty']])
                             self.assertIn('same unfinished approved task',args[3]);self.assertIn('Inspect the existing diff',args[3])
                         return case.fake(*args,**kwargs)
                     with patch('oh.config.version',return_value='new-installed-version'), patch('oh.branches.refresh') as refresh:
-                        result=case.start_delivery(turn='again',host=host,session='new-chat')
+                        result=case.start_delivery(turn='again',host=target,session='new-chat')
                         self.assertEqual(result['continuation']['task'],'1');refresh.assert_not_called()
                         _,continued=load_run(case.root)
                         self.assertEqual(continued['id'],before['id'])
@@ -78,11 +81,13 @@ class DeliveryTest(unittest.TestCase):
                             self.assertEqual(continued[key],before[key])
                         self.assertEqual(review_limit(continued,'1'),review_limit(before,'1'))
                         self.assertEqual(continued['human']['turn'],'again')
+                        self.assertEqual(continued['host'],target)
+                        self.assertTrue(all(a['host']==host for a in continued['attempts']))
                         self.assertEqual(case.git('rev-parse','HEAD'),head)
                         # Replaying this command after another Stop must not restart the worker.
                         request(case.root,'stop')
-                        self.assertEqual(case.start_delivery(turn='again',host=host,session='new-chat')['status'],'stopped')
-                        case.start_delivery(turn='finish',host=host,session='new-chat')
+                        self.assertEqual(case.start_delivery(turn='again',host=target,session='new-chat')['status'],'stopped')
+                        case.start_delivery(turn='finish',host=target,session='new-chat')
                         self.assertEqual(run(case.root,finish)['status'],'checkpoint')
                     self.assertEqual([c[0] for c in case.calls],['implementation','implementation','review'])
                     self.assertEqual(load_run(case.root)[1]['done'],['1'])
@@ -91,13 +96,13 @@ class DeliveryTest(unittest.TestCase):
                     with patch('oh.config.version',return_value='gate-runtime'),patch('oh.branches.refresh') as refresh:
                         from .storage import checkout_file,lock
                         with lock(checkout_file(case.root,'oh-runner.lock'),wait=False),self.assertRaises(Refused):
-                            case.start_delivery(turn='live-boundary',host=host,session='gate-chat')
+                            case.start_delivery(turn='live-boundary',host=target,session='gate-chat')
                         (case.root/'mine.txt').write_text('preserve',newline='\n')
                         with self.assertRaisesRegex(Refused,'completed delivery work'):
-                            case.start_delivery(turn='dirty-boundary',host=host,session='gate-chat')
+                            case.start_delivery(turn='dirty-boundary',host=target,session='gate-chat')
                         self.assertEqual(load_run(case.root)[1],before)
                         (case.root/'mine.txt').unlink()
-                        resumed=case.start_delivery(turn='gate-boundary',host=host,session='gate-chat')
+                        resumed=case.start_delivery(turn='gate-boundary',host=target,session='gate-chat')
                         self.assertEqual((resumed['run'],resumed['status']),(before['id'],'checkpoint'))
                         self.assertEqual(resumed['gate']['choices'],['continue','pr','stop'])
                         self.assertEqual(run(case.root,case.fake)['status'],'checkpoint')
@@ -110,15 +115,20 @@ class DeliveryTest(unittest.TestCase):
                         refresh.assert_not_called()
                         # A publication already approved at this boundary survives a fresh session too.
                         from .workflow import human_event
-                        human=human_event({'hook_event_name':'UserPromptSubmit','session_id':'gate-chat','turn_id':'publish','prompt':'pr'},host)
+                        human=human_event({'hook_event_name':'UserPromptSubmit','session_id':'gate-chat','turn_id':'publish','prompt':'pr'},target)
                         case.git('remote','add','origin','https://github.com/example/fixture.git')
                         with patch('oh.branches.fetched',return_value='origin/main'):choose(case.root,'pr',human)
                         grant=load_run(case.root)[1]['publication']
+                        # Later user commits only allow observation, never republishing as reviewed.
+                        case.git('commit','--allow-empty','-qm','Human post-publication change')
                         with patch('oh.config.version',return_value='publication-runtime'):
-                            resumed=case.start_delivery(turn='publication-boundary',host=host,session='publication-chat')
-                            self.assertEqual(resumed['next_action']['kind'],'publish')
+                            resumed=case.start_delivery(turn='publication-boundary',host=target,session='publication-chat')
+                            self.assertEqual(resumed['next_action']['kind'],'observe_publication')
+                            self.assertTrue(resumed['publication']['observe_only'])
                             self.assertNotIn('gate',resumed)
                             self.assertEqual(load_run(case.root)[1]['publication'],grant)
+                            from .publication import render
+                            with self.assertRaises(Refused):render(case.root,base='origin/main')
                     self.assertEqual([c[0] for c in case.calls],['implementation','implementation','review'])
                 finally:case.doCleanups()
 
@@ -144,6 +154,25 @@ class DeliveryTest(unittest.TestCase):
         with self.assertRaisesRegex(Refused,'branch changed'):self.start_delivery(turn='branch')
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertNotIn('continuations',load_run(self.root)[1])
+        # A new call cannot steal a live run, even within the same host.
+        self.git('switch','-q',before['branch'])
+        journal,state=load_run(self.root)
+        journal.append('run.status',{'status':'running'})
+        with lock(checkout_file(self.root,'oh-runner.lock'),wait=False):
+            with self.assertRaisesRegex(Refused,'still running'):
+                self.start_delivery(turn='live',session='new-chat')
+        self.assertEqual(load_run(self.root)[1]['human'],before['human'])
+        # Stop is already requested: let the existing cleanup release its lock, then
+        # settle and transfer automatically without a second human invocation.
+        from contextlib import ExitStack
+        held=ExitStack();held.enter_context(lock(checkout_file(self.root,'oh-runner.lock'),wait=False))
+        journal.append('run.status',{'status':'stopping'})
+        try:
+            with patch('time.sleep',side_effect=lambda _:held.close()):
+                result=self.start_delivery(turn='settling',host='claude',session='new-chat')
+        finally:held.close()
+        self.assertEqual(result['status'],'running')
+        self.assertEqual(load_run(self.root)[1]['host'],'claude')
 
     def test_stop_after_verified_implementation_continues_at_review_without_rebuilding(self):
         from .controls import request
@@ -155,7 +184,7 @@ class DeliveryTest(unittest.TestCase):
             self.assertTrue(submit_report(args[5],value['structured'])['accepted'])
             request(self.root,'stop');return value
         self.assertEqual(run(self.root,stopped)['status'],'stopped')
-        self.start_delivery(turn='again',session='new-chat')
+        self.start_delivery(turn='again',host='claude',session='new-chat')
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertEqual([c[0] for c in self.calls],['implementation','review'])
 
@@ -177,7 +206,7 @@ class DeliveryTest(unittest.TestCase):
                     # A new Deliver on an updated runtime keeps this exact pending choice;
                     # no stop/restart detour and no new review grant are needed.
                     with patch('oh.config.version',return_value='new-installed-version'):
-                        continued=case.start_delivery(turn='updated',session='updated-chat')
+                        continued=case.start_delivery(turn='updated',host='claude',session='updated-chat')
                         self.assertEqual(continued['status'],gate)
                         updated=load_run(case.root)[1]
                         self.assertEqual(updated['harness_version'],'new-installed-version')
@@ -317,18 +346,18 @@ class DeliveryTest(unittest.TestCase):
         def typed(session,host='codex',turn='later'):
             event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':'/oh-deliver 0001'},host)
             return host_hook(self.root,host,{'prompt':'/oh-deliver 0001'},verified=event)
-        from .storage import Final
-        with self.assertRaisesRegex(Final,'belongs to Codex'):typed('elsewhere','claude')  # said once, then spent
+        self.assertEqual(typed('elsewhere','claude')['gate']['choices'],['pr','stop'])
+        self.assertEqual(load_run(self.root)[1]['host'],'claude')
         with patch('oh.config.version',return_value='new-completion-runtime'):
-            # Runtime adoption and reopening are one recorded transition. A crash before
-            # rewriting the active pointer cannot consume this command while leaving it stopped.
-            with patch('oh.workflow.atomic_json',side_effect=OSError('before active pointer')):
-                with self.assertRaisesRegex(OSError,'before active pointer'):typed('new')
+            # A crash after the atomic transfer but before its result is returned must
+            # replay the same command without another transfer or a lost checkpoint.
+            with patch('oh.workflow.checkpoint',side_effect=OSError('after transfer')):
+                with self.assertRaisesRegex(OSError,'after transfer'):typed('new')
             self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
             self.assertEqual(load_run(self.root)[1]['harness_version'],'new-completion-runtime')
             self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertEqual(load_run(self.root)[1]['human']['session'],'new')
-        _choose(self.root,'pr',self.event('pr','pr'))
+        _choose(self.root,'pr',self.event('pr','pr')|{'session':'new'})
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
         # The person amends OH's last commit: OH can't offer that head's PR any more, and says so once.
         (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-q','--amend','--no-edit')
@@ -486,7 +515,7 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(run(self.root,stopped)['status'],'stopped')
         self.assertEqual(path.read_bytes(),original)
         self.assertEqual(load_run(self.root)[1]['done'],[])
-        self.start_delivery(turn='continue-saved-review',session='new-chat')
+        self.start_delivery(turn='continue-saved-review',host='claude',session='new-chat')
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertEqual([c[0] for c in self.calls],['implementation','review'])
         self.assertIn('- [x] **1.**',path.read_text())
@@ -502,10 +531,14 @@ class DeliveryTest(unittest.TestCase):
         self.assertIn('- [x] **1.**',path.read_text())  # review already authorized this transition
         self.assertEqual(load_run(self.root)[1]['done'],[])
         calls=len(self.calls)
+        self.start_delivery(turn='recover-completion',host='claude',session='recovery')
         self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
         self.assertEqual(len(self.calls),calls)
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
-        choose(self.root,'pr',self.event('private-pr','pr'))
+        from .workflow import human_event
+        self.git('remote','add','origin','https://github.com/example/fixture.git')
+        with patch('oh.branches.fetched',return_value='origin/main'):
+            choose(self.root,'pr',human_event({'hook_event_name':'UserPromptSubmit','session_id':'recovery','turn_id':'pr','prompt':'pr'},'claude'))
         from .publication import render
         self.assertNotIn(str(self.root.parent),render(self.root))
 

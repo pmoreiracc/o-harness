@@ -16,11 +16,19 @@
 A built plugin contains the engine. On the first OH command, the plugin's launcher copies it
 to `~/.local/share/o-harness/versions/<commit>` and marks it active when its version is
 newer than the active one. Each run records its version and keeps using it until it ends,
-so an update never changes a running batch. An explicit numbered Deliver command can
-continue a fully stopped task with a newer engine after validating the saved checkout.
+so an update never changes a running batch. Explicit Deliver or Resume can continue a settled
+task or decision with a newer engine after validating the saved checkout.
 That transition retains the original configuration, task grant and review history;
 old attempt admissions keep their original version. Both hosts share the installed engine
 and the data folder.
+
+Session ownership is transferable, not permanent host ownership. Continuation takes the runner
+lock before the control lock, validates retained work and appends one atomic continuation with
+the new native human source and active host. Stop/Pause cleanup gets a short bounded wait; live
+execution is never taken over. Existing admissions and consumed allowances remain unchanged.
+Each attempt records its host; older attempts derive it from the journal's owner at their start.
+New calls use the destination host's profiles in the original configuration. Completed publication
+with later descendant commits routes to PR observation only, leaving the original grant intact.
 
 ## Authority
 

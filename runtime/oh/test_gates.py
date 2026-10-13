@@ -118,6 +118,28 @@ class GateTest(unittest.TestCase):
         self.assertEqual(after['gate']['choices'], ['pr', 'stop'])
         self.assertEqual(after['gate']['ask']['questions'][0]['options'][1]['label'],'Finish without a PR')
         self.assertNotEqual(after['gate']['id'], result['gate']['id'])
+        # A real native Resume command in another host/session adopts this exact gate.
+        from .authority import stage,starts_work
+        from .storage import now
+        payload,path,text=self.staged_conversation('codex','new-owner',at=now())
+        path.write_text(text.replace('$oh-propose new-owner','$oh-resume'),newline='\n')
+        payload=payload|{'prompt':'$oh-resume'}
+        stage(self.root,'codex',payload)
+        self.assertTrue(starts_work({'event':human_event(payload,'codex')}))
+        before=load_run(self.root)[1]
+        with patch.dict(os.environ,{'CODEX_HOME':str(self.home/'.codex'),'CODEX_THREAD_ID':'new-owner','OH_CODEX_TURN_ID':'1'}):
+            transferred=materialize(self.root)
+        current_state=load_run(self.root)[1]
+        self.assertEqual(current_state['host'],'codex')
+        self.assertEqual(current_state['attempts'],before['attempts'])
+        self.assertEqual(current_state['granted'],before['granted'])
+        self.assertEqual(transferred['gate']['choices'],after['gate']['choices'])
+        self.assertNotEqual(transferred['gate']['id'],after['gate']['id'])
+        from .gates import apply
+        stale=human_event({'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'stale','prompt':'pr'},'claude')
+        with self.assertRaises(Refused):apply(self.root,stale,after['gate']['id'])
+        with self.assertRaises(Refused):choose(self.root,'pr',stale)
+        self.assertEqual(load_run(self.root)[1]['status'],'completed')
 
     def prepare_menu(self,host):
         from .prepared import prepare,directory
@@ -614,7 +636,7 @@ class GateTest(unittest.TestCase):
         from .authority import pending_file
         from .runner import apply_pending
         self.begin('claude')
-        self.typed('/oh-resume', 'p2')  # nothing is paused: refused, and not kept
+        self.typed('grant review', 'p2')  # no review allowance gate: refused, and not kept
         with self.assertRaises(Refused):materialize(self.root)
         self.assertFalse(pending_file(self.root).exists())
         self.assertIsNone(materialize(self.root))

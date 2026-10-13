@@ -430,10 +430,24 @@ class WorkflowTest(unittest.TestCase):
         before=self.git('rev-parse','HEAD')
         def stopping(*args,**kw):
             value=self.fake(*args,**kw)
-            if args[4]=='review':choose(self.root,'stop',self.event('2','stop'))
+            if args[4]=='review':
+                choose(self.root,'stop',self.event('2','stop'))
+                return value|{'failed':True,'returncode':-15,'cancellation':['stopped'],'structured':None}
             return value
         self.assertEqual(run(self.root,stopping)['status'],'stopped')
         self.assertEqual(self.git('rev-parse','HEAD'),before)
+        old=load_run(self.root)[1]
+        from .cli import host_hook
+        event=human_event({'hook_event_name':'UserPromptSubmit','session_id':'claude-resume','turn_id':'resume','prompt':'/oh-resume'},'claude')
+        resumed=host_hook(self.root,'claude',{'prompt':'/oh-resume'},verified=event)
+        self.assertEqual(resumed['status'],'running')
+        self.assertEqual(load_run(self.root)[1]['attempts'],old['attempts'])
+        self.assertEqual(run(self.root,self.fake)['status'],'completed')
+        current=load_run(self.root)[1]
+        self.assertEqual([a['host'] for a in current['attempts'] if a['role']=='review'],['codex','claude'])
+        self.assertEqual([c[0] for c in self.calls],['implementation','review','review'])
+        self.assertEqual(current['granted'],old['granted'])
+        self.assertEqual(current.get('review_grants'),old.get('review_grants'))
 
     def test_dot_dependency_tracks_all_files_and_unknown_path_refused(self):
         check={'name':'all','command':['python3','-c','pass'],'inputs':['.'],'toolchain':[['python3','--version']]}
@@ -659,10 +673,13 @@ class ReviewResultTest(unittest.TestCase):
         from .entry import CHOICES
         for choice in CHOICES:
             for text in (choice,choice.capitalize(),choice.upper()):
-                with patch('oh.cli.choose') as choose,patch('oh.cli.active_file') as active,patch('oh.cli.checkpoint',return_value={'waiting':True}):
+                with patch('oh.cli.choose') as choose,patch('oh.cli.active_file') as active,patch('oh.cli.checkpoint',return_value={'waiting':True}),patch('oh.workflow.carry_on',return_value={'waiting':True}) as resume:
                     active.return_value.exists.return_value=True
                     self.assertEqual(host_hook(Path('/unused'),'codex',{'prompt':text},verified={'prompt':text}),{'waiting':True})
-                    choose.assert_called_once_with(Path('/unused'),choice,{'prompt':text})
+                    if choice=='resume':
+                        resume.assert_called_once_with(Path('/unused'),{'prompt':text});choose.assert_not_called()
+                    else:
+                        choose.assert_called_once_with(Path('/unused'),choice,{'prompt':text});resume.assert_not_called()
 
     def test_malformed_host_results_cannot_become_review_evidence(self):
         from copy import deepcopy

@@ -16,6 +16,12 @@ name and use `init --name`. For Deliver without configured checks, use the proje
 instructions and CI to register affected checks; preserve existing checks. Planning validates
 its documents without running product tests. Keep OH files and settings outside the consumer.
 
+Deliver and Resume can continue saved work in a fresh session on either host, using the same
+checkout and OH data. Let the runtime transfer ownership; never restart the task or grant new
+allowances to switch hosts. It waits briefly for already-requested Stop/Pause cleanup. If that
+cleanup remains pending, retry the valid command after a short wait without asking for approval.
+A still-active run must first be stopped or paused; do not take it over while workers run.
+
 A valid command remains pending through routine internal repair. Follow OH's concrete remedy
 and continue it within existing authority. For the person's uncommitted changes, conflicts,
 missing authority or an external action, explain the actual issue and use the returned choices.
@@ -113,6 +119,12 @@ publication permission alone does not authorize edits. If an external action or 
 prevents completion, name the check and next step. When interrupted, reuse the PR and inspect its
 current head rather than republishing. End with the PR link, delivered work and actual CI result.
 Human merging remains separate. Never rerun implementation or reviews to recover publication.
+
+For `next_action.kind: observe_publication`, the branch contains later commits beyond OH's
+publication grant. Find the existing PR for the recorded branch/destination and observe its
+current head and CI as above. Do not push, create a PR, call pr_summary or claim those later
+commits are reviewed. If no matching PR exists, preserve the branch and explain that the later
+work needs an authorized review/publication path; this resume grants no new work or publication.
 
 If the host rejects publication, retain the work and grant, explain its actual reason and obtain
 only the specific missing native authorization. Never bypass a rejection through another tool.

@@ -235,7 +235,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     from .delivery import replacements
     git_tree=candidate_tree(root,replacements(root,state)) if role=='review' else None
     directory=journal.path/'attempts'/attempt_id
-    data={'id':attempt_id,'task':task['id'],'role':role,'profile':profile,'tree':before,
+    data={'id':attempt_id,'task':task['id'],'role':role,'host':state['host'],'profile':profile,'tree':before,
           'head':git(root,'rev-parse','HEAD'),'config_hash':state['config_hash'],
           'harness_version':state['harness_version'],'runtime':str(HOME),'git_tree':git_tree,'config':state['config'],'root':str(root)}
     if role=='implementation' and state.get('delivery'):

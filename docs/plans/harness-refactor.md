@@ -629,3 +629,60 @@ documentation-only follow-up to the packaged commit. Next developer scenario: a 
 Deliver should report actual implementer/reviewer transitions, retain a visible final menu, and
 follow the chosen PR's current-head CI through its result. C6's independent review/publication
 remain pending that host trial; no consumer code or OH delivery evidence was edited here.
+
+### Session and host continuation
+
+Approved follow-up: one safe resume path covers a new session in the same host and both
+Codex/Claude directions in the same checkout and shared OH store. Active execution has one
+owner; completed evidence has provenance, not permanent host ownership. No new approval,
+service, configuration or execution state is introduced.
+
+- [x] G1: Consolidate Deliver/Resume continuation under runner-then-control locks. Wait briefly
+  only for already-requested Stop/Pause cleanup; refuse a still-active runner without transfer.
+  Validate retained work/branch and preserve idempotent command replay across crashes.
+- [x] G2 (G1): Transfer host/session together; keep original configuration, difficulty, scope,
+  findings and consumed allowances. New calls use the destination's saved profiles. Preserve
+  per-attempt origin in old and new evidence; reject stale menus and cancellation events.
+- [x] G3 (G1): Resume pending review/semantic/completion gates directly. Reuse valid reports
+  and checks; preserve interrupted review accounting. Already-authorized publication retains
+  its grant; later descendant commits permit PR observation only, never unreviewed publication.
+- [ ] G4 (G1–G3): Extend existing resume/control/receipt fixtures across all four session/host
+  directions and interruption boundaries. Run affected checks and syntax, commit and activate
+  both hosts for developer Desktop Stop → Claude and same-host fresh-session trials.
+
+Golden reference: Deliver and `next.sh` derive continuation from saved work and human task
+choices; host-specific gate adapters do not define which product task exists. Retain OH's
+fresh agents and native session ownership to isolate Stop/menu events, using existing journal
+transitions to move that ownership instead of a second handoff system. Independent review
+and publication follow the developer host trial (AGENTS.md).
+
+G1–G3 implemented through the existing `delivery.continued` transition. The shared ownership
+routine validates the saved branch and work while holding runner/control locks in execution
+order. Already-requested cleanup gets up to ten seconds per call, with a valid Deliver/Resume
+command retained for another automatic attempt if needed. A still-active run is refused.
+Same-host and cross-host moves use this same routine. Explicit Resume always retains the run;
+ordinary later Deliver admission in its existing session keeps its established new-batch and
+branch-refresh semantics, including conflict/human-handoff paths. Those paths were preserved
+after regression checks exposed an overly broad early classification.
+
+Historical attempts derive their original host from the journal at admission; new attempts
+also store it explicitly. Receipts and PR history show that origin without rewriting evidence.
+Typed choices now reject a stale owner before any transition, and cancellation compares host
+as well as session. Stale native menu replies remain bound to the old journal/menu. A recorded
+PR grant with later descendant commits returns the derived `observe_publication` action and
+`publication.observe_only`; native evidence export still refuses the later unreviewed head.
+No execution state, configuration or consumer approval was added.
+
+Validation: all 22 affected modules were exercised. The changed delivery/gate/launcher modules
+were rerun together (88 cases, 393.3s); their final remaining conflict case passed after restoring
+unstarted-work admission (7.8s). The final four-direction matrix passed again (37.8s), including
+unreviewed-publication refusal. Native Resume/menu and completed-recovery cases passed (22.6s);
+interrupted review and updated command dispatch passed (4.9s). Existing fixtures were extended;
+no test method was added. Syntax and Windows-risk checks pass. Logs are external under
+`/tmp/oh-transfer-*.log`. The Resume skill validates after removing its unchanged Claude-specific
+frontmatter key from a temporary validation copy; the source keeps that supported host setting.
+
+A read-only validation against real 0005 accepted host transfer and selected PR observation for
+its later commits. The probe collected the proposed transition in memory; it wrote no consumer
+journal, approval, branch or file. Developer Desktop testing remains necessary before independent
+OH review and publication. The next snapshot must be tested with a fresh session on each host.

@@ -124,9 +124,14 @@ review and reapproval through `/oh-design <slug>` from the checkout containing t
 OH then runs the tasks on `deliver/0005` (`deliver/0005-<track>` for one track), made from
 the up-to-date base branch. If that branch still holds unfinished work, from a delivery you stopped,
 OH first recognizes its saved unfinished task, preserves the draft and continues from the last valid
-implementation/check/review stage. This also works in a new conversation after Stop, including with a newer
-installed OH: the original scope, settings, findings and remaining review allowance stay intact. The checkout
+implementation/check/review stage. This also works in a new conversation in either Codex or Claude after Stop,
+including with a newer installed OH: the original scope, settings, findings and remaining review allowance stay intact. The checkout
 must match the saved branch, HEAD and file contents, and the previous runner must have stopped.
+An explicit `/oh-resume` also transfers the saved run or decision to the current session. OH waits
+briefly for already-requested Stop/Pause cleanup; a live run cannot be taken over. The destination
+uses its profiles from the run's saved settings with the same task difficulty and escalation history.
+Old receipts retain their originating host, and old-session menu answers or cancellation events
+cannot control the resumed work. This uses the same checkout and OH data, not cross-computer migration.
 OH finishes that admitted task before refreshing its branch for further work; it never merges or replaces a
 branch over the retained draft. One pull request then publishes all of it. For later task admission, if the base branch
 conflicts with that work, you choose: start over from the base branch (the branch is discarded), finish
@@ -261,6 +266,9 @@ Reinvoking the same Deliver design from a fresh session at a saved completed-tas
 to that decision. An updated OH runtime verifies the retained commit and plan evidence before
 taking over; task/review allowances and any recorded publication choice remain unchanged.
 No implementation, checks or review are repeated just to reopen that gate.
+If publication was already chosen and the branch now has later descendant commits, a new session
+resumes observation of the existing PR. Those commits are not covered by the earlier OH review;
+the retained publication grant cannot push them or create a new PR for them.
 On the normal publication path, the chat links the PR and observes CI for its current commit.
 It reports pending, failed or unavailable checks honestly, diagnoses failures and gives a concrete
 next step. A changed PR head needs fresh CI observations and is not covered by an earlier OH review.

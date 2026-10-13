@@ -117,61 +117,24 @@ def unticked(text,tasks):
 
 @state_writer
 def continue_stopped(root,doc,track,event):
-    """An explicit Deliver continues retained work or its decision, never issues another window.
-
-    Keep the original journal/config and immutable admissions, including when a newer
-    installed OH executes the continuation. Classify before fresh branch/clean checks.
-    """
+    """Classify retained delivery before branch refresh or selecting new tasks."""
     from .config import version
-    from .storage import checkout_file, digest, lock, changes
-    from .verification import tree
-    from .workflow import active_file, carry_on, checkpoint, load_run, next_task
+    from .workflow import active_file,carry_on,load_run,next_task
     if not active_file(root).exists():return None
     _,state=load_run(root)
-    same=(state.get('workflow'),state.get('design'),state.get('track') or '')==('deliver',doc,track)
-    if (same and state['status'] in ('checkpoint','completed','pr')
-            and (state['harness_version']!=version() or state['human']['session']!=event['session'])
-            and git(root,'branch','--show-current')==state['branch']):
-        return carry_on(root,event)  # the retained decision/grant precedes any new task selection
-    waiting=state['status'] in ('review_checkpoint','findings_checkpoint') and state['harness_version']!=version()
-    if not same or state['status'] not in ('stopped','paused') and not waiting:
-        return None
+    if (state.get('workflow'),state.get('design'),state.get('track') or '')!=('deliver',doc,track):return None
+    moving=((state['host'],state['human']['session'])!=(event['host'],event['session']) or state['harness_version']!=version())
+    boundary=state['status'] in ('checkpoint','completed','pr') or state['status']=='stopped' and not next_task(state|{'status':'running'})
+    if boundary:
+        # A new owner resumes the saved decision. Ordinary later delivery admission
+        # (including refreshed/merged branches) retains its existing branch-selection path.
+        return carry_on(root,event) if moving and git(root,'branch','--show-current')==state['branch'] else None
     task=next_task(state|{'status':'running'})
-    if not task:return None  # a completed-task boundary still follows normal task/PR admission
-    if task['id'] not in state['task_started'] and not any(a['task']==task['id'] for a in state['attempts']):
-        return None  # admitted but never begun: normal branch refresh and task selection still apply
-    expected_run=state['id'];expected_status=state['status']
-    # The runner holds this lock through owned-process cleanup. Never transfer a live run.
-    with lock(checkout_file(root,'oh-runner.lock'),wait=False), lock(checkout_file(root,'oh-control.lock')):
-        journal,state=load_run(root)
-        if state['id']!=expected_run:raise Refused('The active delivery changed; inspect status before continuing')
-        if state['status']!=expected_status:raise Refused('The delivery state changed; inspect status before continuing')
-        if state['host']!=event['host']:raise Final(f"This delivery belongs to {state['host'].title()}; invoke Deliver there to continue it")
-        from .branches import incarnation
-        if git(root,'branch','--show-current')!=state['branch'] or incarnation(root,state['branch'])!=state['incarnation']:
-            raise Refused('The saved delivery branch changed; preserve your edits and return to its original checkout/branch before continuing')
-        stop=state['status_history'][-1]
-        retained=state.get('pause_snapshot') if state['status']=='paused' else stop.get('snapshot')
-        if retained is None:  # older OH saved the returned worker tree, before settled snapshots existed
-            attempts=[a for a in state['attempts'] if a['task']==task['id']]
-            last=attempts[-1] if attempts else None
-            retained=({'tree':last.get('tree'),'head':last.get('head')} if last and last.get('finished')
-                      else {'tree':tree(root),'head':state['summaries'][-1]['commit'] if state['summaries'] else state['base']}
-                      if not attempts and not changes(root) else {})
-        if retained.get('head')!=git(root,'rev-parse','HEAD') or retained.get('tree')!=tree(root):
-            raise Refused('The checkout differs from OH’s saved delivery work. Preserve the edits and inspect that difference before continuing; OH will not discard or claim them.')
-        guard(root,state)
-        # Preserve a pending semantic review decision; the command cannot accept findings.
-        boundary=next((s['status'] for s in reversed(state['status_history'])
-                       if s['status'] not in ('stopped','stopping','paused','pausing')),None)
-        target=boundary if boundary in ('findings_checkpoint','review_checkpoint') else 'running'
-        source=digest({k:event[k] for k in ('host','session','turn','prompt')})
-        journal.append('transition',{'source':event,'events':[
-            {'kind':'delivery.continued','data':{'task':task['id'],'human':event,'source':source,
-                'previous_version':state['harness_version'],'version':version(),'snapshot':retained}},
-            {'kind':'run.status','data':{'status':target,'reason':'The person invoked Deliver to continue the saved approved task.'}}]})
-        result=checkpoint(root)
-    return result|{'continuation':{'task':task['id'],'message':f'Resuming task {task["id"]}: {task["title"][:200]}. Saved work, findings and remaining review allowance are retained.'}}
+    if (not moving and state['status']=='stopped' and task and task['id'] not in state['task_started']
+            and not any(a['task']==task['id'] for a in state['attempts'])):return None
+    if state['status'] in ('stopped','paused','stopping','pausing','review_checkpoint','findings_checkpoint'):
+        return carry_on(root,event)
+    return None
 
 
 def finished(root,doc,track,branch,event):

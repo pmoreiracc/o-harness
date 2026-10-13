@@ -80,6 +80,7 @@ def completed(directory, admission, result, record, state):
     profile = admission.get('profile') or {}
     lines = [f"# Task {record['task']} — {title}", '',
         f"**Branch:** {state['branch']}", f"**OH revision:** {admission.get('harness_version', 'Not recorded')}", f"**Outcome at return:** {record['outcome']}",
+        f"**Host:** {admission.get('host', state['host'])}",
         f"**Model:** {profile.get('model', 'Not recorded')} / {profile.get('effort', 'Not recorded')}",
         f"**Elapsed:** {seconds(record.get('duration_ms'))}", f"**HEAD:** {admission['head']}",
         f"**Reviewed tree:** {admission.get('git_tree') or admission['tree']}",
@@ -116,7 +117,7 @@ def index(journal, state):
         attempts = [a for a in state['attempts'] if a['task'] == task['id']]
         if not attempts:continue
         lines.extend([f"## Task {task['id']}: {task['title']}", '',
-                      '| Attempt | Model | Outcome | Elapsed |', '|---|---|---|---|'])
+                      '| Attempt | Host / model | Outcome | Elapsed |', '|---|---|---|---|'])
         rounds = 0
         for attempt in attempts:
             role = attempt['role']
@@ -128,7 +129,7 @@ def index(journal, state):
             link=artifact(label,relative) if attempt.get('finished') else label
             profile = attempt.get('profile') or {}
             outcome=attempt.get('outcome', 'Incomplete' if attempt.get('finished') else 'Running')
-            lines.append(f"| {link} | {profile.get('model', 'Not recorded')} | {outcome} | {seconds(attempt.get('duration_ms'))} |")
+            lines.append(f"| {link} | {attempt.get('host', 'Not recorded')} / {profile.get('model', 'Not recorded')} | {outcome} | {seconds(attempt.get('duration_ms'))} |")
             resolution = state.get('resolutions', {}).get(attempt['id'])
             scope = state.get('scope_records', {}).get(attempt['id'])
             if resolution:lines.append(f"| Decision | | {resolution['choice']} | |")

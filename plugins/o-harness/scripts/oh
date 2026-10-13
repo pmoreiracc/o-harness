@@ -69,8 +69,8 @@ else:
                     continued=next((e['data']['version'] for e in reversed(events) if e['kind']=='delivery.continued'),None)
                     if continued is not None:continued_revision=continued;break
                     if status in ('stopped','completed','pr'):break
-                # Only a new explicit Deliver can adopt an inactive review checkpoint in a newer runtime.
-                if status not in ('stopped','completed','pr') and not (command=='deliver' and status in ('paused','review_checkpoint','findings_checkpoint')):
+                # Explicit continuation adopts only after the new runtime validates saved work.
+                if status not in ('stopped','completed','pr') and not (command in ('deliver','resume') and status in ('paused','pausing','stopping','checkpoint','review_checkpoint','findings_checkpoint')):
                     revision=continued_revision or json.loads(start.read_bytes())['data']['harness_version']
                     if Path(revision).name!=revision:raise SystemExit('Invalid retained runtime revision')
     entry=home/'versions'/revision/'oh'

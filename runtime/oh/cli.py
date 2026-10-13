@@ -64,6 +64,9 @@ def host_hook(root,host,payload,*,verified,idea=None,request=None):
     from .entry import command
     parsed=command(prompt)
     if parsed and parsed[0]=='choice':prompt=parsed[1]  # retain the original human text in verified evidence
+    if prompt=='resume' and active_file(root).exists():
+        from .workflow import carry_on
+        return carry_on(root,verified)
     from .delivery import parse
     delivery=parse(parsed[1]) if parsed and parsed[0]=='deliver' else None
     if delivery and delivery['kind']=='list':

@@ -37,7 +37,7 @@ def request(root, action, *, expected_run=None, source=None):
         journal, state = load_run(root)
         if expected_run is not None and state['id']!=expected_run:
             return {'run':state['id'],'status':state['status']}
-        if source and source.get('session')!=state['human']['session']:
+        if source and (source.get('session')!=state['human']['session'] or source.get('host',state['host'])!=state['host']):
             return {'run':state['id'],'status':state['status']}
         if action=='stop' and expected_run is not None:clear_waits()
         if state['status'] in ('stopped', 'pr', 'completed'):

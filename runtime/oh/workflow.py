@@ -103,7 +103,7 @@ def reduce(records):
             selected=next(t for t in state['tasks'] if t['id']==d['task'])
             selected.update(difficulty=d['difficulty'],difficulty_reason=d['rationale'])
         elif kind=='task.completed':state['done'].append(d['task']);state['summaries'].append(d)
-        elif kind=='attempt.started':state['attempts'].append(d | {'finished':False,'started_at':record['at']})
+        elif kind=='attempt.started':state['attempts'].append({'host':state['host']} | d | {'finished':False,'started_at':record['at']})
         elif kind=='attempt.admitted':
             admitted=next(a for a in state['attempts'] if a['id']==d['id'])
             admitted['request_hash']=d['hash']
@@ -124,9 +124,9 @@ def reduce(records):
             if d['status']=='paused':state['pause_snapshot']={'tree':d['tree'],'head':d['head']}
         elif kind=='task.intervention':state['interventions'][d['task']]=state['interventions'].get(d['task'],0)+1
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
-        elif kind=='run.owner':state['human']=d['human']
+        elif kind=='run.owner':state['human']=d['human'];state['host']=d['human']['host']
         elif kind=='delivery.continued':
-            state['human']=d['human'];state['harness_version']=d['version']
+            state['human']=d['human'];state['host']=d['human']['host'];state['harness_version']=d['version']
             state.setdefault('continuations',[]).append(d|{'at':record['at']})
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
@@ -272,13 +272,13 @@ def _choose(root, choice, event):
     journal,state=load_run(root)
     events=[]
     def append(kind,data):events.append({'kind':kind,'data':data})
+    if (event['host'],event['session'])!=(state['host'],state['human']['session']):
+        raise Refused('This answer came from an earlier session. Invoke Deliver or Resume here to continue the saved work.')
     source=digest({k:event[k] for k in ('host','session','turn','prompt')})
     if state.get('discard'):
         discard_proposal(root,journal,state)
         state=reduce(journal.records())
     if source in state['decisions']:return state
-    if event['host']!=state['host']:
-        raise Refused('Resume through the host that owns this run')
     if choice=='approve' and 'feedback' in state.get('refinement',{}):
         raise Refused('Revise the unapproved task list and call prepare before asking for approval.')
     if choice=='approve' and state['status'] in ('approval_checkpoint','prepared_checkpoint'):
@@ -500,62 +500,119 @@ def adopted(root,state,own):
     return found
 
 
+def settled_owner(root):
+    """Runner then control, as in execution. Only already-requested cleanup gets a short wait."""
+    from contextlib import ExitStack
+    import time
+    deadline=time.monotonic()+10
+    while True:
+        stack=ExitStack()
+        try:stack.enter_context(lock(checkout_file(root,'oh-runner.lock'),wait=False))
+        except Refused:
+            stack.close()
+            _,state=load_run(root)
+            if state['status'] not in ('stopping','pausing'):
+                raise Refused('This delivery is still running in another call. Stop or pause that work before continuing here.') from None
+            if time.monotonic()>=deadline:
+                raise Refused('OH is still finishing Stop/Pause cleanup. This command remains pending; retry it automatically after a short wait.') from None
+            time.sleep(.1)
+            continue
+        try:
+            stack.enter_context(lock(checkout_file(root,'oh-control.lock')))
+            return stack
+        except BaseException:
+            stack.close();raise
+
+
 def reopen(root,state,event):
-    """Make a finished run this checkout's run again, so its pull request can be chosen: the person typing the
-    delivery again after stopping it at completion wants that choice back. It grants no new work."""
+    """Reopen retained completed work, without granting another task."""
     journal=Journal(state['project'],state['id'])
-    with lock(checkout_file(root,'oh-control.lock')):
-        adopted=owned(root,journal,state,event,reopening=True)
-        if state['status']=='stopped' and not adopted:
-            journal.append('decision',{'source':digest({k:event[k] for k in ('host','session','turn','prompt')}),'choice':'reopen'})
-            journal.append('run.status',{'status':'completed'})
-        atomic_json(active_file(root),{'project':state['project'],'run':state['id'],'checkout':checkout_id(root)})
+    with settled_owner(root):
+        current=reduce(journal.records())
+        owned(root,journal,current,event)
+        atomic_json(active_file(root),{'project':current['project'],'run':current['id'],'checkout':checkout_id(root)})
     return checkpoint(root)
 
 
 def carry_on(root,event):
-    """The person typed the checkout's open run's command again: carry on with it, from this conversation."""
-    with lock(checkout_file(root,'oh-control.lock')):
+    """A current human invocation moves control of retained work, never its authority."""
+    _,before=load_run(root)
+    source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+    if source in before['decisions'] or any(c['source']==source for c in before.get('continuations',[])):
+        return checkpoint(root)
+    with settled_owner(root):
         journal,state=load_run(root)
+        if state['id']!=before['id']:raise Refused('The active run changed; inspect the current work before continuing.')
+        if state['status'] in ('stopping','pausing'):
+            from .controls import _settle
+            _settle(root,journal,state)
+            state=reduce(journal.records())
+        task=next_task(state|{'status':'running'})
         owned(root,journal,state,event)
-    return checkpoint(root)
+    result=checkpoint(root)
+    return result|({'continuation':{'task':task['id'],'message':f'Resuming task {task["id"]}: {task["title"][:200]}. Saved work, findings and remaining review allowance are retained.'}}
+                   if task and result['status']=='running' else {})
 
 
-def owned(root,journal,state,event,*,reopening=False):
-    """A verified command typed in another conversation of the run's host makes that conversation the run's owner,
-    so its menus are answered there. Settled delivery decisions can adopt a newer runtime after checking their
-    completed evidence. The host stays: its workers and transcripts are that host's."""
-    from .storage import Final
-    if state['host']!=event['host']:raise Final(f"This run belongs to {state['host'].title()}; carry on with it there")
+def owned(root,journal,state,event):
+    """Called with runner/control locks. Validate saved work before transferring host/session."""
     from .config import version
-    if (state.get('workflow')=='deliver' and state['status'] in ('checkpoint','completed','pr','stopped')
-            and (state['harness_version']!=version() or state['human'].get('session')!=event['session'])):
-        # Only a settled completed-work boundary can adopt new code here. An unfinished
-        # task uses delivery.continue_stopped's retained worker snapshot instead.
-        with lock(checkout_file(root,'oh-runner.lock'),wait=False):
-            from .branches import incarnation
-            from .verification import tree
-            if git(root,'branch','--show-current')!=state['branch'] or incarnation(root,state['branch'])!=state['incarnation']:
-                raise Refused('The saved delivery branch changed; return to its original checkout/branch before reopening its decision.')
-            last=state['summaries'][-1] if state['summaries'] else None
-            if (not last or next_task(state|{'status':'running'}) or any(not a.get('finished') for a in state['attempts'])
-                    or changes(root) or git(root,'rev-parse','HEAD')!=last['commit']
-                    or git(root,'rev-parse','HEAD^{tree}')!=last['tree']):
-                raise Refused('The checkout differs from OH’s completed delivery work; preserve the edits and reconcile that difference before reopening its decision.')
-            from .delivery_verify import verify_run
-            verify_run(root,state,current=True)
-            source=digest({k:event[k] for k in ('host','session','turn','prompt')})
-            events=[{'kind':'delivery.continued','data':{
-                'task':last['task'],'human':event,'source':source,'previous_version':state['harness_version'],
-                'version':version(),'snapshot':{'head':last['commit'],'tree':tree(root)},
-                'reason':'Reopening the saved completed-work decision; no task or review allowance is granted.'}}]
-            if reopening and state['status']=='stopped':
-                events.extend([{'kind':'decision','data':{'source':source,'choice':'reopen'}},
-                               {'kind':'run.status','data':{'status':'completed'}}])
-            journal.append('transition',{'source':event,'events':events})
-        return True
-    if state['human'].get('session')==event['session']:return
-    journal.append('run.owner',{'human':event})
+    from .branches import incarnation,run_git
+    from .verification import tree,candidate_tree
+    from .delivery import guard,replacements
+    source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+    if source in state['decisions'] or any(c['source']==source for c in state.get('continuations',[])):return
+    same=(state['host'],state['human']['session'])==(event['host'],event['session'])
+    stopped=state['status'] in ('stopped','paused')
+    if same and not stopped and state['harness_version']==version():return
+    if git(root,'branch','--show-current')!=state['branch'] or incarnation(root,state['branch'])!=state['incarnation']:
+        raise Refused('The saved delivery branch changed; return to its original checkout/branch before continuing.')
+    guard(root,state)
+    head=git(root,'rev-parse','HEAD');current=tree(root)
+    task=next_task(state|{'status':'running'})
+    completed=not task and state.get('summaries') and state['summaries'][-1].get('commit')
+    if completed:
+        last=state['summaries'][-1]
+        if any(not a.get('finished') for a in state['attempts']) or changes(root):
+            raise Refused('The checkout differs from OH’s completed delivery work; preserve new edits before continuing.')
+        later=(state['status']=='pr' and state.get('publication',{}).get('head')==last.get('commit') and
+               run_git(root,'merge-base','--is-ancestor',last['commit'],head).returncode==0)
+        if ((head!=last.get('commit') and not later) or
+                (head==last.get('commit') and git(root,'rev-parse','HEAD^{tree}')!=last.get('tree'))):
+            raise Refused('The checkout differs from OH’s completed delivery work; preserve the edits and reconcile that difference before reopening its decision.')
+        from .delivery_verify import verify_run
+        verify_run(root,state,current=True)
+    else:
+        retained=state.get('pause_snapshot') if state['status']=='paused' else (state.get('status_history') or [{}])[-1].get('snapshot') if state['status']=='stopped' else None
+        if retained is None:
+            latest=state['attempts'][-1] if state['attempts'] else None
+            retained={'head':latest.get('head'),'tree':latest.get('tree')} if latest and latest.get('finished') else {'head':state['base'],'tree':current} if not latest and not changes(root) else {}
+        matches=retained.get('head')==head and retained.get('tree')==current
+        # An interrupted deterministic completion is already admitted. Match its exact tree
+        # and commit identity here; complete_reviewed still validates all completion authority.
+        if not matches and task and (intent:=state.get('commit_intents',{}).get(task['id'])):
+            expected=intent['git_tree']
+            if head==intent['parent']:
+                matches=candidate_tree(root,replacements(root,state))==expected
+            elif not changes(root) and git(root,'rev-parse','HEAD^{tree}')==expected:
+                message=git(root,'log','-1','--format=%B')
+                matches=(git(root,'rev-parse','HEAD^')==intent['parent'] and
+                         f"OH-Run: {state['id']}" in message and f"OH-Review: {intent['review']}" in message and
+                         f"OH-Evidence: {digest(intent['publication'])}" in message)
+        if not matches:
+            raise Refused('The checkout differs from OH’s saved delivery work. Preserve the edits and reconcile that difference before continuing; OH will not discard or claim them.')
+    target=state['status']
+    if stopped:
+        boundary=next((s['status'] for s in reversed(state.get('status_history',[]))
+                       if s['status'] not in ('stopped','stopping','paused','pausing')), 'running')
+        target=state.get('pause_return_status',boundary) if state['status']=='paused' else boundary
+        if completed and target=='running':target='completed'
+    task_id=task['id'] if task else state['summaries'][-1]['task'] if state['summaries'] else state['tasks'][0]['id']
+    events=[{'kind':'delivery.continued','data':{'task':task_id,
+        'human':event,'source':source,'previous_version':state['harness_version'],'version':version(),
+        'snapshot':{'head':head,'tree':current},'reason':'The person continued retained work; no task or review allowance was granted.'}}]
+    if target!=state['status']:events.append({'kind':'run.status','data':{'status':target,'reason':'Continuing the saved work or decision in this session.'}})
+    journal.append('transition',{'source':event,'events':events})
 
 
 def review_progress(state,task):
@@ -640,7 +697,7 @@ def checkpoint(root):
             if state['status']=='needs_attention' else {}) | (
             {'model_notices':model_notices} if model_notices else {}) | (
             {'last_review':last_review} if last_review else {}) | running_progress(state,journal.path) | (
-            {'publication':state['publication']|{'next':('Execution is finished. Use pr_summary, push only publication.head to publication.branch on publication.remote, and open one PR targeting publication.base_branch. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.' if state['publication'].get('destination') and not state.get('publication_changed') else 'Confirm the current publication destination with the returned native question; all completed work and review are retained.')}}
+            {'publication':state['publication']|{'observe_only':bool(state.get('publication_observe_only')),'next':('The branch contains later commits. Observe the existing PR on the recorded destination; do not push or describe later work as reviewed.' if state.get('publication_observe_only') else 'Execution is finished. Use pr_summary, push only publication.head to publication.branch on publication.remote, and open one PR targeting publication.base_branch. Report its number, link and a short summary. Do not ask for PR approval again, call run or repeat implementation/review.' if state['publication'].get('destination') and not state.get('publication_changed') else 'Confirm the current publication destination with the returned native question; all completed work and review are retained.')}}
             if state['status']=='pr' and state.get('publication') else {}) | (
             {'handoff':state['review_handoff']|{'next':'OH stopped with unresolved work for human PR triage. No task completion, review renewal or publication approval was granted.'}}
             if state.get('review_handoff') else {})|(

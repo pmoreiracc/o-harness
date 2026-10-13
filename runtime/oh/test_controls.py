@@ -94,6 +94,7 @@ class ControlsTest(unittest.TestCase):
         before=len(journal.records())
         self.assertEqual(request(self.root,'stop',expected_run=state['id'],source={'session':'previous-owner'})['status'],'running')
         self.assertEqual(request(self.root,'stop',expected_run='previous-run',source={'session':'s'})['status'],'running')
+        self.assertEqual(request(self.root,'stop',expected_run=state['id'],source={'host':'claude','session':'s'})['status'],'running')
         self.assertEqual(len(journal.records()),before)
         self.assertEqual(request(self.root,'pause')['status'],'paused')
         (self.root/'manual').write_text('preserve')

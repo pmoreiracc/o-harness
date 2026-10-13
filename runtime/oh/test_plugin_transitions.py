@@ -81,14 +81,16 @@ class PluginTransitions(unittest.TestCase):
             {'kind':'run.status','data':{'status':'running'}}]}})
         atomic_json(journal/'000004.json',{'kind':'run.status','data':{'status':'review_checkpoint'}})
         atomic_json(home/'runtime/active.json',{'revision':'v3'})
-        for command in ('start','run','resume','pause','stop'):
+        for command in ('start','run','pause','stop'):
             self.assertEqual(call(command),'v2')
         self.assertEqual(call('deliver'),'v3')  # the explicit command can adopt this unchanged waiting checkpoint
+        self.assertEqual(call('resume'),'v3')
         atomic_json(journal/'000005.json',{'kind':'run.status','data':{'status':'paused'}})
         self.assertEqual(call('deliver'),'v3')
-        self.assertEqual(call('resume'),'v2')
+        self.assertEqual(call('resume'),'v3')
         atomic_json(journal/'000005.json',{'kind':'run.status','data':{'status':'running'}})
         self.assertEqual(call('deliver'),'v2')  # a live execution never switches underneath its worker
+        self.assertEqual(call('resume'),'v2')
         atomic_json(journal/'000006.json',{'kind':'run.status','data':{'status':'stopped'}})
         self.assertEqual(call(),'v3')
         (home/'versions/v1/oh').unlink()

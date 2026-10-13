@@ -615,7 +615,7 @@ def materialize(root):
         except Exception as exc:
             # A refused command that starts work stays pending and is spent only once carried out, so `oh run`
             # carries it out when the reason is fixed, without the person typing it again. A newer command or a
-            # later menu answer replaces it; a newer prompt sets it aside. A choice (a menu word, /oh-resume)
+            # later menu answer replaces it; a newer prompt sets it aside. A choice (a menu word)
             # answers the moment it was typed at, and a failure OH did not foresee would only repeat: those are
             # said once and spent, as is a refusal that is the command's last word.
             refused=exc if isinstance(exc,Refused) else Refused(f'OH could not carry out this command ({type(exc).__name__}: {exc})')
@@ -637,7 +637,7 @@ def starts_work(locator):
     """A typed command that starts work (propose, design, deliver, a prepared request), which OH keeps until done."""
     from .entry import command
     parsed=command((locator.get('event') or {}).get('prompt'))
-    return bool(locator.get('idea')) or bool(parsed) and parsed[0] in ('propose','design','deliver','oh-start')
+    return bool(locator.get('idea')) or bool(parsed) and parsed[0] in ('propose','design','deliver','oh-start','oh-resume')
 
 
 def waiting_file(session):

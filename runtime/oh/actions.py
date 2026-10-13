@@ -15,7 +15,7 @@ def next_action(state, current_tree=None, *, verified=False):
     status = state['status']
     if status in ('stopping', 'pausing', 'stopped', 'paused'):
         return {'kind': 'stopped' if status in ('stopping', 'stopped') else 'paused', 'phase': status}
-    if status == 'pr':return {'kind': 'publish' if state.get('publication',{}).get('destination') and not state.get('publication_changed') else 'decision', 'phase': 'publication'}
+    if status == 'pr':return {'kind': 'observe_publication' if state.get('publication_observe_only') else 'publish' if state.get('publication',{}).get('destination') and not state.get('publication_changed') else 'decision', 'phase': 'publication'}
     if status == 'needs_attention':return {'kind': 'blocked', 'phase': 'needs_attention'}
     if status == 'review_checkpoint' and state.get('workflow', 'deliver') == 'deliver':
         continuation = next_action(state | {'status': 'running'}, current_tree)
@@ -83,6 +83,7 @@ def choices(state):
     from .workflow import committed, continue_limits
     from .gates import approval_effect
     status = state['status']
+    if status=='pr' and state.get('publication_observe_only'):return None
     if status=='pr' and (not state.get('publication',{}).get('destination') or state.get('publication_changed')):
         return [('pr','Confirm the destination for the already-reviewed work.'),('stop','Keep the work locally.')]
     if status=='prepared_checkpoint':

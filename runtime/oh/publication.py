@@ -32,7 +32,8 @@ def destination_state(root, state):
     if state['status']!='pr':return state
     grant=state.get('publication') or {}
     expected={k:grant.get(k) for k in ('remote','destination','remote_fingerprint')}
-    return state|{'publication_changed':destination(root)!=expected}
+    return state|{'publication_changed':destination(root)!=expected,
+                  'publication_observe_only':bool(grant.get('head') and git(root,'rev-parse','HEAD')!=grant['head'])}
 
 
 def public_value(root,state,value):
@@ -61,7 +62,7 @@ def public_value(root,state,value):
 
 def task_evidence(root,state,task,review,parent):
     attempts=[a for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
-    history=[{k:a.get(k) for k in ('id','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions')} for a in attempts]
+    history=[{k:a.get(k) for k in ('id','host','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions')} for a in attempts]
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
@@ -240,10 +241,10 @@ def readable(records,states,root=None):
     lines.extend(['','<details><summary>Review history, findings and decisions</summary>',''])
     for record in records:
         evidence=record['evidence']
-        lines.extend([f"### Task {evidence['task']}",'', '| Round | Outcome | Model | Elapsed |', '|---|---|---|---|'])
+        lines.extend([f"### Task {evidence['task']}",'', '| Round | Outcome | Host / model | Elapsed |', '|---|---|---|---|'])
         for number,attempt in enumerate(evidence['attempts'],1):
             profile=attempt.get('profile') or {}
-            lines.append(f"| {number} | {attempt['outcome']} | {profile.get('model','Not recorded')} | {seconds(attempt.get('duration_ms'))} |")
+            lines.append(f"| {number} | {attempt['outcome']} | {attempt.get('host') or evidence.get('host','Not recorded')} / {profile.get('model','Not recorded')} | {seconds(attempt.get('duration_ms'))} |")
         for number,attempt in enumerate(evidence['attempts'],1):
             lines.extend(['',f'#### Review {number}',''])
             if attempt.get('findings'):
