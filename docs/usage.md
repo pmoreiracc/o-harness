@@ -211,6 +211,9 @@ useful edits. If a worker returns unfinished work, OH continues the same task on
 with concrete remaining steps; no review is spent until implementation completes. A completed
 report includes a current task packet: requirements, rules, affected surfaces, proof, self-review,
 family closure, every prior finding disposition, verification, repair diagnoses and limits.
+Implementers use focused checks while working, finish self-review and owning documentation/generated
+changes before final verification, and wait without editing while those checks run. Passing evidence
+is valid only for the unchanged final work; later edits require verification again.
 Both the implementer and reviewer submit reports before exiting and correct report errors in
 the same agent call. A malformed report does not restart implementation or rerun passing checks.
 OH preserves recognizable review findings even when other receipt fields are malformed;

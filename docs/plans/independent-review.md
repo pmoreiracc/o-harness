@@ -178,3 +178,77 @@ requires a small repair; confirm the following review still covers the whole ori
 During a long phase, confirm observation waits through startup and renews without repeating
 unchanged updates. Check current findings in the decision question and repair/allowance choices
 in the final PR preview. Fresh independent OH review remains after this trial, before publication.
+
+
+## Verification sequencing and bounded quality follow-up
+
+Approved after the task-11 Desktop trial. The scheduled monitor is paused. Work remains on
+`codex/harness-refactor`; consumer repositories and active snapshots are unchanged.
+
+- [x] Correct implementer/tool sequencing: focused checks during development, self-review and
+  generated/reference edits before final verification, no simultaneous edits, then submit.
+- [x] Compare a replacement family/self-review paragraph on the observed mutable-rule and
+  mixed-deletion risks in disposable fixtures. Retain only supported guidance; do not add a
+  report field, reviewer pass, model call, gate or generic mandatory test matrix.
+- [x] Keep owning unchanged reference checks bounded to the affected operation, within the
+  same self-review. Run causal existing tests, compare prompt size and record trial limits.
+- [x] Challenge the final diff against scope and record the result before snapshot activation.
+
+Evidence motivating this work: the task-11 run had four passing but stale verification runs
+(7.5 minutes of configured checks), one repeated duplicate family and late documentation
+findings. The golden reference also says verify then self-review, but invalidates its readiness
+manifest after edits; this is a concrete reason to improve that ordering rather than copy it.
+Its review-ready.sh retains exact-tree evidence; OH keeps its equivalent protection unchanged.
+Evaluation cost is temporary: compare current/candidate guidance on each host's standard
+profile with the same bounded fixture and checks; no extra evaluation agent enters production.
+
+
+### Calibration result and retained change
+
+Only final-verification sequencing, its tool feedback and bounded owning-reference guidance
+are retained. The candidate family paragraph was reverted: both baseline and candidate solved
+all six fixture outcomes (unchanged/changed/removed merchant rules, distinct source facts,
+mixed deletion failures and owning route prose), and preserved the original commit. Existing
+family/permission/replay requirements remain unchanged. This avoids shipping a rewrite without
+an observed quality benefit.
+
+The isolated four-call trial used the configured standard subscription profiles. Both variants
+received the same approved fixture and checks. A synthetic read-only assessment held selection
+constant, so no assessment tokens or reviewer calls were incurred. Existing native immutable
+admissions, report submission and verification were used; no commits or publication occurred.
+
+| Host / variant | Seconds | Input tokens | Output tokens | Cached subset of input | Verification calls |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Codex / baseline | 159.36 | 185245 | 4910 | 161664 | 1 |
+| Codex / candidate | 132.21 | 173149 | 4254 | 150912 | 1 |
+| Claude / baseline | 24.70 | 64044 | 2258 | 46198 | 1 |
+| Claude / candidate | 37.02 | 140068 | 3850 | 125217 | 2 |
+
+No variant produced stale verification. Claude's candidate first ran the original failing
+regression, then verified the repair; its second call was useful failure reproduction, not a
+redundant passing run. Both hosts completed with an accepted report. One paired fixture per
+host cannot establish production token savings or guarantee closure on a large task. It does
+not measure total delivery cost including assessment, repair/review rounds or host interaction.
+The table describes the tested candidate; its unproven family rewrite is not in the final diff.
+Temporary fixtures, original evidence and the comparison script remain outside Git under
+`/tmp/oh-sequencing-*`. No model, effort, tool, report field or agent was added to production.
+
+Automated validation: the existing final-tree fixture now also rejects a passing command whose
+checkout changes during execution, then accepts fresh unchanged evidence. That fixture and
+both-host unfinished-work continuation passed in 15.24s. No new test case or module was added.
+The generic golden-reference order was intentionally changed because the native final-tree
+contract exposed four stale passing runs in the real trial; final evidence protection is retained.
+
+Final validation: existing family-receipt, batch/phase-boundary and Stop-during-review cases
+passed (3 tests, 63.38s); five targeted automated cases passed overall. Syntax, Windows-risk
+and diff whitespace checks pass. No full-suite run or new test module was needed.
+
+Final scope self-review: runtime changes are instruction strings only. Check selection,
+execution, before/after fingerprints, report validation, authority, review allowances,
+escalation, models, Stop/resume and publication paths are unchanged. Code/test claims still
+require opening their sources; owning-reference guidance supplements rather than replaces
+that requirement. The implementer paragraph is 523 words versus 514 before (+9); there are
+no added mandatory calls or report sections. Actual per-task token impact remains to be
+measured on a production-sized trial; neither prompt length nor this small calibration proves
+savings. The installed development snapshot is unchanged. Fresh independent review and
+publication remain subject to the established development workflow.

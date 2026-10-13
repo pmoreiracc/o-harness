@@ -409,6 +409,15 @@ class WorkflowTest(unittest.TestCase):
                 self.assertFalse(submit_report(args[5],value['structured'])['accepted'])
                 failed=[{'name':'fixture','returncode':1,'duration_ms':0,'reused':False,'output':'Wrong behavior'}]
                 with patch('oh.worker_checks.verify',return_value=failed):self.assertFalse(checks(args[5])['passed'])
+                def changed_during_checks(*arguments,**options):
+                    results=verify(*arguments,**options)
+                    (self.root/'during-check.txt').write_text('a late self-review edit',newline='\n')
+                    return results
+                with patch('oh.worker_checks.verify',side_effect=changed_during_checks):
+                    checked=checks(args[5])
+                self.assertTrue(all(c['returncode']==0 for c in checked['checks']))
+                self.assertFalse(checked['passed'])
+                self.assertFalse(submit_report(args[5],value['structured'])['accepted'])
                 self.assertTrue(checks(args[5])['passed'])
                 self.assertFalse(submit_report(args[5],value['structured']|{'readiness':READINESS|{'repairs':[]}})['accepted'])
                 self.assertTrue(submit_report(args[5],value['structured'])['accepted'])
@@ -424,7 +433,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual([c[0] for c in self.calls],['implementation','review'])
         with self.assertRaises(Refused):checks(directories[-1])
         journal,state=load_run(self.root)
-        self.assertEqual(sum(r['kind']=='verification' for r in journal.records()),3)
+        self.assertEqual(sum(r['kind']=='verification' for r in journal.records()),4)
         self.assertEqual(sum(a['role']=='review' for a in state['attempts']),1)
 
     def test_failed_review_does_not_repeat_successful_implementation(self):

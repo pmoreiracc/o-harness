@@ -91,8 +91,8 @@ def run(directory):
         passed=before==after and not any(check_failed(r) for r in results)
         return {'passed':passed,'checks':[{k:r.get(k) for k in ('name','command','returncode','duration_ms','cancellation','unavailable')} for r in results],
                 'failure':failure_summary(results,state['config']['context']['result_chars']) if not passed else '',
-                'next':('Complete self-review; call verify again after any further edit.' if passed else
-                        'Checks changed the working tree. Inspect the changes and call verify again.' if before!=after else
+                'next':('If self-review and edits are complete, submit the readiness report with this evidence. Any further edit requires verification again.' if passed else
+                        'The checkout changed during verification. Finish edits, then verify again without editing while it runs.' if before!=after else
                         'Diagnose and fix the failure within this task, then call verify again before returning.')}
 
 
