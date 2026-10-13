@@ -49,13 +49,14 @@ same cell in intervals of at most 60 seconds. About every 210 seconds, read `sta
 relay a new concrete `progress.focus.message` in one sentence.
 
 In Claude, start each execution with Bash `run_in_background: true` and `timeout: 7200000`.
-Observe that command until it returns; do not end the turn and rely only on the final background
+Establish progress observation before yielding; do not rely only on the final background
 notification. Load Monitor if available and run `<plugin>/scripts/oh --root <checkout> observe
 --run <run-id> --follow` with `timeout_ms: 1800000`. Read the run id from startup status or the last
 execution result. Renew an expired watch while that same execution is active; an observer's
 expiry never restarts or stops execution. Without Monitor, use `observe --run <run-id> --wait 60
 --after <cursor>` repeatedly, carrying forward the returned cursor and reporting new focus no
-more than about every 210 seconds. Do not use long Bash sleeps or deprecated TaskOutput polling.
+more than about every 210 seconds. With a live Monitor, yield to its notifications; without one,
+stay active through these bounded observation calls. Do not use long Bash sleeps or deprecated TaskOutput polling.
 Read the complete original command result when it finishes; `done` from an observer only says
 to inspect it. Never truncate JSON with head/tail or infer continuation from observer prose.
 Renew observation silently; report new work or an actual obstacle, not the renewal itself.
