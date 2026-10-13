@@ -88,7 +88,7 @@ def preview(journal,state,ident):
 
 
 def native_ask(gate):
-    """Codex Desktop's small, persistent question; its native answer is verified by authority."""
+    """Codex Desktop's native question; its human answer is verified by authority."""
     choices=[o['label'] for o in gate['options']]
     # The host supplies no hidden checkpoint field: retain the existing marker so a
     # delayed old payload cannot be displayed later and approve a replacement scope.
@@ -324,10 +324,14 @@ def how(gate, root):
                 f'Typing works too: {typed}.')
     panel='Open gate.preview in the right panel with open_in_codex when available. Show its link. ' if gate.get('preview') else ''
     if gate.get('native_publication'):
-        return ('Ask once with request_user_input_async using exactly gate.native_ask, then end the turn while awaiting the human reply. '
+        return ('Report the result and gate summary first. Ask once with request_user_input_async using exactly gate.native_ask. '
+                'Keep the turn open until the person answers: use clock.sleep in intervals of at most 60 seconds, interrupted by new input. '
+                'Do not send a final answer after opening the question; ending the turn can dismiss the unanswered menu. '
                 'The native reply records publication permission in Codex as well as OH. After the reply call OH run. '
-                'If this native question tool is unavailable, show the full question and typed choices once and wait for a direct human reply. '
-                'Do not use an MCP confirmation for publication or poll while waiting. '+f'Typed choices: {typed}.')
+                'If the question or interruptible wait tool is unavailable, or the person reports a disappearing menu, '
+                'show the full question and typed choices once and wait for a direct human reply instead of reopening the same failing menu. '
+                'Do not use an MCP confirmation for publication, poll OH status, or repeat updates while waiting. '
+                'Silence and elapsed time grant nothing. '+f'Typed choices (case-insensitive): {typed}.')
     return (panel+'Call the OH choose tool directly. It waits for and records the human click; do not use a yielding '
             'execution wrapper, status polling or repeated sleeps while awaiting this decision. Follow its returned next step. '
             'A cancelled or missing menu grants nothing. If the result has status pr, '

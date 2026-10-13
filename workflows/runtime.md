@@ -59,17 +59,23 @@ If no panel is available, show the link. Other routine decisions need no side pa
 
 For ordinary Codex menus, call `choose` directly and await its answer without polling. For
 publication, `gate.how` or `choose` returns a native question: use `request_user_input_async`
-with exactly `native_ask`, then end the turn while waiting. After the actual human reply, call
-`run`; OH verifies it. If the native question tool is unavailable, show the complete question
-and typed choices once and wait for a direct human reply. Do not replace publication permission
-with an MCP confirmation. In Claude, use exactly `gate.ask` with AskUserQuestion, without an
-`answers` field. A cancelled question or silence grants nothing.
+with exactly `native_ask`, after reporting the result and gate summary. Keep the turn open
+until the person answers, using `clock.sleep` in intervals of at most 60 seconds; new input
+interrupts the wait. Do not send a final answer after opening the question: ending the turn
+can dismiss the unanswered menu. Do not poll OH status or repeat progress while waiting.
+After the actual human reply, call `run`; OH verifies it. If the native question or interruptible
+wait tool is unavailable, or the person reports a disappearing menu, show the complete question
+and typed choices once and wait for a direct human reply instead of reopening that failing menu.
+Bare choices are case-insensitive; preserve the original human message as evidence. Do not
+replace publication permission with an MCP confirmation. In Claude, use exactly `gate.ask`
+with AskUserQuestion, without an `answers` field. A cancelled question or silence grants nothing.
 
 After Refine, ask `waiting.ask` in ordinary conversation and end the turn. The next message
 supplies the refinement; call `run` to retain it. If OH returns `prepare`, revise only the
 unapproved task list and call `prepare` again. The resulting preview receives its own approval.
-Do not make the person repeat their answer. If a menu is missing, refresh status and reopen
-its current question; preserve the existing work and choice.
+Do not make the person repeat their answer. If an ordinary menu is missing, refresh status and
+reopen its current question; preserve the existing work and choice. For a disappearing publication
+question, use the direct typed fallback above instead of repeating the failed interaction.
 
 ## Results and publication
 

@@ -22,7 +22,8 @@ def command(prompt):
     match=re.fullmatch(PREFIX+r'oh-(start|pause|resume|stop|propose|design|deliver)(?:\s+(.*))?',prompt,re.S)
     # Workflow skills are invoked as oh-propose/oh-design/oh-deliver; internally they keep their workflow names.
     if match:return (match[1] if match[1] in ('propose','design','deliver') else 'oh-'+match[1]),match[2] or ''
-    if prompt in CHOICES or re.fullmatch(REFINE,prompt,re.S):return 'choice',prompt
+    if prompt.casefold() in CHOICES:return 'choice',prompt.casefold()
+    if re.fullmatch(REFINE,prompt,re.S):return 'choice',prompt
     return None
 
 

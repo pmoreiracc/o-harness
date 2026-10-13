@@ -655,10 +655,11 @@ class ReviewResultTest(unittest.TestCase):
         from .cli import host_hook
         from .entry import CHOICES
         for choice in CHOICES:
-            with patch('oh.cli.choose') as choose,patch('oh.cli.active_file') as active,patch('oh.cli.checkpoint',return_value={'waiting':True}):
-                active.return_value.exists.return_value=True
-                self.assertEqual(host_hook(Path('/unused'),'codex',{'prompt':choice},verified={'prompt':choice}),{'waiting':True})
-                choose.assert_called_once_with(Path('/unused'),choice,{'prompt':choice})
+            for text in (choice,choice.capitalize(),choice.upper()):
+                with patch('oh.cli.choose') as choose,patch('oh.cli.active_file') as active,patch('oh.cli.checkpoint',return_value={'waiting':True}):
+                    active.return_value.exists.return_value=True
+                    self.assertEqual(host_hook(Path('/unused'),'codex',{'prompt':text},verified={'prompt':text}),{'waiting':True})
+                    choose.assert_called_once_with(Path('/unused'),choice,{'prompt':text})
 
     def test_malformed_host_results_cannot_become_review_evidence(self):
         from copy import deepcopy

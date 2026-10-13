@@ -63,6 +63,7 @@ def host_hook(root,host,payload,*,verified,idea=None,request=None):
         return checkpoint(root)
     from .entry import command
     parsed=command(prompt)
+    if parsed and parsed[0]=='choice':prompt=parsed[1]  # retain the original human text in verified evidence
     from .delivery import parse
     delivery=parse(parsed[1]) if parsed and parsed[0]=='deliver' else None
     if delivery and delivery['kind']=='list':

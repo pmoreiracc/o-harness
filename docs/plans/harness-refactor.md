@@ -406,3 +406,59 @@ Original failed exploratory trials are retained externally and excluded from the
 C6 remains open only for the developer's Desktop resume/publication trial, fresh independent OH
 review and PR/CI. The paused consumer remains untouched: one of three review rounds was used,
 and its latest retained report and verification passed the read-only compatibility check.
+
+### Publication question correction — Desktop trial, 2026-10-13
+
+Task 9 reached a clean sixth review and native completion commit `892a49c` in the consumer.
+No publication choice was applied. The native question was accepted, followed seconds later by
+a final answer/turn completion; the developer observed the menu appear and immediately close
+again when reopened. No context-compaction event occurred. Separately, the human typed `Pr`:
+the case-sensitive command parser ignored that valid choice, leaving `pr_summary` unauthorized.
+The accepted question-tool result did not establish that the question remained visible.
+
+- [x] D1: Normalize bare command choices without rewriting native human evidence or accepting
+  arbitrary prose. Extend existing choice/publication fixtures for `Pr` and uppercase choices.
+- [x] D2: Show results before the native question and keep its turn waiting for the human reply
+  with the existing interruptible host wait. Preserve the exact question/destination binding,
+  no authority from silence, and the typed fallback when native display is unavailable or fails.
+  Validate the actual Desktop question lifetime before claiming this host correction works.
+- [ ] D3: Run affected gate/authority/MCP checks and syntax, then prepare a development candidate
+  for the developer's host trial before independent review/publication. Do not modify the
+  completed consumer run or publish from this monitoring/development conversation.
+
+Golden reference: `harness-before-separation` Deliver task checkpoint and `codex-gate.sh` wait
+for an explicit human command; they do not require a transient native popup. OH retains its
+native publication question to share the user's exact destination approval with Codex, and
+uses the proven direct-human-command path as its fallback. Capitalization has no bearing on
+the approved scope. Existing transcript, current-menu, destination and one-use checks remain.
+Internal workflow citations are deferred at the developer's request.
+
+D1 validation: the existing native gate fixture now consumes a direct `Pr` reply, retains `Pr`
+in the immutable human source and binds publication to the same reviewed HEAD. Existing native
+question stale-answer and changed-destination cases pass in that fixture. The existing choice
+dispatch fixture checks lowercase, capitalized and uppercase bare choices without rewriting the
+source. Both affected cases passed; no additional test method was introduced. The initial sandbox
+attempt could not inspect fixture processes (`/bin/ps`); the unchanged fixtures passed with that
+local permission. No native receipt, choice or consumer work was modified here.
+
+Desktop question lifetime trial: the developer confirmed that the same native async question
+stayed visible for at least 20 seconds while this turn remained open, and its native answer
+arrived successfully. This validates the wait mechanism; publication through the updated
+Deliver coordinator still requires the development snapshot trial.
+
+The affected run exposed a superseded assertion in the gate suite: it expected the old dotted
+plugin override and unrelated plugins to remain enabled in a child. The prior isolation change
+intentionally disables inherited interactive tools using parsed TOML tables. Removed that
+duplicated command-shape block; the existing integration fixture already proves tool isolation,
+project/user configuration coverage and unchanged user settings. Kept the worker/menu and
+wrong-runtime authority checks in the gate test. Production isolation was not weakened.
+
+Validation finished: all 22 affected modules were exercised. Twenty-one passed initially;
+the gate module passed after the obsolete block was removed (38 cases including the existing
+isolation fixture, 77.7s). The focused choice/publication cases passed, as did syntax and
+Windows-risk checks. Logs: `/tmp/oh-publication-affected.log`,
+`/tmp/oh-publication-gates-final.log` and `/tmp/oh-publication-syntax.log` (external, not committed).
+D3 remains open for the developer's next snapshot activation and actual publication trial.
+The current consumer session still uses its original snapshot; an exact lowercase `pr` is its
+existing fallback. Neither the ignored capitalized message nor the display-test answer here
+was turned into consumer publication authority.

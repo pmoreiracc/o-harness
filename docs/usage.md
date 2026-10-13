@@ -250,6 +250,8 @@ the next task and finite allowance explained in chat. On Codex, publication uses
 and actual human reply, so the same decision is visible to OH and Codex. It names the branch,
 destination and PR target, while keeping credentials out of the question and report. Choosing PR returns the retained
 publication grant and routes directly to push/PR, without executing or reviewing the work again.
+Direct bare choices are case-insensitive (`pr`, `Pr` and `PR` select the same offered action);
+the original human message is retained unchanged as evidence. Other prose is not inferred as a choice.
 On the normal publication path, the next chat message is the PR number/link and result, including
 the recorded review-round count. The host may still require its own publication authorization; OH
 does not retry a rejected payload through another confirmation tool. Covered by

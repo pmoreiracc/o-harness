@@ -737,6 +737,23 @@ class GateTest(unittest.TestCase):
         self.assertNotIn('secret',text);self.assertNotIn('private',text)
         self.assertEqual(load_run(self.root)[1]['status'],'checkpoint')  # an MCP result never grants publication
 
+        # A direct human reply still works when the Desktop question disappears.
+        # Normalize only the choice; the retained authority keeps the person's exact text.
+        from .test_mcp_server import codex_session
+        from .storage import now
+        codex_session(self.home,'s',self.root)
+        path=next((self.home/'.codex/sessions').rglob('*s.jsonl'))
+        with path.open('a',newline='\n') as stream:
+            for record in [
+                {'type':'event_msg','payload':{'type':'task_started','turn_id':'typed-pr'}},
+                {'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','message':'Pr'}}]:
+                stream.write(json.dumps(record)+'\n')
+        with patch.dict(os.environ,{'CODEX_THREAD_ID':'s','CODEX_HOME':str(self.home/'.codex'),'OH_CODEX_TURN_ID':'typed-pr'}),patch('oh.branches.fetched',return_value='main'):
+            self.assertEqual(materialize(self.root)['status'],'pr')
+        journal,state=load_run(self.root)
+        self.assertEqual(state['publication']['head'],self.git('rev-parse','HEAD'))
+        self.assertEqual([r for r in journal.records() if r['kind']=='transition'][-1]['data']['source']['prompt'],'Pr')
+
         # Short native labels still bind the actual human click to the exact saved publication scope.
         self.begin('codex')
         self.git('remote','add','origin','git@github.com:example/product.git')
@@ -865,14 +882,8 @@ class GateTest(unittest.TestCase):
         self.assertIn('updated after this run started', text)
         self.assertFalse(any(m.get('method') == 'elicitation/create' for m in sent))
         self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
-        from .hosts import command
-        config = self.home / 'codex-home/config.toml';config.parent.mkdir(parents=True)
-        config.write_text('[plugins."o-harness@o-harness"]\nenabled = true\n[plugins."other@x"]\nenabled = true\n', newline='\n')
-        with patch('oh.hosts.executable', return_value='codex'), patch.dict(os.environ, {'CODEX_HOME': str(config.parent)}):
-            args = command('codex', {'model': 'm', 'effort': 'low'}, self.root, 'implementation', None)
-        self.assertIn('plugins."o-harness@o-harness".enabled=false', args)
-        self.assertFalse(any('other@x' in a for a in args))
-        self.assertFalse(any('model_auto_compact_token_limit' in a for a in args))
+        # Invocation-only plugin/MCP isolation and unchanged user settings are covered
+        # by IntegrationTest.test_codex_document_permissions_preserve_configured_paths.
 
     def test_each_host_gets_its_own_menu_mechanism(self):
         from .installation import build
