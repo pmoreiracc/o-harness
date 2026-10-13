@@ -238,6 +238,11 @@ before the commit or saved document, explicitly identifying a clean review with 
 exit status and cancellation reason when available. A newer active attempt or result supersedes
 that current-failure display; the original remains in the history. Check repair feedback
 is plain text without terminal colour codes; the complete retained check result stays in the journal.
+Review packets carry concise verification results instead of repeating check logs as remaining
+work. The receipt index shows active reviews as running and labels an implementer's claimed
+repair as awaiting review confirmation; a later clean review confirms closure. Missing results
+are labelled unavailable rather than linked to nonexistent files. Original receipts stay unchanged.
+Covered by `test_repair_review_retains_prior_family_and_exact_subject`.
 Covered by `test_failed_worker_cause_reaches_status_and_automatic_continuation` and
 `test_review_requires_implementer_checks_for_the_final_unchanged_tree` in `runtime/oh/test_workflow.py`.
 It avoids repeated promises to commit or publish. At a batch boundary, **Stop and take over** retains the work
@@ -256,8 +261,12 @@ Reinvoking the same Deliver design from a fresh session at a saved completed-tas
 to that decision. An updated OH runtime verifies the retained commit and plan evidence before
 taking over; task/review allowances and any recorded publication choice remain unchanged.
 No implementation, checks or review are repeated just to reopen that gate.
-On the normal publication path, the next chat message is the PR number/link and result, including
-the recorded review-round count. The host may still require its own publication authorization; OH
+On the normal publication path, the chat links the PR and observes CI for its current commit.
+It reports pending, failed or unavailable checks honestly, diagnoses failures and gives a concrete
+next step. A changed PR head needs fresh CI observations and is not covered by an earlier OH review.
+Publication recovery reuses the PR; publication permission does not authorize new code edits.
+The final result includes the recorded review-round count and actual CI outcome. The host may
+still require its own publication authorization; OH
 does not retry a rejected payload through another confirmation tool. Covered by
 `test_initial_and_continue_same_batch_snapshot_and_idempotent_restart`,
 `test_codex_menu_records_the_click_itself` and `test_native_pr_evidence_binds_all_commits_and_refuses_tampering`.

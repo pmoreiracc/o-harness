@@ -24,7 +24,9 @@ A persistent obstacle must name the next action; it does not create a recovery a
 
 ## Execution and visibility
 
-Introduce the selected work and its process once. Use “implementation agent”, “planning agent”
+Before selection, say you are checking the requested work and saved delivery state. Once the
+runtime selects work, introduce its process once; a saved final decision needs no new worker.
+Use “implementation agent”, “planning agent”
 or “proposal agent”, and “independent reviewer agent”. Independent review challenges correctness,
 requirements, failure paths and test claims. Explain that the work may take several minutes.
 
@@ -35,7 +37,9 @@ and wait for that same command. These waits observe work and never launch anothe
 
 About every 210 seconds, read `status` once and relay a new concrete `progress.focus.message` in
 one sentence. Deduplicate by attempt and focus id, including native progress already reported.
-Do not invent progress or reread raw transcripts. Report actual transitions/failures when observed.
+Do not invent progress or reread raw transcripts. Report actual transitions/failures when observed:
+say which agent finished which work and which agent is starting next. During review, challenge
+is in progress, not approval. A spent review allowance means the reviewer has not started.
 Use the original execution result when it finishes; inspect status immediately if interrupted or
 asked. Show each new model compatibility notice once without a new approval.
 
@@ -90,7 +94,24 @@ an external temporary file. It revalidates the reviewed commits and destination.
 `publication.head` to `refs/heads/<publication.branch>` on `publication.remote`, using quoted
 arguments. Check for an existing PR, then create or reuse one against `publication.base_branch`;
 use `gh pr create --body-file` for the saved body. In Codex attach its URL with `attach_artifact`.
-Report the PR link and brief result; distinguish local verification from any observed remote CI.
+Report the PR link, then observe its checks with `gh pr view --json headRefOid,statusCheckRollup,url`.
+Keep each observation compact: current head, check names and states; read job logs only to
+diagnose a failure. Do not accumulate complete check responses in the conversation.
+Bind observations to that head: if it changes, discard the previous head's readiness result and
+inspect the new head's checks. The saved OH review still covers only its recorded commit;
+do not describe a different head as independently reviewed. Wait responsively in intervals of at most 60 seconds while checks
+are queued or running; report meaningful changes, not every poll. Do not use fail-fast watching
+that hides remaining check results. Local checks or a successful push do not establish CI success.
+If no checks appear, allow one short wait for registration, then report that CI was not observed;
+never call an empty check list a pass. Report cancelled, failed, skipped or action-required checks
+honestly; do not call the PR ready when verification failed or is still unresolved.
+
+For failures, read the relevant job log and explain the cause and smallest concrete correction.
+Do not rerun unchanged failures or edit code as part of this publication step. A correction must
+go through implementation, verification and independent review under appropriate task authority;
+publication permission alone does not authorize edits. If an external action or unavailable CI
+prevents completion, name the check and next step. When interrupted, reuse the PR and inspect its
+current head rather than republishing. End with the PR link, delivered work and actual CI result.
 Human merging remains separate. Never rerun implementation or reviews to recover publication.
 
 If the host rejects publication, retain the work and grant, explain its actual reason and obtain

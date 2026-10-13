@@ -517,3 +517,65 @@ for both Codex and Claude as `0.6.0-SNAPSHOT.1791855995703845000`. `oh-dev statu
 both hosts on that exact snapshot and source revision. The consumer run was not resumed or
 published by this development session. The developer's fresh-session publication trial and
 independent OH review remain in C6.
+
+### Quality and delivery visibility — follow-up
+
+The developer confirmed the fresh-session final gate worked. The new session resumed task 9
+without implementation/review and opened consumer PR #144 with one publication answer.
+Its coordinator ended while CI was pending; a failed test timeout was discovered by the developer.
+The earlier six review receipts contain 13 families: five original, seven first-round escapes
+and one test-proof regression. This is evidence of late discovery, not repeated ignored repairs.
+
+This follow-up preserves execution decisions, authority, models, schemas, allowances and
+Stop/resume. No additional agent, service, consumer file or approval is introduced. Automatic
+post-publication repair and internal skill citations remain deferred.
+
+- [ ] F1: Save baseline instructions and reuse live-agent trial tooling with small synthetic
+  clean/defective fixtures for public contracts, time boundaries, siblings and weakened race
+  proof. Compare baseline and candidate twice per host using unchanged configured profiles;
+  record detection, false findings, rounds, observed tokens and elapsed time.
+- [ ] F2 (F1): Replace overlapping implementation/review instructions with ordered coverage
+  derived from approved requirements and actual operations, then challenge author claims.
+  Preserve full-task review and family closure. Keep only changes supported by trial evidence.
+- [x] F3: Remove check logs from review remaining-work; label running/incomplete reviews and
+  claimed/confirmed repairs accurately, retaining original evidence and human dispositions.
+- [x] F4: Clarify existing agent phase messages at actual handoffs, distinguishing a waiting
+  review allowance from a started review. Reuse existing progress delivery/deduplication.
+- [x] F5: Extend shared publication instructions to observe CI for the current PR head,
+  diagnose failure, and report missing/external checks honestly; do not implement CI repair.
+- [x] F6: Create the deferred project-local learning GitHub issue with bounded, evidence-linked
+  lessons, relevance and staleness handling; no lesson creates authority or escalation.
+- [ ] F7 (F1–F6): Extend existing behavioral fixtures, run affected/syntax checks and comparative
+  trials, commit focused changes and activate a candidate on both hosts for the developer's
+  host trial. Independent review and publication follow that trial, as required by AGENTS.md.
+
+Golden reference: Deliver's inspectable readiness, whole-family repair and complete coverage
+lenses are retained. Its reviewer calibration method is useful without its promotion machinery;
+its publication path explicitly waits for current-head CI. OH uses the existing coordinator for
+that observation rather than introducing a CI repair loop. No trial can prove exhaustive review
+quality; report measured misses and false findings instead of assuming improved savings.
+
+Coverage map: extend `test_plugin_transitions`' existing repair/receipt scenario for bounded
+handoffs, active/missing artifacts and claim labels; extend existing workflow progress/allowance
+scenarios for real transition ordering. Shared workflow prose gets scenario validation rather
+than assertions matching its wording. All historical receipt readers and authority checks remain.
+
+F3/F4 evidence: the existing repair/receipt fixture passes with running and missing-result cases,
+bounded check summaries and claimed/confirmed labels. Existing progress and allowance fixtures
+pass; phase messages follow immutable admission, and a spent allowance launches no reviewer.
+No test method was added. F5's seven fixed coordinator scenarios passed on actual Codex and
+Claude standard-profile calls: pending CI, changed head, failed check, absent CI, interrupted PR,
+spent review allowance and successful checks. Both preserved review/publication authority and
+proposed no edits. This validates instruction interpretation, not actual GitHub/Desktop behavior;
+the developer snapshot trial still verifies that path. Scenario results are external under
+`/tmp/oh-quality-coordinator-v2-{codex,claude}/result.json`.
+
+F6: created [issue #80](https://github.com/pmoreiracc/o-harness/issues/80),
+“Project-local learning from escaped and recurring defects”. Its design and implementation
+remain deferred. Handoff messaging is included in F4 rather than tracked as another feature.
+
+F7 automated evidence: all 22 affected test modules passed, as did syntax/Windows-risk checks.
+The final allowance-message extension also passed separately (11.2s); progress ordering passed
+in 3.6s. Logs are external at `/tmp/oh-quality-{affected,syntax,focused,progress,allowance}.log`.
+The Deliver skill validator passed using the existing temporary validator dependencies.
+Code and behavioral fixture changes are committed as `8e2f601`.
