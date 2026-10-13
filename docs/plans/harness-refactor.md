@@ -646,7 +646,7 @@ service, configuration or execution state is introduced.
 - [x] G3 (G1): Resume pending review/semantic/completion gates directly. Reuse valid reports
   and checks; preserve interrupted review accounting. Already-authorized publication retains
   its grant; later descendant commits permit PR observation only, never unreviewed publication.
-- [ ] G4 (G1–G3): Extend existing resume/control/receipt fixtures across all four session/host
+- [x] G4 (G1–G3): Extend existing resume/control/receipt fixtures across all four session/host
   directions and interruption boundaries. Run affected checks and syntax, commit and activate
   both hosts for developer Desktop Stop → Claude and same-host fresh-session trials.
 
@@ -686,3 +686,10 @@ A read-only validation against real 0005 accepted host transfer and selected PR 
 its later commits. The probe collected the proposed transition in memory; it wrote no consumer
 journal, approval, branch or file. Developer Desktop testing remains necessary before independent
 OH review and publication. The next snapshot must be tested with a fresh session on each host.
+
+G4 activation: commit `33e85c71e9b920f564108a88f98327420728447a` was rebuilt and enabled as
+`0.6.0-SNAPSHOT.1791887114519730000` on both Codex and Claude; `oh-dev status` confirmed both
+hosts on that exact source. The remaining manual trial is Desktop Stop during work, followed by
+Deliver/Resume in a fresh session in either host; 0005 currently resumes its existing PR observation.
+This activation record is a documentation-only follow-up. Independent review remains after the
+developer host trial, and no OH PR has been opened or merged by this change.
