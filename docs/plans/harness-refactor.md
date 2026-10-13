@@ -422,7 +422,7 @@ The accepted question-tool result did not establish that the question remained v
   with the existing interruptible host wait. Preserve the exact question/destination binding,
   no authority from silence, and the typed fallback when native display is unavailable or fails.
   Validate the actual Desktop question lifetime before claiming this host correction works.
-- [ ] D3: Run affected gate/authority/MCP checks and syntax, then prepare a development candidate
+- [x] D3: Run affected gate/authority/MCP checks and syntax, then prepare a development candidate
   for the developer's host trial before independent review/publication. Do not modify the
   completed consumer run or publish from this monitoring/development conversation.
 
@@ -458,10 +458,10 @@ the gate module passed after the obsolete block was removed (38 cases including 
 isolation fixture, 77.7s). The focused choice/publication cases passed, as did syntax and
 Windows-risk checks. Logs: `/tmp/oh-publication-affected.log`,
 `/tmp/oh-publication-gates-final.log` and `/tmp/oh-publication-syntax.log` (external, not committed).
-D3 remains open for the developer's next snapshot activation and actual publication trial.
-The current consumer session still uses its original snapshot; an exact lowercase `pr` is its
-existing fallback. Neither the ignored capitalized message nor the display-test answer here
-was turned into consumer publication authority.
+D3's candidate was subsequently activated with E3 below; the actual publication trial remains
+in C6. Existing consumer sessions retain their loaded snapshot until the developer opens a fresh
+session. Neither the ignored capitalized message nor the display-test answer here was turned
+into consumer publication authority.
 
 ### Gate coverage and fresh-session final checkpoint — 2026-10-13
 
@@ -477,7 +477,7 @@ The heartbeat is paused. Consumer code/evidence stays untouched during developme
   recorded publication grant. Validate the saved branch/HEAD/tree and plan evidence before
   adoption; reject live execution or changed work. Reuse existing continuation fixtures on
   both hosts and the completed-delivery fixture rather than adding a parallel suite.
-- [ ] E3: Run affected checks and syntax, commit the coherent correction, rebuild and activate
+- [x] E3: Run affected checks and syntax, commit the coherent correction, rebuild and activate
   the fixed snapshot for both hosts. Verify the installed revision. The developer then invokes
   Deliver 0005 in a fresh session; it must return directly to the saved final decision without
   starting another task or rerunning checks/reviews.
@@ -512,5 +512,8 @@ the same human command still reaches the final gate. Both continuation scenarios
 (33.5s), and all 22 affected test modules passed. Syntax/Windows-risk checks passed. Logs remain
 external in `/tmp/oh-gate-resume-affected.log`, `/tmp/oh-final-gate-atomic.log` and
 `/tmp/oh-gate-resume-syntax.log`. No test method or suite was added for this correction.
-E3 activation follows this verified candidate; the actual fresh-session publication trial and
+E3 activation succeeded: source commit `a20e02bd430bac4c6fc0981ed2e5d21260d5999b` is enabled
+for both Codex and Claude as `0.6.0-SNAPSHOT.1791855995703845000`. `oh-dev status` confirmed
+both hosts on that exact snapshot and source revision. The consumer run was not resumed or
+published by this development session. The developer's fresh-session publication trial and
 independent OH review remain in C6.
