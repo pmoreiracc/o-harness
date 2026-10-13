@@ -462,3 +462,55 @@ D3 remains open for the developer's next snapshot activation and actual publicat
 The current consumer session still uses its original snapshot; an exact lowercase `pr` is its
 existing fallback. Neither the ignored capitalized message nor the display-test answer here
 was turned into consumer publication authority.
+
+### Gate coverage and fresh-session final checkpoint — 2026-10-13
+
+The developer requested the monitoring heartbeat be stopped, every equivalent menu path be
+audited, and the corrected snapshot be enabled before resuming 0005 in a fresh session.
+The heartbeat is paused. Consumer code/evidence stays untouched during development.
+
+- [x] E1: Audit shared and host-specific gate entry points. Ensure native async publication
+  questions retain the corrected wait at partial-task, completed-run and changed-destination
+  gates; ordinary blocking menus and prose-only clarification keep their appropriate handling.
+- [x] E2: Resume a settled completed-task decision under the new runtime and owning session,
+  preserving completed commits, original receipts, settings, task/review allowances and any
+  recorded publication grant. Validate the saved branch/HEAD/tree and plan evidence before
+  adoption; reject live execution or changed work. Reuse existing continuation fixtures on
+  both hosts and the completed-delivery fixture rather than adding a parallel suite.
+- [ ] E3: Run affected checks and syntax, commit the coherent correction, rebuild and activate
+  the fixed snapshot for both hosts. Verify the installed revision. The developer then invokes
+  Deliver 0005 in a fresh session; it must return directly to the saved final decision without
+  starting another task or rerunning checks/reviews.
+
+Reference: golden Deliver step 2 and `next.sh` distinguish a task checkpoint, completed branch
+and recorded PR choice before selecting runnable work. OH keeps that distinction while using
+its existing journal and subscription runtime. The current gap is runtime adoption at those
+settled boundaries, not missing user scope or a reason to grant another task.
+
+E1 audit: `gates.how` is shared by partial batch, completed run and changed-destination
+publication questions across Deliver, Propose and Design. All use the corrected native wait.
+Other Codex approvals/review/scope/pause menus use blocking `choose`; configuration uses
+blocking `confirm`. Claude uses its blocking native question and the existing human-answer
+hook. Missing idea/initiative/track and Refine replies use plain conversation, so ending
+those turns does not dismiss a pending native menu. No second async gate implementation was
+found. The existing publication fixture also verifies that a changed destination produces
+its own current question without replacing the saved old grant.
+
+E2 validation: extended the existing Stop/resume fixture through the final decision and a
+recorded PR grant on Codex/repository and Claude/private plans. The same run, completed HEAD,
+receipts, task/review allowances and settings survived both session and runtime changes;
+no worker or check was rerun. Live-run and dirty-checkout adoption is refused. The existing
+finished-design fixture covers a new runtime after Stop and rejects an amended HEAD.
+Both scenarios passed (30.1s total). Read-only inspection of real 0005 confirms its clean
+completed commit and plan evidence match, with task 9 done and no further granted task.
+The fixture initially lacked a publication remote and reused an old human turn ID; corrected
+those inputs, preserving production publication and stale-command checks.
+
+Final E2 checks also interrupt the finished-run handoff before updating the active pointer.
+Runtime adoption and reopening a stopped completed run are one journal transition, so replaying
+the same human command still reaches the final gate. Both continuation scenarios passed again
+(33.5s), and all 22 affected test modules passed. Syntax/Windows-risk checks passed. Logs remain
+external in `/tmp/oh-gate-resume-affected.log`, `/tmp/oh-final-gate-atomic.log` and
+`/tmp/oh-gate-resume-syntax.log`. No test method or suite was added for this correction.
+E3 activation follows this verified candidate; the actual fresh-session publication trial and
+independent OH review remain in C6.

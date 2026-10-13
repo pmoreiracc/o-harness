@@ -252,6 +252,10 @@ destination and PR target, while keeping credentials out of the question and rep
 publication grant and routes directly to push/PR, without executing or reviewing the work again.
 Direct bare choices are case-insensitive (`pr`, `Pr` and `PR` select the same offered action);
 the original human message is retained unchanged as evidence. Other prose is not inferred as a choice.
+Reinvoking the same Deliver design from a fresh session at a saved completed-task gate returns
+to that decision. An updated OH runtime verifies the retained commit and plan evidence before
+taking over; task/review allowances and any recorded publication choice remain unchanged.
+No implementation, checks or review are repeated just to reopen that gate.
 On the normal publication path, the next chat message is the PR number/link and result, including
 the recorded review-round count. The host may still require its own publication authorization; OH
 does not retry a rejected payload through another confirmation tool. Covered by

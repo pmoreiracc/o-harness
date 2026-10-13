@@ -86,6 +86,40 @@ class DeliveryTest(unittest.TestCase):
                         self.assertEqual(run(case.root,finish)['status'],'checkpoint')
                     self.assertEqual([c[0] for c in case.calls],['implementation','implementation','review'])
                     self.assertEqual(load_run(case.root)[1]['done'],['1'])
+                    # A later snapshot resumes at the completed-task gate, without admitting task 2.
+                    before=load_run(case.root)[1];head=case.git('rev-parse','HEAD')
+                    with patch('oh.config.version',return_value='gate-runtime'),patch('oh.branches.refresh') as refresh:
+                        from .storage import checkout_file,lock
+                        with lock(checkout_file(case.root,'oh-runner.lock'),wait=False),self.assertRaises(Refused):
+                            case.start_delivery(turn='live-boundary',host=host,session='gate-chat')
+                        (case.root/'mine.txt').write_text('preserve',newline='\n')
+                        with self.assertRaisesRegex(Refused,'completed delivery work'):
+                            case.start_delivery(turn='dirty-boundary',host=host,session='gate-chat')
+                        self.assertEqual(load_run(case.root)[1],before)
+                        (case.root/'mine.txt').unlink()
+                        resumed=case.start_delivery(turn='gate-boundary',host=host,session='gate-chat')
+                        self.assertEqual((resumed['run'],resumed['status']),(before['id'],'checkpoint'))
+                        self.assertEqual(resumed['gate']['choices'],['continue','pr','stop'])
+                        self.assertEqual(run(case.root,case.fake)['status'],'checkpoint')
+                        updated=load_run(case.root)[1]
+                        for key in ('config','config_hash','tasks','granted','attempts','done','summaries','review_grants'):
+                            self.assertEqual(updated.get(key),before.get(key))
+                        self.assertEqual(updated['harness_version'],'gate-runtime')
+                        self.assertEqual(updated['human']['session'],'gate-chat')
+                        self.assertEqual(case.git('rev-parse','HEAD'),head)
+                        refresh.assert_not_called()
+                        # A publication already approved at this boundary survives a fresh session too.
+                        from .workflow import human_event
+                        human=human_event({'hook_event_name':'UserPromptSubmit','session_id':'gate-chat','turn_id':'publish','prompt':'pr'},host)
+                        case.git('remote','add','origin','https://github.com/example/fixture.git')
+                        with patch('oh.branches.fetched',return_value='origin/main'):choose(case.root,'pr',human)
+                        grant=load_run(case.root)[1]['publication']
+                        with patch('oh.config.version',return_value='publication-runtime'):
+                            resumed=case.start_delivery(turn='publication-boundary',host=host,session='publication-chat')
+                            self.assertEqual(resumed['next_action']['kind'],'publish')
+                            self.assertNotIn('gate',resumed)
+                            self.assertEqual(load_run(case.root)[1]['publication'],grant)
+                    self.assertEqual([c[0] for c in case.calls],['implementation','implementation','review'])
                 finally:case.doCleanups()
 
     def test_stopped_continuation_rejects_changed_checkout_or_live_runner(self):
@@ -280,18 +314,25 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         # Days later, from a new conversation: the PR choice is back, and answered there.
         from .workflow import human_event
-        def typed(session,host='codex'):
-            event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':'later','prompt':'/oh-deliver 0001'},host)
+        def typed(session,host='codex',turn='later'):
+            event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':'/oh-deliver 0001'},host)
             return host_hook(self.root,host,{'prompt':'/oh-deliver 0001'},verified=event)
         from .storage import Final
         with self.assertRaisesRegex(Final,'belongs to Codex'):typed('elsewhere','claude')  # said once, then spent
-        self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
+        with patch('oh.config.version',return_value='new-completion-runtime'):
+            # Runtime adoption and reopening are one recorded transition. A crash before
+            # rewriting the active pointer cannot consume this command while leaving it stopped.
+            with patch('oh.workflow.atomic_json',side_effect=OSError('before active pointer')):
+                with self.assertRaisesRegex(OSError,'before active pointer'):typed('new')
+            self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
+            self.assertEqual(load_run(self.root)[1]['harness_version'],'new-completion-runtime')
+            self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertEqual(load_run(self.root)[1]['human']['session'],'new')
         _choose(self.root,'pr',self.event('pr','pr'))
         self.assertEqual(load_run(self.root)[1]['status'],'pr')
         # The person amends OH's last commit: OH can't offer that head's PR any more, and says so once.
         (self.root/'mine.txt').write_text('mine\n',newline='\n');self.git('add','mine.txt');self.git('commit','-q','--amend','--no-edit')
-        with self.assertRaisesRegex(Final,'open one yourself'):typed('new')
+        with self.assertRaises(Refused):typed('new',turn='amended')
 
     def stopped_in_conflict(self,location='repo'):
         """A delivery stopped after task 1 while someone else's change on main touches the file it wrote."""

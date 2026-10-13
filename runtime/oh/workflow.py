@@ -505,8 +505,8 @@ def reopen(root,state,event):
     delivery again after stopping it at completion wants that choice back. It grants no new work."""
     journal=Journal(state['project'],state['id'])
     with lock(checkout_file(root,'oh-control.lock')):
-        owned(journal,state,event)
-        if state['status']=='stopped':
+        adopted=owned(root,journal,state,event,reopening=True)
+        if state['status']=='stopped' and not adopted:
             journal.append('decision',{'source':digest({k:event[k] for k in ('host','session','turn','prompt')}),'choice':'reopen'})
             journal.append('run.status',{'status':'completed'})
         atomic_json(active_file(root),{'project':state['project'],'run':state['id'],'checkout':checkout_id(root)})
@@ -517,16 +517,44 @@ def carry_on(root,event):
     """The person typed the checkout's open run's command again: carry on with it, from this conversation."""
     with lock(checkout_file(root,'oh-control.lock')):
         journal,state=load_run(root)
-        owned(journal,state,event)
+        owned(root,journal,state,event)
     return checkpoint(root)
 
 
-def owned(journal,state,event):
+def owned(root,journal,state,event,*,reopening=False):
     """A verified command typed in another conversation of the run's host makes that conversation the run's owner,
-    so its menus are answered there. The host stays: its workers and transcripts are that host's."""
-    if state['human'].get('session')==event['session']:return
+    so its menus are answered there. Settled delivery decisions can adopt a newer runtime after checking their
+    completed evidence. The host stays: its workers and transcripts are that host's."""
     from .storage import Final
     if state['host']!=event['host']:raise Final(f"This run belongs to {state['host'].title()}; carry on with it there")
+    from .config import version
+    if (state.get('workflow')=='deliver' and state['status'] in ('checkpoint','completed','pr','stopped')
+            and (state['harness_version']!=version() or state['human'].get('session')!=event['session'])):
+        # Only a settled completed-work boundary can adopt new code here. An unfinished
+        # task uses delivery.continue_stopped's retained worker snapshot instead.
+        with lock(checkout_file(root,'oh-runner.lock'),wait=False):
+            from .branches import incarnation
+            from .verification import tree
+            if git(root,'branch','--show-current')!=state['branch'] or incarnation(root,state['branch'])!=state['incarnation']:
+                raise Refused('The saved delivery branch changed; return to its original checkout/branch before reopening its decision.')
+            last=state['summaries'][-1] if state['summaries'] else None
+            if (not last or next_task(state|{'status':'running'}) or any(not a.get('finished') for a in state['attempts'])
+                    or changes(root) or git(root,'rev-parse','HEAD')!=last['commit']
+                    or git(root,'rev-parse','HEAD^{tree}')!=last['tree']):
+                raise Refused('The checkout differs from OH’s completed delivery work; preserve the edits and reconcile that difference before reopening its decision.')
+            from .delivery_verify import verify_run
+            verify_run(root,state,current=True)
+            source=digest({k:event[k] for k in ('host','session','turn','prompt')})
+            events=[{'kind':'delivery.continued','data':{
+                'task':last['task'],'human':event,'source':source,'previous_version':state['harness_version'],
+                'version':version(),'snapshot':{'head':last['commit'],'tree':tree(root)},
+                'reason':'Reopening the saved completed-work decision; no task or review allowance is granted.'}}]
+            if reopening and state['status']=='stopped':
+                events.extend([{'kind':'decision','data':{'source':source,'choice':'reopen'}},
+                               {'kind':'run.status','data':{'status':'completed'}}])
+            journal.append('transition',{'source':event,'events':events})
+        return True
+    if state['human'].get('session')==event['session']:return
     journal.append('run.owner',{'human':event})
 
 

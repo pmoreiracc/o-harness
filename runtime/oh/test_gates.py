@@ -786,6 +786,11 @@ class GateTest(unittest.TestCase):
         from .publication import render
         with patch('oh.branches.fetched',return_value='main'),self.assertRaisesRegex(Refused,'destination changed'):
             render(self.root)
+        changed=checkpoint(self.root)
+        self.assertEqual(changed['next_action']['kind'],'decision')
+        self.assertEqual(changed['gate']['choices'],['pr','stop'])
+        self.assertIn('example/different.git',changed['gate']['native_ask']['questions'][0]['title'])
+        self.assertEqual(load_run(self.root)[1]['publication']['destination'],'ssh://github.com/example/product.git')
 
     def delayed_menu_commands(self,superseded):
         """A native command predates the menu click, but reaches OH only after its cleanup finished."""

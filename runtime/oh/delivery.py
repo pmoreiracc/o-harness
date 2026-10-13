@@ -117,7 +117,7 @@ def unticked(text,tasks):
 
 @state_writer
 def continue_stopped(root,doc,track,event):
-    """An explicit Deliver continues the retained granted task, never issues another window.
+    """An explicit Deliver continues retained work or its decision, never issues another window.
 
     Keep the original journal/config and immutable admissions, including when a newer
     installed OH executes the continuation. Classify before fresh branch/clean checks.
@@ -125,12 +125,16 @@ def continue_stopped(root,doc,track,event):
     from .config import version
     from .storage import checkout_file, digest, lock, changes
     from .verification import tree
-    from .workflow import active_file, checkpoint, load_run, next_task
+    from .workflow import active_file, carry_on, checkpoint, load_run, next_task
     if not active_file(root).exists():return None
     _,state=load_run(root)
+    same=(state.get('workflow'),state.get('design'),state.get('track') or '')==('deliver',doc,track)
+    if (same and state['status'] in ('checkpoint','completed','pr')
+            and (state['harness_version']!=version() or state['human']['session']!=event['session'])
+            and git(root,'branch','--show-current')==state['branch']):
+        return carry_on(root,event)  # the retained decision/grant precedes any new task selection
     waiting=state['status'] in ('review_checkpoint','findings_checkpoint') and state['harness_version']!=version()
-    if ((state.get('workflow'),state.get('design'),state.get('track') or '')!=('deliver',doc,track)
-            or state['status'] not in ('stopped','paused') and not waiting):
+    if not same or state['status'] not in ('stopped','paused') and not waiting:
         return None
     task=next_task(state|{'status':'running'})
     if not task:return None  # a completed-task boundary still follows normal task/PR admission

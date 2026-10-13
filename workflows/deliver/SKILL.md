@@ -14,6 +14,8 @@ Pass the user's arguments to `deliver` without reinterpreting a refusal as a dif
 - `0005 [track]` starts or resumes approved work directly. OH preserves a stopped task's useful
   draft, findings, settings and remaining allowance before any branch refresh. Relay its brief
   continuation message. No preparation step or second trigger is required.
+  If the saved batch is complete, show its existing final decision. Do not start another task
+  or rerun implementation, checks or review. A recorded publication choice continues publication.
 - Prose returns `quick_fix`. Inspect that bounded change and prepare tasks with `id`, `title`,
   `instructions` and optional ordered `needs`. In Codex call `prepare`; in Claude save the
   manifest under external OH project storage and use `prepare <path>`. Present the returned
