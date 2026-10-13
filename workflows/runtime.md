@@ -36,13 +36,31 @@ Use “implementation agent”, “planning agent”
 or “proposal agent”, and “independent reviewer agent”. Independent review challenges correctness,
 requirements, failure paths and test claims. Explain that the work may take several minutes.
 
-Keep one execution call in flight. Use yielding/background execution so the conversation stays
-responsive: in Codex, a functions.exec wrapper can use `// @exec: {"yield_time_ms": 1000}` and
-wait for the same cell in intervals of at most 60 seconds; in Claude, use Bash background execution
-and wait for that same command. These waits observe work and never launch another run.
+Each native execution call runs at most one agent phase. The implementation phase includes its
+checks and repairs; the runner saves evidence and finishes deterministic transitions before
+returning. If the result has `continue_execution: true`, call `run` automatically. This continues
+the same approved run with a fresh call budget; it is not a user decision or an interrupted
+attempt. `phase_result` describes the phase that returned; use it for a concise factual handoff.
+Never choose the next agent yourself. Each phase has up to two hours, with cleanup
+headroom; the workflow has no total deadline. Never launch overlapping execution calls.
 
-About every 210 seconds, read `status` once and relay a new concrete `progress.focus.message` in
-one sentence. Deduplicate by attempt and focus id, including native progress already reported.
+In Codex, use yielding execution (`functions.exec` with `yield_time_ms: 1000`) and wait for that
+same cell in intervals of at most 60 seconds. About every 210 seconds, read `status` once and
+relay a new concrete `progress.focus.message` in one sentence.
+
+In Claude, start each execution with Bash `run_in_background: true` and `timeout: 7200000`.
+Observe that command until it returns; do not end the turn and rely only on the final background
+notification. Load Monitor if available and run `<plugin>/scripts/oh --root <checkout> observe
+--run <run-id> --follow` with `timeout_ms: 1800000`. Read the run id from startup status or the last
+execution result. Renew an expired watch while that same execution is active; an observer's
+expiry never restarts or stops execution. Without Monitor, use `observe --run <run-id> --wait 60
+--after <cursor>` repeatedly, carrying forward the returned cursor and reporting new focus no
+more than about every 210 seconds. Do not use long Bash sleeps or deprecated TaskOutput polling.
+Read the complete original command result when it finishes; `done` from an observer only says
+to inspect it. Never truncate JSON with head/tail or infer continuation from observer prose.
+Renew observation silently; report new work or an actual obstacle, not the renewal itself.
+
+Deduplicate by attempt and focus id, including native progress already reported.
 Do not invent progress or reread raw transcripts. Report actual transitions/failures when observed:
 say which agent finished which work and which agent is starting next. During review, challenge
 is in progress, not approval. A spent review allowance means the reviewer has not started.
@@ -57,7 +75,9 @@ owned work and retains edits; Pause lets the current step finish before waiting.
 
 ## Decisions
 
-Follow `gate.how` and its exact question/choices. Explain `gate.summary` briefly. For review
+First give the short delivered-change, check and review context in `gate.summary`, then follow
+`gate.how` and its exact question/choices. This summary precedes the tool that opens the menu,
+on both hosts. Include interrupted attempts in the review count. For review
 findings, explain each current finding and the effect of the offered choices; read the linked
 report for details when needed. For an allowance, state reviews used, remaining work and the
 additional allowance. Prior receipts are history, not new results or new authority.

@@ -83,11 +83,27 @@ class ControlsTest(unittest.TestCase):
             result=self.fake(*args,**kwargs)
             if args[4]=='review':request(self.root,'pause')
             return result
-        self.assertEqual(run(self.root,paused)['status'],'paused')
+        for _ in range(3):
+            result=run(self.root,paused,one_phase=True)
+            if not result['continue_execution']:break
+        self.assertEqual(result['status'],'paused')
         self.assertEqual(self.git('rev-parse','HEAD'),original)
         choose(self.root,'resume',self.event('2','oh-resume'))
-        self.assertEqual(run(self.root,self.fake)['completed'],1)
+        self.assertEqual(run(self.root,self.fake,one_phase=True)['completed'],1)
         self.assertEqual(len(self.calls),2)
+
+        # Stop after a saved implementation, between calls, prevents the next reviewer/commit.
+        choose(self.root,'stop',self.event('3','stop'))
+        start(self.root,{'tasks':[self.tasks[1]|{'needs':[]}]},self.event('4'))
+        head=self.git('rev-parse','HEAD')
+        self.assertTrue(run(self.root,self.fake,one_phase=True)['continue_execution'])
+        self.assertTrue(run(self.root,self.fake,one_phase=True)['continue_execution'])
+        before=len(self.calls);granted=load_run(self.root)[1]['granted']
+        request(self.root,'stop')
+        result=run(self.root,self.fake,one_phase=True)
+        self.assertEqual((result['status'],result['continue_execution']),('stopped',False))
+        self.assertEqual(len(self.calls),before);self.assertEqual(self.git('rev-parse','HEAD'),head)
+        self.assertEqual(load_run(self.root)[1]['granted'],granted)
 
     def test_stopped_is_terminal_and_manual_edits_invalidate_paused_resume(self):
         journal,state=start(self.root,{'tasks':self.tasks[:1]},self.event())

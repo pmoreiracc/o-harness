@@ -79,8 +79,8 @@ class WorkflowTest(unittest.TestCase):
         self.assessment_calls=[]
         self.assessment_output={'difficulty':'standard','rationale':'A contained fixture change','references':['product.txt'],'uncertainty':[]}
         self.auto_assessment=True
-        def attempting(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke):
-            if root!=self.root:return actual_attempt(root,journal,state,task,role,profile,feedback,invoke)
+        def attempting(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke,**options):
+            if root!=self.root:return actual_attempt(root,journal,state,task,role,profile,feedback,invoke,**options)
             def working(*args,**kwargs):
                 if args[4]=='assessment' and self.auto_assessment:
                     self.assessment_calls.append((args[2],args[3]))
@@ -104,8 +104,8 @@ class WorkflowTest(unittest.TestCase):
                     submit_report(args[5],result['structured'])
                 return result
             if invoke is hosts.invoke:
-                with patch.object(hosts,'invoke',working):return actual_attempt(root,journal,state,task,role,profile,feedback,working)
-            return actual_attempt(root,journal,state,task,role,profile,feedback,working)
+                with patch.object(hosts,'invoke',working):return actual_attempt(root,journal,state,task,role,profile,feedback,working,**options)
+            return actual_attempt(root,journal,state,task,role,profile,feedback,working,**options)
         instrument=patch.object(runner,'attempt',side_effect=attempting);instrument.start();self.addCleanup(instrument.stop)
 
     def git(self,*args):return subprocess.check_output(['git','-C',str(self.root),*args],stderr=subprocess.DEVNULL).decode().strip()
@@ -132,7 +132,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_initial_and_continue_same_batch_snapshot_and_idempotent_restart(self):
         from .workflow import checkpoint
-        observed=[]
+        observed=[];clock=[100.0];budgets=[]
         def working(*args,**kwargs):
             from .hosts import worker_focus
             message='Checking the fixture boundary.' if args[4]=='review' else 'Implementing the fixture boundary.'
@@ -145,12 +145,29 @@ class WorkflowTest(unittest.TestCase):
                 self.assertEqual(progress['implementation']['summary'],'Checked behavior')
                 self.assertIn('attempt',progress['implementation'])
             observed.append((progress['task'],progress['phase']))
+            budgets.append(kwargs['timeout'])
+            clock[0]+=4000  # each leg fits; the approved workflow exceeds two hours collectively
             return self.fake(*args,**kwargs)
         def checking(*args,**kwargs):
             self.assertEqual(checkpoint(self.root)['progress']['phase'],'implementation')
             return verify(*args,**kwargs)
         journal,_=start(self.root,{'tasks':self.tasks},self.event())
-        with patch('oh.worker_checks.verify',side_effect=checking):result=run(self.root,working)
+        import time
+        with patch('oh.worker_checks.verify',side_effect=checking),patch('oh.runner.time',wraps=time) as timer:
+            timer.monotonic.side_effect=lambda:clock[0]
+            for _ in range(20):
+                before=len(load_run(self.root)[1]['attempts'])
+                result=run(self.root,working,one_phase=True)
+                self.assertLessEqual(len(load_run(self.root)[1]['attempts'])-before,1)
+                if not result['continue_execution']:break
+                self.assertNotIn('last_results',result)
+                self.assertLessEqual(len(result['phase_result']['summary']),400)
+            else:self.fail('The native phase continuation never reached its batch decision')
+        self.assertGreater(clock[0],7200)
+        self.assertTrue(all(7000<=budget<=7140 for budget in budgets),budgets)
+        self.assertFalse(any(a.get('outcome')=='interrupted' for a in load_run(self.root)[1]['attempts']))
+        self.assertIn('Delivered: Checked behavior',result['gate']['summary'])
+        self.assertIn('clean, no findings',result['gate']['summary'])
         self.assertEqual((result['completed'],result['status']),(5,'checkpoint'))
         self.assertTrue(result['limits'].startswith('Continue runs 1 of the 1 remaining task, up to 3 review rounds each.'))
         self.assertEqual(len(self.calls),10)

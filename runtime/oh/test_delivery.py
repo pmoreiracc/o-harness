@@ -88,7 +88,10 @@ class DeliveryTest(unittest.TestCase):
                         request(case.root,'stop')
                         self.assertEqual(case.start_delivery(turn='again',host=target,session='new-chat')['status'],'stopped')
                         case.start_delivery(turn='finish',host=target,session='new-chat')
-                        self.assertEqual(run(case.root,finish)['status'],'checkpoint')
+                        for _ in range(4):
+                            completed=run(case.root,finish,one_phase=True)
+                            if not completed['continue_execution']:break
+                        self.assertEqual(completed['status'],'checkpoint')
                     self.assertEqual([c[0] for c in case.calls],['implementation','implementation','review'])
                     self.assertEqual(load_run(case.root)[1]['done'],['1'])
                     # A later snapshot resumes at the completed-task gate, without admitting task 2.

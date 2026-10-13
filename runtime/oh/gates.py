@@ -208,6 +208,20 @@ def decision_summary(state):
     if status=='pr':return 'Confirm the destination for the completed reviewed work.'
     verification_status=('failed' if any(check_failed(check)
         for result in state.get('verification',{}).values() for check in result['checks']) else 'passed')
+    completed_context=''
+    if status in ('checkpoint','completed') and state.get('done'):
+        authors=[next((a for a in reversed(state['attempts']) if a['task']==task_id and
+                       a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),{}) for task_id in state['done']]
+        work='; '.join(' '.join((a.get('human_summary') or a.get('summary') or 'Completed approved work').split('\n\n')[0].split())[:180]
+                      for a in authors)[:500]
+        reviews=[a for a in state['attempts'] if a['task'] in state['done'] and a['role']=='review']
+        final_ids={s.get('review') for s in state['summaries']}
+        final=[a for a in reviews if a['id'] in final_ids]
+        outcome=('clean, no findings' if final and all(a.get('outcome')=='clean' and not a.get('findings') for a in final)
+                 else 'completed with recorded decisions' if final else 'not required for this outcome')
+        interrupted=sum(a.get('outcome')=='interrupted' for a in reviews)
+        completed_context=f"Delivered: {work}. Review: {outcome}; {len(reviews)} attempt(s)"+(
+            f', including {interrupted} interrupted' if interrupted else '')+'. '
     if status=='review_checkpoint':
         from .workflow import review_limit
         used=sum(a['role']=='review' and a['task']==task['id'] for a in state['attempts'])
@@ -216,12 +230,12 @@ def decision_summary(state):
                 'The implementation and checks are ready for the next independent review.')
         return f"OH has used {used} of {review_limit(state,task['id'])} allowed reviews. {reason}"
     if status=='checkpoint':
-        return (f"{len(state['done'])} of {len(state['tasks'])} tasks completed. Checks {verification_status}; independent review completed. Next: "
+        return (completed_context+f"{len(state['done'])} of {len(state['tasks'])} tasks completed. Checks {verification_status}; independent review completed. Next: "
                 +(' '.join(task['title'].split())[:200] if pending else 'none')+'.')
     if status=='completed':
         count=len(state['done'])
         checks='Checks' if state.get('workflow','deliver')=='deliver' else 'Document validation'
-        return f"{count} task"+('s' if count!=1 else '')+f" completed. {checks} {verification_status}; independent review completed."
+        return completed_context+f"{count} task"+('s' if count!=1 else '')+f" completed. {checks} {verification_status}; independent review completed."
     if status=='paused':return 'The run is paused. Resume continues the approved work with its remaining allowances.'
     last=next((a for a in reversed(state['attempts']) if a['task']==task['id']),{})
     text=last.get('human_summary') or ('A task needs your attention before OH can continue.' if status=='needs_attention' else 'Review findings need your decision.')

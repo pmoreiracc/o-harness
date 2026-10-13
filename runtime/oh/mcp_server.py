@@ -31,7 +31,9 @@ def tool(name, title, description, properties=None, required=(), read_only=False
             'annotations': {'readOnlyHint': read_only, 'destructiveHint': destructive, 'idempotentHint': read_only, 'openWorldHint': False}}
 
 
-LONG = (' Keep this execution call in flight using the host\'s yielding/background support. '
+LONG = (' Each call runs at most one agent phase, saves its evidence and returns. '
+        'If continue_execution is true, call run automatically with a fresh call; no new approval is needed. '
+        'Keep each execution call in flight using the host\'s yielding/background support. '
         'Every 210 seconds, read status once and relay a new progress.focus in one short sentence; '
         'deduplicate its id and never repeat unchanged status or start another execution call. '
         'Native progress reports actual transitions. Codex Stop stops the owning OH run and preserves edits. '

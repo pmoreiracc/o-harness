@@ -20,6 +20,10 @@ from .telemetry import best_effort
 from .verification import tree, candidate_tree, failure_summary, check_failed
 from .workflow import checkpoint, committed, load_run, next_task, reduce, review_limit
 
+# Native hosts allow two hours for a call. Leave time to retain the result and drain children.
+PHASE_SECONDS = 7200
+PHASE_CLEANUP_SECONDS = 60
+
 
 def prompt_for(root,state,task,role,feedback='',packet=None):
     contracts=[]
@@ -215,7 +219,7 @@ def progress(message):
     print(message,file=sys.stderr,flush=True)
 
 
-def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke):
+def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke,*,deadline=None):
     current=reduce(journal.records())
     if current['status'] != 'running':
         raise Refused('The run was stopped or reached a checkpoint; no new attempt started')
@@ -325,8 +329,12 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
             action=('The independent reviewer agent is now challenging' if role=='review' else
                     'The planning agent is drafting' if role=='analysis' else 'The implementation agent is working on')
             progress(f"{action} task {task['id']}: {' '.join(task['title'].split())[:200]} ({profile['model']} / {profile['effort']}).")
-        result=invoke(state['host'],root,profile,prompt,role,directory,context,
-                      schema=hosts.REVIEW_SCHEMA if role=='review' else hosts.ASSESSMENT_SCHEMA if role=='assessment' else hosts.DESIGN_SCHEMA if designing(task) else hosts.PROPOSAL_SCHEMA if intake(task) else hosts.WORK_SCHEMA if role=='implementation' else None)
+        options={'schema':hosts.REVIEW_SCHEMA if role=='review' else hosts.ASSESSMENT_SCHEMA if role=='assessment' else hosts.DESIGN_SCHEMA if designing(task) else hosts.PROPOSAL_SCHEMA if intake(task) else hosts.WORK_SCHEMA if role=='implementation' else None}
+        if deadline is not None:
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise Refused('This phase exhausted its call budget before the agent could start. Saved work and authority are retained.')
+            options['timeout']=remaining
+        result=invoke(state['host'],root,profile,prompt,role,directory,context,**options)
     except Exception as exc:
         result={'failed':True,'returncode':-1,'text':str(exc),'structured':None,
                 'duration_ms':round((time.monotonic()-started)*1000),'usage_observed':False}
@@ -448,23 +456,43 @@ def status(journal,state,value):
 
 
 @state_writer
-def run(root,invoke=hosts.invoke):
+def run(root,invoke=hosts.invoke,*,one_phase=False,deadline=None):
+    if one_phase and deadline is None:deadline=time.monotonic()+PHASE_SECONDS-PHASE_CLEANUP_SECONDS
     from .controls import settle, Interrupted
     try:
         import contextlib
         _,state=load_run(root)
         from .plans import editing
         with editing(root) if state.get('delivery') else contextlib.nullcontext():
-            _run(root,invoke)
+            _run(root,invoke,one_phase=one_phase,deadline=deadline)
     except Interrupted:
         pass
     # An exceptional process cleanup must retain STOPPING, never report false success.
     from .controls import busy
     if not busy(root):settle(root)
-    return checkpoint(root)
+    result=checkpoint(root)
+    if one_phase:
+        automatic=result['status']=='running' or bool(result['next_action'].get('resume'))
+        if automatic:
+            # A transport handoff carries current work, not another copy of completed history.
+            result={k:v for k,v in result.items() if k in ('run','status','next_action','report','progress','last_failure','model_notices')}
+            if 'progress' in result:
+                result['progress']={k:v for k,v in result['progress'].items() if k in ('task','title','phase','attempt','profile','focus')}
+            _,state=load_run(root)
+            if state['attempts']:
+                last=state['attempts'][-1]
+                result['phase_result']={k:last.get(k) for k in ('id','task','role','outcome')}
+                result['phase_result']['summary']=(last.get('human_summary') or last.get('summary',''))[:400]
+        result['continue_execution']=automatic
+    return result
 
 
-def _run(root,invoke):
+def _run(root,invoke,*,one_phase=False,deadline=None):
+    phases=0
+    def execute(*args):
+        nonlocal phases
+        phases+=1
+        return attempt(*args,**({'deadline':deadline} if one_phase else {}))
     journal,state=load_run(root)
     lockpath=checkout_file(root, 'oh-runner.lock')
     with lock(lockpath,wait=False):
@@ -540,7 +568,8 @@ def _run(root,invoke):
                         'difficulty':'complex' if value['uncertainty'] else value['difficulty'],
                         'rationale':value['rationale'],'references':value['references'],'uncertainty':value['uncertainty']})
                     continue
-                result=attempt(root,journal,state,task,'assessment',profiles['standard'],
+                if one_phase and phases:return
+                result=execute(root,journal,state,task,'assessment',profiles['standard'],
                     latest.get('summary','') if latest else '',invoke)
                 if result['outcome']=='assessment_mutated_tree':return checkpoint(root)
                 continue
@@ -609,6 +638,7 @@ def _run(root,invoke):
                     journal.append('subject.existing',{'plan':existing_plan(root,existing)})
                 work=None
             elif not reusable:
+                if one_phase and phases:return
                 parent=state['summaries'][-1].get('commit',state['base']) if state['summaries'] else state['base']
                 if git(root,'rev-parse','HEAD')!=parent:raise Refused('HEAD changed outside the runner; restore the recorded task parent')
                 if designing(task) or intake(task):
@@ -620,7 +650,7 @@ def _run(root,invoke):
                     undo(root,rendered,check_only=True)
                     extra=[p for p in changes(root) if p not in rendered.get('intent',[])]
                     if extra:raise Blocked(f"The checkout has changes OH didn't write ({', '.join(extra[:5])}); a plan commit holds only its plan files")
-                work=attempt(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
+                work=execute(root,journal,state,task,'implementation' if state.get('workflow','deliver')=='deliver' else 'analysis',profile,feedback,invoke)
                 if work['outcome'] in ('blocked','report_invalid'):
                     status(journal,state,'needs_attention');return checkpoint(root)
                 if work['outcome']!='implemented' or intake(task):continue  # a proposal is shown before it is written
@@ -671,7 +701,8 @@ def _run(root,invoke):
                 progress(f"Task {task_id} is ready for review; the reviewer has not started because the review allowance is spent.")
                 status(journal,state,'review_checkpoint');return checkpoint(root)
             if decision['kind']!='review':continue
-            review=attempt(root,journal,state,task,'review',profiles['review'],invoke=invoke)
+            if one_phase and phases:return
+            review=execute(root,journal,state,task,'review',profiles['review'],'',invoke)
             if review['outcome']=='clean':
                 if not gated(state,task):complete_reviewed(root,journal,state,task,review)
             elif review['outcome']=='needs_resolution':

@@ -229,6 +229,28 @@ Persistent external obstacles preserve work and explain the concrete next action
 has no Retry menu: after the obstacle is repaired, `run` continues the same approved work
 without renewing task or review allowances. Planning uses the same continuation after its
 external obstacle is resolved. Neither workflow offers a routine Retry approval.
+Native host calls execute one agent phase at a time, saving its result and completing the
+runner's deterministic transitions before returning. `continue_execution: true` means the chat
+automatically calls `run` again under the same approval. Each assessment, implementation
+(including its checks), or review receives a fresh two-hour call budget with cleanup headroom;
+the overall workflow has no time deadline. Ordinary handoffs are not interrupted attempts and
+do not renew or spend extra review allowances. Existing Stop/Pause and scope decisions apply.
+Covered by `test_initial_and_continue_same_batch_snapshot_and_idempotent_restart` and
+`test_pause_after_review_fences_commit_and_resumes_exact_review`.
+
+Claude uses an explicit background-call timeout and observes public progress through Monitor,
+or bounded `observe` calls when Monitor is unavailable. An expired observer is renewed while
+execution continues; it never starts or cancels work. Codex retains its yielding tool calls.
+The chat reports new useful focus approximately every three to four minutes and actual agent
+transitions when they happen. Before the existing decision menu, it summarizes the delivered
+change, checks and review outcome, including interrupted attempts. `observe` reads only the
+selected run's current public state, without rendering gates or modifying evidence.
+
+The independent review starts from the actual approved clauses and their required observable
+behavior, including failure and recovery outcomes. It checks implementation, callers and proof
+against those requirements. An author's disclosed limitation or an older implementation pattern
+cannot waive an approved obligation. A consequential unresolved gap is a finding; direct
+inspection remains valid evidence for small, auditable behavior, without a blanket new-test rule.
 Covered by `test_blocked_or_missing_worker_completion_never_spends_a_review`
 and `test_planning_continues_after_external_obstacle_without_new_allowance`.
 `status` includes the current task and phase (specialist work, checks, independent review or completion)

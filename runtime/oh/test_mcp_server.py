@@ -405,6 +405,27 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual(err.getvalue().splitlines(),messages)  # completed batches emit nothing twice
         self.assertEqual(out.getvalue(),'')  # progress stays off the machine-readable result stream
 
+        from .progress import observe,follow
+        journal,state=load_run(self.root);before=journal.records()
+        result=observe(self.root,state['id'],wait=0)
+        self.assertTrue(result['done']);self.assertEqual(journal.records(),before)
+        self.assertEqual(observe(self.root,'another-run',wait=0)['status'],'replaced')
+        # Watch expiry and focus throttling cannot launch work, renew authority or spend reviews.
+        clock=[0.0]
+        def snapshot(root,run_id):
+            phase='implementation' if clock[0]<20 else 'review'
+            focus='first' if clock[0]<5 else 'second' if clock[0]<25 else 'third'
+            return {'run':run_id,'status':'running','phase':phase,'attempt':phase,'done':False,
+                    'focus':{'id':focus,'message':focus},'message':phase+' '+focus}
+        with patch('oh.progress.snapshot',side_effect=snapshot),patch('oh.progress.time') as timer,contextlib.redirect_stdout(io.StringIO()) as observed:
+            timer.monotonic.side_effect=lambda:clock[0]
+            timer.sleep.side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)
+            follow(self.root,state['id'],seconds=240)
+        rows=[json.loads(line) for line in observed.getvalue().splitlines()]
+        self.assertEqual([row.get('message') for row in rows[:-1]],['implementation first','review second','review third'])
+        self.assertEqual(rows[-1]['observer'],'expired')
+        self.assertEqual(journal.records(),before)
+
     def test_a_cancelled_call_gets_no_reply_and_an_unexpected_error_gets_one(self):
         with patch.dict(os.environ, {'FAKE_WAIT': '0.5'}):
             sent = play([{'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}}},

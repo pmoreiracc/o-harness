@@ -204,6 +204,8 @@ class Tolerant:
 
 
 def main(argv=None):
+    import time
+    call_started=time.monotonic()
     for name in ('stdout','stderr'):
         if not isinstance(getattr(sys,name),Tolerant):setattr(sys,name,Tolerant(getattr(sys,name)))
     parser=argparse.ArgumentParser(prog='oh')
@@ -228,6 +230,8 @@ def main(argv=None):
     backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
     restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
     sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('cancel');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
+    observer=sub.add_parser('observe');observer.add_argument('--run',required=True);observer.add_argument('--after',default='')
+    observer.add_argument('--wait',type=int,default=60);observer.add_argument('--follow',action='store_true')
     settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
     settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
     planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check','list'])
@@ -238,6 +242,9 @@ def main(argv=None):
     deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*')
     resource=sub.add_parser('resource');resource.add_argument('path')
     args=parser.parse_args(argv);invocation=Path.cwd();root=(args.root or invocation).resolve()
+    if args.command in ('start','run','resume','deliver'):
+        from .runner import PHASE_SECONDS,PHASE_CLEANUP_SECONDS
+        phase_deadline=call_started+PHASE_SECONDS-PHASE_CLEANUP_SECONDS
     from .system import WINDOWS
     if WINDOWS:
         # CreateProcess searches OH's own current folder for bare commands whatever that variable says, so OH
@@ -323,6 +330,11 @@ def main(argv=None):
             from .plans import check,layout,listing
             where=layout(root)
             result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
+        elif args.command=='observe':
+            from .progress import observe,follow
+            if args.follow:follow(root,args.run);return
+            if not 0<=args.wait<=60:raise Refused('Observation waits must be between zero and sixty seconds')
+            result=observe(root,args.run,after=args.after,wait=args.wait)
         elif args.command=='status':
             from .authority import waits
             from .workflow import NO_RUN,WAIT_NEXT
@@ -349,7 +361,7 @@ def main(argv=None):
             _,state=load_run(root)
             if state['status']=='paused':raise Refused('Submit /oh-resume (Codex: $oh-resume) in the owning host conversation, then run oh resume')
             from .runner import run
-            result=run(root)
+            result=run(root,one_phase=True,deadline=phase_deadline)
         elif args.command=='host-hook':
             from .authority import stage
             result=stage(root,args.host,json.load(sys.stdin))
@@ -370,7 +382,7 @@ def main(argv=None):
                 if args.request not in state['human']['prompt']:
                     raise Refused('This request has no matching native human authorization')
             from .runner import run
-            result=run(root)
+            result=run(root,one_phase=True,deadline=phase_deadline)
         elif args.command=='observe-ci':
             from .observability import observe_ci
             result=observe_ci(root)
@@ -416,10 +428,10 @@ def main(argv=None):
                     print(admitted['note'],flush=True);result=admitted
                 elif selected['kind']=='design':
                     from .design_runner import run
-                    result=run(root,selected['doc'],selected['track'])
+                    result=run(root,selected['doc'],selected['track'],one_phase=True,deadline=phase_deadline)
                 else:
                     from .runner import run
-                    result=run(root)
+                    result=run(root,one_phase=True,deadline=phase_deadline)
         elif args.command=='resource':
             path=(HOME/args.path).resolve()
             if not path.is_relative_to(HOME):raise Refused('Resource outside OH')

@@ -764,3 +764,94 @@ the source revision and snapshot mode. Existing sessions retain their loaded plu
 developer trial uses fresh sessions. Start with Resume in my-geoffrey: it should report merged
 PR #144 without transferring the finished run or reopening a gate. Test genuine mid-task
 continuation separately. This activation note is documentation-only; no OH PR was published.
+
+### Renew execution per phase and strengthen core review
+
+Approved scope: address only the observed Claude SDK background interruption, missing public
+progress/result summary, and a reviewer dismissing an explicit requirement. Consumer task 10
+and its receipts stay untouched. No new approval gate, publication redesign or review stage.
+
+- [x] I1: Add safe one-agent-phase execution to the shared runner and use it in native host
+  entrypoints. Save reports, validate evidence and finish deterministic transitions before
+  yielding. Return explicit automatic continuation, retaining the same run and authority.
+  Each call gets a fresh two-hour budget with one minute reserved for cleanup; there is no
+  workflow-wide deadline. Interrupted attempts retain the existing allowance rules.
+- [x] I2 (I1): Update the host protocol to continue the next native phase automatically,
+  observe public progress using supported host tools, and present a short change/check/review
+  summary before the existing decision. Observer expiry cannot cancel execution. Keep output
+  bounded and avoid raw transcripts, truncated JSON, new services and consumer configuration.
+- [x] I3: Integrate required observable behavior, failure paths and proof into the core review
+  procedure. Author disclosures and prior implementation patterns cannot waive requirements.
+  Retain existing lenses and receipt fields; no blanket test requirement or final checklist.
+- [ ] I4 (I1–I3): Extend existing workflow, control, progress and host fixtures with simulated
+  long phases and observer expiry. Exercise real Claude/Codex reviewers on a disclosed defect
+  and a compliant control. Run affected checks and syntax, record durations and limitations,
+  then build the development candidate for the developer's host trial before C6 review.
+
+Reference: the golden Deliver implements in the parent agent and starts fresh reviewers with
+bound readiness. OH retains its fresh implementers but must end transport calls at durable
+agent boundaries. The native runner still owns next-action selection, checks validation,
+review admission and completion; the coordinator only continues returned execution.
+
+Coverage disposition: extend the existing batch/idempotence fixture for per-phase continuation
+and the existing Stop/Pause fixtures for handoff cancellation. Reuse progress/host fixtures for
+observation and result ordering. One focused observer test is justified if no existing fixture
+can cover its expiry without launching another execution; do not duplicate whole-run setup.
+Reviewer calibration uses isolated temporary repositories and existing native admissions.
+
+I1–I3 implementation: the shared runner supports one-phase calls; the CLI entrypoints used by
+both hosts enable that mode. An invocation launches at most one assessment/implementation/review,
+then retains its result, validates evidence and finishes allowed deterministic transitions.
+`continue_execution` explicitly returns automatic continuation under existing authority. No
+new workflow state, grant or review receipt is created just for a handoff. Each invocation starts
+a fresh 7,140-second native budget inside the 7,200-second host call limit. Normal handoffs do
+not interrupt attempts; actual timeouts keep the existing failed-attempt accounting. Automatic
+responses carry a short current phase result rather than repeated completed-task history.
+
+Claude now uses the explicit per-phase background limit, Monitor observation and a bounded
+fallback when Monitor is unavailable. The small read-only `observe` command binds to a run,
+returns bounded public focus, throttles streamed detail to 210 seconds and exits at a returned
+execution or observer deadline. Its expiry cannot launch/cancel workers or write evidence.
+Gate summaries now contain the delivered work and review outcome/count, including interrupted
+attempts, before the existing menu. Resume loads this shared protocol before its first call.
+The reviewer maps actual requirements to observable behavior and proof throughout its existing
+review procedure; disclosed gaps and older patterns cannot supply an exemption.
+
+Validation: all 16 modules selected by `affected HEAD` passed. The focused phase/control/observer
+checks passed in 37.32s. After compacting automatic handoff output, the affected phase/control
+cases passed again in 33.77s. A simulated approved batch took over two hours in aggregate while
+each agent received its own fresh budget; no handoff was recorded as interrupted. Existing
+fixtures cover both host directions and repository/private designs, Stop/Pause between calls,
+no repeated workers/reviews, observer expiry and unchanged journal evidence. No new unit-test
+method or full-suite run was added. Syntax and Windows-risk checks passed. The Resume skill
+passed the skill validator using a temporary copy excluding its unchanged Claude-specific
+frontmatter key; production retains that supported host field.
+
+Real reviewers used the saved configured profiles and native immutable admissions on two
+isolated fixtures each: a disclosed violation of an explicit transient-error contract, and a
+compliant control whose small failure branch can be established by inspection. Both hosts
+reported the violation as blocking and accepted the control, with zero report-format issues.
+Assessment/implementation were synthetic fixture setup, so these are reviewer calibration
+costs including native overhead, not completed product-task metrics or claimed savings:
+
+| Host / case | Seconds | Input | Output | Cached input subset |
+| --- | ---: | ---: | ---: | ---: |
+| Claude / disclosed violation | 47.59 | 170198 | 4092 | 141154 |
+| Claude / compliant control | 49.99 | 171955 | 4086 | 144064 |
+| Codex / disclosed violation | 219.33 | 277696 | 6035 | 233216 |
+| Codex / compliant control | 145.92 | 266590 | 4239 | 242688 |
+
+Read-only instruction forward tests with the configured standard profiles (Claude 15.68s,
+Codex 31.74s) selected automatic next-phase execution, observation-only renewal, summary before
+the menu and no restart after Stop. They also offered redundant renewal commentary; the final
+protocol explicitly makes observer renewal silent and removes an unnecessary approval aside.
+These tests are not actual Desktop/SDK UI trials, native Windows/Linux execution or a guarantee
+against semantic reviewer mistakes. Developer host trials and independent OH review remain C6.
+No task-10 consumer files or receipts were changed. Evidence stays outside Git under
+`/tmp/oh-phase-*`, including affected/focused test logs, native calibration receipts and usage.
+
+Final budget binding starts at CLI entry, so admission/setup inside the command consumes the
+same phase budget rather than reducing cleanup headroom outside it. The phase, cancellation
+and four-direction cross-host continuation fixtures passed again after that change: 3 tests,
+81.90s (47.05s cross-host matrix, 27.03s multi-phase batch, 7.83s pause/stop). Syntax and
+Windows-risk checks passed on the final candidate. No failed checks remain.

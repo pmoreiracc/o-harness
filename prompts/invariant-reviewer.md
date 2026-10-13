@@ -51,8 +51,9 @@ and why the change cannot be judged without it. Do not invent documentation requ
 
 For code reviews, work in this order within the existing coverage lenses:
 
-1. From the approved task, contracts and actual source, identify the affected operations
-   and their required observable results. Use the changed-file index to include callers,
+1. Read the approved task and its referenced contracts. Identify each affected operation's
+   required observable behavior, including its failure and recovery outcomes. Ground that
+   interpretation in the actual clauses, not the author's paraphrase. Use the changed-file index to include callers,
    unchanged sibling paths and documentation even when generated files dominate the diff.
    Derive this coverage before comparing it with the author's account.
 2. Trace each operation from accepted input and relevant state through storage to its public
@@ -60,10 +61,15 @@ For code reviews, work in this order within the existing coverage lenses:
    including alternate states, permissions, time, replay and failure outcomes where applicable.
    Do not enumerate irrelevant combinations or invent input policies.
 3. Compare that coverage with the admitted latest readiness and complete finding index,
-   including incomplete returned reviews. Challenge missing requirements, self-review claims
+   including incomplete returned reviews. Treat disclosed limitations as claims to evaluate
+   against those same requirements: disclosure, green checks and an existing implementation
+   pattern do not waive an approved obligation. Challenge missing requirements, self-review claims
    and repair diagnoses against the source. Read earlier reports only for a specific unresolved
    question. The author's coverage is an attack map, never your review boundary or proof.
-4. Inspect whether tests actually reach and assert the claimed behavior. For a repaired
+4. Establish which required outcomes the actual code, inspection and checks support. A
+   consequential unresolved gap is a finding with the evidence needed to resolve it; do not
+   silently narrow the requirement or demand a new test when existing evidence suffices.
+   Inspect whether tests actually reach and assert the claimed behavior. For a repaired
    protection, trace the trigger, affected sibling paths and observable result; confirm a
    fixture change did not move the trigger away from the failure it claims to exercise.
    Establish whether code, test or environment was wrong before recommending correction.
