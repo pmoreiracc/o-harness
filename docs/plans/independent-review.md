@@ -30,7 +30,7 @@ Tasks 3–5 depend on 1–2. Task 6 is applied throughout. Task 7 remains pendin
 | Fixture | Protection / disposition |
 | --- | --- |
 | Existing authority, controls and plugin fixtures | Retained: native human proof, session transfer, cancellation and launcher behavior. |
-| Existing checkpoint/native-menu fixtures | Extended: Review again; free-text review requests grant no task/publication; stale replies cannot authorize inspection; replay does not consume a second review. |
+| Existing checkpoint/native-menu fixtures | Retained original publication choices; free-text review requests grant no task/publication; stale replies cannot authorize inspection; replay does not consume a second review. |
 | Existing failed-review and escalation fixtures | Extended: inspection failures retain the same window without rerunning implementation; escalation needs an intervening author repair. |
 | Existing PR/scope fixtures | Extended: original implementation summary, all later reviews shown once, correction history does not inflate completed-task counts; scope decisions preserve completed documents. |
 | New standalone workflow case | Current/historical subjects, fresh independent receipts, untouched saved delivery, Stop and cross-host continuation. |
@@ -105,6 +105,13 @@ entry handling, repair/publication evidence and presentation. Logs and original 
 outside Git under `/tmp/oh-independent-review-*`.
 
 ## Developer host trial before independent OH review
+
+Scope correction after the first host trial: the added Review again menu shortcut was not
+approved. Restore the original checkpoint/publication menus. Explicit review requests and
+`oh-review task <id>` retain the approved capability. Reuse the existing menu and replay
+fixtures to verify this correction; no additional workflow or test case is needed.
+Validation: the three existing Claude/Codex menu and fallback cases passed in 20.83s,
+including explicit re-review and replay protection. Syntax and Windows-risk checks passed.
 
 Run `oh-dev on`, then start fresh Claude and Codex sessions in disposable consumer checkouts.
 

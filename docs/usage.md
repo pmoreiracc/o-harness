@@ -51,8 +51,9 @@ automatically carrying earlier findings. A clean review ends with its report. Ad
 one inspection: Stop retains incomplete evidence, and resume does not silently buy another
 review. A new inspection needs a new request.
 
-At an unpublished Deliver checkpoint, **Review again** challenges the last completed task;
-`/oh-review task <id>` selects another completed task in that run. Clean review returns to the
+At an unpublished Deliver checkpoint, explicitly request another review or use
+`/oh-review task <id>` to select a completed task in that run. Publication menus retain their
+existing choices; independent review adds no menu item. Clean review returns to the
 decision without a commit. Blockers use the existing repair loop and produce a reviewed
 correction commit. Original task marks, receipts and used allowances remain intact. Scope
 from these additional reviews uses the existing issue/PR dispositions rather than rewriting

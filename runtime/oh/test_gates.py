@@ -102,9 +102,9 @@ class GateTest(unittest.TestCase):
 
     def test_checkpoint_offers_its_choices_as_a_menu_that_expires_when_the_run_moves(self):
         result = self.begin('claude', fresh=True)
-        self.assertEqual(result['gate']['choices'], ['continue', 'pr', 'review again', 'stop'])
+        self.assertEqual(result['gate']['choices'], ['continue', 'pr', 'stop'])
         question = result['gate']['ask']['questions'][0]
-        self.assertEqual([o['label'] for o in question['options']], ['Continue', 'Open a PR', 'Review again', 'Stop and take over'])
+        self.assertEqual([o['label'] for o in question['options']], ['Continue', 'Open a PR', 'Stop and take over'])
         self.assertNotIn('Branch work.',question['question'])
         self.assertIn('Completed: 1. Pending: 2:',result['gate']['details'])
         self.assertIn('Checks:',result['gate']['details'])
@@ -132,7 +132,7 @@ class GateTest(unittest.TestCase):
         choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))
         self.assertIsNone(current(self.root))  # running: nothing to choose
         after = run(self.root, self.fake)
-        self.assertEqual(after['gate']['choices'], ['pr', 'review again', 'stop'])
+        self.assertEqual(after['gate']['choices'], ['pr', 'stop'])
         self.assertEqual(after['gate']['ask']['questions'][0]['options'][-1]['label'],'Finish without a PR')
         self.assertNotEqual(after['gate']['id'], result['gate']['id'])
         # A real native Resume command in another host/session adopts this exact gate.
@@ -841,7 +841,7 @@ class GateTest(unittest.TestCase):
             self.assertEqual(load_run(self.root)[0].records(),records)
         sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}},while_open=delayed)
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
-        self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'review again', 'stop'])
+        self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
         self.assertIn('Recorded', text)
         self.assertNotIn('Project:',asked['params']['message'])
         self.assertLess(len(asked['params']['message']),400)
@@ -891,7 +891,7 @@ class GateTest(unittest.TestCase):
         self.assertIn('request_user_input_async',gate['how'])
         self.assertNotIn('right panel',gate['how'])
         self.assertIn('github.com',question['title'])
-        self.assertEqual(question['options'],['Continue','Open a PR','Review again','Stop and take over'])
+        self.assertEqual(question['options'],['Continue','Open a PR','Stop and take over'])
         from .test_mcp_server import codex_session
         codex_session(self.home,'s',self.root)
         path=next((self.home/'.codex/sessions').rglob('*s.jsonl'))
@@ -988,7 +988,7 @@ class GateTest(unittest.TestCase):
         self.begin('codex')
         for reply, capabilities in (({'action': 'decline'}, None), ({'action': 'cancel'}, None), ({}, {})):
             sent, text = self.server(self.root, reply, capabilities)
-            self.assertIn('type one of: continue, pr, review again, stop', text)
+            self.assertIn('type one of: continue, pr, stop', text)
             self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.assertFalse(any(m.get('method') == 'elicitation/create' for m in sent))  # no capability: never asked
 

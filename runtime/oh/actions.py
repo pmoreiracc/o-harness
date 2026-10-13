@@ -96,10 +96,10 @@ def choices(state):
         left = len([t for t in state['tasks'] if t['id'] not in state['done']])
         found = ([('continue', continue_limits(left, state['config']))] if left else [])
         found += [('pr', '')] if committed(state) and any('commit' in s for s in state['summaries']) else []
-        return found + ([('review again','Ask a fresh reviewer to challenge the last completed task.')] if state.get('workflow','deliver')=='deliver' and state['done'] else []) + [('stop', '')]
+        return found + [('stop', '')]
     if status == 'completed':
         if not committed(state) or not any('commit' in s for s in state['summaries']):return None
-        return [('pr', '')]+([('review again','Ask a fresh reviewer to challenge the last completed task.')] if state.get('workflow','deliver')=='deliver' else [])+[('stop', '')]
+        return [('pr', ''), ('stop', '')]
     if status == 'approval_checkpoint':
         if state.get('workflow') == 'propose':
             return [('approve', approval_effect(state)), ('refine',''),

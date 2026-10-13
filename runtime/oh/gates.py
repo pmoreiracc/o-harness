@@ -7,7 +7,7 @@ from .storage import Refused, checkout_file, digest, lock, state_writer
 from .verification import check_failed
 
 MARK = 'OH gate '
-LABELS = {'review again':('Review again','Challenge the last completed task with a fresh reviewer.'),'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committed work as one pull request.'),
+LABELS = {'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committed work as one pull request.'),
           'stop': ('Stop and take over', 'End OH here and keep the work for you to continue; do not push or open a PR.'), 'resume': ('Resume', 'Continue with the existing task and review allowances.'),
           'handoff pr': ('Stop and hand off to a PR', 'End OH and retain unresolved work for human PR triage; this does not approve completion or publication.'), 'approve': ('Approve', ''),
           'refine': ('Refine', 'Tell OH what to change in the chat.'),
