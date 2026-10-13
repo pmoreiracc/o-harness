@@ -80,8 +80,9 @@ Proposal, design and quick-fix approvals provide a complete Markdown review copy
 external storage. In Codex Desktop, OH opens it in the right panel and uses OH’s blocking
 menu, so you can keep reading and scrolling while deciding. The menu waits for your click
 without repeatedly waking the coordinator. Cancelling it grants nothing. In Claude desktop, the
-coordinator opens a scratchpad copy of it in the side pane (`show_pane`) when that pane tool is
-available; the stored preview stays the one OH checks, and without the pane you get the link only.
+coordinator uses `SendUserFile` to display the preview when available, or opens a scratchpad
+copy with `show_pane` on hosts providing that tool. If display is unavailable or fails, it
+shows the complete preview in chat before asking. The stored preview stays the one OH checks.
 Covered by `test_prepared_claude_menu_binds_scope_limits_and_expires`. The question names that exact
 preview through a short checkpoint reference. OH verifies the displayed question and native human answer, records the choice once,
 and refuses an edited preview or a reply to an older one. Refine asks what to change in plain
@@ -353,6 +354,15 @@ does not retry a rejected payload through another confirmation tool. Covered by
 
 Every new OH execution or repository-planning branch starts from the refreshed base branch. Task preparation
 also refreshes the base branch after Refine, before showing the revised list; the previous branch remains intact.
+An explicitly requested correction to an existing open PR is the exception: preparation
+selects that PR's branch and records its starting commit and destination in the approval
+preview. It creates a new bounded run and retains the published run's original evidence.
+Refinement keeps the selected PR. The final choice is **Update PR #number**, and publication
+updates that PR's reviewed head and description; an interrupted update retains approval.
+The PR must belong to the configured origin and target the configured base branch. A changed
+PR identity/head, another worktree holding the branch, or divergent local work is preserved
+and reported for reconciliation. No force-push or replacement PR is authorized. Covered by
+`test_quick_fix_updates_the_selected_pr_without_reopening_its_old_run`.
 Preparing starts no worker or execution branch. Numbered delivery retains its existing branch-resume
 behavior: bring the base into unfinished work, or start fresh when the base already contains it. The local base branch is
 fast-forwarded when it is available and has no divergent work; another worktree's base branch stays untouched.

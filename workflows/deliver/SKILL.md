@@ -20,6 +20,11 @@ Pass the user's arguments to `deliver` without reinterpreting a refusal as a dif
   `instructions` and optional ordered `needs`. In Codex call `prepare`; in Claude save the
   manifest under external OH project storage and use `prepare <path>`. Present the returned
   preview, limits and approval question. OH assesses difficulty at runtime.
+  Inspect the configured base for ordinary new work, or the existing PR's head when the
+  person explicitly asks to update that PR. Pass its number as `prepare.pr` in Codex or
+  `prepare --pr NUMBER <path>` in Claude. Preparation selects and validates that branch;
+  do not reset, rebase or switch branches to bypass a refusal. A published delivery remains
+  finished; this is a new bounded correction with its own approval and fresh review.
 - `request:<id>` runs the already prepared scope; the older consumer-profile spelling remains
   supported. A prepared identifier is not an approval until the human sends or approves it.
 

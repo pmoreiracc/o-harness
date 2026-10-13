@@ -85,8 +85,8 @@ def host_hook(root,host,payload,*,verified,idea=None,request=None):
         return listing(root)
     if delivery and delivery['kind']=='quick_fix' or parsed==('oh-start',''):
         if unfinished(root,verified):raise occupied(load_run(root)[1])
-        from .branches import from_main
-        from_main(root)
+        # Preparation selects the base or an explicitly requested existing PR. A
+        # prose invocation alone must not switch away from the requested work.
         from .prepared import remember
         remember(root,host,payload,verified)
         return delivery or {'prepare':True,'authorized':False,'next':'Prepare the agreed tasks and show the returned approval menu.'}
@@ -231,7 +231,7 @@ def main(argv=None):
     export=sub.add_parser('profile-export');export.add_argument('destination',type=Path)
     imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
     renamed=sub.add_parser('rename');renamed.add_argument('name')
-    prep=sub.add_parser('prepare');prep.add_argument('manifest');prep.add_argument('--review')
+    prep=sub.add_parser('prepare');prep.add_argument('manifest');prep.add_argument('--review');prep.add_argument('--pr',type=int)
     clash=sub.add_parser('conflict');clash.add_argument('choice',choices=['fresh','keep']);clash.add_argument('doc');clash.add_argument('track',nargs='?',default='')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
@@ -280,7 +280,7 @@ def main(argv=None):
             result=receive(root,args.host,json.load(sys.stdin))
         elif args.command in ('prepare','prepare-design'):
             from .prepared import prepare
-            result=prepare(root,manifest=args.manifest,review=args.review) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
+            result=prepare(root,manifest=args.manifest,review=args.review,pr=args.pr) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
         elif args.command=='worker-checks':
             from .worker_checks import serve
             serve(args.attempt,sys.stdin,sys.stdout)

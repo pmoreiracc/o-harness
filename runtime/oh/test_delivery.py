@@ -134,7 +134,7 @@ class DeliveryTest(unittest.TestCase):
                         (case.root/'mine.txt').unlink()
                         resumed=case.start_delivery(turn='gate-boundary',host=target,session='gate-chat')
                         self.assertEqual((resumed['run'],resumed['status']),(before['id'],'checkpoint'))
-                        self.assertEqual(resumed['gate']['choices'],['continue','pr','review again','stop'])
+                        self.assertEqual(resumed['gate']['choices'],['continue','pr','stop'])
                         self.assertEqual(run(case.root,case.fake)['status'],'checkpoint')
                         updated=load_run(case.root)[1]
                         for key in ('config','config_hash','tasks','granted','attempts','done','summaries','review_grants'):
@@ -281,14 +281,14 @@ class DeliveryTest(unittest.TestCase):
         result=receive(self.root,'codex',{'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'fix','prompt':'/oh-deliver fix X'})
         self.assertTrue(result['pending'])  # preparation can now offer an owner-bound approval menu
         self.assertTrue(pending_file(self.root).exists())
-        # Direct prose invocation must refresh the checkout before the coordinator inspects the fix.
+        # Prose entry preserves the checkout; preparation resolves the base or explicit PR before switching.
         import contextlib,io
         from .cli import main
         self.git('switch','-qc','feature/old')
         with patch('oh.authority.materialize',side_effect=lambda root: self.start_delivery('fix X',turn='direct')), contextlib.redirect_stdout(io.StringIO()) as output:
             main(['--root',str(self.root),'deliver','fix X'])
         self.assertEqual(json.loads(output.getvalue())['kind'],'quick_fix')
-        self.assertEqual(self.git('branch','--show-current'),'main')
+        self.assertEqual(self.git('branch','--show-current'),'feature/old')
         self.assertEqual(self.calls,[])
 
     def test_repository_design_starts_once_and_uses_existing_batch_runner(self):
@@ -384,7 +384,7 @@ class DeliveryTest(unittest.TestCase):
         plans.add_task(self.root,where,'0001','Core','Add sign-out.',[]);self.git('commit','-qam','Add task 3')
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         again=self.start_delivery(turn='again')  # no merge of main, no new task: the finished delivery's PR choice
-        self.assertEqual((again['run'],again['gate']['choices']),(first,['pr','review again','stop']))
+        self.assertEqual((again['run'],again['gate']['choices']),(first,['pr','stop']))
         self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
         choose(self.root,'stop',self.event('declined','stop'))  # typed at completion, like the menu's Stop
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
@@ -393,14 +393,14 @@ class DeliveryTest(unittest.TestCase):
         def typed(session,host='codex',turn='later'):
             event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':'/oh-deliver 0001'},host)
             return host_hook(self.root,host,{'prompt':'/oh-deliver 0001'},verified=event)
-        self.assertEqual(typed('elsewhere','claude')['gate']['choices'],['pr','review again','stop'])
+        self.assertEqual(typed('elsewhere','claude')['gate']['choices'],['pr','stop'])
         self.assertEqual(load_run(self.root)[1]['host'],'claude')
         with patch('oh.config.version',return_value='new-completion-runtime'):
             # A crash after the atomic transfer but before its result is returned must
             # replay the same command without another transfer or a lost checkpoint.
             with patch('oh.workflow.checkpoint',side_effect=OSError('after transfer')):
                 with self.assertRaisesRegex(OSError,'after transfer'):typed('new')
-            self.assertEqual(typed('new')['gate']['choices'],['pr','review again','stop'])
+            self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
             self.assertEqual(load_run(self.root)[1]['harness_version'],'new-completion-runtime')
             self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertEqual(load_run(self.root)[1]['human']['session'],'new')

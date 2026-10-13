@@ -493,5 +493,7 @@ class InstallationTest(unittest.TestCase):
             self.assertTrue(launched('s'))
             self.assertFalse(launched('other'))
             from .entry import CHOICES
-            for choice in CHOICES:self.assertTrue(launched('other',choice,recognized=True),choice)
+            for choice in CHOICES:
+                for text in (choice,choice.capitalize(),choice.upper()):
+                    self.assertTrue(launched('other',text,recognized=True),text)
             for removed in ('fix scope','fix findings'):self.assertFalse(launched('other',removed),removed)

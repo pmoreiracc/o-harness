@@ -39,6 +39,10 @@ def review_document(state):
     effect=approval_effect(state)
     if state['status']=='prepared_checkpoint':
         lines=['# Quick-fix task list',effect,'## Tasks']
+        if target:=state.get('pr_target'):
+            lines.extend(['## Existing PR to update',f"PR: {target['url']}",
+                f"Branch: {target['branch']}; starting commit: {target['head']}; base: {target['base_branch']}.",
+                'This scope adds reviewed corrections to that branch. Publication requires the final decision and updates this PR only.'])
         if source:=state.get('repair_source'):
             lines.extend(['## Existing work included in completion',
                 'Approval includes these original edits in the reviewed commit, together with the repairs:',
@@ -288,7 +292,9 @@ def describe(journal, state, root=None):
              'findings_checkpoint': 'Fix the concerns or accept the current work?'}[state['status']]
     if target:
         from .branches import trunk
-        title+=f" Open a PR pushes the reviewed repository code on {state['branch']} to {target['destination']} and opens its PR against {trunk(root,state['config'])}."
+        if selected:=state.get('pr_target'):
+            title=f"Update PR #{selected['number']}? This pushes the reviewed repository code on {state['branch']} to {target['destination']} and updates {selected['url']} against {selected['base_branch']}."
+        else:title+=f" Open a PR pushes the reviewed repository code on {state['branch']} to {target['destination']} and opens its PR against {trunk(root,state['config'])}."
     if state['status']=='findings_checkpoint':
         severities={f['severity'] for f in state['attempts'][-1].get('findings',[])}
         if severities=={'scope'}:title='Record the scope as future work or dismiss it?'
@@ -309,6 +315,8 @@ def describe(journal, state, root=None):
         for option in menu:
             if option['choice']=='pr':
                 option['description']='Publish the reviewed work and standard review summary.'
+                if selected:=state.get('pr_target'):
+                    option.update(label=f"Update PR #{selected['number']}",description='Push the reviewed correction and refresh this existing PR’s review summary.')
     if state['status']=='review_checkpoint':
         menu[0]['label']=f"Allow {state['config']['review_rounds']} more reviews"
         menu[1]['label']='Stop and take over'
@@ -350,14 +358,15 @@ def ask(gate):
 def how(gate, root):
     typed = ', '.join(o['choice'] for o in gate['options']) + (', or refine: <what to change>' if gate['words'] else '')
     if gate['host'] == 'claude':
-        panel=('Before asking, if `mcp__ccd_view__show_pane` is available, copy gate.preview into your scratchpad directory under its .md name, '
+        panel=('Before asking, show the complete gate.preview: use SendUserFile with files [gate.preview], status `normal`, display `render` when available. '
+               'Otherwise, if `mcp__ccd_view__show_pane` is available, copy gate.preview into your scratchpad directory under its .md name, '
                'open that copy with show_pane (pane `file`) while still showing the original path; the copy is display only and never goes back to OH, '
-               'and a missing or refused pane never blocks the question. ') if gate.get('preview') else ''
+               'and if display is unavailable or fails, read and show the complete preview in chat before asking. ') if gate.get('preview') else ''
         return (panel+'Ask the person with AskUserQuestion, passing exactly `gate.ask` and never an `answers` field. '
                 'After they answer, run OH `run`; OH reads the click from the saved transcript of the conversation that '
                 'owns this run, so ask only there. '
                 f'Typing works too: {typed}.')
-    panel='Open gate.preview in the right panel with open_in_codex when available. Show its link. ' if gate.get('preview') else ''
+    panel='Open gate.preview in the right panel with open_in_codex when available. Show its link. If display fails or is unavailable, show the complete preview in chat before asking. ' if gate.get('preview') else ''
     if gate.get('native_publication'):
         return ('Report the result and gate summary first. Ask once with request_user_input_async using exactly gate.native_ask. '
                 'Keep the turn open until the person answers: use clock.sleep in intervals of at most 60 seconds, interrupted by new input. '

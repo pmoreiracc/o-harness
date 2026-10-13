@@ -345,6 +345,9 @@ class CodexToolsTest(unittest.TestCase):
         path = Path(argv[-1])
         self.assertTrue(path.is_relative_to(state_home() / 'projects' / project(self.root)['id']))
         self.assertEqual(read_json(path), {'tasks': tasks})
+        argv=json.loads(self.call('prepare',{'root':str(self.root),'tasks':tasks,'pr':148})[0])['argv']
+        self.assertEqual(argv[2:5],['prepare','--pr','148'])
+        self.assertEqual(read_json(Path(argv[-1])),{'tasks':tasks})
 
     def test_commands_get_the_person_s_shell_setup_but_oh_settings_only_from_codex(self):
         os.environ.pop('CLAUDE_CONFIG_DIR', None)  # Codex passes none; the shell's must not stand in for it

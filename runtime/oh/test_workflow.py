@@ -544,7 +544,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('timed check: failed',full_summary(state))
         # Existing publication histories can contain this falsely accepted result.
         historical={'evidence':{'run':state['id'],'task':'1','title':'Task 1',
-            'attempts':[{'outcome':'clean','findings':[]}],'resolutions':{}}}
+            'review':'historical-review','attempts':[{'id':'historical-review','outcome':'clean','findings':[]}],'resolutions':{}}}
         self.assertIn('timed check (failed)',readable([historical],{state['id']:state}))
         for status in ('completed','checkpoint'):
             legacy=state|{'status':status,'done':['1'],'summaries':[{'task':'1','commit':head}],

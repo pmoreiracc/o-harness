@@ -91,9 +91,12 @@ report for details when needed. For an allowance, state reviews used, remaining 
 additional allowance. Prior receipts are history, not new results or new authority.
 
 When `gate.preview` exists, link the complete review copy beside the question. In Codex use
-`open_in_codex` for that file when available. In Claude, use `mcp__ccd_view__show_pane` if available
-with a scratchpad copy, keeping the original path visible; the copy never goes back to OH.
-If no panel is available, show the link. Other routine decisions need no side panel.
+`open_in_codex` for that file when available. In Claude, use `SendUserFile` with
+`files: [gate.preview]`, `status: "normal"`, `display: "render"` when available.
+Otherwise use `mcp__ccd_view__show_pane` with a scratchpad copy, keeping the original path
+visible; the copy never goes back to OH. If display is unavailable, fails, or the person
+cannot see it, read and show the complete preview in chat before asking. Other routine
+decisions need no side panel. Keep the returned question payload unchanged.
 
 For ordinary Codex menus, call `choose` directly and await its answer without polling. For
 publication, `gate.how` or `choose` returns a native question: use `request_user_input_async`
@@ -127,6 +130,14 @@ First call `publication` (Claude: `publication`). It checks the approved reposit
 PR and records verified publication. If it returns `published`, use that result below without
 pushing again. If discovery fails, explain its concrete next step; never treat a failed lookup
 as permission to create another PR. If it returns a gate, follow that decision before publishing.
+
+For `publication_status: update pending`, this correction targets `existing_pr.url` only.
+Generate `pr_summary` into an external temporary file. If `push_required`, push only
+`publication.head` to `refs/heads/<publication.branch>` on `publication.remote`, without
+force. Update that PR using `gh pr edit <existing_pr.url> --body-file <file>`, then call
+`publication` again. An interruption retains approval and detects whether push or just
+the body update remains. Never create a replacement PR or treat the old PR head as the
+published correction. Once confirmed, attach/report the PR and observe its CI as below.
 
 Only when it confirms `publication_status: not published`, use `pr_summary` (Claude: `pr-summary`), preserving its entire body and hidden review metadata in
 an external temporary file. It revalidates the reviewed commits and destination. Push only

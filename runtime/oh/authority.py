@@ -263,7 +263,8 @@ def answer(root,hint=None,after=None):
     used=used_file(root,found)
     if used.exists():return None
     try:
-        try:choice=pick(gate,found['prompt']) if found['via']=='question' else found['prompt']
+        from .entry import command
+        try:choice=pick(gate,found['prompt']) if found['via']=='question' else command(found['prompt'])[1]
         except Refused:
             from .review import menu_request
             if not (result:=menu_request(root,found,ask(gate)['questions'][0],since)):raise

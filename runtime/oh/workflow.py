@@ -199,6 +199,11 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
     if {'plans','slug','delivery'}&set(manifest) or (plan is None and any((t.get('transition') or {}).get('profile') in ('plans','intake','delivery') for t in tasks)):
         raise Refused('A manifest cannot choose plan settings or plan transitions')
     if prepared is not None and (workflow!='deliver' or plan is not None):raise Refused('Prepared scope is delivery work only')
+    if prepared and prepared.get('pr_target') and not waiting:
+        from .publication import correction_pr
+        correction_pr(root,prepared['pr_target'])
+        if git(root,'branch','--show-current')!=prepared['pr_target']['branch']:
+            raise Refused('Return to the prepared PR branch before starting its approved correction.')
     if workflow!='deliver' and len(tasks)!=1:raise Refused('Planning workflows have one bounded artifact task')
     source=digest({k:event[k] for k in ('host','session','turn','prompt')})
     if waiting:source=digest({'human':source,'prepared':waiting})
@@ -253,6 +258,7 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
             from .design_adapter import binding
             data['delivery']=binding(root,manifest)
         if prepared and prepared.get('repair_source'):data['repair_source']=prepared['repair_source']
+        if prepared and prepared.get('pr_target'):data['pr_target']=prepared['pr_target']
         if waiting:data['prepared_request']=waiting
         journal=Journal(p['id'],run)
         journal.append('run.started',data)
@@ -384,8 +390,12 @@ def _choose(root, choice, event):
         if choice=='pr':
             from .publication import destination
             target=destination(root,required=True)
+            if state.get('pr_target'):
+                from .publication import correction_pr
+                correction_pr(root,state['pr_target'])
             from .branches import fetched,trunk
-            if main:=trunk(root,state['config']):fetched(root,main)
+            base_name=state['pr_target']['base_branch'] if state.get('pr_target') else trunk(root,state['config'])
+            if base_name:fetched(root,base_name)
             from .delivery_verify import verify
             verify(root,state)
             head=git(root,'rev-parse','HEAD');branch=git(root,'branch','--show-current')
@@ -393,8 +403,9 @@ def _choose(root, choice, event):
             if not commits:raise Refused('Nothing was committed, so there is nothing to publish')
             if head!=commits[-1] or branch!=state['branch']:
                 raise Refused('PR choice must cover the exact completed branch head')
-            decision.update(head=head,branch=branch,base_branch=trunk(root,state['config']),commits=adopted(root,state,commits)+commits)
+            decision.update(head=head,branch=branch,base_branch=base_name,commits=adopted(root,state,commits)+commits)
             decision.update(target)
+            if state.get('pr_target'):decision['pr_target']=state['pr_target']
         append('decision',decision)
         append('run.status',{'status':'pr' if choice=='pr' else 'stopped'})
     elif choice in ('accept concerns','route scope','dismiss scope','accept concerns and route scope',
@@ -727,6 +738,20 @@ def checkpoint(root):
     from .actions import next_action
     from .handoff import coordinator_view
     action=next_action(state)
+    publication={}
+    if state['status']=='pr' and state.get('publication') and not state.get('published'):
+        message=('Execution is finished. Call publication to check for an existing PR before pushing. If none exists, '
+                 'use pr_summary, push only publication.head to publication.branch on publication.remote, and open one PR '
+                 'targeting publication.base_branch. Call publication again to record the verified result. '
+                 'Do not ask for PR approval again or repeat implementation/review.')
+        if state.get('pr_target'):
+            message=('Execution is finished. Call publication before pushing. For update pending, update only existing_pr: '
+                     'use pr_summary, push publication.head to publication.branch on publication.remote only if push_required, '
+                     'then edit that PR body. Call publication again to record the verified result. '
+                     'Do not create another PR, ask for approval again or repeat implementation/review.')
+        if not state['publication'].get('destination') or state.get('publication_changed'):
+            message='Confirm the current publication destination with the returned native question; all completed work and review are retained.'
+        publication={'publication':state['publication']|{'next':message}}
     return {'run':state['id'],'status':state['status'],'completed':len(state['done']),
             'next_action':{k:v for k,v in action.items() if k in ('kind','phase','task','attempt','resume')},
             'authorized_remaining':[t for t in state['granted'] if t not in state['done']],
@@ -739,9 +764,7 @@ def checkpoint(root):
             if state['status']=='needs_attention' else {}) | (
             {'model_notices':model_notices} if model_notices else {}) | (
             {'last_review':last_review} if last_review else {}) | running_progress(state,journal.path) | (
-            {'published':state['published'],'publication_status':'last verified'} if state.get('published') else {}) | (
-            {'publication':state['publication']|{'next':('Execution is finished. Call publication to check for an existing PR before pushing. If none exists, use pr_summary, push only publication.head to publication.branch on publication.remote, and open one PR targeting publication.base_branch. Call publication again to record the verified result. Do not ask for PR approval again or repeat implementation/review.' if state['publication'].get('destination') and not state.get('publication_changed') else 'Confirm the current publication destination with the returned native question; all completed work and review are retained.')}}
-            if state['status']=='pr' and state.get('publication') and not state.get('published') else {}) | (
+            {'published':state['published'],'publication_status':'last verified'} if state.get('published') else {}) | publication | (
             {'handoff':state['review_handoff']|{'next':'OH stopped with unresolved work for human PR triage. No task completion, review renewal or publication approval was granted.'}}
             if state.get('review_handoff') else {})|(
             {'plan':{k:v for k,v in state['rendered'].items() if k in ('kind','number','title','path','tasks','summary')}

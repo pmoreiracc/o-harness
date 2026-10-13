@@ -55,7 +55,8 @@ TOOLS = [
          'it, and prose proposes a quick fix.' + LONG, {'arguments': {'type': 'array', 'items': TEXT}}),
     tool('prepare', 'Prepare tasks', 'Saves a task list in OH\'s storage for the person to approve. Returns the exact '
          'trigger the person types to approve it.', {'tasks': {'type': 'array', 'items': {'type': 'object'},
-         'description': 'Tasks with id, title, instructions and optional needs, ordered by dependency'},'review': TEXT|{'description':'Completed standalone review ID used as repair input; no execution approval'}}, ['tasks']),
+         'description': 'Tasks with id, title, instructions and optional needs, ordered by dependency'},'review': TEXT|{'description':'Completed standalone review ID used as repair input; no execution approval'},
+         'pr':{'type':'integer','minimum':1,'description':'Existing open PR explicitly selected by the person for this quick fix; retains its branch'}}, ['tasks']),
     tool('prepare_design', 'Prepare a design', 'Binds an approved design document for delivery.',
          {'doc': TEXT, 'track': TEXT}, ['doc']),
     tool('start', 'Start prepared work', 'Verifies the person\'s approval and runs the prepared work.' + LONG, {'request': TEXT}),
@@ -100,7 +101,10 @@ def command(name, arguments, root):
         values = arguments.get('arguments') or []
         if not isinstance(values, list) or not all(isinstance(v, str) for v in values):raise Refused('`arguments` is a list of text')
         return [name, '--', *values]
-    if name == 'prepare':return ['prepare']+(['--review',text('review')] if text('review') else [])+['--',str(manifest(root,arguments.get('tasks')))]
+    if name == 'prepare':
+        number=arguments.get('pr')
+        if number is not None and (type(number) is not int or number<=0):raise Refused('The PR number must be positive')
+        return ['prepare']+(['--review',text('review')] if text('review') else [])+(['--pr',str(number)] if number is not None else [])+['--',str(manifest(root,arguments.get('tasks')))]
     if name == 'conflict':
         if arguments.get('choice') not in ('fresh', 'keep'):raise Refused('`choice` is fresh or keep')
         return ['conflict', arguments['choice'], '--', text('doc', True)] + ([text('track')] if text('track') else [])

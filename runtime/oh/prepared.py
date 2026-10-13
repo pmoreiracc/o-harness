@@ -9,14 +9,22 @@ def directory(root):return state_home()/'projects'/project(root)['id']/'prepared
 
 
 @state_writer
-def prepare(root,manifest=None,doc=None,track='',review=None):
+def prepare(root,manifest=None,doc=None,track='',review=None,pr=None):
     if (manifest is None)==(doc is None):raise Refused('Prepare either tasks or one design')
+    previous_target=None
     if manifest is not None and review is None:
         from .workflow import active_file,load_run
         if active_file(root).exists():
             _,previous=load_run(root)
             if previous['status']=='prepared_checkpoint' and previous.get('repair_source'):
                 review=previous['repair_source']['run']
+            if previous['status']=='prepared_checkpoint' and previous.get('pr_target'):
+                if pr is not None and pr!=previous['pr_target']['number']:
+                    raise Refused('This preview targets another PR. Cancel it, then prepare the newly requested PR.')
+                pr=previous['pr_target']['number']
+                previous_target=previous['pr_target']
+    if pr is not None and (manifest is None or review is not None):
+        raise Refused('An existing PR target prepares a new quick fix; do not combine it with design delivery or standalone-review repair.')
     if manifest is not None:
         from .workflow import validate_tasks
         path=(Path(root)/manifest).resolve()
@@ -58,6 +66,9 @@ def prepare(root,manifest=None,doc=None,track='',review=None):
         event=reviewed['human'] if event is None else event
         if event['host']!=reviewed['host'] or event['session']!=reviewed['human']['session']:
             raise Refused('Prepare these fixes in the review conversation, or resume its decision here first.')
+    elif pr is not None:
+        from .publication import prepare_correction
+        target=prepare_correction(root,pr,previous=previous_target)
     else:from_main(root)
     if manifest is None:
         from .design_adapter import manifest as project_design
@@ -66,6 +77,7 @@ def prepare(root,manifest=None,doc=None,track='',review=None):
     value={'created':now(),'project':project(root)['id'],'checkout':checkout_id(root),'base':git(root,'rev-parse','HEAD'),
            'snapshot':snapshot(root),'project_checks':project_checks(root)}|kind
     if source:value['repair_source']=source
+    if pr is not None:value['pr_target']=target
     key=digest(value);atomic_json(directory(root)/(key+'.json'),value,immutable=True)
     trigger=('$o-harness:oh-deliver request:'+key if manifest is not None else '$o-harness:oh-deliver '+doc+(' '+track if track else '')+' request:'+key)
     config=value['snapshot']['config']
@@ -91,6 +103,9 @@ def activate(root,journal,state,event):
     if event['host']!=state['host'] or event['session']!=state['human']['session']:raise Refused('Approve in the conversation that prepared these tasks')
     resolve(root,'request:'+state['prepared_request'],event,'tasks')
     if version()!=state['harness_version']:raise Refused('OH changed after preparation; prepare the task list again')
+    if state.get('pr_target'):
+        from .publication import correction_pr
+        correction_pr(root,state['pr_target'])
     if state.get('repair_source'):
         intent=state.get('activation')
         actual=git(root,'branch','--show-current')

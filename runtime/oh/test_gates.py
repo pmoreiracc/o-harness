@@ -290,7 +290,8 @@ class GateTest(unittest.TestCase):
         question=result['gate']['ask']['questions'][0]
         self.assertEqual(result['gate']['choices'],['approve','refine','cancel'])
         self.assertIn('Implement behavior',Path(result['gate']['preview']).read_text())
-        self.assertIn('scratchpad',result['gate']['how']);self.assertIn('show_pane',result['gate']['how'])  # Claude's side pane shows a display copy
+        self.assertIn('SendUserFile',result['gate']['how']);self.assertIn('display `render`',result['gate']['how'])
+        self.assertIn('show the complete preview in chat before asking',result['gate']['how'])
         self.assertNotIn('open_in_codex',result['gate']['how'])
         self.assertNotIn('Implement behavior',question['question'])
         self.assertEqual(run(self.root,self.fake)['status'],'prepared_checkpoint')
@@ -356,6 +357,91 @@ class GateTest(unittest.TestCase):
         with connect() as db:
             self.assertEqual(db.execute('SELECT status FROM runs WHERE id=?',(first_run,)).fetchone()[0],'stopped')
             self.assertEqual(db.execute('SELECT status FROM runs WHERE id=?',(state['id'],)).fetchone()[0],'pr')
+
+    def test_quick_fix_updates_the_selected_pr_without_reopening_its_old_run(self):
+        from . import branches
+        from .prepared import prepare,directory
+        from .publication import reconcile,render
+        from .storage import atomic_json
+        from .workflow import carry_on
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        self.git('update-ref','refs/remotes/origin/main','main')
+        result=self.begin('claude',fresh=True)
+        with patch('oh.branches.fetched',return_value='origin/main'):
+            self.click(result['gate']['ask']['questions'][0],'Open a PR',use='original-pr')
+        original,before=load_run(self.root)
+        pr=fixtures.pull_request(before,number=148)
+        with patch('oh.publication.github',return_value=[pr]):reconcile(self.root)
+        evidence=original.records();head=self.git('rev-parse','HEAD');branch=before['branch']
+        self.typed('/oh-deliver Fix the timeout on '+branch+' and update PR #148 only','fix-pr')
+        self.assertEqual(materialize(self.root)['kind'],'quick_fix')
+        self.assertEqual(self.git('branch','--show-current'),branch)
+        manifest=directory(self.root).parent/'correction.json'
+        atomic_json(manifest,{'tasks':[self.tasks[0]|{'title':'Repair timeout','instructions':'Fix the timeout; preserve the existing work.'}]})
+        actual=branches.run_git
+        def git_call(root,*args,**kw):
+            if args[:3]==('fetch','--quiet','origin'):
+                return actual(root,'fetch','--quiet',str(root),pr['head']['sha'],timeout=60)
+            return actual(root,*args,**kw)
+        with patch('oh.publication.github',side_effect=lambda *a,**k:pr),patch('oh.branches.run_git',side_effect=git_call):
+            # Bad identities/closed PRs and divergent local work never switch or reset the checkout.
+            for wrong in (pr|{'state':'closed'},pr|{'head':pr['head']|{'repo':{'full_name':'someone/fork'}}}):
+                with patch('oh.publication.github',return_value=wrong),self.assertRaises(Refused):prepare(self.root,str(manifest),pr=148)
+            self.git('commit','--allow-empty','-qm','Local work')
+            with self.assertRaisesRegex(Refused,'local work'):
+                prepare(self.root,str(manifest),pr=148)
+            self.assertNotEqual(self.git('rev-parse','HEAD'),head)
+            self.git('reset','--hard',head)
+            self.git('switch','main')
+            first=prepare(self.root,str(manifest),pr=148)
+            state=load_run(self.root)[1];target=state['pr_target']
+            self.assertEqual((state['branch'],state['base']),(branch,head))
+            self.assertIn(pr['html_url'],Path(first['gate']['preview']).read_text())
+            self.assertEqual(state['granted'],[])
+            self.click(first['gate']['ask']['questions'][0],'Refine',use='refine-fix')
+            self.typed('Keep the change bounded.','refinement',hook=False);materialize(self.root)
+            self.git('remote','set-url','origin','https://github.com/other/product.git')
+            with self.assertRaisesRegex(Refused,'destination changed'):
+                prepare(self.root,str(manifest))
+            self.assertEqual(self.git('rev-parse','HEAD'),head)
+            self.git('remote','set-url','origin','https://github.com/example/product.git')
+            second=prepare(self.root,str(manifest))
+            self.assertEqual(load_run(self.root)[1]['pr_target'],target)
+            self.assertIsNone(self.click(first['gate']['ask']['questions'][0],'Approve',use='stale-fix'))
+            with patch('oh.publication.github',return_value=pr|{'head':pr['head']|{'sha':'f'*40}}):
+                with self.assertRaisesRegex(Refused,'no longer'):self.click(second['gate']['ask']['questions'][0],'Approve',use='moved-pr')
+            self.assertEqual(load_run(self.root)[1]['granted'],[])
+            self.typed('Approve','typed-fix',hook=False)
+            self.assertEqual(materialize(self.root)['status'],'running')
+            self.assertIsNone(materialize(self.root))
+            result=run(self.root,self.fake)
+            new_head=self.git('rev-parse','HEAD')
+            self.assertEqual(load_run(self.root)[1]['done'],['1'])
+            gate=result['gate'];self.assertIn('Update PR #148',gate['ask']['questions'][0]['question'])
+            with patch('oh.branches.fetched',return_value='origin/main'):
+                self.click(gate['ask']['questions'][0],'Update PR #148',use='publish-fix')
+            approved=load_run(self.root)[1]['publication']
+            pending=reconcile(self.root)
+            self.assertEqual(pending['publication_status'],'update pending');self.assertTrue(pending['push_required'])
+            self.assertNotIn('published',load_run(self.root)[1])
+            with self.assertRaises(Refused):reconcile(self.root,149)
+            body=render(self.root)
+            packet=json.loads(body.split('```json\n')[1].split('\n```')[0])
+            self.assertEqual([r['commit'] for r in packet['records']],[head,new_head])
+            # A fresh host finishes the granted update without another task/review/approval.
+            resumed=carry_on(self.root,{'host':'codex','session':'fresh','turn':'resume','prompt':'/oh-resume'})
+            self.assertEqual(resumed['next_action']['kind'],'publish');self.assertNotIn('gate',resumed)
+            self.assertEqual(load_run(self.root)[1]['publication'],approved)
+            pr=pr|{'head':pr['head']|{'sha':new_head}}
+            pending=reconcile(self.root)
+            self.assertEqual(pending['publication_status'],'update pending');self.assertFalse(pending['push_required'])
+            self.assertNotIn('published',load_run(self.root)[1])
+            pr=pr|{'body':body.replace('\n','\r\n')}
+            self.assertEqual(reconcile(self.root)['published']['number'],148)
+            published=load_run(self.root)[1]['published']
+            self.assertEqual(reconcile(self.root)['published']['approved_head'],new_head)
+            self.assertEqual(load_run(self.root)[1]['published'],published)
+            self.assertEqual(original.records(),evidence)
 
     def test_prepared_codex_menu_uses_native_click_and_can_stop(self):
         self.tasks[0]['title']='Sign-in [form]'
@@ -614,7 +700,7 @@ class GateTest(unittest.TestCase):
                 self.typed('continue', 'from-' + name.split()[-1], extra=extra)
                 with self.assertRaisesRegex(Refused, 'could not read'):materialize(self.root)
                 self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
-        self.typed('continue', 'desktop', extra=desktop)
+        self.typed('Continue', 'desktop', extra=desktop)
         self.assertEqual(materialize(self.root)['status'], 'running')
         # docs/architecture.md: RC clicks work without typing; custom SDK callbacks are an accepted risk.
         journal, _ = load_run(self.root);journal.append('run.status', {'status': 'checkpoint'})
@@ -626,7 +712,7 @@ class GateTest(unittest.TestCase):
             self.assertIsNone(materialize(self.root))  # the click is consumed once
             journal.append('run.status',{'status':'checkpoint'})
             question=ask(current(self.root))['questions'][0]
-        self.typed('continue','phone-typed',extra=desktop|{'entrypoint':'sdk-cli'})
+        self.typed('CONTINUE','phone-typed',extra=desktop|{'entrypoint':'sdk-cli'})
         self.assertEqual(materialize(self.root)['status'],'running')
         journal.append('run.status',{'status':'checkpoint'})
         question=ask(current(self.root))['questions'][0]

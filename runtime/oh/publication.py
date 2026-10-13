@@ -70,12 +70,74 @@ def github(root,host,endpoint,*,pages=False):
         raise Refused('GitHub returned an incomplete publication result. Repeat publication once the API is available; keep the existing approval.') from None
 
 
+def correction_pr(root,target,*,heads=None):
+    """Recheck an explicitly selected PR without granting edits or publication."""
+    from urllib.parse import urlsplit
+    if destination(root)!={k:target[k] for k in ('remote','destination','remote_fingerprint')}:
+        raise Refused('The selected PR destination changed. Restore its origin remote, or cancel and prepare the intended PR again.')
+    host,repo=repository(target)
+    pr=github(root,host,f'repos/{repo}/pulls/{target["number"]}')
+    try:
+        url=urlsplit(pr['html_url'])
+        valid=(type(pr['id']) is int and type(pr['number']) is int and pr['number']==target['number'] and
+               url.scheme=='https' and url.hostname==host and url.path.casefold()==f'/{repo}/pull/{target["number"]}'.casefold() and
+               pr['state']=='open' and not pr.get('merged_at') and
+               pr['base']['repo']['full_name'].casefold()==repo.casefold() and
+               (pr['head'].get('repo') or {}).get('full_name','').casefold()==repo.casefold() and
+               pr['base']['ref']==target['base_branch'] and
+               isinstance(pr['head']['ref'],str) and
+               re.fullmatch('[0-9a-f]{40,64}',pr['head']['sha']) and
+               ('id' not in target or pr['id']==target['id']) and
+               ('branch' not in target or pr['head']['ref']==target['branch']) and
+               ('head' not in target or pr['head']['sha'] in (heads or (target['head'],))))
+        if not valid:raise ValueError()
+    except (KeyError,TypeError,ValueError,AttributeError):
+        raise Refused('The selected PR is no longer the same open PR, branch, base or head in origin. Preserve the work and inspect the PR; prepare a new scope if its target changed. No other PR is authorized.') from None
+    return pr
+
+
+def prepare_correction(root,number,*,previous=None):
+    """Select existing PR work before preparing scope; never reset or overwrite it."""
+    from .branches import untouched,trunk,run_git,holder
+    if type(number) is not int or number<=0:raise Refused('The PR number must be positive')
+    untouched(root)
+    # Refinement can approve a fresh head, but cannot silently retarget the PR or remote.
+    target=({k:v for k,v in previous.items() if k!='head'} if previous else
+            destination(root,required=True)|{'number':number,'base_branch':trunk(root)})
+    pr=correction_pr(root,target)
+    branch=pr['head']['ref'];head=pr['head']['sha']
+    if not isinstance(branch,str) or branch==target['base_branch'] or run_git(root,'check-ref-format','--branch',branch).returncode:
+        raise Refused('The selected PR needs a valid execution branch distinct from the base branch.')
+    if holder(root,branch):raise Refused(f'{branch} is checked out in another worktree. Prepare this PR from that checkout; its work is preserved.')
+    target.update(id=pr['id'],url=pr['html_url'],branch=branch,head=head)
+    fetched=run_git(root,'fetch','--quiet','origin','refs/heads/'+branch,timeout=60)
+    if fetched.returncode or git(root,'rev-parse','FETCH_HEAD')!=head:
+        raise Refused('The selected PR head could not be fetched unchanged. Check the connection and current PR head, then prepare again; no branch was switched.')
+    local=run_git(root,'show-ref','--verify','--quiet','refs/heads/'+branch).returncode==0
+    if local and run_git(root,'merge-base','--is-ancestor','refs/heads/'+branch,head).returncode:
+        raise Refused(f'{branch} has local work outside the selected PR head. Preserve and reconcile those commits before preparing this correction; OH will not reset them.')
+    if local:
+        git(root,'switch','--quiet',branch)
+        git(root,'merge','--ff-only','--quiet',head)
+    else:git(root,'switch','--quiet','--no-track','-c',branch,head)
+    return target
+
+
 def discover(root,state,number=None):
     """Find this run's PR, including creation that succeeded before OH saved its receipt."""
     from urllib.parse import urlencode,urlsplit
     grant=state.get('publication') or {}
     host,repo=repository(grant)
     saved=state.get('published')
+    if (target:=state.get('pr_target')) and not saved:
+        if number is not None and number!=target['number']:raise Refused('This correction targets its approved existing PR; no other PR is authorized.')
+        pr=correction_pr(root,target,heads=(target['head'],grant['head']))
+        # The old PR is expected before push. After push, an interrupted body update
+        # still needs finishing; neither state is a completed publication receipt.
+        current=(pr['head']['sha']==grant['head'] and
+                 (pr.get('body') or '').replace('\r\n','\n').strip()==render(root).replace('\r\n','\n').strip())
+        return {'id':pr['id'],'number':pr['number'],'url':pr['html_url'],'repository':repo,'host':host,
+                'state':'open','observed_head':pr['head']['sha'],'pending_update':not current}
     if saved:
         if number is not None and number!=saved['number']:raise Refused('This delivery already has a recorded PR; use its saved link.')
         number=saved['number']
@@ -139,6 +201,12 @@ def reconcile(root,number=None):
         except Refused as exc:
             if not state.get('published'):raise
             return checkpoint(root)|{'publication_notice':str(exc),'publication_status':'last verified'}
+        if found and found.get('pending_update'):
+            if git(root,'rev-parse','HEAD')!=state['publication']['head'] or git(root,'branch','--show-current')!=state['publication']['branch'] or changes(root):
+                raise Refused('The checkout changed after publication approval. Preserve the changes and return to the approved clean branch head before updating this PR.')
+            return checkpoint(root)|{'publication_status':'update pending','existing_pr':found,
+                'push_required':found['observed_head']!=state['publication']['head']}
+        if found:found.pop('pending_update',None)  # a transient next action is not part of the completed receipt
         if found and not state.get('published'):
             grant=state['publication']
             journal.append('publication.completed',found|{'run':state['id'],'grant':grant['source'],
@@ -282,7 +350,9 @@ def reference(root):
     config=None
     if active_file(root).exists():
         _,state=load_run(root)
-        if state['status']=='pr':config=state['config']
+        if state['status']=='pr':
+            config=state['config']
+            if state.get('pr_target'):config=config|{'base_branch':state['pr_target']['base_branch']}
     return main_ref(root,config)
 
 
