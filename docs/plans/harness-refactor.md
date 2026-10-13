@@ -710,7 +710,7 @@ implementation cycle, while current-head CI reporting remains separate from revi
 - [x] H3 (H1–H2): Extend existing publication, host-transfer and admission fixtures for interrupted
   publication, later commits, closed/merged PRs, branch reuse and GitHub failures. Run affected
   checks and syntax with duration evidence. No additional orchestration or test framework.
-- [ ] H4 (H3): Update verified documentation, commit the candidate and prepare the development
+- [x] H4 (H3): Update verified documentation, commit the candidate and prepare the development
   snapshot. Remaining developer trials under C6: Resume 0005 on either host reports its PR; a genuinely stopped
   run resumes work; a new Deliver after merge selects the next approved batch. Independent
   review and publication follow that host trial, as required by AGENTS.md.
@@ -757,3 +757,10 @@ its later head, while confirming the original journal was unchanged. No consumer
 approval, ownership or receipt was modified by the probe. External logs are
 `/tmp/oh-publication-{focus2,affected,regressions,syntax}.log`. The candidate still needs the
 developer's fresh-session host trial and the subsequent independent review under C6.
+
+H4 activation: source `497aca900bb7e5c2cf705a373a757d7fd78f9216` is enabled on both Codex
+and Claude as `0.6.0-SNAPSHOT.1791889457000178000`; `oh-dev status` verified both hosts,
+the source revision and snapshot mode. Existing sessions retain their loaded plugin, so the
+developer trial uses fresh sessions. Start with Resume in my-geoffrey: it should report merged
+PR #144 without transferring the finished run or reopening a gate. Test genuine mid-task
+continuation separately. This activation note is documentation-only; no OH PR was published.
