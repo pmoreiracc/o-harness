@@ -31,6 +31,8 @@ def finding_index(state, task):
               and all(isinstance(v,str) for v in c.values())} if isinstance(items,list) else {}
     for position, attempt in enumerate(history):
         if attempt['task'] != task or attempt['role'] != 'review':continue
+        # A live reviewer has not returned evidence yet. It is not a failed handoff.
+        if attempt.get('finished') is False:continue
         if attempt.get('outcome') not in ('clean','blocking','needs_resolution') or attempt.get('report_issues') or attempt.get('review_fragments'):
             path=Path(attempt['evidence'])/'result.json' if attempt.get('evidence') else None
             incomplete.append({'attempt':attempt['id'],'outcome':attempt.get('outcome','unfinished'),

@@ -377,12 +377,19 @@ class CodexToolsTest(unittest.TestCase):
     def test_the_runner_reports_progress_where_the_server_forwards_it(self):
         import contextlib
         from .runner import run
-        from .workflow import start
+        from .workflow import start,load_run
         fixtures.configure(self.root, tasks_per_batch=1)
         start(self.root, {'tasks': [{'id': '1', 'title': 'One', 'instructions': 'Do it'}]}, fixtures.WorkflowTest.event(self))
         out, err = io.StringIO(), io.StringIO()
+        def worker(*args,**kwargs):
+            _,state=load_run(self.root)
+            # Progress describes an admitted worker, not a speculative next phase.
+            self.assertEqual(state['attempts'][-1]['role'],args[4])
+            self.assertTrue(state['attempts'][-1]['request_hash'])
+            self.assertEqual(len(err.getvalue().splitlines()),1 if args[4]=='implementation' else 3)
+            return fixtures.WorkflowTest.fake(self,*args,**kwargs)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            run(self.root, lambda *a, **k: fixtures.WorkflowTest.fake(self, *a, **k))
+            run(self.root, worker)
         messages=err.getvalue().splitlines()
         self.assertEqual(len(messages),4)  # implementation (including checks) and review start/finish
         self.assertIn('task 1: One',messages[0])

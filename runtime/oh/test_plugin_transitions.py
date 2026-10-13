@@ -171,6 +171,21 @@ class PluginTransitions(unittest.TestCase):
             if args[4]=='review':
                 request=read_json(args[5]/'request.json');packet=read_json(request['task_context']['path']);binding=packet['findings'];prior=read_json(Path(binding['path']))
                 self.assertEqual(digest(prior),binding['hash']);manifests.append(prior)
+                self.assertEqual(packet['remaining_work'],'')
+                self.assertNotIn('output',packet['verification']['checks'][0])
+                # The current reviewer is active, not an incomplete returned receipt.
+                from .workflow import load_run
+                from . import receipts
+                from .handoff import finding_index
+                journal,active=load_run(self.root)
+                self.assertEqual(finding_index(active,'1')['incomplete_reviews'],[])
+                receipts.index(journal,active)
+                visible=(journal.path/'index.md').read_text()
+                self.assertNotIn(f"attempts/{active['attempts'][-1]['id']}/result.json",visible)
+                self.assertIn('| Running |',visible)
+                if len(manifests)>1:
+                    self.assertIn('Awaiting review confirmation',visible)
+                    self.assertNotIn('Confirmed by clean review',visible)
                 if len(manifests)==1:
                     value['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':description,'path':'output.txt','family':'sibling-paths','relation':'original'} for description in ('Fix first sibling path','Fix second sibling path')])
             return value
@@ -227,8 +242,18 @@ class PluginTransitions(unittest.TestCase):
         self.assertIn(b'Result SHA-256',saved)
         self.assertIn('Review 2',(journal.path/'index.md').read_text())
         self.assertIn('Confirmed by [review]',(journal.path/'index.md').read_text())
+        self.assertIn('Confirmed by clean review',(journal.path/'index.md').read_text())
         run(self.root,self.fake)
         self.assertEqual(receipt.read_bytes(),saved)
+        # A finished attempt with missing output remains incomplete, without a broken link.
+        from . import receipts
+        lost=state['attempts'][-1]|{'id':'missing-review','outcome':'interrupted',
+            'evidence':str(journal.path/'attempts'/'missing-review')}
+        receipts.index(journal,state|{'attempts':state['attempts']+[lost]})
+        visible=(journal.path/'index.md').read_text()
+        self.assertIn('Incomplete review evidence',visible)
+        self.assertIn('result unavailable',visible)
+        self.assertNotIn('](attempts/missing-review/result.json)',visible)
 
     def tracked_script(self):
         script=self.root/'checks.sh';script.write_text('#!/bin/sh\nexit 0\n',newline='\n')

@@ -49,28 +49,30 @@ opinion, read:
 If a doc required by the project does not exist, that is itself a finding — say which one
 and why the change cannot be judged without it. Do not invent documentation requirements.
 
-Read the admitted current task packet, its latest readiness report and complete finding
-index, including returned reports without a completed verdict. Prior author reports are
-consulted only for a specific unresolved question; their accumulation is not required
-review context. Validate the packet and index bindings before using their contents.
-The implementer wrote the readiness claims: they are an attack map, never proof and never
-the boundary of your review. A missing bound current report when an implementer ran is a
-runner failure, not something you waive in prose.
+For code reviews, work in this order within the existing coverage lenses:
 
-For implementation reports with `readiness`, challenge the requirement-to-proof mapping,
-self-review outcomes and each repair diagnosis against the approved behavior and actual
-code. A passing check does not establish that its assertion is correct. When code or tests
-were changed to repair a failure, establish which was wrong and whether the correction
-preserves the required behavior and meaningful failure coverage. Report a concrete defect
-when a green check masks lost behavior or an unauthorized requirement change. This belongs
-to the existing task/design and tests lenses, without a separate review or approval stage.
+1. From the approved task, contracts and actual source, identify the affected operations
+   and their required observable results. Use the changed-file index to include callers,
+   unchanged sibling paths and documentation even when generated files dominate the diff.
+   Derive this coverage before comparing it with the author's account.
+2. Trace each operation from accepted input and relevant state through storage to its public
+   result. Challenge consequential boundaries and combinations supported by the contract,
+   including alternate states, permissions, time, replay and failure outcomes where applicable.
+   Do not enumerate irrelevant combinations or invent input policies.
+3. Compare that coverage with the admitted latest readiness and complete finding index,
+   including incomplete returned reviews. Challenge missing requirements, self-review claims
+   and repair diagnoses against the source. Read earlier reports only for a specific unresolved
+   question. The author's coverage is an attack map, never your review boundary or proof.
+4. Inspect whether tests actually reach and assert the claimed behavior. For a repaired
+   protection, trace the trigger, affected sibling paths and observable result; confirm a
+   fixture change did not move the trigger away from the failure it claims to exercise.
+   Establish whether code, test or environment was wrong before recommending correction.
 
-Cover the full affected task in the first round, even after finding a blocker. Trace complete
-operations from accepted inputs through stored state to returned results. Where applicable,
-challenge combinations of individually valid limits, replay after authorization changes,
-and exact public error contracts. An isolated boundary test or a test accepting any exception
-does not prove those complete paths. Use the changed-file index to keep source, tests and
-affected documentation visible when generated artifacts dominate the diff.
+Record concrete observations in the existing evidence fields, not another report or stage.
+Finish the full task coverage even after finding a blocker; prior-finding regression is
+additional coverage, not a substitute. A green check cannot establish a false assertion or
+authorize changed requirements. Validate packet/index bindings before use. A missing bound
+current report when an implementer ran is a runner failure, never something to waive.
 
 **Never cite a rule you have not read in this session.** A confidently misquoted
 invariant is worse than a missed one: it sends the implementer to fix the wrong thing.

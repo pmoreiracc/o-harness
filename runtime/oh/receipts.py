@@ -65,7 +65,9 @@ def request(directory, admission):
             else:
                 for item in items:
                     lines.append('- '+(f"{item['id']} | {item['disposition']} | {item['proof']}" if isinstance(item, dict) else item))
-    lines.extend(['', '## Remaining work', '', packet['remaining_work'] or 'Complete the approved task and required checks.', '',
+    remaining=packet['remaining_work'] or ('Independently review the current task and its verification evidence.' if admission['role']=='review'
+                                         else 'Complete the approved task and required checks.')
+    lines.extend(['', '## Remaining work', '', remaining, '',
                   '## Evidence', '', '[Task context](task-context.json) · [Finding index](finding-index.json) · [Native admission](request.json)', '',
                   'Author readiness contains claims to verify. The journal and native evidence govern authority.', ''])
     save(Path(directory)/'request.md', '\n'.join(lines), immutable=True)
@@ -105,6 +107,8 @@ def completed(directory, admission, result, record, state):
 
 
 def index(journal, state):
+    def artifact(label, relative):
+        return f'[{label}]({relative})' if (journal.path/relative).is_file() else label+' (not yet available)'
     lines = [f"# {state.get('name', 'Project')} — {state.get('workflow', 'deliver')}", '',
              f"**Branch:** {state['branch']}", f"**Current state:** {state['status']}",
              f"**Completed tasks:** {', '.join(state['done']) or 'None'}", '']
@@ -121,21 +125,24 @@ def index(journal, state):
             filename = 'review.md' if role == 'review' else 'report.md'
             relative = f"attempts/{attempt['id']}/{filename}"
             if not (journal.path/relative).is_file():relative = f"attempts/{attempt['id']}/result.json"
+            link=artifact(label,relative) if attempt.get('finished') else label
             profile = attempt.get('profile') or {}
-            lines.append(f"| [{label}]({relative}) | {profile.get('model', 'Not recorded')} | {attempt.get('outcome', 'Running')} | {seconds(attempt.get('duration_ms'))} |")
+            outcome=attempt.get('outcome', 'Incomplete' if attempt.get('finished') else 'Running')
+            lines.append(f"| {link} | {profile.get('model', 'Not recorded')} | {outcome} | {seconds(attempt.get('duration_ms'))} |")
             resolution = state.get('resolutions', {}).get(attempt['id'])
             scope = state.get('scope_records', {}).get(attempt['id'])
             if resolution:lines.append(f"| Decision | | {resolution['choice']} | |")
             if scope:lines.append(f"| Scope | | {scope['action']} | |")
             if attempt.get('normalized_report'):
-                lines.append(f"| Handoff correction | | [Unambiguous legacy references](attempts/{attempt['id']}/normalized-report.json); original outcome retained | |")
+                lines.append(f"| Handoff correction | | "+artifact('Unambiguous legacy references',f"attempts/{attempt['id']}/normalized-report.json")+"; original outcome retained | |")
         lines.append('')
         from .handoff import finding_index
         findings=finding_index(state,task['id'])
         if findings['incomplete_reviews']:
             lines.extend(['### Incomplete review evidence',''])
             for item in findings['incomplete_reviews']:
-                lines.append(f"- [Original review](attempts/{item['attempt']}/result.json): "+'; '.join(item.get('issues') or [item['note']]))
+                link=f"[Original review](attempts/{item['attempt']}/result.json)" if item.get('report') else f"Review {item['attempt']} (result unavailable)"
+                lines.append(f"- {link}: "+'; '.join(item.get('issues') or [item['note']]))
             lines.append('')
         if findings['families']:
             lines.extend(['### Finding dispositions', '', 'Author repair claims are separate from the last independent review and human decisions.', ''])
@@ -143,11 +150,16 @@ def index(journal, state):
             for family in findings['families']:
                 for item in family['occurrences']:
                     original=item['id'].split('#')[0]
-                    lines.append(f"- [{escape(item['id'])}](attempts/{original}/result.json): **{item['disposition']}** ({escape(family['family'])}).")
+                    label=item['disposition']
+                    if label=='still-open' and item.get('author_claim',{}).get('disposition')=='fixed':label='Awaiting review confirmation'
+                    if label=='fixed' and item.get('reviewed_by'):label='Confirmed by clean review'
+                    relative=f"attempts/{original}/result.json"
+                    link=f"[{escape(item['id'])}]({relative})" if (journal.path/relative).is_file() else escape(item['id'])+' (result unavailable)'
+                    lines.append(f"- {link}: **{label}** ({escape(family['family'])}).")
                     if item.get('reviewed_by'):
-                        lines.append(f"  Confirmed by [review](attempts/{item['reviewed_by']}/result.json).")
+                        lines.append('  Confirmed by '+artifact('review',f"attempts/{item['reviewed_by']}/result.json")+'.')
                     if claim:=item.get('author_claim'):
-                        lines.append(f"  Author [claim](attempts/{claim['attempt']}/result.json): {escape(claim['disposition'])} — {escape(claim['proof'])}.")
+                        lines.append('  Implementer '+artifact('claim',f"attempts/{claim['attempt']}/result.json")+f": {escape(claim['disposition'])} — {escape(claim['proof'])}.")
             lines.append('')
     lines.extend(['This index is a current view. Original requests, results and receipts remain unchanged.', ''])
     save(journal.path/'index.md', '\n'.join(lines))

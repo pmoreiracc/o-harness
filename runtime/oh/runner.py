@@ -103,7 +103,10 @@ def prompt_for(root,state,task,role,feedback='',packet=None):
                  'For design, return a clear bounded task plan with dependencies, '
                  'acceptance checks, relevant invariants and risks. Do not invent approval or impose an ADR process.\n')
     else:
-        common+=('Implement exactly this task, run its required checks, then self-review before requesting independent review. '
+        common+=('Work in this order within the approved task. '
+          'First map its requirements and contracts to affected operations, callers and observable results; '
+          'retain that mapping in readiness.requirements and surfaces. Inspect useful existing work before editing. '
+          'Implement the mapped behavior, then run its required checks and self-review before requesting independent review. '
           'Use the oh_checks verify tool to run the project-configured checks; it selects affected checks and records actual outcomes. '
           'Fix failures and call verify again while you are still working. Run additional focused checks where useful. '
           'After any further edit, call verify again. Return completed only with passing verification for your final work. '
@@ -115,20 +118,18 @@ def prompt_for(root,state,task,role,feedback='',packet=None):
           'Do not change requirements, remove behavior, add decorative controls or weaken an assertion merely to make a check pass. '
           'Correct a faulty test within the approved scope with a concrete behavioral justification; an actual conflict '
           'between authoritative requirements needs a decision, not a silent choice. '
-          'Open every other file your change makes a claim about; confirm the claim or narrow it to what you verified. '
-          'For every protection you add or change, list the ways around it, search for sibling paths, and close them together. '
-          'Trace complete affected operations from accepted input through state changes to the returned result. '
-          'Where applicable, test combinations of valid limits, replay after authorization changes, and the exact '
-          'public error contract; checking fields in isolation or accepting any exception does not prove those paths. '
-          'Verify documentation claims against the implementation and tests; follow the project documentation conventions. '
-          'Fix review blockers and concerns as defect families: fix the root cause, search every sibling, and close the '
-          'whole family together; never patch only the reported line. '
+          'Self-review complete operations from accepted input and relevant state through storage to the public result. '
+          'Use the approved mapping to challenge alternate states, boundaries, permissions, replay and failure '
+          'outcomes where applicable; do not enumerate irrelevant combinations or invent input policies. '
+          'For each changed protection or reported defect, search sibling paths and close the whole family. '
+          'Trace the trigger and assertion of its regression test; a changed fixture must still exercise the '
+          'claimed failure. Open files your code or documentation makes claims about and confirm the claim '
+          'or narrow it. Follow project documentation conventions. '
           'The approved scope never grows. Do not implement unrelated gaps or entries under Open review scope or Scope decisions. '
           'Return actionable unrelated gaps in found_along_way, never in the change. Routine verification notes, '
           'absence of sibling paths and unchanged documentation belong in summary, not found_along_way. '
           'Do not edit plan files; OH records those notes. '
-          'Return summary with claims and evidence for requirements, rules, affected surfaces, self-review attacks, family closure, '
-          'prior finding dispositions, verification and limits. Start with a short summary of the delivered behavior, '
+          'Start summary with a short account of the delivered behavior, '
           'including existing implementation and earlier repairs you retained; put verification and limits in separate paragraphs. '
           'Return readiness with explicit requirements, rules, surfaces, proof, self_review, family_closure, '
           'prior_findings, verification, repairs and limits. Map every requirement to implementation and concrete proof. '
@@ -230,11 +231,6 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         except Exception as exc:profile_error=exc
     if fallback and not any(a.get('model_fallback',{}).get('notice')==fallback['notice'] for a in state['attempts']):
         print(fallback['notice'],file=sys.stderr,flush=True)
-    # Progress goes to stderr: stdout carries only the result, which tools and scripts read.
-    action=('OH’s independent reviewer agent is checking' if role=='review' else
-            'OH’s assessment agent is examining' if role=='assessment' else
-            'OH’s planning agent is drafting' if role=='analysis' else 'OH’s implementation agent is building')
-    if role!='assessment':progress(f"{action} task {task['id']}: {' '.join(task['title'].split())[:200]} ({profile['model']} / {profile['effort']}).")
     attempt_id=identifier();before=tree(root)
     from .delivery import replacements
     git_tree=candidate_tree(root,replacements(root,state)) if role=='review' else None
@@ -324,6 +320,11 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     started=time.monotonic()
     try:
         if profile_error:raise profile_error
+        # Announce the handoff only after admission succeeds, at the actual worker launch.
+        if role!='assessment':
+            action=('The independent reviewer agent is now challenging' if role=='review' else
+                    'The planning agent is drafting' if role=='analysis' else 'The implementation agent is working on')
+            progress(f"{action} task {task['id']}: {' '.join(task['title'].split())[:200]} ({profile['model']} / {profile['effort']}).")
         result=invoke(state['host'],root,profile,prompt,role,directory,context,
                       schema=hosts.REVIEW_SCHEMA if role=='review' else hosts.ASSESSMENT_SCHEMA if role=='assessment' else hosts.DESIGN_SCHEMA if designing(task) else hosts.PROPOSAL_SCHEMA if intake(task) else hosts.WORK_SCHEMA if role=='implementation' else None)
     except Exception as exc:
@@ -424,7 +425,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
             progress(f"{finding['severity']}: {' '.join(finding['description'].split())[:350]}")
     elif outcome=='implemented':
         summary=record.get('human_summary') or record['summary']
-        progress('The '+('implementation' if role=='implementation' else 'planning')+' agent finished: '
+        progress('The '+('implementation' if role=='implementation' else 'planning')+f" agent finished its round for task {task['id']}: "
                  +' '.join(summary.split('\n\n',1)[0].split())[:350])
     elif outcome=='unfinished':
         progress('The '+('assessment' if role=='assessment' else 'implementation')+' agent has remaining work; OH will continue on the same profile with useful work retained.')
@@ -667,9 +668,10 @@ def _run(root,invoke):
             check(root)
             decision=next_action(reduce(journal.records()),current_tree=tree(root),verified=True)
             if decision['kind']=='review_allowance':
+                progress(f"Task {task_id} is ready for review; the reviewer has not started because the review allowance is spent.")
                 status(journal,state,'review_checkpoint');return checkpoint(root)
             if decision['kind']!='review':continue
-            review=attempt(root,journal,state,task,'review',profiles['review'],json.dumps(check_results)[:4000],invoke)
+            review=attempt(root,journal,state,task,'review',profiles['review'],invoke=invoke)
             if review['outcome']=='clean':
                 if not gated(state,task):complete_reviewed(root,journal,state,task,review)
             elif review['outcome']=='needs_resolution':

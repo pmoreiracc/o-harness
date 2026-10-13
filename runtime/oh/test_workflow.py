@@ -178,13 +178,16 @@ class WorkflowTest(unittest.TestCase):
             value=self.fake(*args,**kw)
             if args[4]=='review':value['structured']={'verdict':'blocking','summary':'Fix it','findings':[{'severity':'blocking','description':'Wrong','path':'output.txt','family':'wrong-output','relation':'original'}],'evidence':EVIDENCE}
             return value
-        result=run(self.root,blocked)
+        messages=io.StringIO()
+        with patch('sys.stderr',messages):result=run(self.root,blocked)
         self.assertEqual(result['status'],'review_checkpoint')
         # docs/usage.md: spent review windows show findings and their complete retained history.
         for detail in ('Round 3 of 3','Reviews used/granted: 3/3','Wrong','repeats an earlier finding','Open findings: blocking'):
             self.assertIn(detail,result['gate']['details'])
         reviews=sum(c[0]=='review' for c in self.calls);self.assertEqual(reviews,3)
         self.assertEqual(self.calls[-1][0],'implementation')  # the third receipt's findings were repaired before renewal
+        self.assertEqual(messages.getvalue().count('reviewer agent is now challenging'),3)
+        self.assertIn('reviewer has not started',messages.getvalue().splitlines()[-1])
         self.assertEqual(result['next_action']['phase'],'review_checkpoint')
         _,ready=load_run(self.root)
         self.assertEqual(ready['verification']['1']['attempt'],ready['attempts'][-1]['id'])
