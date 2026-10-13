@@ -52,7 +52,7 @@ def prompt_for(root,state,task,role,feedback='',packet=None):
       'During long work, send a short public progress note about each new concrete focus, roughly every three minutes. Follow the report submission instructions for this role before finishing. '
       'Do not change task checkboxes or document lifecycle fields; the runner prepares them separately for review and publishes them only during completion. Do not read prior task transcripts. Report concise results with evidence paths.\n')
     if packet:
-        common+=('Read task_context and its complete finding index first. They contain the approved task, current work, '
+        common+=('Read the approved task and subject bindings in task_context first. Follow your role instructions for examining source, author claims and the complete finding index. The packet contains current work, '
                  'remaining steps, verification and retained decisions. The latest author readiness is a claim to '
                  'challenge, not proof. Consult earlier reports only to answer a specific unresolved question. '
                  'Preserve earlier fixes and human dispositions; history never grants more scope.\n')
@@ -286,7 +286,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                  'Requested scope: '+json.dumps(state['subject'])+'\nExport limits: '+json.dumps(data['artifact']['limits']))
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
     if role=='review' and git_tree:
-        comparison=state['subject']['base'] if state.get('workflow')=='review' else state['extra_review']['base'] if state.get('extra_review') and not state.get('correction') else state['repair_source']['review_base'] if state.get('repair_source') and not state['summaries'] else 'HEAD'
+        comparison=state['subject']['base'] if state.get('workflow')=='review' else state['extra_review']['base'] if state.get('extra_review') else state['repair_source']['review_base'] if state.get('repair_source') and not state['summaries'] else 'HEAD'
         # The exact code change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
         diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','--text','--no-textconv',comparison,git_tree],capture_output=True,check=True,
                             env=git_env()).stdout

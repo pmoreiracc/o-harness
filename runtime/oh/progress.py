@@ -5,14 +5,15 @@ from .storage import digest
 
 
 def snapshot(root,run_id):
-    from .workflow import load_run,running_progress
+    from .workflow import load_run,running_progress,reduce
     from .controls import busy
-    journal,state=load_run(root)
+    journal,_=load_run(root)
+    records=journal.records();state=reduce(records)
     if state['id']!=run_id:
         return {'run':run_id,'status':'replaced','done':True,'message':'The observed run is no longer active.'}
     progress=running_progress(state,journal.path).get('progress',{})
     phase=progress.get('phase',state['status'])
-    value={'run':run_id,'status':state['status'],'phase':phase,'done':not busy(root)}
+    value={'run':run_id,'status':state['status'],'phase':phase,'revision':records[-1]['hash'],'done':not busy(root)}
     value.update({k:progress[k] for k in ('task','title','attempt','focus') if k in progress})
     labels={'implementation':'implementation agent','analysis':'planning agent','assessment':'assessment agent','review':'independent reviewer agent'}
     label=labels.get(phase,'OH')
@@ -29,23 +30,24 @@ def observe(root,run_id,*,after='',wait=60):
     deadline=time.monotonic()+wait
     while True:
         value=snapshot(root,run_id);cursor=digest(value)
-        if cursor!=after or value['done'] or time.monotonic()>=deadline:
+        if cursor!=after or time.monotonic()>=deadline:
             return value|{'cursor':cursor,'changed':cursor!=after}
         time.sleep(min(1,max(0,deadline-time.monotonic())))
 
 
-def follow(root,run_id,*,seconds=1800):
+def follow(root,run_id,*,after='',seconds=1800):
     """For Claude Monitor: native phase changes immediately, latest new focus at most every 210s.
     A host watch may expire earlier. Expiry only ends this observer; execution stays owned by its call.
     """
-    deadline=time.monotonic()+seconds;cursor='';phase=None;focus=None;reported=0
+    deadline=time.monotonic()+seconds;cursor=after;phase=None;focus=None;reported=0
     while time.monotonic()<deadline:
         value=observe(root,run_id,after=cursor,wait=min(60,max(0,deadline-time.monotonic())))
+        if not value['changed'] and (phase is None or value['done']):continue
         cursor=value['cursor'];current=(value.get('attempt'),value.get('phase'),value['status'])
         next_focus=(value.get('focus') or {}).get('id')
         if current!=phase or value['done'] or next_focus!=focus and time.monotonic()-reported>=210:
             print(json.dumps(value,ensure_ascii=False),flush=True)
             phase=current;focus=next_focus;reported=time.monotonic()
         if value['done']:return
-    print(json.dumps({'run':run_id,'observer':'expired','done':False,
+    print(json.dumps({'run':run_id,'observer':'expired','done':False,'cursor':cursor,
                       'message':'Observation expired; renew it if the execution call is still active.'}),flush=True)

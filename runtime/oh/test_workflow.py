@@ -182,7 +182,10 @@ class WorkflowTest(unittest.TestCase):
         from . import review
         configure(self.root,tasks_per_batch=1)
         journal,_=start(self.root,{'tasks':self.tasks[:2]},self.event())
-        run(self.root,self.fake)
+        def initial(*args,**kwargs):
+            if args[4]=='implementation':(self.root/'original-surface.txt').write_text('Original task surface')
+            return self.fake(*args,**kwargs)
+        run(self.root,initial)
         original=self.git('rev-parse','HEAD');original_intent=load_run(self.root)[1]['commit_intents']['1']
         append=Journal.append
         def saved_then_interrupted(journal,kind,data):
@@ -212,6 +215,11 @@ class WorkflowTest(unittest.TestCase):
         def defect(*args,**kwargs):
             nonlocal first
             result=self.fake(*args,**kwargs)
+            if args[4]=='review':
+                self.assertIn('original-surface.txt',(args[5]/'change.diff').read_text())
+                self.assertEqual(json.loads((args[5]/'request.json').read_text())['head'],original)
+            else:
+                result['structured']['summary']='Corrected fixture value.\n\nDetailed verification remains in the original report.'
             if args[4]=='review' and first:
                 first=False
                 result['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':'Concrete defect',
@@ -235,6 +243,11 @@ class WorkflowTest(unittest.TestCase):
         prose=readable([{'commit':done['commit'],'evidence':state['commit_intents'][done.get('commit_key',done['task'])]['publication']} for done in state['summaries']],{state['id']:state},self.root)
         self.assertEqual(prose.count('### Task 1:'),1)
         self.assertIn('4 rounds',prose)
+        self.assertIn('allowed 3 more reviews',prose)
+        self.assertIn('Correction: Corrected fixture value.',prose)
+        self.assertNotIn('Detailed verification remains',prose)
+        from .handoff import report
+        self.assertIn('Detailed verification remains',report(next(a for a in reversed(state['attempts']) if a['role']=='implementation'))['summary'])
 
     def test_initial_and_continue_same_batch_snapshot_and_idempotent_restart(self):
         from .workflow import checkpoint
@@ -901,7 +914,7 @@ class ReviewResultTest(unittest.TestCase):
         from .entry import CHOICES
         for choice in CHOICES:
             for text in (choice,choice.capitalize(),choice.upper()):
-                with patch('oh.cli.choose') as choose,patch('oh.cli.active_file') as active,patch('oh.cli.checkpoint',return_value={'waiting':True}),patch('oh.workflow.carry_on',return_value={'waiting':True}) as resume:
+                with patch('oh.cli.choose') as choose,patch('oh.cli.active_file') as active,patch('oh.cli.checkpoint',return_value={'waiting':True}),patch('oh.workflow.load_run',return_value=(None,{'status':'running'})),patch('oh.workflow.carry_on',return_value={'waiting':True}) as resume:
                     active.return_value.exists.return_value=True
                     self.assertEqual(host_hook(Path('/unused'),'codex',{'prompt':text},verified={'prompt':text}),{'waiting':True})
                     if choice=='resume':

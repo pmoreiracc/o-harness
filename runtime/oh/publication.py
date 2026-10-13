@@ -365,7 +365,7 @@ def readable(records,states,root=None):
         lines.extend([f"### Task {task}: {escape(evidence['title'])}",'',escape(public_value(root,state,summary)),''])
         if record.get('original_evidence'):
             repair=next((a for a in reversed(state['attempts']) if a['task']==task and a['role']=='implementation' and a.get('outcome')=='implemented'),None)
-            lines.extend(['Correction: '+escape(public_value(root,state,report(repair).get('summary','Reviewed corrections committed.'))),''])
+            lines.extend(['Correction: '+escape(public_value(root,state,report(repair).get('summary','Reviewed corrections committed.').split('\n\n',1)[0].strip())),''])
     lines.extend(['## Verification',''])
     for record in records:
         evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']
@@ -405,6 +405,25 @@ def readable(records,states,root=None):
                        Path(destination['design']).name+' '+destination['section'] if destination.get('design') else 'this PR')
                 lines.append('Scope: '+scope['action']+'; recorded in '+escape(where)+'.')
             elif resolution and resolution.get('issue'):lines.append('Destination: '+resolution['issue']['url']+'.')
+    # Choices to repair and renew review are journal decisions, not final resolutions.
+    # Present them without changing portable approval evidence or inventing old details.
+    for run_id in dict.fromkeys(r['evidence']['run'] for r in records):
+        state=states[run_id]
+        retained=Journal(state['project'],run_id).records() if root is not None and state.get('project') else []
+        lines.extend(['', '#### Repair and allowance decisions', ''])
+        if not retained:
+            lines.append('Historical decision details are unavailable.')
+            continue
+        current_task=None
+        for entry in retained:
+            events=entry['data']['events'] if entry['kind']=='transition' else [entry]
+            for event in events:
+                kind=event['kind'];data=event['data']
+                if kind=='attempt.started':current_task=data['task']
+                if kind=='decision' and data['choice'].startswith('fix concerns'):
+                    lines.append(f"- Task {current_task or 'not recorded'}: {escape(data['choice'])} (journal {entry['sequence']}).")
+                elif kind=='review.grant':
+                    lines.append(f"- Task {data['task']}: allowed {data['rounds']} more reviews (journal {entry['sequence']}).")
     lines.extend(['','</details>','','## Delivery boundary',''])
     latest=states[records[-1]['evidence']['run']]
     pending=[t for t in latest.get('tasks',[]) if t['id'] not in latest.get('done',[])]

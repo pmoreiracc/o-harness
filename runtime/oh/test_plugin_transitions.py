@@ -187,7 +187,7 @@ class PluginTransitions(unittest.TestCase):
                 self.assertIn('| Running |',visible)
                 if len(manifests)>1:
                     self.assertIn('Awaiting review confirmation',visible)
-                    self.assertNotIn('Confirmed by clean review',visible)
+                    self.assertNotIn('Confirmed by review',visible)
                 if len(manifests)==1:
                     value['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':description,'path':'output.txt','family':'sibling-paths','relation':'original'} for description in ('Fix first sibling path','Fix second sibling path')])
             return value
@@ -217,6 +217,23 @@ class PluginTransitions(unittest.TestCase):
         self.assertIsNone(validate_readiness(packet['current_work']['readiness'],finding_ids(index)))
         self.assertIsNotNone(validate_readiness(packet['current_work']['readiness']|{'prior_findings':[]},finding_ids(index)))
         from copy import deepcopy
+        from .handoff import finding_index
+        resolved=deepcopy(state);last=resolved['attempts'][-1]
+        last.update(outcome='needs_resolution',finding_positions=[1],findings=[{'severity':'scope','family':'future','description':'Future work','path':'other.txt'}])
+        def closed():
+            return [o['disposition'] for f in finding_index(resolved,'1')['families'] if f['severity']=='blocking' for o in f['occurrences']]
+        self.assertEqual(closed(),['still-open','still-open'])
+        resolved['resolutions'][last['id']]={'choice':'route scope','tree':last['git_tree'],'source':'human','issue':{'url':'https://example.invalid/issue/1'}}
+        self.assertEqual(closed(),['fixed','fixed'])
+        resolved['resolutions'][last['id']]['tree']='stale'
+        self.assertEqual(closed(),['still-open','still-open'])
+        resolved['resolutions'][last['id']]['tree']=last['git_tree']
+        last['report_issues']=['Incomplete coverage']
+        self.assertEqual(closed(),['still-open','still-open'])
+        last['report_issues']=[]
+        last['findings'][0]['severity']='concern'
+        resolved['resolutions'][last['id']]['choice']='accept concerns'
+        self.assertEqual(closed(),['still-open','still-open'])
         from .handoff import legacy_report,report_schema
         legacy=deepcopy(manifests[1]);legacy['schema']=2
         for group in legacy['families']:
@@ -244,7 +261,7 @@ class PluginTransitions(unittest.TestCase):
         self.assertIn(b'Result SHA-256',saved)
         self.assertIn('Review 2',(journal.path/'index.md').read_text())
         self.assertIn('Confirmed by [review]',(journal.path/'index.md').read_text())
-        self.assertIn('Confirmed by clean review',(journal.path/'index.md').read_text())
+        self.assertIn('Confirmed by review',(journal.path/'index.md').read_text())
         run(self.root,self.fake)
         self.assertEqual(receipt.read_bytes(),saved)
         # A finished attempt with missing output remains incomplete, without a broken link.

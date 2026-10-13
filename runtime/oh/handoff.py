@@ -19,6 +19,23 @@ def report(attempt):
     return value if isinstance(value, dict) else {}
 
 
+def confirms_repairs(state, attempt):
+    """Only valid independent evidence closes earlier in-scope findings."""
+    if attempt.get('finished') is False:return False
+    if attempt.get('report_issues') or attempt.get('review_fragments'):return False
+    findings=attempt.get('findings',[])
+    if attempt.get('outcome')=='clean':return not findings
+    if attempt.get('outcome')!='needs_resolution' or not findings or {f['severity'] for f in findings}!={'scope'}:return False
+    if not attempt.get('git_tree') or not attempt.get('head'):return False
+    from .publication import validate_evidence
+    try:
+        validate_evidence({'schema':1,'attempts':[attempt],'review':attempt['id'],
+            'git_tree':attempt.get('git_tree'),'parent':attempt.get('head'),
+            'resolutions':state.get('resolutions',{})})
+    except Refused:return False
+    return True
+
+
 def finding_index(state, task):
     """Distinct cases and original locators, with later review evidence and labelled author claims."""
     families = {}
@@ -38,7 +55,9 @@ def finding_index(state, task):
             incomplete.append({'attempt':attempt['id'],'outcome':attempt.get('outcome','unfinished'),
                 'report':str(path) if path and path.is_file() else None,
                 'issues':attempt.get('report_issues',[]),'fragments':attempt.get('review_fragments',[]),
-                'note':'Inspect retained incomplete evidence. A later reviewer must address it explicitly before claiming clean.'})
+                'note':('Historical incomplete evidence; a later valid review is recorded for this task.'
+                        if any(a['role']=='review' and confirms_repairs(state,a) for a in history[position+1:]) else
+                        'Inspect retained incomplete evidence. A later reviewer must address it explicitly before claiming clean.')})
         resolution = state.get('resolutions', {}).get(attempt['id'], {})
         scope = state.get('scope_records', {}).get(attempt['id'], {})
         for number, finding in enumerate(attempt.get('findings', []), 1):
@@ -59,8 +78,8 @@ def finding_index(state, task):
                 'review': str(Path(attempt['evidence'])/'result.json') if attempt.get('evidence') else '',
                 'tree': attempt.get('git_tree') or attempt.get('tree'),
                 'decision': choice, 'scope_action': scope.get('action')}
-            # A later clean review closes earlier in-scope findings. An author claim alone cannot.
-            clean = next((a for a in reversed(history[position+1:]) if a['role']=='review' and a.get('outcome')=='clean'), None)
+            # A later valid review closes earlier in-scope findings. An author claim alone cannot.
+            clean = next((a for a in reversed(history[position+1:]) if a['role']=='review' and confirms_repairs(state,a)), None)
             if disposition=='still-open' and finding['severity']!='scope' and clean:
                 occurrence.update(disposition='fixed', reviewed_by=clean['id'],
                     resolution_evidence=str(Path(clean['evidence'])/'result.json') if clean.get('evidence') else '')

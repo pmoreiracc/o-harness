@@ -36,7 +36,8 @@ and creates the `oh` command at `~/.local/share/o-harness/bin/oh`. Add that fold
    the project with `oh init`, saving your project's checks: the commands OH must pass
    before it commits, in your settings file (`~/.config/o-harness/settings.json`). Nothing
    runs yet. `/oh-config` shows them, and `oh config open` opens the file.
-2. Run `/oh-propose <idea>` again.
+2. OH continues the saved command after registration. If setup reports an external obstacle,
+   follow its concrete recovery instruction; your original command remains pending.
 
 OH finds your `claude` or `codex` binary on `PATH` each time it starts a worker. It starts
 workers only with a native binary owned by you or the system, outside temporary and project

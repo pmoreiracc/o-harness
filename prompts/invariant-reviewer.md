@@ -111,10 +111,9 @@ plan or the rule is wrong**. That last part matters: a rule that forbids obvious
 work is a finding against the rule, and saying so is the point of asking before anything is
 built.
 
-Do not review the plan's *quality* — whether the steps are well ordered, whether something
-is missing, whether you would have done it differently. That is the author's job and the
-approver's. You are here for the conflicts that would otherwise be discovered after the
-code exists, when the cheapest fix is to rewrite the rule.
+Review objective omissions against approved requirements and dependencies that make the plan
+infeasible. Do not substitute personal preferences about ordering or design. Name the concrete
+requirement or failure, so the author and approver can address it before implementation.
 
 **Finding nothing is the common outcome**, and it needs no apology — say so in one line.
 
@@ -132,8 +131,8 @@ names no rule and pays a different price:
   deliberately unmade, each with a trigger. If the change picks one — a billing provider,
   an fx rate source, an eval baseline format, a hosting choice — that is a finding
   regardless of how good the choice is. It needs the project's explicit decision process, not a silent commit.
-- A missing test where a doc states a testable rule. Where a doc states
-  a testable rule, it names the test — and the test names the doc.
+- A missing test where a doc states a testable rule. Require reciprocal doc/test
+  links only when the consumer project requires them.
 - **A defect that survives merge, where no written rule names it.** A credential reaching
   a log; a control that reports green when the thing it proves is gone; a rule with a route
   around it. Anchor it `none — a defect` and **state the failure in `Why:` concretely: the

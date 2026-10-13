@@ -195,8 +195,8 @@ session adopts the new runtime after checking the saved branch, HEAD and working
 same findings and spent review allowance remain pending; the command grants no extra reviews.
 There is no need to stop the waiting run first. The same continuation test covers this path.
 
-Workers have no total execution deadline: implementation, planning and review can continue
-as long as the task needs. Explicit stop first interrupts the host so it can cancel shell tools
+The workflow has no total execution deadline. Each implementation, planning or review phase
+has its own two-hour execution budget; the next phase receives a fresh budget. Explicit stop first interrupts the host so it can cancel shell tools
 running in separate sessions, then force-stops its process group if needed. On Windows the
 worker's job object contains those commands. When a worker exits, OH closes its remaining
 process group so an inherited output pipe cannot keep the attempt waiting.

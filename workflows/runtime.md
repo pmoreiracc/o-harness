@@ -48,11 +48,13 @@ In Codex, use yielding execution (`functions.exec` with `yield_time_ms: 1000`) a
 same cell in intervals of at most 60 seconds. About every 210 seconds, read `status` once and
 relay a new concrete `progress.focus.message` in one sentence.
 
-In Claude, start each execution with Bash `run_in_background: true` and `timeout: 7200000`.
+In Claude, capture the observer cursor with `observe --run <run-id> --wait 0` before starting
+the next execution phase, using the run id from startup status or the last execution result.
+Start each execution with Bash `run_in_background: true` and `timeout: 7200000`.
 Establish progress observation before yielding; do not rely only on the final background
 notification. Load Monitor if available and run `<plugin>/scripts/oh --root <checkout> observe
---run <run-id> --follow` with `timeout_ms: 1800000`. Read the run id from startup status or the last
-execution result. Renew an expired watch while that same execution is active; an observer's
+--run <run-id> --after <cursor> --follow` with `timeout_ms: 1800000`. Read the run id from startup status or the last
+execution result. Renew an expired watch with its last cursor while that same execution is active; an observer's
 expiry never restarts or stops execution. Without Monitor, use `observe --run <run-id> --wait 60
 --after <cursor>` repeatedly, carrying forward the returned cursor and reporting new focus no
 more than about every 210 seconds. With a live Monitor, yield to its notifications; without one,

@@ -161,7 +161,7 @@ def index(journal, state):
                     original=item['id'].split('#')[0]
                     label=item['disposition']
                     if label=='still-open' and item.get('author_claim',{}).get('disposition')=='fixed':label='Awaiting review confirmation'
-                    if label=='fixed' and item.get('reviewed_by'):label='Confirmed by clean review'
+                    if label=='fixed' and item.get('reviewed_by'):label='Confirmed by review'
                     relative=f"attempts/{original}/result.json"
                     link=f"[{escape(item['id'])}]({relative})" if (journal.path/relative).is_file() else escape(item['id'])+' (result unavailable)'
                     lines.append(f"- {link}: **{label}** ({escape(family['family'])}).")

@@ -62,7 +62,7 @@ TOOLS = [
     tool('run', 'Run OH', 'Verifies the person\'s latest choice and carries it out, or continues the current run.' + LONG),
     tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
     tool('resume', 'Resume', 'Continues unfinished work with existing allowances, or reports the PR if that delivery already finished.' + LONG),
-    tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
+    tool('stop', 'Stop', 'Stops current execution, preserving work and evidence for an explicit resume.', destructive=True),
     tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with the base branch: '
          'fresh discards the branch to start over from the base branch, keep finishes without the base branch\'s changes.',
          {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),

@@ -426,6 +426,22 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual([row.get('message') for row in rows[:-1]],['implementation first','review second','review third'])
         self.assertEqual(rows[-1]['observer'],'expired')
         self.assertEqual(journal.records(),before)
+        # A resumed watch ignores the old idle gate, including a fast phase that
+        # returns to that same gate before the next poll. Journal revision distinguishes it.
+        from .storage import digest
+        baseline={'run':state['id'],'status':'checkpoint','phase':'checkpoint','done':True,'revision':'old'}
+        clock[0]=0
+        def resumed(root,run_id):
+            return baseline | {'revision':'old' if clock[0]<3 else 'new'}
+        with patch('oh.progress.snapshot',side_effect=resumed),patch('oh.progress.time') as timer,contextlib.redirect_stdout(io.StringIO()) as observed:
+            timer.monotonic.side_effect=lambda:clock[0]
+            timer.sleep.side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)
+            follow(self.root,state['id'],after=digest(baseline),seconds=10)
+        rows=[json.loads(line) for line in observed.getvalue().splitlines()]
+        self.assertEqual([r['revision'] for r in rows],['new'])
+        self.assertGreaterEqual(clock[0],3)
+        self.assertEqual(journal.records(),before)
+
 
     def test_a_cancelled_call_gets_no_reply_and_an_unexpected_error_gets_one(self):
         with patch.dict(os.environ, {'FAKE_WAIT': '0.5'}):

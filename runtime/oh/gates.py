@@ -251,6 +251,9 @@ def decision_summary(state):
         return completed_context+f"{count} task"+('s' if count!=1 else '')+f" completed. {checks} {verification_status}; independent review completed."
     if status=='paused':return 'The run is paused. Resume continues the approved work with its remaining allowances.'
     last=next((a for a in reversed(state['attempts']) if a['task']==task['id']),{})
+    if status=='findings_checkpoint':
+        findings=last.get('findings',[])
+        return ' '.join('; '.join(f["severity"]+': '+f['description'] for f in findings).split())[:320]
     text=last.get('human_summary') or ('A task needs your attention before OH can continue.' if status=='needs_attention' else 'Review findings need your decision.')
     return ' '.join(text.split())[:320]
 
@@ -325,6 +328,7 @@ def describe(journal, state, root=None):
         if state['status']=='checkpoint':
             batch=min(len(state['tasks'])-len(state['done']),state['config']['tasks_per_batch'])
             explanation+=f" Continue allows {batch} more task(s), up to {state['config']['review_rounds']} reviews each."
+        if state['status'] in ('findings_checkpoint','review_checkpoint'):title=explanation+' '+title
         question=f'{title} [{MARK}{ident}]'
     return {'id': ident, 'run': state['id'], 'status': state['status'], 'host': state['host'],'native_publication':bool(target),
             'summary':explanation,'details':summary(state,root,journal) if not document else '', 'question':question, 'options': menu, 'words': state['status'] in ('approval_checkpoint','prepared_checkpoint')}|({'preview':document} if document else {})

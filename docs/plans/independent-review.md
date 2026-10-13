@@ -127,3 +127,54 @@ Run `oh-dev on`, then start fresh Claude and Codex sessions in disposable consum
 
 After these trials pass, request a fresh OH invariant review through a bound immutable
 admission. Fix any blockers before preparing publication. Task 7 remains unchecked.
+
+## Follow-up from the completed-task host trial
+
+Approved scope: restore full-task correction coverage, reconcile contradictory instructions,
+repair read-only progress observation and receipt/decision presentation. Family-wide repair
+already exists; no new repair brief, model policy, menu choice or authority mechanism.
+
+- [x] Preserve original comparison base through correction and resume; extend existing correction fixture.
+- [x] Honor observation cursors and wait past unchanged idle baselines; extend observer fixture.
+- [x] Derive finding closure from valid review and exact-tree scope resolution; preserve immutable reports.
+- [x] Reconcile entry/review instructions; show current decision context and concise correction summaries.
+- [x] Run affected checks, syntax and scope self-review; record evidence before developer host trial.
+
+The golden reference retains complete task coverage and family closure across rounds. We retain
+those rules; fixes address their inconsistent delivery, not a new quality workflow.
+
+
+### Follow-up verification and scope review
+
+Existing fixtures were extended; no new test cases or test modules were added. The correction
+fixture now preserves an original, untouched task surface through repair and the allowance
+boundary, checks the actual commit parent, and retains the complete original report while
+shortening its visible correction summary. The receipt fixture checks unresolved, exact-tree
+resolved, stale, incomplete and accepted-concern cases. The observer fixture covers unchanged
+idle startup, cursor renewal, fast completion returning to the same status, focus throttling and
+unchanged journals. Existing Claude/Codex gate fixtures retain menu binding and original choices.
+
+- Initial targeted run: 65 of 66 passed in 166.06s. The extended receipt fixture had inconsistent
+  synthetic finding positions; fixing that fixture preserved production validation.
+- Final receipt, observer and gate cases passed (6.86s, 4.46s, 0.21s). The older scope fixture
+  needed its saved-run read stubbed after a previous resume-path change; it passes in 0.04s.
+- Final correction, portable PR evidence and both-host packaging: 3 passed in 22.09s.
+  Across these runs, all 69 distinct selected cases passed. No full suite was run.
+- Syntax, Windows-risk scan and diff whitespace checks passed. Actual Windows/Linux execution
+  and native host interaction remain for CI and the developer trial.
+- The generic skill validator rejects the pre-existing Claude `disable-model-invocation` key.
+  That supported host field was retained; OH's two-host packaging check passed instead.
+
+Self-review: the review comparison base changes, but the immutable reviewed tree and correction
+commit parent do not. Receipt closure reuses existing publication evidence validation, cannot
+accept stale human dispositions, and never rewrites reports. Observation remains read-only and
+its expiry grants nothing. PR decision history comes from existing journals; unavailable history
+is labelled. No family mechanism, menu choice, model policy, approval, consumer change or
+production service was added. Earlier model misses remain a quality limitation, not proof that
+this coverage fix guarantees defect detection.
+
+Next developer trial (`oh-dev on`, fresh host session): request a completed-task review that
+requires a small repair; confirm the following review still covers the whole original task.
+During a long phase, confirm observation waits through startup and renews without repeating
+unchanged updates. Check current findings in the decision question and repair/allowance choices
+in the final PR preview. Fresh independent OH review remains after this trial, before publication.

@@ -469,7 +469,8 @@ class GateTest(unittest.TestCase):
             self.assertLess(len(gate['question']),400)
             if status!='prepared_checkpoint':
                 self.assertNotIn('preview',gate)  # decisions and renewals stay in chat, never a side panel
-                self.assertNotIn('Timeout remains',gate['question'])
+                if status=='findings_checkpoint':self.assertIn('Fix timeout',gate['question'])
+                else:self.assertNotIn('Timeout remains',gate['question'])
                 self.assertNotIn('raw protocol',gate['question'])
             if status=='review_checkpoint':
                 self.assertEqual([o['choice'] for o in gate['options']],['grant review','stop','handoff pr'])

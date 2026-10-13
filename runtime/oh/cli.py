@@ -345,7 +345,7 @@ def main(argv=None):
             result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
         elif args.command=='observe':
             from .progress import observe,follow
-            if args.follow:follow(root,args.run);return
+            if args.follow:follow(root,args.run,after=args.after);return
             if not 0<=args.wait<=60:raise Refused('Observation waits must be between zero and sixty seconds')
             result=observe(root,args.run,after=args.after,wait=args.wait)
         elif args.command=='status':
