@@ -7,7 +7,7 @@ from .storage import Refused, checkout_file, digest, lock, state_writer
 from .verification import check_failed
 
 MARK = 'OH gate '
-LABELS = {'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committed work as one pull request.'),
+LABELS = {'review again':('Review again','Challenge the last completed task with a fresh reviewer.'),'continue': ('Continue', ''), 'pr': ('Open a PR', 'Publish the committed work as one pull request.'),
           'stop': ('Stop and take over', 'End OH here and keep the work for you to continue; do not push or open a PR.'), 'resume': ('Resume', 'Continue with the existing task and review allowances.'),
           'handoff pr': ('Stop and hand off to a PR', 'End OH and retain unresolved work for human PR triage; this does not approve completion or publication.'), 'approve': ('Approve', ''),
           'refine': ('Refine', 'Tell OH what to change in the chat.'),
@@ -39,6 +39,14 @@ def review_document(state):
     effect=approval_effect(state)
     if state['status']=='prepared_checkpoint':
         lines=['# Quick-fix task list',effect,'## Tasks']
+        if source:=state.get('repair_source'):
+            lines.extend(['## Existing work included in completion',
+                'Approval includes these original edits in the reviewed commit, together with the repairs:',
+                *('- '+p for p in source['files']),
+                'Source: standalone review '+source['run']+' (repair input, not a workflow review round).'])
+            if source.get('covers'):
+                lines.extend(['Existing commits included in verification and review:',*('- '+commit for commit in source['covers'])])
+            if source.get('new_branch'):lines.append('OH will create a new delivery branch; the published branch remains intact.')
         for task in state['tasks']:
             lines.extend([f"### Task {task['id']}: {task['title']}",task['instructions'],
                           'Dependencies: '+(', '.join(task.get('needs',[])) or 'none')+'.'])
@@ -138,7 +146,8 @@ def review_history(state, task):
 def full_summary(state,root=None):
     """A human gate explains the current task and the effect of waiting, without inventing approval."""
     pending=[t for t in state['tasks'] if t['id'] not in state['done']]
-    task=pending[0] if pending else state['tasks'][-1]
+    from .workflow import display_task
+    task=display_task(state)
     lines=[f"Branch {state['branch']}. Task {task['id']}: {task['title']}.",
            f"Completed: {', '.join(state['done']) or 'none'}. Pending: "+('; '.join(t['id']+': '+t['title'] for t in pending) or 'none')+'.']
     if root is not None:
@@ -203,20 +212,24 @@ def options(state):
 def decision_summary(state):
     """Short chat context; complete findings and history remain in the returned details."""
     pending=[t for t in state['tasks'] if t['id'] not in state['done']]
-    task=pending[0] if pending else state['tasks'][-1]
+    from .workflow import display_task
+    task=display_task(state)
     status=state['status']
     if status=='pr':return 'Confirm the destination for the completed reviewed work.'
     verification_status=('failed' if any(check_failed(check)
         for result in state.get('verification',{}).values() for check in result['checks']) else 'passed')
     completed_context=''
     if status in ('checkpoint','completed') and state.get('done'):
-        authors=[next((a for a in reversed(state['attempts']) if a['task']==task_id and
-                       a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),{}) for task_id in state['done']]
+        authors=[]
+        for task_id in state['done']:
+            original=next((s for s in state.get('summaries',[]) if s['task']==task_id),{})
+            at=next((i for i,a in enumerate(state['attempts']) if a['id']==original.get('review')),len(state['attempts']))
+            authors.append(next((a for a in reversed(state['attempts'][:at]) if a['task']==task_id and
+                       a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),{}))
         work='; '.join(' '.join((a.get('human_summary') or a.get('summary') or 'Completed approved work').split('\n\n')[0].split())[:180]
                       for a in authors)[:500]
         reviews=[a for a in state['attempts'] if a['task'] in state['done'] and a['role']=='review']
-        final_ids={s.get('review') for s in state['summaries']}
-        final=[a for a in reviews if a['id'] in final_ids]
+        final=[next((a for a in reversed(reviews) if a['task']==task_id),{}) for task_id in state['done']]
         outcome=('clean, no findings' if final and all(a.get('outcome')=='clean' and not a.get('findings') for a in final)
                  else 'completed with recorded decisions' if final else 'not required for this outcome')
         interrupted=sum(a.get('outcome')=='interrupted' for a in reviews)
@@ -280,6 +293,10 @@ def describe(journal, state, root=None):
     menu = [{'choice': choice, 'label': LABELS[choice][0], 'description': ('Run this approved task list.' if choice=='approve' and state['status']=='prepared_checkpoint' else
                             'Approve this proposal or plan.' if choice=='approve' else text or LABELS[choice][1] or LABELS[choice][0])}
             for choice,text in found]
+    if state['status']=='prepared_checkpoint' and state.get('repair_source'):
+        for option in menu:
+            if option['choice']=='approve':option.update(label='Approve fixes',description='Fix the shown scope and commit the complete reviewed change, including the displayed original edits.')
+            elif option['choice']=='cancel':option.update(label='Keep as feedback',description='Retain the standalone report and end without changing the work.')
     if state['status']=='checkpoint':
         batch=min(len(state['tasks'])-len(state['done']),state['config']['tasks_per_batch'])
         for option in menu:
@@ -310,7 +327,7 @@ def describe(journal, state, root=None):
             explanation+=f" Continue allows {batch} more task(s), up to {state['config']['review_rounds']} reviews each."
         question=f'{title} [{MARK}{ident}]'
     return {'id': ident, 'run': state['id'], 'status': state['status'], 'host': state['host'],'native_publication':bool(target),
-            'summary':explanation,'details':summary(state,root,journal) if not document else '', 'question':question, 'options': menu, 'words': state['status'] == 'approval_checkpoint'}|({'preview':document} if document else {})
+            'summary':explanation,'details':summary(state,root,journal) if not document else '', 'question':question, 'options': menu, 'words': state['status'] in ('approval_checkpoint','prepared_checkpoint')}|({'preview':document} if document else {})
 
 
 def current(root):

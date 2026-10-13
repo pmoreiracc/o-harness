@@ -177,16 +177,19 @@ def public_value(root,state,value):
 
 
 def task_evidence(root,state,task,review,parent):
-    attempts=[a for a in state['attempts'] if a['task']==task['id'] and a['role']=='review']
+    from .review import workflow_reviews
+    if review.get('purpose','workflow')!='workflow':raise Refused('Standalone review cannot authorize completion')
+    attempts=workflow_reviews(state,task['id'])
     history=[{k:a.get(k) for k in ('id','host','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions')} for a in attempts]
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
         'host':state['host'],'version':state['harness_version'],'config_hash':state['config_hash'],'branch':state['branch'],
         'parent':parent,'git_tree':review['git_tree'],'review':review['id'],'attempts':history,'resolutions':resolutions}
+    if state.get('correction'):value['correction_of']=state['correction']['prior_commit']
     # The first task a run commits was also reviewed with the commits OH didn't make before it: the person's own,
     # and merges of main resolved by hand.
-    if (covers:=(state.get('delivery') or {}).get('covers')) and not state['summaries']:value['covers']=covers
+    if (covers:=(state.get('delivery') or {}).get('covers') or state.get('repair_source',{}).get('covers')) and not state['summaries']:value['covers']=covers
     scope={k:{name:v for name,v in record.items() if name not in ('render','change')} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
     if scope:value['scope']=scope
     value=public_value(root,state,value)
@@ -196,6 +199,7 @@ def task_evidence(root,state,task,review,parent):
 
 def validate_evidence(value):
     if value.get('schema')!=1 or not isinstance(value.get('attempts'),list) or not value['attempts']:raise Refused('Missing native review history')
+    if value.get('correction_of') and value['correction_of']!=value['parent']:raise Refused('Correction must extend its recorded reviewed head')
     history=value['attempts'];ids=[a['id'] for a in history]
     if len(set(ids))!=len(ids) or ids[-1]!=value['review']:raise Refused('Final review does not match retained history')
     final=history[-1]
@@ -308,7 +312,7 @@ def render(root,base=None):
             grants[run]=grant
         done=[t for t in state['summaries'] if t['commit']==commit]
         if len(done)!=1:raise Refused('Commit has no unique authoritative task completion')
-        evidence=state['commit_intents'][done[0]['task']].get('publication')
+        evidence=state['commit_intents'][done[0].get('commit_key',done[0]['task'])].get('publication')
         if not evidence:raise Refused('This older run lacks portable review evidence; obtain a fresh final review before publication')
         if evidence['branch']!=branch:raise Refused('Review evidence belongs to another branch')
         verify_record(root,commit,evidence)
@@ -334,15 +338,34 @@ def readable(records,states,root=None):
     from html import escape
     from .handoff import report
     from .receipts import finding, seconds
+    # Presentation includes later inspections and correction commits once per task.
+    # The commit-bound evidence above stays unchanged; these views grant no authority.
+    from .review import workflow_reviews
+    grouped={}
+    for record in records:
+        evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']
+        key=(evidence['run'],task)
+        if key not in grouped:grouped[key]=record
+        else:grouped[key]=record|{'original_evidence':grouped[key].get('original_evidence',grouped[key]['evidence'])}
+        grouped[key]=grouped[key]|{'evidence':evidence|{
+            'attempts':workflow_reviews(state,task) or evidence['attempts'],
+            'resolutions':evidence.get('resolutions',{})|state.get('resolutions',{}),
+            'scope':evidence.get('scope',{})|state.get('scope_records',{})}}
+    records=list(grouped.values())
     lines=['## Completed tasks','']
     for record in records:
         evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']
-        author=next((a for a in reversed(state['attempts']) if a['task']==task and
+        original=record.get('original_evidence',evidence)
+        at=next((i for i,a in enumerate(state['attempts']) if a.get('id')==original['review']),len(state['attempts']))
+        author=next((a for a in reversed(state['attempts'][:at]) if a['task']==task and
                      a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
         value=report(author)
         summary=value.get('summary') or (author or {}).get('human_summary') or (author or {}).get('summary')
         summary=(summary or 'No author summary was recorded.').split('\n\n',1)[0].strip()
         lines.extend([f"### Task {task}: {escape(evidence['title'])}",'',escape(public_value(root,state,summary)),''])
+        if record.get('original_evidence'):
+            repair=next((a for a in reversed(state['attempts']) if a['task']==task and a['role']=='implementation' and a.get('outcome')=='implemented'),None)
+            lines.extend(['Correction: '+escape(public_value(root,state,report(repair).get('summary','Reviewed corrections committed.'))),''])
     lines.extend(['## Verification',''])
     for record in records:
         evidence=record['evidence'];state=states[evidence['run']];task=evidence['task']

@@ -50,13 +50,15 @@ else:
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')
     revision=json.loads(active.read_bytes())['revision']
     if Path(revision).name!=revision:raise SystemExit('Invalid installed OH revision')
-    if command in ('run','start','deliver','resume','pause','stop','plugin-hook'):
+    if command in ('run','start','deliver','review','resume','pause','stop','plugin-hook'):
         import hashlib
         key=hashlib.sha256(json.dumps(str(Path(options.root).resolve()),ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
         locator=home/'registry/checkouts'/(key+'.json')
         if locator.is_file():
             checkout=json.loads(locator.read_bytes())
             active_run=home/'checkout-state'/checkout['checkout']/'oh-active-run.json'
+            review_run=active_run.with_name('oh-active-review.json')
+            if review_run.is_file():active_run=review_run
             if active_run.is_file():
                 binding=json.loads(active_run.read_bytes())
                 start=home/'projects'/binding['project']/'runs'/binding['run']/'000001.json'
@@ -70,7 +72,7 @@ else:
                     if continued is not None:continued_revision=continued;break
                     if status in ('stopped','completed','pr'):break
                 # Explicit continuation adopts only after the new runtime validates saved work.
-                if status not in ('stopped','completed','pr') and not (command in ('deliver','resume') and status in ('paused','pausing','stopping','checkpoint','review_checkpoint','findings_checkpoint')):
+                if status not in ('stopped','completed','pr') and not (command in ('deliver','resume','review') and status in ('paused','pausing','stopping','checkpoint','review_checkpoint','findings_checkpoint')):
                     revision=continued_revision or json.loads(start.read_bytes())['data']['harness_version']
                     if Path(revision).name!=revision:raise SystemExit('Invalid retained runtime revision')
     entry=home/'versions'/revision/'oh'

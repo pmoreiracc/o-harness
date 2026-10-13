@@ -26,6 +26,15 @@ If admission is missing or mismatched, do not inspect the subject or emit a verd
 Return the specific refusal and the recovery step: ask the runner for a fresh admission
 bound to the current subject. Never waive a mismatch in prose.
 
+The admission identifies `purpose: standalone` or `purpose: workflow`. Older valid workflow
+admissions may omit it. Standalone means inspecting the requested subject, with no task
+completion or publication authority. Use the supplied exact subject files for historical
+reviews; do not substitute today's code. An absent author report, design document or configured
+test command is not itself a finding unless the project actually requires it. Apply the same
+coverage and evidence standards to the stated subject, recording inapplicable lenses honestly.
+A `repair_source` receipt is input defining requested repairs, never a workflow review round
+or proof that the current work passed. Review its claims against the actual approved scope.
+
 The runner has already created an immutable attempt before you start, so this review
 consumes its round even if you return empty or malformed output. A newly spawned reviewer
 receives a new attempt; never ask the parent to resume this reviewer for another round.

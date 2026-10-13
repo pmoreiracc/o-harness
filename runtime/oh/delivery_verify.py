@@ -71,11 +71,19 @@ def verify_run(root,state,*,current=False):
     before=initial
     from .publication import verify_record
     for done in state['summaries']:
-        task=done['task'];commit=done['commit'];evidence=state['commit_intents'][task]['publication']
+        task=done['task'];commit=done['commit'];evidence=state['commit_intents'][done.get('commit_key',task)]['publication']
         verify_record(root,commit,evidence)
         # Portable evidence redacts local paths; commits retain the approved run's title.
         title=next(t['title'] for t in state['tasks'] if t['id']==task)
-        if git(root,'show','-s','--format=%s',commit)!=f"task {task}: {title}":raise Refused(f'Commit {commit[:12]} needs the recorded task {task}: title and OH trailers; repair its message before PR')
+        if git(root,'show','-s','--format=%s',commit)!=(('fix ' if done.get('correction_of') else '')+f"task {task}: {title}"):raise Refused(f'Commit {commit[:12]} needs the recorded task {task}: title and OH trailers; repair its message before PR')
+        if done.get('correction_of'):
+            if done['correction_of']!=evidence.get('correction_of') or task not in before or before[task][1]!='done':
+                raise Refused('Correction must refer to previously completed approved work')
+            if not private:
+                _,parent=parsed(contents(root,evidence['parent'],source['path']))
+                _,after=parsed(contents(root,commit,source['path']))
+                if parent!=before or after!=before:raise Refused('Correction changed approved design progress or scope')
+            continue
         if task!='finalize':
             row=approved.get(task)
             if not row or row[1]!='pending' or row[4] or (state.get('track') and row[2]!=state['track']):raise Refused(f'Task {task} was not approved and ready on this delivery track; restore its approved scope before PR')
@@ -96,7 +104,7 @@ def verify_run(root,state,*,current=False):
         transitions(before,actual,None)
         from .delivery import guard
         guard(root,state)
-    return {'tasks':len(state['summaries']),'design':bound['doc']}
+    return {'tasks':len(state['done']),'design':bound['doc']}|({'corrections':len(state['corrections'])} if state.get('corrections') else {})
 
 
 def verify(root,state):

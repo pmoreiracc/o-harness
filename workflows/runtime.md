@@ -76,6 +76,11 @@ owned work and retains edits; Pause lets the current step finish before waiting.
 
 ## Decisions
 
+If a result has `prepare_review`, preserve the person's actual request. Answer a question
+directly; for a requested inspection, resolve its subject through `workflows/review/SKILL.md`
+and call Review. This input granted no implementation or publication. Do not reopen the same
+menu merely because the person requested review through its free-text answer.
+
 First give the short delivered-change, check and review context in `gate.summary`, then follow
 `gate.how` and its exact question/choices. This summary precedes the tool that opens the menu,
 on both hosts. Include interrupted attempts in the review count. For review

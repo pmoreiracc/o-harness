@@ -11,7 +11,8 @@ def selection(root,state):
     from .checks import resolve
     # Include native progress before it is rendered, so document checks are not omitted.
     proposed=[state['delivery']['path']] if state.get('delivery',{}).get('layout',{}).get('location')=='repo' else []
-    return resolve(root,state['project_checks']+state['checks'],state['base'],proposed_paths=proposed)
+    base=state.get('repair_source',{}).get('review_base',state['base'])
+    return resolve(root,state['project_checks']+state['checks'],base,proposed_paths=proposed)
 
 
 def active(directory,role='implementation',*,reporting=False):
@@ -23,6 +24,8 @@ def active(directory,role='implementation',*,reporting=False):
     if (directory!=journal.path/'attempts'/last['id'] or last['finished'] or last['role']!=role
             or state['status'] not in allowed or admitted['id']!=last['id']
             or digest(admitted)!=last.get('request_hash')
+            or admitted.get('purpose','workflow')!=('standalone' if state.get('workflow')=='review' else 'workflow')
+            or admitted.get('run',state['id'])!=state['id']
             or admitted['config_hash']!=state['config_hash'] or git(root,'rev-parse','HEAD')!=admitted['head']):
         raise Refused('This tool belongs only to the current running '+role+' attempt.')
     from .authority import owner_stop_reader
@@ -53,9 +56,12 @@ def admission(directory):
             raise Refused('A review file binding changed: '+str(ref['path']))
     for key in ('task_context','change_index','diff','covers','artifact'):
         if request.get(key):binding(request[key])
+    if request.get('purpose','workflow')!=attempt.get('purpose','workflow'):
+        raise Refused('Review purpose differs from its immutable admission.')
     packet=read_json(request['task_context']['path']);binding(packet['findings'])
     if packet.get('current_work') and packet['current_work']['report'].get('available',True):binding(packet['current_work']['report'])
-    artifact=request.get('artifact',{})
+    from .review import artifact_content
+    artifact=artifact_content(request.get('artifact',{}))
     from .plans import file_identity
     for path,expected in artifact.get('files',{}).items():
         if hashlib.sha256(Path(path).read_bytes()).hexdigest()!=expected or (path in artifact.get('identities',{}) and file_identity(path)!=artifact['identities'][path]):

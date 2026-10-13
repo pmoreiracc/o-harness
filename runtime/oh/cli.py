@@ -35,6 +35,8 @@ def host_hook(root,host,payload,*,verified,idea=None,request=None):
             remember(root,host,payload,verified)
         choose(root,'refine: '+prompt,verified)
         return checkpoint(root)
+    if idea in ('review','review-request'):
+        return {'kind':'review','prepare_review':True,'human':verified,'intent':prompt}
     if idea:
         if idea=='design':
             from .plans import listing
@@ -64,9 +66,18 @@ def host_hook(root,host,payload,*,verified,idea=None,request=None):
     from .entry import command
     parsed=command(prompt)
     if parsed and parsed[0]=='choice':prompt=parsed[1]  # retain the original human text in verified evidence
+    if prompt=='resume' and active_file(root).exists() and load_run(root)[1]['status']=='completed':
+        from .review import dismiss_finished
+        dismiss_finished(root)
     if prompt=='resume' and active_file(root).exists():
         from .workflow import carry_on
         return carry_on(root,verified)
+    if parsed and parsed[0]=='review':
+        if not parsed[1]:return ask_for(root,verified,'review')
+        return {'kind':'review','prepare_review':True,'human':verified,'intent':parsed[1]}
+    if parsed and parsed[0] in ('deliver','propose','design','oh-resume'):
+        from .review import dismiss_finished
+        dismiss_finished(root)
     from .delivery import parse
     delivery=parse(parsed[1]) if parsed and parsed[0]=='deliver' else None
     if delivery and delivery['kind']=='list':
@@ -147,6 +158,7 @@ def ask_for(root,event,kind):
         free=[{k:i[k] for k in ('slug','milestone','depends')} for i in listing(root)['initiatives'] if 'design' not in i]
         if not free:raise Final('Every roadmap initiative has a design already. New ideas start with /oh-propose.')
         ask,extra='Which initiative should OH design?',{'initiatives':free}
+    elif kind=='review':ask='What should OH review: your changes, a commit/range, files, or a completed delivery task?'
     else:ask="What's the idea?"
     wait_for(root,event,kind,ask)
     return {'waiting':{'command':kind,'ask':ask,'next':WAIT_NEXT}|extra}
@@ -214,11 +226,12 @@ def main(argv=None):
     build=sub.add_parser('build-plugin');build.add_argument('destination',type=Path);build.add_argument('--host',choices=['codex','claude'],required=True)
     install=sub.add_parser('setup');install.add_argument('--development',action='store_true');install.add_argument('--if-newer',action='store_true')
     plugin_hook=sub.add_parser('plugin-hook');plugin_hook.add_argument('--host',choices=['codex','claude'],required=True)
+    review_command=sub.add_parser('review');review_command.add_argument('arguments',nargs='*')
     launch=sub.add_parser('start');launch.add_argument('request',nargs='?')
     export=sub.add_parser('profile-export');export.add_argument('destination',type=Path)
     imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
     renamed=sub.add_parser('rename');renamed.add_argument('name')
-    prep=sub.add_parser('prepare');prep.add_argument('manifest')
+    prep=sub.add_parser('prepare');prep.add_argument('manifest');prep.add_argument('--review')
     clash=sub.add_parser('conflict');clash.add_argument('choice',choices=['fresh','keep']);clash.add_argument('doc');clash.add_argument('track',nargs='?',default='')
     prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
     verification=sub.add_parser('verify');verification.add_argument('base',nargs='?');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
@@ -242,7 +255,7 @@ def main(argv=None):
     deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*')
     resource=sub.add_parser('resource');resource.add_argument('path')
     args=parser.parse_args(argv);invocation=Path.cwd();root=(args.root or invocation).resolve()
-    if args.command in ('start','run','resume','deliver'):
+    if args.command in ('start','run','resume','deliver','review'):
         from .runner import PHASE_SECONDS,PHASE_CLEANUP_SECONDS
         phase_deadline=call_started+PHASE_SECONDS-PHASE_CLEANUP_SECONDS
     from .system import WINDOWS
@@ -267,7 +280,7 @@ def main(argv=None):
             result=receive(root,args.host,json.load(sys.stdin))
         elif args.command in ('prepare','prepare-design'):
             from .prepared import prepare
-            result=prepare(root,manifest=args.manifest) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
+            result=prepare(root,manifest=args.manifest,review=args.review) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
         elif args.command=='worker-checks':
             from .worker_checks import serve
             serve(args.attempt,sys.stdin,sys.stdout)
@@ -365,9 +378,36 @@ def main(argv=None):
         elif args.command=='host-hook':
             from .authority import stage
             result=stage(root,args.host,json.load(sys.stdin))
-        elif args.command in ('run','start'):
+        elif args.command in ('run','start','review'):
             from .authority import materialize
+            if args.command=='review':
+                from .registry import index_path
+                if not index_path(root).is_file():
+                    from .authority import desktop_pending
+                    desktop_pending(root)
+                    if not index_path(root).is_file():
+                        from .review import input_event
+                        if not input_event(root):raise Refused('Invoke oh-review in this checkout so OH can identify your request.')
+                        from .entry import enroll
+                        if setup:=enroll(root):
+                            print(json.dumps(setup,indent=2));return
             admitted=materialize(root)
+            if args.command=='review' and admitted is None:
+                from .review import input_event
+                if event:=input_event(root):
+                    from .entry import enroll
+                    if setup:=enroll(root):
+                        print(json.dumps(setup,indent=2));return
+                    admitted={'prepare_review':True,'human':event,'intent':event['prompt']}
+            if args.command=='review' and admitted and admitted.get('prepare_review'):
+                from .review import start as start_review
+                selected=shlex.join(args.arguments) if args.arguments else admitted['intent']
+                admitted=start_review(root,selected,admitted['human'])
+                if admitted.get('review_request_applied'):
+                    print(json.dumps(admitted,indent=2));return
+            elif admitted and admitted.get('prepare_review'):
+                print(json.dumps(admitted,indent=2));return
+
             if admitted and admitted.get('published'):
                 executable_run(root,admitted)
                 print(json.dumps(admitted,indent=2));return
@@ -376,6 +416,11 @@ def main(argv=None):
             if admitted and (admitted.get('waiting') or admitted.get('prepare') or admitted.get('kind') in ('quick_fix','list') or admitted.get('authorized') is False):
                 print(json.dumps(admitted,indent=2));return  # preparation/waiting cannot run an older batch
             executable_run(root,admitted)
+            if args.command=='review':
+                from .workflow import load_run
+                _,reviewing=load_run(root)
+                if reviewing.get('workflow')!='review' and not reviewing.get('extra_review'):
+                    raise Refused('No additional review was requested; use oh-review with its subject.')
             if args.command=='start' and args.request:
                 from .workflow import load_run
                 _,state=load_run(root)

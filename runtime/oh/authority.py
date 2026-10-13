@@ -263,7 +263,12 @@ def answer(root,hint=None,after=None):
     used=used_file(root,found)
     if used.exists():return None
     try:
-        choice=pick(gate,found['prompt']) if found['via']=='question' else found['prompt']
+        try:choice=pick(gate,found['prompt']) if found['via']=='question' else found['prompt']
+        except Refused:
+            from .review import menu_request
+            if not (result:=menu_request(root,found,ask(gate)['questions'][0],since)):raise
+            atomic_json(used,{'source':found,'result':result},immutable=True)
+            return result
         result=apply(root,found|{'prompt':choice},gate['id'])
     except Refused as exc:
         # Said once; this answer is then spent, and it stays the latest, so nothing older applies instead.
@@ -463,7 +468,7 @@ def conversation_input(root,host,payload,event):
     origin_index=next((i for i in range(len(distinct)-2,-1,-1) if command(distinct[i]['prompt'])),None)
     if origin_index is None:return None
     context=distinct[origin_index:];kind,args=command(context[0]['prompt'])
-    if kind not in ('propose','design','deliver') or any(not within(m['cwd'],root) for m in context):return None
+    if kind not in ('propose','design','deliver','review') or any(not within(m['cwd'],root) for m in context):return None
     from .registry import index_path
     from .cli import started
     # A consumed or cancelled input closes this conversation's intake. A read-only question or quick-fix
@@ -476,6 +481,7 @@ def conversation_input(root,host,payload,event):
             if ('refused' in record or started(root,proof) or
                     not (result.get('waiting') or result.get('kind') in ('list','quick_fix'))):return None
     replies=[m['prompt'] for m in context[1:]]
+    if kind=='review':return (kind,'\n'.join(replies)) if not args else None
     if kind in ('propose','design'):
         return (kind,'\n'.join(replies) if kind=='propose' else replies[-1]) if not args else None
     from .delivery import parse,track_question
@@ -637,7 +643,7 @@ def starts_work(locator):
     """A typed command that starts work (propose, design, deliver, a prepared request), which OH keeps until done."""
     from .entry import command
     parsed=command((locator.get('event') or {}).get('prompt'))
-    return bool(locator.get('idea')) or bool(parsed) and parsed[0] in ('propose','design','deliver','oh-start','oh-resume')
+    return bool(locator.get('idea')) or bool(parsed) and parsed[0] in ('propose','design','deliver','review','oh-start','oh-resume')
 
 
 def waiting_file(session):
@@ -869,7 +875,12 @@ def desktop_answer(root):
     answer=reply.get('answer')
     for option in gate['options']:
         if answer==option['label']+' — '+option['description']:answer=option['choice'];break
-    choice=pick(gate,answer)
+    try:choice=pick(gate,answer)
+    except Refused:
+        from .review import menu_request
+        if not (result:=menu_request(root,event|{'prompt':answer},question,gate_at,payload=payload)):raise
+        atomic_json(used,{'source':event,'result':result},immutable=True)
+        return result
     source=event|{'prompt':choice,'via':'question','native_reply':used.stem,'record_hashes':sorted({*event['record_hashes'],proof})}
     try:result=apply(root,source,gate['id'])
     except Refused as exc:
@@ -913,7 +924,8 @@ def _desktop_pending(root):
     payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':message['turn'],'prompt':text,'transcript_path':str(path)}
     event=_attest('codex',payload,root)
     request=None if command(text) or asked or refinement else conversation_input(root,'codex',payload,event)
-    if not command(text) and not asked and not request and not refinement:return
+    review_request=not command(text) and not asked and not request and not refinement and re.search(r'\breview\b',text,re.I)
+    if not command(text) and not asked and not request and not refinement and not review_request:return
     if refinement and not newer(event.get('at'),refinement['source'].get('at')):return
     if asked and not newer(event.get('at'),asked['at']):return
     # Re-reading a consumed command returns its result; it never grants work again. This also lets a retry

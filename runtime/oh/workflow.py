@@ -67,7 +67,8 @@ def occupied(state):
 
 
 def active_file(root):
-    return checkout_file(root, 'oh-active-run.json')
+    review=checkout_file(root, 'oh-active-review.json')
+    return review if review.exists() else checkout_file(root, 'oh-active-run.json')
 
 
 NO_RUN=('No OH command is waiting in this checkout. Type /oh-propose <idea>, /oh-design <slug> or /oh-deliver '
@@ -94,7 +95,7 @@ def reduce(records):
     for record in expanded:
         kind=record['kind'];d=record['data']
         if kind=='grant':state['granted']=d['tasks'];state['decisions'].append(d['source'])
-        elif kind=='commit.intent':state['commit_intents'][d['task']]=d
+        elif kind=='commit.intent':state['commit_intents'][d.get('key',d['task'])]=d
         elif kind=='task.started':state['task_started'][d['task']]=d.get('started_at',record['at'])
         elif kind=='task.assessed':
             if not any(a['id']==d['attempt'] and a['task']==d['task'] and a['role']=='assessment' and a.get('outcome')=='assessed' for a in state['attempts']):
@@ -135,6 +136,11 @@ def reduce(records):
             state['human']=d['human'];state['host']=d['human']['host'];state['harness_version']=d['version']
             state.setdefault('continuations',[]).append(d|{'at':record['at']})
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
+        elif kind=='review.requested':state['extra_review']=d
+        elif kind=='review.checked':state.pop('extra_review',None)
+        elif kind=='correction.started':state['correction']=d
+        elif kind=='correction.completed':
+            state.setdefault('corrections',[]).append(d);state['summaries'].append(d);state.pop('correction',None);state.pop('extra_review',None)
         elif kind=='review.grant':state.setdefault('review_grants',[]).append(d)
         elif kind=='preparation.activating':state['activation']=d
         elif kind=='preparation.activated':state.update(branch=d['branch'],incarnation=d['incarnation'])
@@ -207,7 +213,7 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
     from .config import project_checks
     required=prepared['project_checks'] if prepared else project_checks(root)
     if workflow=='deliver' and not required and not manifest.get('checks'):raise Refused("Add this project's checks before starting paid work: oh config set checks '<JSON list>'")
-    if changes(root):
+    if changes(root) and not (prepared or {}).get('repair_source'):
         raise Refused('Start from a clean execution checkout; save task manifests in external OH project storage')
     run=identifier();checkout=checkout_id(root)
     from .branches import trunk
@@ -246,6 +252,7 @@ def _start(root, manifest, event, prepared=None, plan=None, waiting=None):
         if any((t.get('transition') or {}).get('profile')=='consumer-v1' for t in tasks):
             from .design_adapter import binding
             data['delivery']=binding(root,manifest)
+        if prepared and prepared.get('repair_source'):data['repair_source']=prepared['repair_source']
         if waiting:data['prepared_request']=waiting
         journal=Journal(p['id'],run)
         journal.append('run.started',data)
@@ -310,6 +317,11 @@ def _choose(root, choice, event):
         append('grant',{'tasks':[t['id'] for t in state['tasks'][:state['config']['tasks_per_batch']]],'source':source,'kind':'initial','config_hash':state['config_hash']})
         append('decision',{'source':source,'choice':choice})
         append('run.status',{'status':'running'})
+    elif choice=='review again':
+        if state.get('workflow','deliver')!='deliver' or state['status'] not in ('checkpoint','completed') or not state['done']:raise Refused('Review again requires completed unpublished delivery work')
+        from .review import request_again
+        request_again(root,journal,state,state['done'][-1],event)
+        return reduce(journal.records())
     elif choice=='continue':
         if state['status']!='checkpoint':raise Refused('Continue requires a task checkpoint')
         tasks=[t['id'] for t in state['tasks'] if t['id'] not in state['done']][:state['config']['tasks_per_batch']]
@@ -402,6 +414,9 @@ def _choose(root, choice, event):
             from .scope import prepare
             scope=prepare(root,journal,state,review,'dismiss' if 'dismiss' in choice else 'route','human choice')
             if scope:append('scope.recorded',scope)
+        if choice.startswith('fix concerns') and state.get('extra_review') and not state.get('correction'):
+            append('correction.started',{'task':task,'key':identifier(),'source_review':review['id'],
+                'prior_commit':state['extra_review']['head'],'return_status':state['extra_review']['return_status']})
         if not choice.startswith('fix concerns'):
             append('review.resolution',{'attempt':review['id'],'source':source,'choice':choice,
                 'issue':((scope or {}).get('destination') or {}).get('issue'),
@@ -411,7 +426,7 @@ def _choose(root, choice, event):
         append('task.intervention',{'task':task})
     elif choice=='grant review':
         if state['status']!='review_checkpoint':raise Refused('No spent review window')
-        task=next(t['id'] for t in state['tasks'] if t['id'] not in state['done'])
+        task=next_task(state|{'status':'running'})['id']
         append('task.intervention',{'task':task})
         append('review.grant',{'task':task,'source':source,'rounds':state['config']['review_rounds']})
         append('decision',{'source':source,'choice':choice})
@@ -468,14 +483,26 @@ def discard_proposal(root,journal,state):
     journal.append('proposal.discarded',{})
 
 
+def intent_key(state,task):
+    correction=state.get('correction') or {}
+    return correction['key'] if correction.get('task')==task else task
+
+
 def next_task(state):
     if state['status']!='running':return None
+    if selected:=state.get('extra_review') or state.get('correction'):
+        return next(t for t in state['tasks'] if t['id']==selected['task'])
     for task in state['tasks']:
         if task['id'] in state['done']:continue
         if task['id'] not in state['granted']:return None
         if not set(task.get('needs',[]))<=set(state['done']):raise Refused('Unmet task dependency')
         return task
     return None
+
+
+def display_task(state):
+    return (next_task(state|{'status':'running','granted':state.get('granted',[])}) or
+            next((t for t in state['tasks'] if t['id'] not in state['done']),state['tasks'][-1]))
 
 
 def review_limit(state,task):
@@ -578,7 +605,7 @@ def owned(root,journal,state,event):
     same=(state['host'],state['human']['session'])==(event['host'],event['session'])
     stopped=state['status'] in ('stopped','paused')
     if same and not stopped and state['harness_version']==version():return
-    if git(root,'branch','--show-current')!=state['branch'] or incarnation(root,state['branch'])!=state['incarnation']:
+    if git(root,'branch','--show-current')!=state['branch'] or (state.get('incarnation') is not None and incarnation(root,state['branch'])!=state['incarnation']):
         raise Refused('The saved delivery branch changed; return to its original checkout/branch before continuing.')
     guard(root,state)
     head=git(root,'rev-parse','HEAD');current=tree(root)
@@ -594,13 +621,15 @@ def owned(root,journal,state,event):
         verify_run(root,state,current=True)
     else:
         retained=state.get('pause_snapshot') if state['status']=='paused' else (state.get('status_history') or [{}])[-1].get('snapshot') if state['status']=='stopped' else None
+        if retained is None and not state['attempts']:
+            retained=(state.get('repair_source') or {}).get('starting_work') or state.get('subject')
         if retained is None:
             latest=state['attempts'][-1] if state['attempts'] else None
             retained={'head':latest.get('head'),'tree':latest.get('tree')} if latest and latest.get('finished') else {'head':state['base'],'tree':current} if not latest and not changes(root) else {}
         matches=retained.get('head')==head and retained.get('tree')==current
         # An interrupted deterministic completion is already admitted. Match its exact tree
         # and commit identity here; complete_reviewed still validates all completion authority.
-        if not matches and task and (intent:=state.get('commit_intents',{}).get(task['id'])):
+        if not matches and task and (intent:=state.get('commit_intents',{}).get(intent_key(state,task['id']))):
             expected=intent['git_tree']
             if head==intent['parent']:
                 matches=candidate_tree(root,replacements(root,state))==expected
@@ -640,7 +669,7 @@ def review_progress(state,task):
 def running_progress(state,directory=None):
     """Describe the current task from retained execution evidence, without inspecting worker transcripts."""
     if state['status']!='running':return {}
-    task=next((t for t in state['tasks'] if t['id'] in state['granted'] and t['id'] not in state['done']),None)
+    task=next_task(state)
     if not task:return {}
     attempts=[a for a in state['attempts'] if a['task']==task['id']]
     last=attempts[-1] if attempts else None
@@ -669,6 +698,9 @@ def running_progress(state,directory=None):
 
 def checkpoint(root):
     journal,state=load_run(root)
+    if state.get('workflow')=='review':
+        from .review import result
+        return result(root,journal,state)
     from .publication import destination_state
     state=destination_state(root,state)
     from . import receipts
@@ -678,7 +710,7 @@ def checkpoint(root):
     left=len([t for t in state['tasks'] if t['id'] not in state['done']])
     reviewed=next((a['task'] for a in reversed(state['attempts']) if a['role']=='review' and a.get('finished')),None)
     last_review=review_progress(state,reviewed) if reviewed else None
-    task=next((t['id'] for t in state['tasks'] if t['id'] not in state['done']),None)
+    task=display_task(state)['id']
     latest=next((a for a in reversed(state['attempts']) if a['task']==task),None)
     failed=latest if latest and latest.get('finished') and latest.get('outcome') in ('failed','blocked','interrupted','verification_failed','report_invalid','review_incomplete') else None
     failure={}

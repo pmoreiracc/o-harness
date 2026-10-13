@@ -9,8 +9,14 @@ def directory(root):return state_home()/'projects'/project(root)['id']/'prepared
 
 
 @state_writer
-def prepare(root,manifest=None,doc=None,track=''):
+def prepare(root,manifest=None,doc=None,track='',review=None):
     if (manifest is None)==(doc is None):raise Refused('Prepare either tasks or one design')
+    if manifest is not None and review is None:
+        from .workflow import active_file,load_run
+        if active_file(root).exists():
+            _,previous=load_run(root)
+            if previous['status']=='prepared_checkpoint' and previous.get('repair_source'):
+                review=previous['repair_source']['run']
     if manifest is not None:
         from .workflow import validate_tasks
         path=(Path(root)/manifest).resolve()
@@ -21,6 +27,13 @@ def prepare(root,manifest=None,doc=None,track=''):
         kind={'kind':'tasks','manifest':data}
     else:
         if project(root).get('design_profile')!='consumer-v1':raise Refused('Design preparation requires a consumer-owned profile')
+    source=None
+    if review:
+        if manifest is None:raise Refused('Review findings prepare quick fixes, not design delivery')
+        from .review import repair_source
+        source=repair_source(root,review)
+        if (source['files'] or source['covers']) and len(data['tasks'])!=1:
+            raise Refused('The included existing change is committed together. Prepare one repair task covering that change; separate unrelated work before splitting it into tasks.')
     # Snapshot only after recovering the real command and refreshing the preparation context.
     # This also handles a refinement made after the previous delivery merged.
     from .authority import materialize,attest
@@ -38,13 +51,21 @@ def prepare(root,manifest=None,doc=None,track=''):
         if state['status']=='prepared_checkpoint' and (not event or
                 (event['host'],event['session'])!=(state['host'],state['human']['session'])):raise occupied(state)
     from .branches import from_main
-    from_main(root)
+    if source:
+        from .workflow import reduce
+        from .storage import Journal
+        reviewed=reduce(Journal(project(root)['id'],review).records())
+        event=reviewed['human'] if event is None else event
+        if event['host']!=reviewed['host'] or event['session']!=reviewed['human']['session']:
+            raise Refused('Prepare these fixes in the review conversation, or resume its decision here first.')
+    else:from_main(root)
     if manifest is None:
         from .design_adapter import manifest as project_design
         data=project_design(root,doc,track)
         kind={'kind':'design','doc':doc,'track':track,'manifest':data}
     value={'created':now(),'project':project(root)['id'],'checkout':checkout_id(root),'base':git(root,'rev-parse','HEAD'),
            'snapshot':snapshot(root),'project_checks':project_checks(root)}|kind
+    if source:value['repair_source']=source
     key=digest(value);atomic_json(directory(root)/(key+'.json'),value,immutable=True)
     trigger=('$o-harness:oh-deliver request:'+key if manifest is not None else '$o-harness:oh-deliver '+doc+(' '+track if track else '')+' request:'+key)
     config=value['snapshot']['config']
@@ -70,11 +91,16 @@ def activate(root,journal,state,event):
     if event['host']!=state['host'] or event['session']!=state['human']['session']:raise Refused('Approve in the conversation that prepared these tasks')
     resolve(root,'request:'+state['prepared_request'],event,'tasks')
     if version()!=state['harness_version']:raise Refused('OH changed after preparation; prepare the task list again')
-    if changes(root):raise Refused('Save the uncommitted changes before approving these tasks')
+    if state.get('repair_source'):
+        intent=state.get('activation')
+        actual=git(root,'branch','--show-current')
+        recovered=actual if intent and actual==intent['branch'] else None
+        validate_work(root,state['repair_source'],branch=recovered)
+    elif changes(root):raise Refused('Save the uncommitted changes before approving these tasks')
     branch=git(root,'branch','--show-current');intent=state.get('activation')
     if not intent:
         if branch!=state['branch'] or incarnation(root,branch)!=state['incarnation']:raise Refused('Return to the checkout and branch where these tasks were prepared')
-        target=execution_branch(root,state['tasks'][0]['title'],state['id']) if branch==trunk(root,state['config']) else branch
+        target=execution_branch(root,state['tasks'][0]['title'],state['id']) if branch==trunk(root,state['config']) or state.get('repair_source',{}).get('new_branch') else branch
         if target!=branch and run_git(root,'show-ref','--verify','--quiet','refs/heads/'+target).returncode==0:raise Refused('The prepared execution branch already exists; prepare again')
         record=journal.records()[-1]
         intent={'branch':target,'base':state['base'],'gate_record':{k:record[k] for k in ('hash','at')}}
@@ -121,3 +147,13 @@ def resolve(root,name,event,kind):
     if value['base']!=git(root,'rev-parse','HEAD'):raise Refused('Prepared scope is stale: prepare against the current committed base')
     if kind=='tasks':delivery_only(value['manifest'])  # also for a file written without prepare
     return value
+
+
+def validate_work(root,source,*,branch=None):
+    from .verification import tree
+    current={'head':git(root,'rev-parse','HEAD'),'branch':git(root,'branch','--show-current'),'tree':tree(root)}
+    expected=source['starting_work']|({'branch':branch} if branch is not None else {})
+    if current!=expected:
+        raise Refused('The existing work changed after the repair preview. Preserve the edits and prepare a new preview before approval.')
+    if digest(read_json(source['receipt']))!=source['hash']:
+        raise Refused('The source review evidence changed; preserve it and request a fresh review.')

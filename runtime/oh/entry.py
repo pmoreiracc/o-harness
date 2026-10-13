@@ -3,7 +3,7 @@ import re
 from .storage import Refused
 
 CHOICES={'continue','pr','stop','resume','retry','grant review','fix concerns','dismiss scope',
-         'fix concerns and route scope','fix concerns and dismiss scope','accept concerns and dismiss scope','accept concerns','route scope','accept concerns and route scope','approve','refine','cancel','handoff pr'}
+         'fix concerns and route scope','fix concerns and dismiss scope','accept concerns and dismiss scope','accept concerns','route scope','accept concerns and route scope','approve','refine','cancel','handoff pr','review again'}
 REFINE=r'refine:\s*\S.*'  # refine: <what to change>, the person's own words for the next proposal
 PREFIX=r'[$/](?:o-harness:)?'
 
@@ -19,9 +19,9 @@ def invocation(prompt):
 def command(prompt):
     if not isinstance(prompt,str):return None
     prompt=invocation(prompt)
-    match=re.fullmatch(PREFIX+r'oh-(start|pause|resume|stop|propose|design|deliver)(?:\s+(.*))?',prompt,re.S)
+    match=re.fullmatch(PREFIX+r'oh-(start|pause|resume|stop|propose|design|deliver|review)(?:\s+(.*))?',prompt,re.S)
     # Workflow skills are invoked as oh-propose/oh-design/oh-deliver; internally they keep their workflow names.
-    if match:return (match[1] if match[1] in ('propose','design','deliver') else 'oh-'+match[1]),match[2] or ''
+    if match:return (match[1] if match[1] in ('propose','design','deliver','review') else 'oh-'+match[1]),match[2] or ''
     if prompt.casefold() in CHOICES:return 'choice',prompt.casefold()
     if re.fullmatch(REFINE,prompt,re.S):return 'choice',prompt
     return None
@@ -65,6 +65,9 @@ def receive(root,host,payload):
                     and (result.get('waiting') or result.get('kind') in ('list','quick_fix'))):
                 return stage(root,host,payload,idea='conversation')
         except (FileNotFoundError,Refused):pass
+        if re.search(r'\breview\b',payload.get('prompt',''),re.I):
+            from .review import remember_input
+            remember_input(root,host,payload)
         return None
     drop_waiting(payload.get('session_id'))  # another OH command, or /oh-stop, replaces what OH waited for
     from .workflow import load_run

@@ -44,8 +44,10 @@ def finding(finding):
 def request(directory, admission):
     packet = read_json(admission['task_context']['path'])
     task = packet['task']
-    lines = [f"# Task {task['id']} — {admission['role']} request", '',
-             f"**Task:** {task['title']}", f"**HEAD:** {admission['head']}",
+    standalone=admission.get('purpose')=='standalone'
+    lines = [('# Standalone review request' if standalone else f"# Task {task['id']} — {admission['role']} request"), '',
+             f"**Purpose:** {admission.get('purpose','workflow')}",
+             f"**{'Subject' if standalone else 'Task'}:** {task['title']}", f"**HEAD:** {admission['head']}",
              f"**Working tree:** {admission['tree']}",
              f"**Reviewed Git tree:** {admission.get('git_tree') or 'Not applicable.'}",
              f"**Context SHA-256:** {admission['task_context']['hash']}", '',
@@ -76,9 +78,11 @@ def request(directory, admission):
 def completed(directory, admission, result, record, state):
     role = record['role']
     rounds = sum(a['task'] == record['task'] and a['role'] == 'review' for a in state['attempts'])
-    title = f'Review {rounds}' if role == 'review' else role.capitalize()+' report'
+    standalone=admission.get('purpose')=='standalone'
+    title = 'Standalone review' if standalone else f'Review {rounds}' if role == 'review' else role.capitalize()+' report'
     profile = admission.get('profile') or {}
-    lines = [f"# Task {record['task']} — {title}", '',
+    lines = [('# Standalone review' if standalone else f"# Task {record['task']} — {title}"), '',
+        '**Purpose:** '+admission.get('purpose','workflow'),
         f"**Branch:** {state['branch']}", f"**OH revision:** {admission.get('harness_version', 'Not recorded')}", f"**Outcome at return:** {record['outcome']}",
         f"**Host:** {admission.get('host', state['host'])}",
         f"**Model:** {profile.get('model', 'Not recorded')} / {profile.get('effort', 'Not recorded')}",
@@ -110,22 +114,23 @@ def completed(directory, admission, result, record, state):
 def index(journal, state):
     def artifact(label, relative):
         return f'[{label}]({relative})' if (journal.path/relative).is_file() else label+' (not yet available)'
-    lines = [f"# {state.get('name', 'Project')} — {state.get('workflow', 'deliver')}", '',
+    standalone=state.get('workflow')=='review'
+    lines = [f"# {state.get('name', 'Project')} — "+('Standalone review' if standalone else state.get('workflow','deliver')), '',
              f"**Branch:** {state['branch']}", f"**Current state:** {'published' if state.get('published') else state['status']}",
-             f"**Completed tasks:** {', '.join(state['done']) or 'None'}", '']
+             (f"**Subject:** {state['subject']['description']}" if standalone else f"**Completed tasks:** {', '.join(state['done']) or 'None'}"), '']
     if published:=state.get('published'):
         lines.extend([f"**Delivery finished:** [PR #{published['number']}]({published['url']})",
                       f"Publication verified at {published['verified_at']}; reviewed commit `{published['approved_head']}`. Current PR checks and later commits are separate from this receipt.", ''])
     for task in state['tasks']:
         attempts = [a for a in state['attempts'] if a['task'] == task['id']]
         if not attempts:continue
-        lines.extend([f"## Task {task['id']}: {task['title']}", '',
+        lines.extend([('## Standalone review' if state.get('workflow')=='review' else f"## Task {task['id']}: {task['title']}"), '',
                       '| Attempt | Host / model | Outcome | Elapsed |', '|---|---|---|---|'])
         rounds = 0
         for attempt in attempts:
             role = attempt['role']
             if role == 'review':rounds += 1
-            label = f'Review {rounds}' if role == 'review' else role.capitalize()
+            label = ('Standalone review' if attempt.get('purpose')=='standalone' else f'Review {rounds}') if role == 'review' else role.capitalize()
             filename = 'review.md' if role == 'review' else 'report.md'
             relative = f"attempts/{attempt['id']}/{filename}"
             if not (journal.path/relative).is_file():relative = f"attempts/{attempt['id']}/result.json"

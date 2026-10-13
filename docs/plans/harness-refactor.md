@@ -862,3 +862,17 @@ it is unavailable). Both hosts are enabled on `0.6.0-SNAPSHOT.179189789426447100
 `684915498d3cbebfe471831dce5c3f5acb63ca2c`, verified with `oh-dev status`. Fresh sessions
 load this candidate. Developer host testing still precedes independent OH review under C6;
 this is a development snapshot, not a published OH PR or an approval of consumer task 10.
+
+## J. Independent review and approved repairs
+
+The approved follow-up is implemented in [independent-review.md](independent-review.md).
+It adds standalone inspection, the existing quick-fix approval handoff for findings, and
+fresh review/correction of completed unpublished tasks. Explicit receipt purpose keeps
+feedback separate from delivery rounds and completion authority. Original manual work,
+task marks, receipts, decisions and review allowances are preserved.
+
+Affected behavioral checks, native host admission fixtures, packaging and syntax checks
+passed. Real Claude and Codex reviewers each caught the defective fixture and accepted
+the clean control. The linked plan records coverage, measured time/usage and remaining
+host scenarios. Developer snapshot trials still precede fresh independent OH review and
+publication; this follow-up does not mark C6 complete or modify consumer 0005.

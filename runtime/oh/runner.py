@@ -56,6 +56,11 @@ def prompt_for(root,state,task,role,feedback='',packet=None):
                  'remaining steps, verification and retained decisions. The latest author readiness is a claim to '
                  'challenge, not proof. Consult earlier reports only to answer a specific unresolved question. '
                  'Preserve earlier fixes and human dispositions; history never grants more scope.\n')
+    if state.get('repair_source'):
+        common+=('The packet repair_source is a standalone review used to define the approved repairs. '
+                 'It is not a workflow review round or completion proof. Check its findings against current code '
+                 'and the approved task; preserve original edits included in this task. Record closure evidence '
+                 'in the ordinary readiness/evidence fields. Do not broaden this task to excluded findings.\n')
     if designing(task) or intake(task):
         common+=('Use the supplied planning context for approval claims: human_gate means a human approves '
                  'the private design after review; human_merge means a human merges the repository design PR. '
@@ -202,15 +207,17 @@ def approved(plan):
 
 def repeated_family(reviews):
     """Escalation needs two independent receipts of the same unresolved defect family."""
-    seen=set();receipts=set()
+    seen={};receipts=set()
     for review in reviews:
         if review['id'] in receipts:continue
         receipts.add(review['id'])
         if review.get('outcome') not in ('blocking','needs_resolution'):continue
         families={f['family'].strip() for f in review.get('findings',[])
                   if f['severity']=='blocking' and f.get('family','').strip()}
-        if seen & families:return sorted(seen & families)
-        seen.update(families)
+        repeated={family for family in families if family in seen and
+                  ('author_attempt' not in review or seen[family]!=review.get('author_attempt'))}
+        if repeated:return sorted(repeated)
+        seen.update({family:review.get('author_attempt') for family in families})
     return []
 
 
@@ -237,11 +244,13 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         print(fallback['notice'],file=sys.stderr,flush=True)
     attempt_id=identifier();before=tree(root)
     from .delivery import replacements
-    git_tree=candidate_tree(root,replacements(root,state)) if role=='review' else None
+    git_tree=(state['subject']['git_tree'] if state.get('workflow')=='review' else candidate_tree(root,replacements(root,state))) if role=='review' else None
     directory=journal.path/'attempts'/attempt_id
-    data={'id':attempt_id,'task':task['id'],'role':role,'host':state['host'],'profile':profile,'tree':before,
+    from .review import purpose
+    data={'purpose':purpose(state),'run':state['id'],'id':attempt_id,'task':task['id'],'role':role,'host':state['host'],'profile':profile,'tree':before,
           'head':git(root,'rev-parse','HEAD'),'config_hash':state['config_hash'],
           'harness_version':state['harness_version'],'runtime':str(HOME),'git_tree':git_tree,'config':state['config'],'root':str(root)}
+    if role=='review':data['author_attempt']=next((a['id'] for a in reversed(state['attempts']) if a['task']==task['id'] and a['role']=='implementation'),None)
     if role=='implementation' and state.get('delivery'):
         data['read_only_paths']=sorted(state['delivery']['inputs'])
     if role=='implementation':
@@ -265,20 +274,31 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     prompt=prompt_for(root,state,task,role,feedback,packet=data['task_context'])
     if role in ('implementation','review'):
         prompt+='\nBefore exiting, call oh_checks submit_report with your complete structured report. Correct any returned issues in this same attempt. Once accepted, finish with a short plain summary; final prose is not another report. Do not repeat unchanged passing checks for report corrections.\n'
+    if role=='review' and state.get('workflow')=='review':
+        from .review import capture
+        data['subject']=state['subject'];data['artifact']=capture(root,directory,state['subject'])
+        prompt+=('\nThis is a standalone inspection, not task completion. Review only the requested subject. '
+                 'No author readiness or configured verification is required. Use relevant existing requirements; '
+                 'do not invent a requirement for design documents. No prior review history is implied. '
+                 'The exact subject files are exported at '+data['artifact']['root']+
+                 '. For historical review read these versions, never substitute the current checkout. '
+                 'Use repository-relative paths in findings even when reading exported source files. '
+                 'Requested scope: '+json.dumps(state['subject'])+'\nExport limits: '+json.dumps(data['artifact']['limits']))
     if role=='review':prompt+='\nOH NATIVE REVIEW ADMISSION: '+str(directory/'request.json')
     if role=='review' and git_tree:
+        comparison=state['subject']['base'] if state.get('workflow')=='review' else state['extra_review']['base'] if state.get('extra_review') and not state.get('correction') else state['repair_source']['review_base'] if state.get('repair_source') and not state['summaries'] else 'HEAD'
         # The exact code change as a file, for reviewers without a shell (Claude on Windows) and everyone else.
-        diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','--text','--no-textconv','HEAD',git_tree],capture_output=True,check=True,
+        diff=subprocess.run(['git','-C',str(root),'diff','--no-color','--no-ext-diff','--text','--no-textconv',comparison,git_tree],capture_output=True,check=True,
                             env=git_env()).stdout
         (directory/'change.diff').write_bytes(diff)
         data['diff']={'path':str(directory/'change.diff'),'sha256':hashlib.sha256(diff).hexdigest()}
-        prompt+='\nThe exact code change under review, from HEAD to the reviewed tree, is in '+str(directory/'change.diff')+'.'
-        sizes=git(root,'diff','--numstat','--no-renames','-z','HEAD',git_tree,raw=True)
+        prompt+='\nThe exact code change under review, from '+comparison+' to the reviewed tree, is in '+str(directory/'change.diff')+'.'
+        sizes=git(root,'diff','--numstat','--no-renames','-z',comparison,git_tree,raw=True)
         index=[dict(zip(('added','removed','path'),entry.decode().split('\t',2))) for entry in sizes.split(b'\0') if entry]
         atomic_json(directory/'change-index.json',index,immutable=True)
         data['change_index']={'path':str(directory/'change-index.json'),'hash':digest(index)}
         prompt+='\nStart with the complete changed-file index '+str(directory/'change-index.json')+' to plan coverage. Large generated artifacts must not crowd out source, tests or affected documentation; validate their generation and inspect relevant contracts.'
-    if role=='review' and (covers:=state.get('delivery',{}).get('covers')) and not state['summaries']:
+    if role=='review' and (covers:=state.get('delivery',{}).get('covers') or state.get('repair_source',{}).get('covers')) and not state['summaries']:
         # Commits OH didn't make: the person's own, and merges of the base branch resolved by the agent or the person (for those,
         # what the resolution changed beyond Git's own merge).
         text=b''.join(subprocess.run(['git','-C',str(root),'show','--remerge-diff','--no-color','--no-ext-diff',commit],capture_output=True,check=True,
@@ -290,7 +310,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
                  +'. Review it as part of this subject: a '
                  'resolution that loses either side\'s intent, changes more than the conflict needs, or edits the plans beyond '
                  'the base branch\'s version and this branch\'s recorded progress is a blocker.')
-    if role=='review' and 'candidate' in state.get('delivery_render',{}):
+    if role=='review' and not state.get('extra_review') and not state.get('correction') and 'candidate' in state.get('delivery_render',{}):
         from .plans import file_identity,digest_of
         render=state['delivery_render'];candidate=Path(render['candidate'])
         data['artifact']={'files':{str(candidate):digest_of(candidate)},'identities':{str(candidate):file_identity(candidate)}}
@@ -303,7 +323,7 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         (directory/'subject.diff').write_text(changed_text(root,rendered))
         prompt+=('\nThe subject is the plan files OH wrote: '+', '.join(rendered['files'])+'. Their exact change is in '
                  +str(directory/'subject.diff')+'. The unchanged code tree is not the review subject by itself.')
-    if role=='review' and (intake(task) or not committed(state) and not data.get('artifact')):
+    if role=='review' and state.get('workflow')!='review' and (intake(task) or not committed(state) and not data.get('artifact')):
         workers=[a for a in reduce(journal.records())['attempts'] if a['role']=='analysis' and a.get('outcome')=='implemented']
         artifact=Path(workers[-1]['evidence'])/'result.json'
         from .storage import read_json
@@ -328,7 +348,8 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         if role!='assessment':
             action=('The independent reviewer agent is now challenging' if role=='review' else
                     'The planning agent is drafting' if role=='analysis' else 'The implementation agent is working on')
-            progress(f"{action} task {task['id']}: {' '.join(task['title'].split())[:200]} ({profile['model']} / {profile['effort']}).")
+            subject=(state['subject']['description'] if state.get('workflow')=='review' else f"task {task['id']}: {' '.join(task['title'].split())[:200]}")
+            progress(f"{action} {subject} ({profile['model']} / {profile['effort']}).")
         options={'schema':hosts.REVIEW_SCHEMA if role=='review' else hosts.ASSESSMENT_SCHEMA if role=='assessment' else hosts.DESIGN_SCHEMA if designing(task) else hosts.PROPOSAL_SCHEMA if intake(task) else hosts.WORK_SCHEMA if role=='implementation' else None}
         if deadline is not None:
             remaining=deadline-time.monotonic()
@@ -369,10 +390,12 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         if parsed['issues']:
             result=result|{'text':result['text']+'\nReview report limitations: '+'; '.join(parsed['issues'])}
         if after!=before or private_changed:outcome='review_mutated_tree'
-        if 'files' in (data.get('artifact') or {}):
+        from .review import artifact_content
+        inspected=artifact_content(data.get('artifact') or {})
+        if 'files' in inspected:
             from .plans import current_files,file_identity,resolved
-            if current_files(root,data['artifact']['files'])!=data['artifact']['files']:outcome='review_mutated_tree'
-            if {p:file_identity(resolved(root,p)) for p in data['artifact']['files']}!=data['artifact']['identities']:
+            if current_files(root,inspected['files'])!=inspected['files']:outcome='review_mutated_tree'
+            if {p:file_identity(resolved(root,p)) for p in inspected['files']}!=inspected['identities']:
                 outcome='review_mutated_tree'
     else:
         outcome='failed' if result['failed'] else 'implemented';findings=[]
@@ -409,11 +432,11 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
         notes=[];outcome='failed' if result['failed'] else 'report_invalid';result=result|{'text':'The implementing report needs found_along_way as a list of strings'}
     # Preserve the full raw result outside the orchestrator context.
     atomic_json(directory/'result.json',result|{'outcome':outcome,'findings':findings,'tree':after},immutable=True)
-    record={'found_along_way':notes,'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
+    record={'purpose':data['purpose'],'run':state['id'],'found_along_way':notes,'id':attempt_id,'task':task['id'],'role':role,'outcome':outcome,'tree':after,
       'findings':findings,'summary':result['text'][:state['config']['context']['result_chars']],
       'returncode':result.get('returncode'),'cancellation':result.get('cancellation',[]),
       'duration_ms':result['duration_ms'],'evidence':str(directory),'git_tree':git_tree,'head':data['head'],'artifact':data.get('artifact')}
-    if role=='review':record.update(report_issues=parsed['issues'],review_fragments=parsed['fragments'],finding_positions=parsed['positions'])
+    if role=='review':record.update(author_attempt=data.get('author_attempt'),report_issues=parsed['issues'],review_fragments=parsed['fragments'],finding_positions=parsed['positions'])
     elif result.get('report_issues'):record['report_issues']=result['report_issues']
     if data.get('escalated_families'):record['escalated_families']=data['escalated_families']
     if role=='assessment' and outcome=='assessed':record['assessment']=answer
@@ -427,7 +450,8 @@ def attempt(root,journal,state,task,role,profile,feedback='',invoke=hosts.invoke
     if role=='review':
         rounds=sum(a['role']=='review' and a['task']==task['id'] for a in reduce(journal.records())['attempts'])
         result_label={'clean':'clean','blocking':'blocking findings','needs_resolution':'findings need a decision'}.get(outcome,'could not complete the review')
-        progress(f"The independent reviewer agent finished round {rounds}: {result_label}; "
+        label='the standalone review' if state.get('workflow')=='review' else f'round {rounds}'
+        progress(f"The independent reviewer agent finished {label}: {result_label}; "
                  +(f"{len(findings)} finding"+('s.' if len(findings)!=1 else '.') if findings else 'no findings.' if outcome=='clean' else 'no completed verdict.'))
         for finding in findings:
             progress(f"{finding['severity']}: {' '.join(finding['description'].split())[:350]}")
@@ -511,6 +535,17 @@ def _run(root,invoke,*,one_phase=False,deadline=None):
             if state.get('branch_move'):
                 finish_move(root,journal,state)
                 state=reduce(journal.records())
+        if state.get('workflow')=='review':
+            from .config import version
+            if state['harness_version']!=version():
+                raise Refused('Resume this saved review to validate it against the current OH version before execution.')
+            for pending in [a for a in state['attempts'] if not a['finished']]:
+                journal.append('attempt.finished',{'id':pending['id'],'outcome':'interrupted','summary':'Review interrupted; retained evidence is incomplete.'})
+            state=reduce(journal.records())
+            if not state['attempts']:
+                execute(root,journal,state,state['tasks'][0],'review',state['config']['models'][state['host']]['review'],'',invoke)
+            if reduce(journal.records())['status']=='running':status(journal,state,'completed')
+            return
         # A proposal cuts its branch when it first writes; nothing runs on main before that.
         from .branches import trunk
         if committed(state) and state.get('workflow')!='propose' and git(root,'branch','--show-current') in (trunk(root,state['config']),''):
@@ -546,6 +581,19 @@ def _run(root,invoke,*,one_phase=False,deadline=None):
                     status(journal,state,'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint')
                 return checkpoint(root)
             task_id=task['id'];task_start=time.monotonic()
+            if state.get('extra_review') and not state.get('correction'):
+                request=state['extra_review']
+                reviewed=[a for a in state['attempts'][request['after']:] if a['role']=='review' and a.get('finished')]
+                if reviewed:
+                    from .review import finish_again
+                    finish_again(journal,state,reviewed[-1])
+                    if reduce(journal.records())['status']!='running':return
+                    continue
+                if one_phase and phases:return
+                execute(root,journal,state,task,'review',state['config']['models'][state['host']]['review'],'',invoke)
+                if reduce(journal.records())['status']!='running':return
+                continue
+
             decision=next_action(state,current_tree=tree(root))
             if decision['kind']=='restore_report':
                 from .handoff import recover_legacy
@@ -662,7 +710,7 @@ def _run(root,invoke,*,one_phase=False,deadline=None):
                     check(root)
                     rendered=write_plan(root,journal,state,task,work)
                 if rendered is None:continue
-            elif task.get('transition') and not (designing(task) or intake(task)):
+            elif task.get('transition') and not state.get('correction') and not (designing(task) or intake(task)):
                 with lock(checkout_file(root,'oh-control.lock')):
                     from .controls import check
                     check(root)
@@ -886,7 +934,9 @@ def complete_reviewed(root,journal,state,task,review):
             from .plans import validate_outputs
             validate_outputs(root,state['rendered'])
         task_id=task['id'];expected=review.get('git_tree')
-        if task_id not in state['granted'] or task_id in state['done']:
+        correction=state.get('correction')
+        if review.get('purpose','workflow')!='workflow':raise Refused('Standalone review cannot complete delivery')
+        if not correction and (task_id not in state['granted'] or task_id in state['done']):
             raise Refused('This task has no remaining completion authority')
         checked=state.get('verification',{}).get(task_id)
         if not checked or checked['tree']!=review['tree'] or any(check_failed(c) for c in checked['checks']):
@@ -927,7 +977,9 @@ def complete_reviewed(root,journal,state,task,review):
             observe_completion(state,task_id)
             return
         if not expected:raise Refused('Review predates exact Git-tree binding; a fresh review is required')
-        intent=state['commit_intents'].get(task_id)
+        from .workflow import intent_key
+        key=intent_key(state,task_id)
+        intent=state['commit_intents'].get(key)
         head=git(root,'rev-parse','HEAD')
         already=False
         if intent and head!=intent['parent']:
@@ -949,18 +1001,24 @@ def complete_reviewed(root,journal,state,task,review):
             from .publication import task_evidence
             publication=task_evidence(root,state,task,review,head)
             if not intent:
-                intent={'task':task_id,'review':review['id'],'git_tree':expected,'parent':head,'publication':publication}
+                intent={'task':task_id,'key':key,'review':review['id'],'git_tree':expected,'parent':head,'publication':publication}
                 journal.append('commit.intent',intent)
             if not intent.get('publication'):raise Refused('This older commit intent needs fresh portable review evidence before publication')
             publish_progress(root,reduce(journal.records()))
             git(root,'add','--all',*whole(root))
             if git(root,'write-tree')!=expected:raise Refused('The staged tree differs from the reviewed Git tree')
             title=(f"{state['rendered']['kind']} {state['rendered']['number']}: {state['rendered']['title']}" if designing(task) else
-                   'propose: '+state['rendered']['lines'][-1][:120] if intake(task) else f"task {task_id}: {task['title']}")
+                   'propose: '+state['rendered']['lines'][-1][:120] if intake(task) else ('fix ' if correction else '')+f"task {task_id}: {task['title']}")
             git(root,'commit','--allow-empty','-m',f"{title}\n\nOH-Run: {state['id']}\nOH-Review: {review['id']}\nOH-Reviewed-Tree: {expected}\nOH-Evidence: {digest(intent['publication'])}")
             if git(root,'rev-parse','HEAD^{tree}')!=expected or git(root,'rev-parse','HEAD^')!=head:raise Refused('Commit hooks changed the reviewed tree or parent')
         from .delivery import finish
         finish(root,journal,reduce(journal.records()),review)
+        if correction:
+            journal.append('correction.completed',{'task':task_id,'commit_key':key,'correction_of':correction['prior_commit'],
+                'commit':git(root,'rev-parse','HEAD'),'tree':expected,'review':review['id'],
+                'summary':review['summary'],'evidence':review['evidence']})
+            journal.append('run.status',{'status':correction['return_status']})
+            return
         journal.append('task.completed',{'task':task_id,'commit':git(root,'rev-parse','HEAD'),'tree':expected,'review':review['id'],
             'summary':review['summary'],'evidence':review['evidence']})
         observe_completion(state,task_id)

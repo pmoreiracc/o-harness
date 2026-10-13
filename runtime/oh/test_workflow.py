@@ -130,6 +130,112 @@ class WorkflowTest(unittest.TestCase):
                 'structured':({'status':'completed','readiness':READINESS|{'prior_findings':prior},'obstacle':None,'summary':'Checked behavior','found_along_way':[]} if role=='implementation'
                               else {'verdict':'clean','summary':'Checked behavior','findings':[],'evidence':EVIDENCE}),'usage_observed':False}
 
+    def test_standalone_review_is_fresh_and_preserves_delivery_and_historical_subject(self):
+        from . import review
+        from .workflow import checkpoint
+        from .storage import read_json
+        configure(self.root,tasks_per_batch=1)
+        original,_=start(self.root,{'tasks':self.tasks[:2]},self.event())
+        run(self.root,self.fake)
+        before=original.records()
+        selected=review.start(self.root,'changes',self.event('review-1','/oh-review changes'))
+        self.assertEqual(selected['purpose'],'standalone')
+        self.assertEqual(run(self.root,self.fake)['last_review']['outcome'],'clean')
+        _,state=load_run(self.root)
+        admitted=read_json(Path(state['attempts'][0]['evidence'])/'request.json')
+        self.assertEqual(admitted['purpose'],'standalone')
+        self.assertEqual(original.records(),before)
+        self.assertEqual(review.workflow_reviews(state,'review'),[])
+        first=state['id']
+        review.start(self.root,'commit HEAD',self.event('review-2','/oh-review commit HEAD'))
+        result=run(self.root,self.fake)
+        _,state=load_run(self.root)
+        self.assertNotEqual(state['id'],first)
+        self.assertEqual(len(state['attempts']),1)
+        self.assertEqual(result['last_review']['outcome'],'clean')
+        admission=read_json(Path(state['attempts'][0]['evidence'])/'request.json')
+        self.assertEqual((Path(admission['artifact']['root'])/'output.txt').read_text(),(self.root/'output.txt').read_text())
+        self.assertFalse(read_json(Path(state['attempts'][0]['evidence'])/'finding-index.json')['families'])
+        self.assertIn('Standalone review',(Path(state['attempts'][0]['evidence'])/'review.md').read_text())
+        review.dismiss_finished(self.root)
+        self.assertEqual(checkpoint(self.root)['run'],original.path.name)
+        # Stop belongs to this review only; resume reports retained incomplete evidence,
+        # and cannot silently buy another standalone attempt.
+        review.start(self.root,'changes',self.event('stop-review','/oh-review changes'))
+        def stopping(*args,**kwargs):
+            response=self.fake(*args,**kwargs)
+            from .controls import request
+            request(self.root,'stop')
+            return response
+        self.assertEqual(run(self.root,stopping)['status'],'stopped')
+        from .cli import host_hook
+        event=self.event('resume-review','/oh-resume')|{'host':'claude','session':'new-host'}
+        resumed=host_hook(self.root,'claude',{'prompt':'/oh-resume'},verified=event)
+        self.assertEqual(resumed['purpose'],'standalone')
+        finished=run(self.root,self.fake)
+        self.assertEqual(finished['status'],'completed')
+        self.assertNotIn('prepare',finished)
+        self.assertEqual(len(load_run(self.root)[1]['attempts']),1)
+        self.assertEqual(original.records(),before)
+
+    def test_completed_task_rereview_preserves_completion_and_commits_only_reviewed_corrections(self):
+        from . import review
+        configure(self.root,tasks_per_batch=1)
+        journal,_=start(self.root,{'tasks':self.tasks[:2]},self.event())
+        run(self.root,self.fake)
+        original=self.git('rev-parse','HEAD');original_intent=load_run(self.root)[1]['commit_intents']['1']
+        append=Journal.append
+        def saved_then_interrupted(journal,kind,data):
+            result=append(journal,kind,data)
+            if kind=='transition' and any(e['kind']=='review.requested' for e in data['events']):
+                raise OSError('interrupted after saving the review decision')
+            return result
+        with patch.object(Journal,'append',saved_then_interrupted),self.assertRaisesRegex(OSError,'saving the review decision'):
+            review.again(self.root,'1',self.event('again','/oh-review task 1'))
+        recovered=review.again(self.root,'1',self.event('again','/oh-review task 1'))
+        self.assertEqual(recovered['status'],'running')
+        self.assertTrue(recovered['review_request_applied'])
+        self.assertTrue(recovered['continue_execution'])
+        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
+        self.assertEqual(self.git('rev-parse','HEAD'),original)
+        self.assertEqual(load_run(self.root)[1]['done'],['1'])
+        count=len(load_run(self.root)[1]['attempts'])
+        self.assertTrue(review.again(self.root,'1',self.event('again','/oh-review task 1'))['review_request_applied'])
+        run(self.root,self.fake)
+        self.assertEqual(len(load_run(self.root)[1]['attempts']),count)
+        from .publication import readable
+        state=load_run(self.root)[1]
+        prose=readable([{'commit':original,'evidence':original_intent['publication']}],{state['id']:state},self.root)
+        self.assertIn('2 rounds',prose)
+        review.again(self.root,'1',self.event('find-defect','/oh-review task 1'))
+        first=True
+        def defect(*args,**kwargs):
+            nonlocal first
+            result=self.fake(*args,**kwargs)
+            if args[4]=='review' and first:
+                first=False
+                result['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':'Concrete defect',
+                    'path':'output.txt','family':'fixture','relation':'first-round-escape','anchor':'none — a defect',
+                    'failure':'The fixture produces the wrong value.','fix':'Write the corrected value.'}])
+            return result
+        boundary=run(self.root,defect)
+        if load_run(self.root)[1]['status']=='review_checkpoint':
+            self.assertIn('Task 1:',boundary['gate']['details'])
+            choose(self.root,'grant review',self.event('more','grant review'))
+            run(self.root,defect)
+        _,state=load_run(self.root)
+        self.assertEqual(state['status'],'checkpoint')
+        self.assertEqual(state['done'],['1'])
+        self.assertEqual(state['commit_intents']['1'],original_intent)
+        self.assertEqual(self.git('rev-parse','HEAD^'),original)
+        self.assertEqual(state['summaries'][-1]['correction_of'],original)
+        self.assertEqual(len(state['corrections']),1)
+        from .publication import verify_record
+        verify_record(self.root,state['summaries'][-1]['commit'],state['commit_intents'][state['summaries'][-1]['commit_key']]['publication'])
+        prose=readable([{'commit':done['commit'],'evidence':state['commit_intents'][done.get('commit_key',done['task'])]['publication']} for done in state['summaries']],{state['id']:state},self.root)
+        self.assertEqual(prose.count('### Task 1:'),1)
+        self.assertIn('4 rounds',prose)
+
     def test_initial_and_continue_same_batch_snapshot_and_idempotent_restart(self):
         from .workflow import checkpoint
         observed=[];clock=[100.0];budgets=[]
@@ -339,6 +445,16 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual([r[0] for r in db.execute("SELECT model FROM attempts WHERE role='review'")],['gpt-6-sol','gpt-6-sol'])
         self.assertEqual([c[0] for c in self.calls],['implementation','review','review'])
         self.assertEqual(self.git('show','--name-only','--format=','HEAD'),'output.txt')
+        from .review import again
+        head=self.git('rev-parse','HEAD');failed.clear()
+        again(self.root,'1',self.event('extra-failure','/oh-review task 1'))
+        with patch('oh.worker_checks.verify',wraps=verify) as extra_checks:
+            self.assertEqual(run(self.root,review_failure)['status'],'review_checkpoint')
+            choose(self.root,'grant review',self.event('extra-window','grant review'))
+            self.assertEqual(run(self.root,review_failure)['status'],'completed')
+            extra_checks.assert_not_called()
+        self.assertEqual(self.git('rev-parse','HEAD'),head)
+        self.assertEqual(sum(c[0]=='implementation' for c in self.calls),1)
         subprocess.run(['git','init','-q',str(self.root/'vendor')],check=True)  # any other repository is a change
         from .storage import changes
         self.assertEqual(changes(self.root),['vendor/'])
@@ -611,7 +727,10 @@ class WorkflowTest(unittest.TestCase):
                   'human_summary':'Preserved staged approvals through FX recovery.\n\nLint failed in the new tests.'},
                  {'task':'1','role':'implementation','outcome':'implemented',
                   'human_summary':'Implemented the timeout and preserved staged approvals through FX recovery; verified the refund query.\n\nDatabase tests could not run in the worker sandbox.'}]
-        short=readable(packet['records'][:1],{state['id']:state|{'attempts':state['attempts']+repairs}},self.root)
+        final=next(i for i,a in enumerate(state['attempts']) if a['id']==packet['records'][0]['evidence']['review'])
+        # Repair claims precede their final review; later unreviewed author prose is
+        # not the summary of a completed commit.
+        short=readable(packet['records'][:1],{state['id']:state|{'attempts':state['attempts'][:final]+repairs+state['attempts'][final:]}},self.root)
         self.assertIn(repairs[-1]['human_summary'].split('\n\n')[0],short)
         self.assertIn('Task 1: fixture (passed).',short)
         self.assertNotIn('Database tests could not run',short);self.assertNotIn('Lint failed',short)
@@ -747,11 +866,11 @@ class ReviewResultTest(unittest.TestCase):
         finding={'severity':'scope','description':'Unrelated logout','path':'logout.py','family':'logout','relation':'original'}
         attempt={'id':'review','task':'1','role':'review','finished':True,'findings':[finding],'git_tree':'tree','head':'parent','outcome':'needs_resolution'}
         state={'id':'run','project':'project','status':'findings_checkpoint','attempts':[attempt]}
-        for delivery in ({},{'status':'frozen'}):
+        for delivery,extra in (({},{}),({'status':'frozen'},{}),({'status':'approved'},{'extra_review':{'task':'1'}})):
             with patch('oh.delivery.guard'),patch('oh.issues.route',return_value={'url':'https://github.com/example/repo/issues/1'}) as issue:
-                value=prepare(None,None,state|{'delivery':delivery},attempt,'route','human choice')
+                value=prepare(None,None,state|{'delivery':delivery}|extra,attempt,'route','human choice')
                 self.assertEqual(value['destination'],{'issue':issue.return_value});issue.assert_called_once()
-                dismissed=prepare(None,None,state|{'delivery':delivery},attempt,'dismiss','human choice')
+                dismissed=prepare(None,None,state|{'delivery':delivery}|extra,attempt,'dismiss','human choice')
                 self.assertEqual(dismissed['destination'],{'pr':True});self.assertNotIn('render',dismissed)
         evidence={'schema':1,'attempts':[attempt],'review':'review','parent':'parent','git_tree':'tree','resolutions':{
             'review':{'choice':'dismiss scope','tree':'tree','source':'human','scope':dismissed}}}

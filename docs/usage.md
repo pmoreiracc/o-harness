@@ -1,8 +1,9 @@
 # Using OH
 
-OH does nothing until you invoke one of its commands. An ordinary prompt such as "design a
-login page" never starts OH. Claude uses `/`, Codex uses `$`. The first command in a checkout
-registers it.
+Planning and delivery begin with an OH command or their existing approval question. An
+ordinary prompt such as "design a login page" never starts implementation. Independent
+review can also be requested through the Review skill in conversation. Claude uses `/`,
+Codex uses `$`. The first explicit command in a checkout registers it.
 
 You type a command once. If something is in the way, the agent fixes it and OH carries the
 command out, without asking you to type it again. Only choices that are yours reach you, as a
@@ -21,6 +22,46 @@ run: use `status` to inspect that run. These paths are covered by
 `test_native_transcript_binds_host_turn_text_and_checkout`,
 `test_desktop_fallback_uses_only_current_native_human_turn`, and
 `test_a_real_command_runs_through_the_launcher`.
+
+## Independent review: oh-review
+
+Ask OH to review your work, or use `/oh-review changes`. You can also name `tree`,
+`paths <relative paths>`, `commit <ref>` or `range <base> <head>`. The coordinator resolves
+the subject and asks only when it is ambiguous. Historical review reads the selected
+revision without switching your branch. The reviewer uses your relevant project contracts;
+you do not need a design document, an implementation report or configured checks to get feedback.
+
+Each standalone request starts a fresh reviewer. Its request and receipt say **Standalone
+review**, and its findings cannot count as delivery review rounds or authorize completion.
+An ordinary message mentioning review only records input; it never starts an agent or pauses
+approved delivery by itself. The Review tool validates the actual human request before launch.
+
+With findings, OH prepares a bounded quick-fix preview using the existing task approval:
+**Approve fixes**, **Refine**, or **Keep as feedback**. Free-text refinements become part of
+the revised task list, which you approve before execution. The preview identifies the original
+manual edits and existing commits included in completion. These enter one coherent repair task;
+its entire included change passes normal checks and independent review. OH preserves those edits and refuses stale
+approval or silently including unrelated files. Approving fixes enters normal Deliver;
+publication still needs its own decision. The source receipt is repair input, not proof that
+the repaired work passed checks or review.
+
+Keep as feedback ends the operation. A later standalone review starts independently, without
+automatically carrying earlier findings. A clean review ends with its report. Add
+`--feedback-only` when you want findings without a repair offer. Standalone review performs
+one inspection: Stop retains incomplete evidence, and resume does not silently buy another
+review. A new inspection needs a new request.
+
+At an unpublished Deliver checkpoint, **Review again** challenges the last completed task;
+`/oh-review task <id>` selects another completed task in that run. Clean review returns to the
+decision without a commit. Blockers use the existing repair loop and produce a reviewed
+correction commit. Original task marks, receipts and used allowances remain intact. Scope
+from these additional reviews uses the existing issue/PR dispositions rather than rewriting
+completed task artifacts. A review of published work is standalone feedback.
+
+Covered by `test_standalone_review_is_fresh_and_preserves_delivery_and_historical_subject`,
+`test_standalone_findings_use_existing_approval_for_manual_work`,
+`test_completed_task_rereview_preserves_completion_and_commits_only_reviewed_corrections`, and
+`test_completed_design_task_correction_preserves_marks_and_portable_evidence`.
 
 ## Plan: oh-propose and oh-design
 

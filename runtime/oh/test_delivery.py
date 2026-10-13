@@ -41,6 +41,33 @@ class DeliveryTest(unittest.TestCase):
         event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':prompt},host)
         return host_hook(self.root,host,{'prompt':prompt},verified=event)
 
+    def test_completed_design_task_correction_preserves_marks_and_portable_evidence(self):
+        self.documents();self.start_delivery();run(self.root,self.fake)
+        from .review import again
+        from .delivery_verify import verify_run
+        _,before=load_run(self.root)
+        document=Path(before['delivery']['path']);contents=document.read_bytes()
+        original=before['summaries'][0]['commit'];first=True
+        def defect(*args,**kwargs):
+            nonlocal first
+            result=self.fake(*args,**kwargs)
+            if args[4]=='review' and first:
+                first=False
+                result['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':'Wrong fixture value',
+                    'path':'output.txt','family':'fixture','relation':'first-round-escape','anchor':'none — a defect',
+                    'failure':'Fixture returns a wrong value.','fix':'Correct the implementation value.'}])
+            return result
+        again(self.root,'1',self.event('review-again','/oh-review task 1'))
+        self.assertEqual(run(self.root,defect)['status'],'checkpoint')
+        _,after=load_run(self.root)
+        self.assertEqual(after['done'],before['done'])
+        self.assertEqual(document.read_bytes(),contents)
+        self.assertEqual(after['summaries'][0],before['summaries'][0])
+        self.assertEqual(self.git('rev-parse','HEAD^'),original)
+        verified=verify_run(self.root,after,current=True)
+        self.assertEqual((verified['tasks'],verified['corrections']),(1,1))
+        self.assertEqual(after['granted'],before['granted'])
+
     def test_stopped_draft_continues_in_new_session_and_version_on_both_hosts(self):
         # docs/usage.md: Deliver resumes retained work before clean/merged-branch checks,
         # even before its first commit; a newer installed OH retains the original authority.
@@ -107,7 +134,7 @@ class DeliveryTest(unittest.TestCase):
                         (case.root/'mine.txt').unlink()
                         resumed=case.start_delivery(turn='gate-boundary',host=target,session='gate-chat')
                         self.assertEqual((resumed['run'],resumed['status']),(before['id'],'checkpoint'))
-                        self.assertEqual(resumed['gate']['choices'],['continue','pr','stop'])
+                        self.assertEqual(resumed['gate']['choices'],['continue','pr','review again','stop'])
                         self.assertEqual(run(case.root,case.fake)['status'],'checkpoint')
                         updated=load_run(case.root)[1]
                         for key in ('config','config_hash','tasks','granted','attempts','done','summaries','review_grants'):
@@ -357,7 +384,7 @@ class DeliveryTest(unittest.TestCase):
         plans.add_task(self.root,where,'0001','Core','Add sign-out.',[]);self.git('commit','-qam','Add task 3')
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         again=self.start_delivery(turn='again')  # no merge of main, no new task: the finished delivery's PR choice
-        self.assertEqual((again['run'],again['gate']['choices']),(first,['pr','stop']))
+        self.assertEqual((again['run'],again['gate']['choices']),(first,['pr','review again','stop']))
         self.assertEqual((self.git('branch','--show-current'),self.git('rev-parse','HEAD')),('deliver/0001',head))
         choose(self.root,'stop',self.event('declined','stop'))  # typed at completion, like the menu's Stop
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
@@ -366,14 +393,14 @@ class DeliveryTest(unittest.TestCase):
         def typed(session,host='codex',turn='later'):
             event=human_event({'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':'/oh-deliver 0001'},host)
             return host_hook(self.root,host,{'prompt':'/oh-deliver 0001'},verified=event)
-        self.assertEqual(typed('elsewhere','claude')['gate']['choices'],['pr','stop'])
+        self.assertEqual(typed('elsewhere','claude')['gate']['choices'],['pr','review again','stop'])
         self.assertEqual(load_run(self.root)[1]['host'],'claude')
         with patch('oh.config.version',return_value='new-completion-runtime'):
             # A crash after the atomic transfer but before its result is returned must
             # replay the same command without another transfer or a lost checkpoint.
             with patch('oh.workflow.checkpoint',side_effect=OSError('after transfer')):
                 with self.assertRaisesRegex(OSError,'after transfer'):typed('new')
-            self.assertEqual(typed('new')['gate']['choices'],['pr','stop'])
+            self.assertEqual(typed('new')['gate']['choices'],['pr','review again','stop'])
             self.assertEqual(load_run(self.root)[1]['harness_version'],'new-completion-runtime')
             self.assertEqual(run(self.root,self.fake)['status'],'completed')
         self.assertEqual(load_run(self.root)[1]['human']['session'],'new')

@@ -409,7 +409,7 @@ def recover(root,state):
 
 def reviewed(root,state,review):
     guard(root,state)
-    if not state.get('delivery'):return
+    if not state.get('delivery') or state.get('extra_review') or state.get('correction'):return
     artifact=review.get('artifact') or {}
     render=state.get('delivery_render')
     if render and 'candidate' not in render:return  # legacy repository admission
@@ -424,6 +424,7 @@ def reviewed(root,state,review):
 
 def replacements(root,state):
     """The proposed repository document belongs to the reviewed tree, not the live checkout yet."""
+    if state.get('extra_review') or state.get('correction'):return {}
     render=state.get('delivery_render')
     if not render or 'candidate' not in render or state['delivery']['layout']['location']!='repo':return {}
     return {Path(render['path']).relative_to(root).as_posix():Path(render['candidate'])}
@@ -442,7 +443,7 @@ def publish_progress(root,state):
 def finish(root,journal,state,review):
     """Journal the exact approval update after the reviewed commit, before either private write."""
     reviewed(root,state,review)
-    if not state.get('delivery') or state['delivery']['layout']['location']!='private':return
+    if state.get('correction') or not state.get('delivery') or state['delivery']['layout']['location']!='private':return
     doc=state['delivery']['doc'];render=state['delivery_render'];intent=state.get('delivery_approval')
     if not intent or intent['task']!=render['task']:
         old=intent['after'] if intent else state['delivery']['approvals'][doc]

@@ -13,6 +13,7 @@ def external_failures(attempts, state):
 def next_action(state, current_tree=None, *, verified=False):
     from .workflow import next_task, review_limit
     status = state['status']
+    if state.get('workflow')=='review':return {'kind':'review' if status=='running' else 'finished','phase':'review' if status=='running' else status}
     if state.get('published'):return {'kind':'published','phase':'publication'}
     if status in ('stopping', 'pausing', 'stopped', 'paused'):
         return {'kind': 'stopped' if status in ('stopping', 'stopped') else 'paused', 'phase': status}
@@ -35,6 +36,7 @@ def next_action(state, current_tree=None, *, verified=False):
                   'preview': 'preparing', 'route_scope': 'preparing', 'review': 'review',
                   'review_allowance': 'review_checkpoint', 'approve_plan': 'approval_checkpoint', 'blocked': 'needs_attention'}
         return {'kind': kind, 'task': task_id, 'phase': phases.get(kind, kind)} | extra
+    if state.get('extra_review') and not state.get('correction'):return result('review')
     if history and not history[-1].get('finished'):
         pending=state.get('reports',{}).get(history[-1]['id'],{})
         return result('working', phase='report_correction' if pending.get('issues') else history[-1]['role'], attempt=history[-1]['id'])
@@ -94,10 +96,10 @@ def choices(state):
         left = len([t for t in state['tasks'] if t['id'] not in state['done']])
         found = ([('continue', continue_limits(left, state['config']))] if left else [])
         found += [('pr', '')] if committed(state) and any('commit' in s for s in state['summaries']) else []
-        return found + [('stop', '')]
+        return found + ([('review again','Ask a fresh reviewer to challenge the last completed task.')] if state.get('workflow','deliver')=='deliver' and state['done'] else []) + [('stop', '')]
     if status == 'completed':
         if not committed(state) or not any('commit' in s for s in state['summaries']):return None
-        return [('pr', ''), ('stop', '')]
+        return [('pr', '')]+([('review again','Ask a fresh reviewer to challenge the last completed task.')] if state.get('workflow','deliver')=='deliver' else [])+[('stop', '')]
     if status == 'approval_checkpoint':
         if state.get('workflow') == 'propose':
             return [('approve', approval_effect(state)), ('refine',''),

@@ -84,11 +84,12 @@ class CodexToolsTest(unittest.TestCase):
 
     def test_tools_cover_everyday_commands_and_nothing_that_changes_what_oh_runs(self):
         names = {t['name'] for t in TOOLS}
-        self.assertEqual(names, {'status', 'config', 'init', 'plans', 'resource', 'deliver', 'prepare', 'prepare_design',
+        self.assertEqual(names, {'status', 'config', 'init', 'plans', 'resource', 'deliver', 'review', 'prepare', 'prepare_design',
                                  'start', 'run', 'pause', 'resume', 'stop', 'cancel', 'conflict', 'pr_summary', 'publication', 'choose', 'confirm'})
         from .mcp_server import command
         from .storage import Refused
         self.assertEqual(command('publication',{},self.root),['publication'])
+        self.assertEqual(command('review',{'arguments':['paths','folder with spaces']},self.root),['review','--','paths','folder with spaces'])
         self.assertEqual(command('publication',{'pr':144},self.root),['publication','--pr','144'])
         for invalid in (0,-1,True,'144'):
             with self.assertRaises(Refused):command('publication',{'pr':invalid},self.root)

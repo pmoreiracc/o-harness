@@ -32,7 +32,9 @@ def prepare(root,journal,state,attempt,action,source):
     value={'attempt':attempt['id'],'task':attempt['task'],'action':action,'source':source,'findings':findings}
     bound=state.get('delivery') or {}
     # Use the admitted lifecycle, before OH ticks/freezes the candidate for this task.
-    mutable=bound and bound.get('status','approved') in ('draft','approved')
+    # A completed task's progress is history. Additional reviews use the existing
+    # issue/PR dispositions instead of rewriting its old completion candidate.
+    mutable=bound and bound.get('status','approved') in ('draft','approved') and not (state.get('extra_review') or state.get('correction'))
     if mutable:
         render=state.get('delivery_render')
         if not render or render['task']!=attempt['task']:raise Refused('Render this task before recording its scope notes')

@@ -102,9 +102,9 @@ class GateTest(unittest.TestCase):
 
     def test_checkpoint_offers_its_choices_as_a_menu_that_expires_when_the_run_moves(self):
         result = self.begin('claude', fresh=True)
-        self.assertEqual(result['gate']['choices'], ['continue', 'pr', 'stop'])
+        self.assertEqual(result['gate']['choices'], ['continue', 'pr', 'review again', 'stop'])
         question = result['gate']['ask']['questions'][0]
-        self.assertEqual([o['label'] for o in question['options']], ['Continue', 'Open a PR', 'Stop and take over'])
+        self.assertEqual([o['label'] for o in question['options']], ['Continue', 'Open a PR', 'Review again', 'Stop and take over'])
         self.assertNotIn('Branch work.',question['question'])
         self.assertIn('Completed: 1. Pending: 2:',result['gate']['details'])
         self.assertIn('Checks:',result['gate']['details'])
@@ -112,11 +112,28 @@ class GateTest(unittest.TestCase):
         self.assertEqual(question['options'][0]['description'],'Run the next 1 task, up to 3 reviews each.')
         self.assertIn('AskUserQuestion', result['gate']['how'])
         self.assertNotIn('show_pane', result['gate']['how'])  # no preview, so no side-pane copy
+        # Free text in Other can request inspection; it grants neither more tasks nor publication.
+        from . import review
+        from .cli import main
+        before=load_run(self.root)[1]
+        requested=self.click(question,'I want another invariant review round',use='extra-review')
+        self.assertTrue(requested['prepare_review'])
+        self.assertEqual(load_run(self.root)[1]['granted'],before['granted'])
+        self.assertEqual(len(load_run(self.root)[1]['attempts']),len(before['attempts']))
+        with patch.dict(os.environ,{'CODEX_THREAD_ID':'different-conversation'}),self.assertRaisesRegex(Refused,'another conversation'):
+            review.input_event(self.root)
+        for _ in range(2):
+            output=io.StringIO()
+            with patch('sys.stdout',output),patch('oh.runner.run',side_effect=lambda root,**options:run(root,self.fake,**options)):
+                main(['--root',str(self.root),'review','--','task','1'])
+            self.assertEqual(json.loads(output.getvalue())['status'],'checkpoint')
+        self.assertEqual(len(load_run(self.root)[1]['attempts']),len(before['attempts'])+1)
+        self.assertEqual(self.git('rev-parse','HEAD'),before['summaries'][0]['commit'])
         choose(self.root, 'continue', human_event({'hook_event_name': 'UserPromptSubmit', 'session_id': 's', 'turn_id': '2', 'prompt': 'continue'}, 'claude'))
         self.assertIsNone(current(self.root))  # running: nothing to choose
         after = run(self.root, self.fake)
-        self.assertEqual(after['gate']['choices'], ['pr', 'stop'])
-        self.assertEqual(after['gate']['ask']['questions'][0]['options'][1]['label'],'Finish without a PR')
+        self.assertEqual(after['gate']['choices'], ['pr', 'review again', 'stop'])
+        self.assertEqual(after['gate']['ask']['questions'][0]['options'][-1]['label'],'Finish without a PR')
         self.assertNotEqual(after['gate']['id'], result['gate']['id'])
         # A real native Resume command in another host/session adopts this exact gate.
         from .authority import stage,starts_work
@@ -161,6 +178,90 @@ class GateTest(unittest.TestCase):
         manifest=directory(self.root).parent/'tasks.json';atomic_json(manifest,{'tasks':self.tasks})
         with patch.dict(os.environ,{'CODEX_HOME':str(self.home/'.codex'),'CODEX_THREAD_ID':'s' if host=='codex' else ''}):result=prepare(self.root,str(manifest))
         return result,manifest
+
+    def test_standalone_findings_use_existing_approval_for_manual_work(self):
+        from . import review
+        from .prepared import prepare,directory
+        from .storage import atomic_json
+        self.git('switch','main')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        (self.root/'committed.txt').write_text('original committed work')
+        self.git('add','committed.txt');self.git('commit','-qm','manual commit')
+        covered=self.git('rev-parse','HEAD')
+        (self.root/'product.txt').write_text('manual tracked change')
+        self.git('add','product.txt')
+        (self.root/'manual.txt').write_text('original untracked work')
+        branch=self.git('branch','--show-current');head=self.git('rev-parse','HEAD')
+        before=self.git('diff','--cached')
+        def defect(*args,**kwargs):
+            result=self.fake(*args,**kwargs)
+            result['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':'Wrong fixture value',
+                'path':'product.txt','family':'fixture','relation':'original','anchor':'none — a defect',
+                'failure':'The fixture returns a wrong value.','fix':'Correct its value.'}])
+            return result
+        prompt='Please review my manual changes.'
+        subfolder=self.root/'src';subfolder.mkdir()
+        self.typed(prompt,'review-manual',hook=False,cwd=subfolder)
+        from .entry import receive
+        receive(subfolder,'claude',{'hook_event_name':'UserPromptSubmit','session_id':'s',
+            'prompt_id':'review-manual','prompt':prompt,'transcript_path':str(self.transcript)})
+        self.assertIsNone(materialize(self.root))  # ordinary input alone never starts a run
+        from .cli import main
+        output=io.StringIO()
+        with patch('sys.stdout',output),patch('oh.runner.run',side_effect=lambda root,**options:run(root,defect,**options)):
+            main(['--root',str(self.root),'review','--','changes'])
+        result=json.loads(output.getvalue())
+        source=result['review_source']
+        self.assertEqual(self.git('diff','--cached'),before)
+        manifest=directory(self.root).parent/'manual-fix.json'
+        atomic_json(manifest,{'tasks':self.tasks[:1]})
+        (self.root/'unexpected.txt').write_text('outside the preview')
+        with self.assertRaisesRegex(Refused,'reviewed work changed'):
+            prepare(self.root,str(manifest),review=source)
+        (self.root/'unexpected.txt').unlink()
+        gate=prepare(self.root,str(manifest),review=source)['gate']
+        self.assertEqual([o['label'] for o in gate['ask']['questions'][0]['options']],['Approve fixes','Refine','Keep as feedback'])
+        self.assertIn('manual.txt',Path(gate['preview']).read_text())
+        self.assertIn(covered,Path(gate['preview']).read_text())
+        self.assertEqual(self.git('branch','--show-current'),branch)
+        self.assertEqual(self.git('rev-parse','HEAD'),head)
+        self.click(gate['ask']['questions'][0],'Refine',use='manual-refine')
+        self.typed('Fix the value and preserve the original manual work.','manual-words',hook=False)
+        feedback=materialize(self.root)
+        atomic_json(manifest,{'tasks':[self.tasks[0]|{'instructions':feedback['feedback']}]})
+        gate=prepare(self.root,str(manifest))['gate']
+        self.assertEqual(load_run(self.root)[1]['repair_source']['run'],source)
+        from . import prepared
+        actual_git=prepared.git
+        def interrupted(root,*args):
+            result=actual_git(root,*args)
+            if args[0]=='switch':raise OSError('interrupted after switching the manual work')
+            return result
+        with patch('oh.prepared.git',side_effect=interrupted),self.assertRaisesRegex(OSError,'switching the manual work'):
+            self.click(gate['ask']['questions'][0],'Approve fixes',use='manual-approve')
+        self.assertEqual(materialize(self.root)['status'],'running')  # recover the same approval
+        self.assertEqual(self.git('rev-parse','main'),head)
+        self.assertNotEqual(self.git('branch','--show-current'),'main')
+        completed=run(self.root,self.fake)
+        self.assertEqual(completed['status'],'completed')
+        self.assertEqual(self.git('show','HEAD:manual.txt'),'original untracked work')
+        self.assertEqual(self.git('show','HEAD:product.txt'),'manual tracked change')
+        _,state=load_run(self.root)
+        self.assertEqual(len(review.workflow_reviews(state,'1')),1)
+        self.assertNotEqual(state['attempts'][-1]['id'],state['repair_source']['attempt'])
+        self.assertEqual(state['repair_source']['covers'],[covered])
+        request=json.loads((Path(state['attempts'][-1]['evidence'])/'request.json').read_text())
+        self.assertIn('committed.txt',Path(request['diff']['path']).read_text())
+        self.assertEqual(request['covers']['commits'],[covered])
+        self.git('remote','add','origin','https://github.com/example/fixture.git')
+        from .workflow import checkpoint
+        gate=checkpoint(self.root)['gate']
+        with patch('oh.branches.fetched',return_value='origin/main'):
+            self.click(gate['ask']['questions'][0],'Open a PR',use='manual-publish')
+        from .publication import render,validate_event
+        body=render(self.root,base='origin/main')
+        self.assertEqual(validate_event(self.root,{'pull_request':{'body':body,'head':{
+            'sha':self.git('rev-parse','HEAD'),'ref':self.git('branch','--show-current')}}},'origin/main')['commits'],1)
 
     def test_prepared_claude_menu_binds_scope_limits_and_expires(self):
         """docs/usage.md: prepared approval grants only the shown snapshot, in its owning conversation."""
@@ -297,6 +398,11 @@ class GateTest(unittest.TestCase):
             old_question=question
             atomic_json(manifest,{'tasks':[self.tasks[0]|{'instructions':'Fix the replacement timeout.'},self.tasks[1]]})
             gate=prepare(self.root,str(manifest))['gate'];question=gate['native_ask']['questions'][0]
+            from .review import input_event
+            requested=reply('/oh-review tree')
+            self.assertTrue(requested['prepare_review'])
+            self.assertEqual(input_event(self.root)['prompt'],'/oh-review tree')
+            self.assertEqual(load_run(self.root)[1]['granted'],[])
             self.assertIsNone(reply(old_question['options'][0],displayed=old_question,title=old_question['title']))
             self.assertEqual(load_run(self.root)[1]['granted'],[])
             approve=question['options'][0]
@@ -331,6 +437,7 @@ class GateTest(unittest.TestCase):
             self.assertEqual(desktop_answer(self.root)['status'],'running')
             self.assertIsNone(desktop_answer(self.root))
             self.assertEqual(len(load_run(self.root)[0].records()),count)
+            with self.assertRaisesRegex(Refused,'decision moved on'):input_event(self.root)
 
     def test_large_menus_bound_the_handoff_and_preserve_complete_details(self):
         """docs/usage.md: long decisions link complete retained reports; recovery has no menu."""
@@ -734,7 +841,7 @@ class GateTest(unittest.TestCase):
             self.assertEqual(load_run(self.root)[0].records(),records)
         sent, text = self.server(self.root, {'action': 'accept', 'content': {'choice': 'continue'}},while_open=delayed)
         asked = next(m for m in sent if m.get('method') == 'elicitation/create')
-        self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'stop'])
+        self.assertEqual(asked['params']['requestedSchema']['properties']['choice']['enum'], ['continue', 'pr', 'review again', 'stop'])
         self.assertIn('Recorded', text)
         self.assertNotIn('Project:',asked['params']['message'])
         self.assertLess(len(asked['params']['message']),400)
@@ -784,7 +891,7 @@ class GateTest(unittest.TestCase):
         self.assertIn('request_user_input_async',gate['how'])
         self.assertNotIn('right panel',gate['how'])
         self.assertIn('github.com',question['title'])
-        self.assertEqual(question['options'],['Continue','Open a PR','Stop and take over'])
+        self.assertEqual(question['options'],['Continue','Open a PR','Review again','Stop and take over'])
         from .test_mcp_server import codex_session
         codex_session(self.home,'s',self.root)
         path=next((self.home/'.codex/sessions').rglob('*s.jsonl'))
@@ -881,7 +988,7 @@ class GateTest(unittest.TestCase):
         self.begin('codex')
         for reply, capabilities in (({'action': 'decline'}, None), ({'action': 'cancel'}, None), ({}, {})):
             sent, text = self.server(self.root, reply, capabilities)
-            self.assertIn('type one of: continue, pr, stop', text)
+            self.assertIn('type one of: continue, pr, review again, stop', text)
             self.assertEqual(load_run(self.root)[1]['status'], 'checkpoint')
         self.assertFalse(any(m.get('method') == 'elicitation/create' for m in sent))  # no capability: never asked
 

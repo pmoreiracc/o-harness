@@ -23,7 +23,7 @@ def finding_index(state, task):
     """Distinct cases and original locators, with later review evidence and labelled author claims."""
     families = {}
     incomplete = []
-    history = [a for a in state['attempts'] if a['task'] == task]
+    history = [a for a in state['attempts'] if a['task'] == task and a.get('purpose','workflow')=='workflow']
     author = next((a for a in reversed(history) if a['role'] in ('implementation','analysis') and a.get('finished')), None)
     readiness = report(author).get('readiness') or {}
     items = readiness.get('prior_findings', []) if isinstance(readiness,dict) else []
@@ -203,13 +203,14 @@ def prepare(state, task, role, directory, admission, feedback=''):
         verification = {k: v for k, v in verification.items() if k != 'checks'} | {
             'checks': [{k: c[k] for k in ('name', 'command', 'returncode', 'cancellation', 'unavailable', 'duration_ms', 'reused') if k in c}
                        for c in verification['checks']]}
-    packet = {'schema': VERSION, 'run': state['id'], 'task': task,
+    packet = {'purpose':admission.get('purpose','workflow'),'schema': VERSION, 'run': state['id'], 'task': task,
         'subject': {k: admission.get(k) for k in ('head', 'tree', 'git_tree', 'config_hash')},
         'role': role, 'current_work': current, 'remaining_work': feedback,
         'verification': verification,
         'findings': {'path': str(index_path), 'hash': digest(index)},
         'history': str(directory.parent.parent),
         'history_policy': 'Read the current packet and complete finding index. Consult original reports only for a specific unresolved question; do not replay prior author reports or transcripts.'}
+    if state.get('repair_source'):packet['repair_source']=state['repair_source']
     if state.get('plans'):
         packet['planning'] = state['plans']
         packet['human_refinements'] = [{'source': a['source'], 'feedback': a['feedback']}
