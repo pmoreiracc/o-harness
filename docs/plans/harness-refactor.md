@@ -530,11 +530,11 @@ This follow-up preserves execution decisions, authority, models, schemas, allowa
 Stop/resume. No additional agent, service, consumer file or approval is introduced. Automatic
 post-publication repair and internal skill citations remain deferred.
 
-- [ ] F1: Save baseline instructions and reuse live-agent trial tooling with small synthetic
+- [x] F1: Save baseline instructions and reuse live-agent trial tooling with small synthetic
   clean/defective fixtures for public contracts, time boundaries, siblings and weakened race
   proof. Compare baseline and candidate twice per host using unchanged configured profiles;
   record detection, false findings, rounds, observed tokens and elapsed time.
-- [ ] F2 (F1): Replace overlapping implementation/review instructions with ordered coverage
+- [x] F2 (F1): Replace overlapping implementation/review instructions with ordered coverage
   derived from approved requirements and actual operations, then challenge author claims.
   Preserve full-task review and family closure. Keep only changes supported by trial evidence.
 - [x] F3: Remove check logs from review remaining-work; label running/incomplete reviews and
@@ -545,7 +545,7 @@ post-publication repair and internal skill citations remain deferred.
   diagnose failure, and report missing/external checks honestly; do not implement CI repair.
 - [x] F6: Create the deferred project-local learning GitHub issue with bounded, evidence-linked
   lessons, relevance and staleness handling; no lesson creates authority or escalation.
-- [ ] F7 (F1–F6): Extend existing behavioral fixtures, run affected/syntax checks and comparative
+- [x] F7 (F1–F6): Extend existing behavioral fixtures, run affected/syntax checks and comparative
   trials, commit focused changes and activate a candidate on both hosts for the developer's
   host trial. Independent review and publication follow that trial, as required by AGENTS.md.
 
@@ -579,3 +579,53 @@ The final allowance-message extension also passed separately (11.2s); progress o
 in 3.6s. Logs are external at `/tmp/oh-quality-{affected,syntax,focused,progress,allowance}.log`.
 The Deliver skill validator passed using the existing temporary validator dependencies.
 Code and behavioral fixture changes are committed as `8e2f601`.
+
+F1/F2 comparison finished using the existing native trial pattern, adapted in the external
+`/tmp/oh-quality-trial.py`. Baseline was enabled snapshot `1791855995703845000`; the candidate
+was frozen as `1791858045278984000` before testing. Each host ran each variant twice, with a
+retained defective draft followed by a real independent review, real implementer repair and
+fresh review of the clean result. Initial draft/readiness were synthetic; assessment, repair
+and reviews were real. These are comparative trial costs, not complete new-task implementation
+costs. The configured profiles were unchanged: Codex assessed with sol/medium, selected
+astra/high for repairs and reviewed with sol/high; Claude used sonnet/medium and opus/high.
+
+| Trial | Seconds | Input tokens | Output tokens | Cached input subset | Reviews |
+|---|---:|---:|---:|---:|---:|
+| Baseline Claude 1 | 184.79 | 663186 | 17738 | 542931 | 2 |
+| Baseline Claude 2 | 207.18 | 686695 | 21257 | 578650 | 2 |
+| Baseline Codex 1 | 642.05 | 850356 | 19476 | 748288 | 2 |
+| Baseline Codex 2 | 754.05 | 970679 | 22067 | 860544 | 2 |
+| Candidate Claude 1 | 194.91 | 670652 | 18557 | 566743 | 2 |
+| Candidate Claude 2 | 195.01 | 606017 | 18970 | 500940 | 2 |
+| Candidate Codex 1 | 650.85 | 815338 | 18506 | 701824 | 2 |
+| Candidate Codex 2 | 727.72 | 987693 | 19894 | 839936 | 2 |
+
+Every first review detected all four seeded families: missing initialization state, refund
+output compatibility, saved-timezone boundaries across callers and a noncausal concurrency
+test. Every repaired control passed the external behavior oracle and an independent in-memory
+mutation that removes the race guard. All final reviews were clean: zero missed seeded families,
+zero findings on clean controls, zero report rejections, one repair and two reviews per run,
+and no intervening allowance/recovery decision. There were 21 verification calls in total.
+Cached input is a subset of input, not an additional token total.
+
+Limits and decision: both variants already detected every seeded family, so this small trial
+does not establish improved detection or lower review counts on larger tasks. Claude sometimes
+added overlapping readiness/coverage findings on the seeded incomplete draft in both variants;
+the candidate does not eliminate that noise. Keep the ordered guidance as a clarification using
+existing report fields, not a claimed quality guarantee. Time/token differences are descriptive,
+not demonstrated savings; host trials ran concurrently. One candidate Claude assessment logged
+a macOS process-cleanup warning but completed without a repeated attempt; the original log is
+retained. No lifecycle code was changed to hide it. Native logs, requests and results stay outside
+Git under `/tmp/oh-quality-*`; aggregate measurements are `/tmp/oh-quality-metrics.json`.
+
+Publication/CI instructions and documentation are committed separately as `cf8aca5`.
+The final package was built from that commit; developer host testing and independent OH review
+remain required before publication. No production services, report fields or consumer gates were added.
+
+Activation verified: both Codex and Claude are on `0.6.0-SNAPSHOT.1791858920237433000`,
+source `cf8aca5fcaa53b36e6c384f04c2ec2675a9de42f`. Activation refreshed the existing development
+dashboard; fresh sessions use this snapshot. This final measurement/activation entry is a
+documentation-only follow-up to the packaged commit. Next developer scenario: a new bounded
+Deliver should report actual implementer/reviewer transitions, retain a visible final menu, and
+follow the chosen PR's current-head CI through its result. C6's independent review/publication
+remain pending that host trial; no consumer code or OH delivery evidence was edited here.
