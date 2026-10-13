@@ -783,7 +783,7 @@ and its receipts stay untouched. No new approval gate, publication redesign or r
 - [x] I3: Integrate required observable behavior, failure paths and proof into the core review
   procedure. Author disclosures and prior implementation patterns cannot waive requirements.
   Retain existing lenses and receipt fields; no blanket test requirement or final checklist.
-- [ ] I4 (I1–I3): Extend existing workflow, control, progress and host fixtures with simulated
+- [x] I4 (I1–I3): Extend existing workflow, control, progress and host fixtures with simulated
   long phases and observer expiry. Exercise real Claude/Codex reviewers on a disclosed defect
   and a compliant control. Run affected checks and syntax, record durations and limitations,
   then build the development candidate for the developer's host trial before C6 review.
@@ -855,3 +855,10 @@ same phase budget rather than reducing cleanup headroom outside it. The phase, c
 and four-direction cross-host continuation fixtures passed again after that change: 3 tests,
 81.90s (47.05s cross-host matrix, 27.03s multi-phase batch, 7.83s pause/stop). Syntax and
 Windows-risk checks passed on the final candidate. No failed checks remain.
+
+I4 candidate: runtime changes are committed as `e480d2e`; `6849154` clarifies Claude's
+event-driven waiting (yield once Monitor is active, stay active with bounded observation when
+it is unavailable). Both hosts are enabled on `0.6.0-SNAPSHOT.1791897894264471000`, source
+`684915498d3cbebfe471831dce5c3f5acb63ca2c`, verified with `oh-dev status`. Fresh sessions
+load this candidate. Developer host testing still precedes independent OH review under C6;
+this is a development snapshot, not a published OH PR or an approval of consumer task 10.
