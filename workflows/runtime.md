@@ -93,10 +93,16 @@ additional allowance. Prior receipts are history, not new results or new authori
 When `gate.preview` exists, link the complete review copy beside the question. In Codex use
 `open_in_codex` for that file when available. In Claude, use `SendUserFile` with
 `files: [gate.preview]`, `status: "normal"`, `display: "render"` when available.
+Call it alone and wait for its result before asking; never batch file display and
+`AskUserQuestion` in the same response. A call being issued is not successful display.
 Otherwise use `mcp__ccd_view__show_pane` with a scratchpad copy, keeping the original path
-visible; the copy never goes back to OH. If display is unavailable, fails, or the person
-cannot see it, read and show the complete preview in chat before asking. Other routine
-decisions need no side panel. Keep the returned question payload unchanged.
+visible; the copy never goes back to OH. Wait for that result too. If Claude reports the
+file was not delivered (including a session without a project thread), display is unavailable,
+or the person cannot see it, show the complete preview, question and existing typed choices
+in chat, then end the turn and wait for their reply. Do not reopen `AskUserQuestion` on this
+fallback: its modal can obscure the plan. Do not ask the person to create a project or change
+their session to read it. Other routine decisions need no side panel. After successful file
+display, keep the returned native question payload unchanged.
 
 For ordinary Codex menus, call `choose` directly and await its answer without polling. For
 publication, `gate.how` or `choose` returns a native question: use `request_user_input_async`

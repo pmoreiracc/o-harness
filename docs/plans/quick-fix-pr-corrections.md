@@ -91,3 +91,13 @@ that preview, and typed `Approve` accepted once. Stop and resume the new correct
 in a fresh session to check preserved scope and allowances. At completion choose
 `Update PR #number`; expect the same PR with its new review summary and current-head
 CI result, without another OH push decision. Do not reset the old stopped branch.
+
+### First host trial
+
+The existing-PR preparation selected the correct branch and saved its target. Preview
+delivery failed: this Claude session had `SendUserFile`, but the host could not deliver
+files outside a project thread. Claude batched display and the approval question in
+one response, opening the modal before receiving that failure. The instructions now
+require a separate completed display call; on failure they use the complete chat
+preview and existing typed choices, without opening another modal. This introduces
+no approval type or authority change. Repeat the host trial to verify the fallback.

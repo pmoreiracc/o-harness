@@ -358,10 +358,13 @@ def ask(gate):
 def how(gate, root):
     typed = ', '.join(o['choice'] for o in gate['options']) + (', or refine: <what to change>' if gate['words'] else '')
     if gate['host'] == 'claude':
-        panel=('Before asking, show the complete gate.preview: use SendUserFile with files [gate.preview], status `normal`, display `render` when available. '
+        panel=('Before asking, show the complete gate.preview: call SendUserFile alone with files [gate.preview], status `normal`, display `render` when available. '
+               'Wait for and read its returned result before a subsequent AskUserQuestion call; never batch these tools in the same response. '
                'Otherwise, if `mcp__ccd_view__show_pane` is available, copy gate.preview into your scratchpad directory under its .md name, '
                'open that copy with show_pane (pane `file`) while still showing the original path; the copy is display only and never goes back to OH, '
-               'and if display is unavailable or fails, read and show the complete preview in chat before asking. ') if gate.get('preview') else ''
+               'and wait for its result too. If display is unavailable, fails or reports not delivered, read and show the complete preview in chat with the question and typed choices below, '
+               'then end the turn and wait for the human reply. Do not call AskUserQuestion on that fallback: its modal can hide the preview. '
+               'Only after confirmed file display, use the menu instructions that follow. ') if gate.get('preview') else ''
         return (panel+'Ask the person with AskUserQuestion, passing exactly `gate.ask` and never an `answers` field. '
                 'After they answer, run OH `run`; OH reads the click from the saved transcript of the conversation that '
                 'owns this run, so ask only there. '

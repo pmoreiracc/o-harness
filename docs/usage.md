@@ -81,8 +81,10 @@ external storage. In Codex Desktop, OH opens it in the right panel and uses OHâ€
 menu, so you can keep reading and scrolling while deciding. The menu waits for your click
 without repeatedly waking the coordinator. Cancelling it grants nothing. In Claude desktop, the
 coordinator uses `SendUserFile` to display the preview when available, or opens a scratchpad
-copy with `show_pane` on hosts providing that tool. If display is unavailable or fails, it
-shows the complete preview in chat before asking. The stored preview stays the one OH checks.
+copy with `show_pane` on hosts providing that tool. It waits for the display result before
+opening the menu. If display is unavailable or fails, it shows the complete preview and
+choices in chat and waits for a typed reply, so a modal cannot hide the plan. The stored
+preview stays the one OH checks.
 Covered by `test_prepared_claude_menu_binds_scope_limits_and_expires`. The question names that exact
 preview through a short checkpoint reference. OH verifies the displayed question and native human answer, records the choice once,
 and refuses an edited preview or a reply to an older one. Refine asks what to change in plain
