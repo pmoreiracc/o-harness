@@ -7,6 +7,7 @@ import signal
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from .storage import Refused, atomic_json, identifier
 from .system import WINDOWS
 from .telemetry import best_effort
@@ -15,11 +16,18 @@ LENSES=('task-and-design','invariants-and-decisions','affected-surfaces-and-nega
  'correctness-and-failure-paths','security-authorization-and-concurrency',
  'tests-claims-docs-and-generated-artifacts','prior-findings-and-family-closure')
 STRINGS={'type':'array','items':{'type':'string'}}
+from .handoff import READINESS_LISTS, DISPOSITIONS
+READ_ONLY_ROLES=('review','analysis','assessment')
+ASSESSMENT_SCHEMA={'type':'object','additionalProperties':False,
+ 'required':['difficulty','rationale','references','uncertainty'],'properties':{
+ 'difficulty':{'type':'string','enum':['simple','standard','complex']},
+ 'rationale':{'type':'string'},'references':STRINGS,'uncertainty':STRINGS}}
 REVIEW_SCHEMA={'type':'object','additionalProperties':False,
  'required':['verdict','summary','findings','evidence'],'properties':{
  'verdict':{'type':'string','enum':['clean','blocking','concern','scope']},'summary':{'type':'string'},
  'findings':{'type':'array','items':{'type':'object','additionalProperties':False,
-   'required':['severity','description','path','family','relation'],'properties':{
+   'required':['severity','description','path','family','relation','anchor','failure','fix'],'properties':{
+     **{key:{'type':'string'} for key in ('anchor','failure','fix')},
      'severity':{'type':'string','enum':['blocking','concern','scope']},'description':{'type':'string'},'path':{'type':'string'},'family':{'type':'string'},'relation':{'type':'string','enum':['original','repeat-family','fix-regression','first-round-escape','newly-exposed','scope']}}}},
  'evidence':{'type':'object','additionalProperties':False,'required':['anchors','lenses','attacks','limits'],
    'properties':{'anchors':STRINGS,'attacks':STRINGS,'limits':STRINGS,
@@ -27,9 +35,19 @@ REVIEW_SCHEMA={'type':'object','additionalProperties':False,
        'properties':{lens:{'type':'string'} for lens in LENSES}}}}}}
 
 # Implementation reports keep unrelated observations separate from the authorized change.
-WORK_SCHEMA={'type':'object','additionalProperties':False,'required':['status','summary','found_along_way'],
- 'properties':{'status':{'type':'string','enum':['completed','blocked']},
-               'summary':{'type':'string'},'found_along_way':STRINGS}}
+WORK_SCHEMA={'type':'object','additionalProperties':False,'required':['status','summary','found_along_way','obstacle','readiness'],
+ 'properties':{'status':{'type':'string','enum':['completed','unfinished','blocked']},
+               'summary':{'type':'string'},'found_along_way':STRINGS,
+               'readiness':{'type':['object','null'],'additionalProperties':False,
+                 'required':[*READINESS_LISTS,'prior_findings'],
+                 'properties':{**{key:STRINGS for key in READINESS_LISTS},
+                    'prior_findings':{'type':'array','items':{'type':'object','additionalProperties':False,
+                        'required':['id','disposition','proof'],'properties':{'id':{'type':'string'},
+                            'disposition':{'type':'string','enum':list(DISPOSITIONS)},'proof':{'type':'string'}}}}}},
+               'obstacle':{'type':['object','null'],'additionalProperties':False,
+                 'required':['kind','evidence','next_step'],'properties':{
+                   'kind':{'type':'string','enum':['missing_authority','external_dependency']},
+                   'evidence':{'type':'string'},'next_step':{'type':'string'}}}}}
 
 # A design worker returns prose only; OH adds the number, frontmatter, roadmap link and decision log row.
 DESIGN_SCHEMA={'type':'object','additionalProperties':False,
@@ -43,6 +61,7 @@ PROPOSAL_SCHEMA={'type':'object','additionalProperties':False,
  'properties':{'route':{'type':'string','enum':['roadmap','task','improvement','unclear']},'depends':{'type':'array','items':{'type':'string'}},
    **{key:{'type':'string'} for key in ('understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
                                         'design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary')}}}
+
 
 def script(stream):
     """A wrapper that needs an interpreter, not a native binary. Windows binaries start with MZ."""
@@ -153,7 +172,8 @@ def subscription_env(root=None):
 def authentication(host,root):
     binary=executable(host,root)
     command=[binary,'login','status'] if host=='codex' else [binary,'auth','status']
-    result=subprocess.run(command,cwd=root,env=subscription_env(root),capture_output=True,text=True,timeout=20)
+    # Native children inherit this host environment; do not mask API authentication for the probe.
+    result=subprocess.run(command,cwd=root,env=os.environ.copy(),capture_output=True,text=True,timeout=20)
     if host=='codex':
         valid=result.returncode==0 and 'Logged in using ChatGPT' in result.stdout+result.stderr
     else:
@@ -171,180 +191,104 @@ def codex_home():
     return Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
 
 
-def oh_plugins():
-    """OH's plugin as installed in Codex, under each marketplace that provides it."""
-    import re
-    import tomllib
-    import os
-    home=codex_home()
-    try:plugins=tomllib.loads((home/'config.toml').read_text()).get('plugins',{})
-    except (OSError,ValueError):return []
-    return sorted(k for k in plugins if isinstance(k,str) and re.fullmatch(r'o-harness@[A-Za-z0-9_.-]+',k))
-
-
-def command(host,profile,root,role,schema_path,compact_tokens,artifact_dir=None,*,standalone=False):
-    if standalone and role!='analysis':raise Refused('Standalone execution is only for read-only insights analysis')
-    if host=='codex':
-        args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
-          '--config','features.multi_agent=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
-          '--config',f'model_reasoning_effort="{profile["effort"]}"',
-          '--config',f'model_auto_compact_token_limit={compact_tokens}',
-          '--sandbox','read-only' if role in ('review','analysis') else 'workspace-write',
-          '--cd',str(root)]
-        if standalone:args+=['--skip-git-repo-check']
-        # Workers never load OH itself: its menu server would run outside their sandbox.
-        for name in oh_plugins():args+=['--config',f'plugins."{name}".enabled=false']
-        if schema_path:args+=['--output-schema',str(schema_path)]
-        return args+['-']
-    from .storage import state_home
-    from .storage import git
-    git_paths=[] if standalone else [git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
-    from .config import protected_paths
-    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
-    if artifact_dir:protected.append(str(artifact_dir))
-    if role in ('review','analysis'):protected.append(str(root))
-    private=None if standalone else private_plans(root)
-    if private:protected.append(str(private))  # workers read private plans; only OH writes them
-    deny=['Agent','Task']+[f'Edit({rule_path(p)}/**)' for p in protected]
-    if WINDOWS:
-        # Claude Code's sandbox doesn't run on native Windows, so workers there get no shell at all: they read
-        # and edit files. OH runs the project's checks after each task and gives the results to the reviewer.
-        settings={'sandbox':{'enabled':False},'permissions':{'deny':deny+['Bash','PowerShell']}}
-        tools='Read,Glob,Grep' if role in ('review','analysis') else 'Read,Glob,Grep,Edit,Write'
-    else:
-        settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
-          'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':deny}}
-        tools='Read,Glob,Grep,Bash' if role in ('review','analysis') else 'Read,Glob,Grep,Bash,Edit,Write'
-    args=[executable(host,root),'--settings',json.dumps(settings),'--tools',tools,'--print','--output-format','stream-json','--verbose',
-          '--model',profile['model'],'--effort',profile['effort'],
-          '--permission-mode','plan' if role in ('review','analysis') else 'acceptEdits',
-          '--permission-prompts','none']
-    if schema_path:args+=['--json-schema',schema_path.read_text()]
-    # Every role reads OH's project inputs, admissions and repair feedback. The existing protected
-    # paths still deny edits there: adding a readable directory never grants authority to change it.
-    if artifact_dir:args+=['--add-dir',str(artifact_dir)]
-    if private:args+=['--add-dir',str(private)]
-    return args
-
-
-def rule_path(path):
-    """An absolute path the way Claude's permission rules write it: //c/Users/me for C:\\Users\\me, //Users/me on POSIX."""
-    path=str(path)
-    if len(path)>2 and path[1]==':' and path[2] in '\\/':return '//'+path[0].lower()+path[2:].replace('\\','/')
-    return '/'+path
-
-
-def private_plans(root):
-    """This project's private plans folder, or None when its plans live in the repository or aren't chosen yet."""
-    from .plans import layout
-    try:where=layout(root)
-    except Refused:return None
-    return where['base'] if where['location']=='private' else None
-
-
-def parse_usage(host,event,attempt):
-    if host=='codex' and event.get('type')=='turn.completed':
-        u=event.get('usage') or {}
-        return [{'response_id':attempt+':'+str(event.get('turn_id','final')),
-          'input':u.get('input_tokens'),'cached':u.get('cached_input_tokens'),
-          'output':u.get('output_tokens'),'reasoning':u.get('reasoning_output_tokens'),
-          'source':'codex.turn.completed'}]
-    if host=='claude' and event.get('type')=='result':
-        result=[]
-        # modelUsage is the aggregate for this fresh CLI conversation, including cache fields.
-        # Do not also add per-message usage or forwarded child messages.
-        for model,u in (event.get('modelUsage') or {}).items():
-            parts=[u.get('inputTokens'),u.get('cacheReadInputTokens'),u.get('cacheCreationInputTokens')]
-            total=sum(parts) if all(type(x) is int for x in parts) else None
-            result.append({'response_id':attempt+':'+model,'model':model,'input':total,
-              'cached':u.get('cacheReadInputTokens'),'output':u.get('outputTokens'),
-              'reasoning':None,'source':'claude.result.modelUsage'})
-        return result
-    return []
-
-
-def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=1800):
-    authentication(host,root)
-    from .capabilities import validate_profile
-    validate_profile(host,profile,root)
-    attempt_dir=Path(attempt_dir);attempt_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
-    schema_path=None
-    if schema:
-        schema_path=attempt_dir/'output-schema.json';atomic_json(schema_path,schema,immutable=True)
-    from .storage import state_home
-    artifact_dir=(state_home()/'projects'/context['project'] if not context.get('standalone')
-                  else attempt_dir.parent.parent)
-    args=command(host,profile,root,role,schema_path,context['compact_tokens'],artifact_dir,
-                 standalone=context.get('standalone',False))
-    started=time.monotonic();final='';usage_seen=False;structured=None;failed=False
-    with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
-        from .processes import launch
-        controlled=context.get('controlled',False)
-        with launch(root,args,controlled=controlled,timeout=timeout,cwd=root,
-                    env=subscription_env(root)|{'OH_CHILD_ATTEMPT':context['attempt']},
-                    stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error) as (child,cancelled,reason):
-            try:
-                child.stdin.write(prompt.encode());child.stdin.close()
-            except BrokenPipeError:
-                failed=True
-            turn=0
-            for line in child.stdout:
-                raw.write(line)
-                try:event=json.loads(line)
-                except ValueError:continue
-                if event.get('type')=='turn.completed':turn+=1;event['turn_id']=event.get('turn_id',str(turn))
-                for usage in parse_usage(host,event,context['attempt']):
-                    usage_seen=True
-                    best_effort('usage',context['project'],context['run'],context.get('task'),context['attempt'],**usage)
-                if event.get('type')=='item.completed':
-                    item=event.get('item',{})
-                    if item.get('type')=='agent_message':final=item.get('text','')
-                if event.get('type')=='result':
-                    final=event.get('result','');structured=event.get('structured_output')
-                    failed=bool(event.get('is_error'))
-                if event.get('type') in ('turn.failed','error'):failed=True
-            raw.flush();os.fsync(raw.fileno())
-        status=child.returncode
-    if schema and structured is None:
-        try:structured=json.loads(final)
-        except ValueError:pass
-    return {'returncode':status,'text':final,'structured':structured,'usage_observed':usage_seen,
-            'duration_ms':round((time.monotonic()-started)*1000),'failed':failed or status!=0 or cancelled.is_set(),'cancellation':reason}
+def failure_text(result):
+    reasons=result.get('cancellation',[])
+    reason=('Worker stopped by request.' if 'stopped' in reasons else
+            'Worker reached its execution timeout.' if 'timeout' in reasons else
+            f"Worker failed (exit status {result.get('returncode', 'unknown')}).")
+    return reason+('\nLast worker output:\n'+result['text'] if result.get('text') else '')
 
 
 def work_result(result):
     """Host success means the report arrived, not that the assigned implementation finished."""
-    if result['failed']:return 'failed',result['text']
+    if result['failed']:return 'failed',failure_text(result)
     value=result.get('structured')
     if (not isinstance(value,dict) or set(value)!=set(WORK_SCHEMA['required']) or
-            value.get('status') not in ('completed','blocked') or
+            value.get('status') not in ('completed','unfinished','blocked') or
             not isinstance(value.get('summary'),str) or not value['summary'].strip() or
             not isinstance(value.get('found_along_way'),list) or
             any(not isinstance(note,str) for note in value['found_along_way'])):
-        return 'failed','The implementation report needs an explicit completed or blocked status, a summary and found_along_way'
-    return ('blocked' if value['status']=='blocked' else 'implemented'),value['summary']
+        return 'report_invalid','The implementation report needs status, summary, found_along_way, obstacle and readiness. Preserve the implementation and finish the handoff.'
+    obstacle=value['obstacle']
+    if obstacle is not None and (not isinstance(obstacle,dict) or set(obstacle)!= {'kind','evidence','next_step'} or
+            obstacle.get('kind') not in ('missing_authority','external_dependency') or
+            any(not isinstance(obstacle.get(k),str) or not obstacle[k].strip() for k in ('evidence','next_step'))):
+        return 'report_invalid','An obstacle needs its kind, concrete evidence and the external action or authority needed. Otherwise continue the approved work.'
+    if value['status']=='blocked' and obstacle:
+        return 'blocked','Obstacle: '+obstacle['evidence']+'\nNext: '+obstacle['next_step']+'\n\n'+value['summary']
+    if value['status']!='completed' or obstacle:
+        return 'unfinished',value['summary']
+    from .handoff import validate_readiness
+    if problem:=validate_readiness(value['readiness']):
+        return 'report_invalid',value['summary']+'\nCorrect the implementation report: '+problem
+    return 'implemented',value['summary']
+
+
+def assessment_result(result):
+    if result['failed']:return 'failed',failure_text(result)
+    value=result.get('structured')
+    if (not isinstance(value,dict) or set(value)!=set(ASSESSMENT_SCHEMA['required']) or
+            value.get('difficulty') not in ('simple','standard','complex') or
+            not isinstance(value.get('rationale'),str) or not value['rationale'].strip() or
+            any(not isinstance(value.get(k),list) or any(not isinstance(x,str) or not x.strip() for x in value[k])
+                for k in ('references','uncertainty')) or not value['references']):
+        return 'unfinished','Difficulty assessment needs a level, scope-based rationale, examined references and remaining uncertainty.'
+    return 'assessed',value['rationale']
+
+
+def review_details(result):
+    """Keep findings independently of presentation; only complete evidence can authorize clean."""
+    value=result.get('structured');issues=[];fragments=[];findings=[];positions=[]
+    if not isinstance(value,dict):
+        import re
+        fragments=[{'line':n,'value':line,'problem':'Unstructured finding; inspect the original report.'}
+                   for n,line in enumerate(result.get('text','').splitlines(),1)
+                   if re.search(r'\b(BLOCKING|CONCERN|SCOPE)\b',line,re.IGNORECASE)]
+        return {'outcome':'failed' if result.get('failed') else 'review_incomplete','findings':[],
+                'positions':[], 'fragments':fragments, 'issues':['No structured review report was retained.']}
+    items=value.get('findings')
+    if not isinstance(items,list):
+        issues.append('Review findings must be a list, including [] for no findings.')
+        if items is not None:fragments.append({'number':0,'value':items,'problem':'Unclassified findings field.'})
+        items=[]
+    shape=REVIEW_SCHEMA['properties']['findings']['items']['properties']
+    for number,item in enumerate(items,1):
+        if not isinstance(item,dict) or item.get('severity') not in shape['severity']['enum']:
+            fragments.append({'number':number,'value':item,'problem':'Finding severity is missing or unknown.'})
+            continue
+        finding={key:item[key] for key in shape if isinstance(item.get(key),str)}
+        for key in ('severity','description','path','family','relation'):finding.setdefault(key,'')
+        if finding['relation'] not in shape['relation']['enum']:finding['relation']=''
+        findings.append(finding);positions.append(number)
+        if not finding['description'].strip():
+            fragments.append({'number':number,'value':item,'problem':'Finding claim is missing.'})
+    if fragments:issues.append('Clarify incomplete findings: '+', '.join(str(f['number']) for f in fragments)+'.')
+    evidence=value.get('evidence')
+    if not isinstance(evidence,dict):issues.append('Review evidence is missing.')
+    else:
+        for key in ('anchors','attacks','limits'):
+            items=evidence.get(key)
+            if (not isinstance(items,list) or any(not isinstance(x,str) or not x.strip() for x in items)
+                    or key!='limits' and not items):issues.append('Complete review evidence.'+key+'.')
+        lenses=evidence.get('lenses')
+        missing=[lens for lens in LENSES if not isinstance(lenses,dict) or not isinstance(lenses.get(lens),str) or not lenses[lens].strip()]
+        if missing:issues.append('Complete review lenses: '+', '.join(missing)+'.')
+    if not isinstance(value.get('summary'),str) or not value['summary'].strip():issues.append('Provide a review summary.')
+    if value.get('verdict') not in REVIEW_SCHEMA['properties']['verdict']['enum']:issues.append('Provide an explicit review verdict.')
+    if result.get('failed'):outcome='failed'
+    elif any(f['severity']=='blocking' and f['description'].strip() for f in findings):outcome='blocking'
+    elif issues:outcome='review_incomplete'
+    elif findings:outcome='needs_resolution'
+    elif value.get('verdict')=='clean':outcome='clean'
+    else:
+        outcome='review_incomplete';issues.append('A non-clean verdict needs its findings; absence of findings is not a clean verdict.')
+    return {'outcome':outcome,'findings':findings,'positions':positions,'fragments':fragments,'issues':issues}
 
 
 def review_result(result):
-    value=result.get('structured')
-    if result['failed'] or not isinstance(value,dict) or set(value)!={'verdict','summary','findings','evidence'}:
-        return 'failed',[]
-    evidence=value['evidence']
-    if not isinstance(evidence,dict) or set(evidence)!={'anchors','attacks','limits','lenses'}:return 'failed',[]
-    if any(not isinstance(evidence[k],list) or any(not isinstance(x,str) or not x.strip() for x in evidence[k]) for k in ('anchors','attacks','limits')):return 'failed',[]
-    if not evidence['anchors'] or not evidence['attacks']:return 'failed',[]
-    if not isinstance(evidence['lenses'],dict) or set(evidence['lenses'])!=set(LENSES) or any(not isinstance(v,str) or not v.strip() for v in evidence['lenses'].values()):return 'failed',[]
-    findings=value['findings']
-    if value['verdict'] not in REVIEW_SCHEMA['properties']['verdict']['enum']:return 'failed',[]
-    if not isinstance(findings,list) or not isinstance(value['summary'],str):return 'failed',[]
-    shape=REVIEW_SCHEMA['properties']['findings']['items']
-    if any(not isinstance(f,dict) or set(f)!=set(shape['required'])
-           or any(not isinstance(v,str) for v in f.values())
-           or f['severity'] not in shape['properties']['severity']['enum']
-           or f['relation'] not in shape['properties']['relation']['enum'] for f in findings):
-        return 'failed',[]
-    if value['verdict']=='clean' and not findings:return 'clean',[]
-    # Never trust a declared clean count over visible findings.
-    if any(f['severity']=='blocking' for f in findings):return 'blocking',findings
-    if findings:return 'needs_resolution',findings
-    return 'failed',[]
+    parsed=review_details(result)
+    return parsed['outcome'],parsed['findings']
+
+
+def invoke(*args, **kwargs):
+    raise Refused('OH no longer launches host subprocesses. Use a fresh native host agent.')

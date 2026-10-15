@@ -1,40 +1,29 @@
-"""Owned subprocess groups with cooperative pause and bounded cancellation."""
+"""Bounded configured-check subprocesses; native hosts own agent cancellation."""
 import contextlib
 import subprocess
 import threading
 import time
-from .storage import checkout_file, lock
 from . import system
 
 
 @contextlib.contextmanager
-def launch(root, command, *, controlled=False, timeout=1800, **kwargs):
-    from .controls import check, stopping
-    gate = lock(checkout_file(root, 'oh-control.lock')) if controlled else contextlib.nullcontext()
-    journal=None
-    with gate:
-        if controlled:
-            check(root)
-            from .workflow import load_run
-            journal,_=load_run(root)
-        child = system.spawn(command, **kwargs)
+def launch(root, command, *, timeout=None, interrupt=False, **kwargs):
+    child = system.spawn(command, **kwargs)
     done = threading.Event()
     cancelled = threading.Event()
     reason = []
     def watch():
-        from .workflow import reduce
-        stamp=None; current='running'
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while not done.wait(0.1):
-            if journal is not None:
-                updated=journal.path.stat().st_mtime_ns
-                if updated!=stamp:
-                    current=reduce(journal.records())['status'];stamp=updated
-            stop=current in ('stopping','stopped')
-            if stop or time.monotonic() >= deadline:
-                reason.append('stopped' if stop else 'timeout')
+            if system.wait_for_exit(child, timeout=0):
+                # An exited worker's descendants may still hold its output pipe open.
+                # Close them before the consumer waits forever for EOF; keep the leader unreaped.
+                system.stop(child, force=True)
+                return
+            if deadline is not None and time.monotonic() >= deadline:
+                reason.append('timeout')
                 cancelled.set()
-                system.stop(child)
+                system.stop(child, interrupt=interrupt)
                 # Keep the group leader unreaped until escalation. Its PID cannot be reused.
                 done.wait(5)
                 system.stop(child, force=True)
@@ -49,16 +38,18 @@ def launch(root, command, *, controlled=False, timeout=1800, **kwargs):
         # Also reap descendants left behind by a completed command; all belong to this step.
         system.stop(child, force=True)
         child.wait(timeout=10)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream is not None:
+                with contextlib.suppress(BrokenPipeError):stream.close()
 
 
-def capture(root, command, *, controlled=False, timeout=900, env=None):
+def capture(root, command, *, timeout=900, env=None):
     # Temporary files keep draining independent of a descendant retaining stdout.
     import tempfile
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
-        with launch(root, command, controlled=controlled, timeout=timeout, cwd=root,
+        with launch(root, command, timeout=timeout, cwd=root,
                     env=env, stdout=output, stderr=error) as (child, cancelled, reason):
             system.wait_for_exit(child)
         output.seek(0); error.seek(0)
         return subprocess.CompletedProcess(command, child.returncode,
             output.read().decode(errors='replace'), error.read().decode(errors='replace')), reason
-

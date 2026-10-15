@@ -101,18 +101,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(403,{'error':'Same-origin requests only'});return
         # AI analysis is an explicit user action, never part of a dashboard GET.
         if self.path!='/api/suggestions':self.send(404,{'error':'Not found'});return
-        if not self.server.analysis_lock.acquire(blocking=False):
-            self.send(409,{'error':'Analysis is already running'});return
-        def work():
-            try:
-                from .suggestions import generate
-                self.server.analysis_error=None
-                self.server.analysis_result=generate(host='codex')
-            except Exception as exc:
-                self.server.analysis_error=str(exc)
-            finally:self.server.analysis_lock.release()
-        threading.Thread(target=work,daemon=True).start()
-        self.send(202,{'status':'requested'})
+        self.send(503,{'error':'Dashboard AI analysis is unavailable in this native-workflow candidate. Saved analytics remain readable; no agent was launched.'})
+
 
 
 class LocalServer(ThreadingHTTPServer):
