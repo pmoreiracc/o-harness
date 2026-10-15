@@ -120,6 +120,11 @@ def prepare_correction(root,number,*,previous=None):
         git(root,'switch','--quiet',branch)
         git(root,'merge','--ff-only','--quiet',head)
     else:git(root,'switch','--quiet','--no-track','-c',branch,head)
+    from .branches import main_ref
+    from .delivery import unreviewed
+    base=main_ref(root,{'base_branch':target['base_branch']})
+    fork=git(root,'merge-base',base,head)
+    target.update(review_base=fork,covers=unreviewed(root,fork,base))
     return target
 
 
@@ -254,10 +259,12 @@ def task_evidence(root,state,task,review,parent):
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
         'host':state['host'],'version':state['harness_version'],'config_hash':state['config_hash'],'branch':state['branch'],
         'parent':parent,'git_tree':review['git_tree'],'review':review['id'],'attempts':history,'resolutions':resolutions}
-    if state.get('correction'):value['correction_of']=state['correction']['prior_commit']
+    if state.get('correction'):
+        value['correction_of']=state['correction']['prior_commit']
+        correction_ancestor(root,value)
     # The first task a run commits was also reviewed with the commits OH didn't make before it: the person's own,
     # and merges of main resolved by hand.
-    if (covers:=(state.get('delivery') or {}).get('covers') or state.get('repair_source',{}).get('covers')) and not state['summaries']:value['covers']=covers
+    if (covers:=(state.get('delivery') or {}).get('covers') or state.get('repair_source',{}).get('covers') or state.get('pr_target',{}).get('covers')) and not state['summaries']:value['covers']=covers
     scope={k:{name:v for name,v in record.items() if name not in ('render','change')} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
     if scope:value['scope']=scope
     value=public_value(root,state,value)
@@ -265,13 +272,45 @@ def task_evidence(root,state,task,review,parent):
     return value
 
 
+def issue_url(value):
+    """Current native strings and historical issue objects describe the same destination."""
+    return value.get('url','') if isinstance(value,dict) else value if isinstance(value,str) else ''
+
+
+def validate_scope(value):
+    for attempt in value['attempts']:
+        findings=[f for f in attempt.get('findings',[]) if f['severity']=='scope']
+        if not findings:continue
+        record=value.get('scope',{}).get(attempt['id']) or value.get('resolutions',{}).get(attempt['id'],{}).get('scope',{})
+        resolution=value.get('resolutions',{}).get(attempt['id'],{})
+        if not record and resolution.get('issue') and 'route scope' in resolution.get('choice',''):
+            continue  # historical exact-review disposition predates separate scope records
+        if record.get('attempt')!=attempt['id'] or record.get('findings')!=findings or not record.get('source'):
+            raise Refused('Outstanding scope findings require their explicit retained disposition')
+        destination=record.get('destination',{})
+        if record.get('action')=='dismiss' and (destination=={'pr':True} or
+                destination.get('design') and destination.get('section')=='## Scope decisions'):continue
+        if record.get('action') in ('route','noted') and (issue_url(destination.get('issue')) or
+                destination.get('design') and destination.get('section') or destination.get('pr') and record['action']=='noted'):continue
+        raise Refused('Scope routing is incomplete')
+
+
+def correction_ancestor(root,value):
+    if not value.get('correction_of'):return
+    from subprocess import CalledProcessError
+    try:git(root,'merge-base','--is-ancestor',value['correction_of'],value['parent'])
+    except CalledProcessError:raise Refused('The original corrected task is not part of the reviewed parent history') from None
+    if trailer(root,value['correction_of'],'OH-Run')!=value['run'] or trailer(root,value['correction_of'],'OH-Review') not in {a['id'] for a in value['attempts']}:
+        raise Refused('Correction does not identify an earlier reviewed task in this run')
+
+
 def validate_evidence(value):
     if value.get('schema')!=1 or not isinstance(value.get('attempts'),list) or not value['attempts']:raise Refused('Missing native review history')
-    if value.get('correction_of') and value['correction_of']!=value['parent']:raise Refused('Correction must extend its recorded reviewed head')
     history=value['attempts'];ids=[a['id'] for a in history]
     if len(set(ids))!=len(ids) or ids[-1]!=value['review']:raise Refused('Final review does not match retained history')
     final=history[-1]
     if final['git_tree']!=value['git_tree'] or final['head']!=value['parent']:raise Refused('Review is not bound to this commit tree and parent')
+    validate_scope(value)
     findings=final.get('findings') or []
     severities={f['severity'] for f in findings}
     if final['outcome']=='clean' and not findings:return
@@ -280,9 +319,6 @@ def validate_evidence(value):
     expected={'accept concerns':{'concern'},'route scope':{'scope'},'accept concerns and route scope':{'concern','scope'},
               'dismiss scope':{'scope'},'accept concerns and dismiss scope':{'concern','scope'}}
     if expected.get(resolution.get('choice'))!=severities or resolution.get('tree')!=value['git_tree'] or not resolution.get('source'):raise Refused('Missing exact-tree human finding disposition')
-    if 'scope' in severities and not resolution.get('issue'):
-        scope=resolution.get('scope',{})
-        if scope.get('attempt')!=final['id'] or scope.get('findings')!=[f for f in findings if f['severity']=='scope'] or scope.get('action')!='dismiss' or scope.get('destination')!={'pr':True}:raise Refused('Scope routing is incomplete')
 
 
 def trailer(root,commit,name):
@@ -328,6 +364,7 @@ def merged(root,commit,parents,base):
 
 def verify_record(root,commit,evidence):
     validate_evidence(evidence)
+    correction_ancestor(root,evidence)
     if git(root,'show','-s','--format=%P',commit)!=evidence['parent'] or git(root,'rev-parse',commit+'^{tree}')!=evidence['git_tree']:raise Refused('Native evidence does not describe the actual commit')
     from subprocess import CalledProcessError
     for covered in evidence.get('covers',[]):
@@ -471,10 +508,10 @@ def readable(records,states,root=None):
             scope=evidence.get('scope',{}).get(attempt.get('id'))
             if scope:
                 destination=scope['destination']
-                where=(destination['issue']['url'] if destination.get('issue') else
+                where=(issue_url(destination['issue']) if destination.get('issue') else
                        Path(destination['design']).name+' '+destination['section'] if destination.get('design') else 'this PR')
                 lines.append('Scope: '+scope['action']+'; recorded in '+escape(where)+'.')
-            elif resolution and resolution.get('issue'):lines.append('Destination: '+resolution['issue']['url']+'.')
+            elif resolution and resolution.get('issue'):lines.append('Destination: '+issue_url(resolution['issue'])+'.')
     # Choices to repair and renew review are journal decisions, not final resolutions.
     # Present them without changing portable approval evidence or inventing old details.
     for run_id in dict.fromkeys(r['evidence']['run'] for r in records):

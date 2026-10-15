@@ -256,9 +256,10 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
 
     def test_native_admissions_are_sequential_fresh_and_use_explicit_profiles(self):
         from . import native
-        configure(self.root,models={'codex':{'standard':{'model':'gpt-6.11-sol','effort':'high'}}})
+        configure(self.root,models={'codex':{'standard':{'model':'gpt-6.11-sol','effort':'high'}}},context={'handoff_chars':1000})
         instructions='Implement only the approved bounded behavior and retain its acceptance proof.\n'*400
-        self.approve([self.tasks[0]|{'instructions':instructions},*self.tasks[1:4]])
+        title=('Long approved task title '*50)[:1200]
+        self.approve([self.tasks[0]|{'title':title,'instructions':instructions},*self.tasks[1:4]])
         with self.assertRaises(Refused):native.admit(self.root,'implementation')
         admission=native.admit(self.root,'assessment')
         self.assertEqual(admission['fork_turns'],'none');self.assertTrue(admission['fresh_context'])
@@ -269,6 +270,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertLessEqual(len(packet_path.read_text()),load_run(self.root)[1]['config']['context']['handoff_chars'])
         details=json.loads((packet_path.parent/packet['details']['path']).read_text())
         self.assertEqual(details['task']['instructions'],instructions)
+        self.assertEqual(details['task']['title'],title)
         self.assertEqual(details['scope_snapshot']['hash'],load_run(self.root)[1]['scope_id'])
         self.assertTrue((packet_path.parent/packet['findings']['path']).is_file())
         from .receipts import request
@@ -318,6 +320,15 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         (self.root/'output.txt').write_text('changed after verification',newline='\n')
         with self.assertRaises(Refused):native.admit(self.root,'review')
         native.verify(self.root)
+        from . import handoff
+        saved_write=handoff.atomic_json;before=load_run(self.root)[1]
+        def failed_packet(path,value,**kwargs):
+            if Path(path).name=='task-context.json':raise OSError('Simulated packet write failure before native launch.')
+            return saved_write(path,value,**kwargs)
+        with patch('oh.handoff.atomic_json',side_effect=failed_packet),self.assertRaises(OSError):
+            native.admit(self.root,'review')
+        self.assertEqual(load_run(self.root)[1]['attempts'],before['attempts'])
+        self.assertEqual(native.resume(self.root)['reviews_used'],0)
         failed=native.admit(self.root,'review')
         self.native_results[failed['id']]={'text':'Native spawn failed before returning a child identity.','status':'failed'}
         self.assertEqual(native.retain(self.root,failed['id'],{'tool_use_id':'failed-native-spawn'})['outcome'],'failed')
@@ -343,7 +354,10 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         configure(self.root,review_rounds=2)
         self.approve();self.assess();self.implement()
         finding={'severity':'blocking','description':'Timeout still leaks its session.','path':'output.txt','family':'session-leak','relation':'original'}
-        first=self.reviewed({'verdict':'blocking','summary':'Repair the session family.','findings':[finding]})
+        scope={'severity':'scope','description':'Logout cleanup belongs to later work.','path':'logout.py','family':'logout','relation':'original'}
+        original_report='[BLOCKING] '+finding['description']+'\nPath: output.txt\nFamily: `session-leak`. Relation: original.\n\n[SCOPE] '+scope['description']+'\nPath: logout.py\nFamily: `logout`. Relation: original.'
+        first=self.reviewed(original_report)
+        self.assertEqual(first['findings'],[finding,scope])
         with self.assertRaises(Refused):native.complete(self.root,first['id'])
         repaired=self.implement()
         self.assertEqual(repaired['profile'],load_run(self.root)[1]['config']['models']['codex']['standard'])
@@ -364,10 +378,17 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         native.decision(self.root,'grant-review',locator)
         self.assertEqual(native.resume(self.root)['reviews_allowed'],4)
         clean=self.finish_attempt('review',{'verdict':'clean','summary':'Independently checked repairs.','findings':[]})
+        with self.assertRaises(Refused):native.complete(self.root,clean['id'])
+        native.decision(self.root,'route-scope',self.human('Route scope'),attempt=first['id'],
+                        destination={'issue':'https://github.com/example/product/issues/20'})
+        with self.assertRaises(Refused):
+            native.decision(self.root,'accept-concerns',self.human('Accept concerns'),attempt=first['id'])
         families=finding_index(load_run(self.root)[1],'1')['families']
         self.assertEqual(len(families[0]['occurrences']),2)
         self.assertTrue(all(item['reviewed_by']==clean['id'] for item in families[0]['occurrences']))
-        self.assertEqual(json.loads((Path(first['evidence'])/'result.json').read_text())['findings'],[finding])
+        self.assertEqual(json.loads((Path(first['evidence'])/'native-result.json').read_text())['text'],original_report)
+        self.assertEqual(families[1]['occurrences'][0]['disposition'],'routed')
+        native.complete(self.root,clean['id'])
 
     def test_imperfect_report_preserves_every_recognizable_finding(self):
         from . import native
@@ -407,6 +428,23 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         state=load_run(self.root)[1]
         self.assertEqual(state['granted'],['2']);self.assertEqual(state['done'],['1'])
         self.assertEqual(native.resume(self.root)['task']['id'],'2')
+        self.assess();self.implement(edit=lambda:(self.root/'second.txt').write_text('Task two is complete.',newline='\n'))
+        second=self.reviewed();native.complete(self.root,second['id'])
+        second_commit=self.git('rev-parse','HEAD');original_summaries=load_run(self.root)[1]['summaries']
+        native.review(self.root,['task','1']);native.verify(self.root)
+        blocker=self.finish_attempt('review',{'verdict':'blocking','summary':'Task one needs a scoped correction.','findings':[
+            {'severity':'blocking','description':'Task one leaves stale timeout state.','family':'earlier-task','path':'output.txt'}]})
+        with self.assertRaises(Refused):native.complete(self.root,blocker['id'])
+        self.implement(edit=lambda:(self.root/'output.txt').write_text('Corrected task one after task two.',newline='\n'))
+        fixed=self.reviewed();correction=native.complete(self.root,fixed['id'])
+        self.assertEqual(self.git('rev-parse','HEAD^'),second_commit)
+        self.assertEqual(correction['correction_of'],completed['commit'])
+        state=load_run(self.root)[1]
+        self.assertEqual(state['summaries'][:2],original_summaries)
+        self.assertEqual(state['done'],['1','2'])
+        evidence=state['commit_intents'][correction['commit_key']]['publication']
+        self.assertEqual(evidence['parent'],second_commit)
+        self.assertEqual(evidence['correction_of'],completed['commit'])
 
     def test_interrupted_commit_recovers_without_another_review_or_duplicate_commit(self):
         from . import native
@@ -481,6 +519,34 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(state['attempts'][-1]['findings'],[concern,scope])
         native.complete(self.root,review['id'])
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
+        from . import publication
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/product?'))
+        self.assertIn(issue,publication.render(self.root))
+        from copy import deepcopy
+        state=load_run(self.root)[1];evidence=state['commit_intents']['1']['publication']
+        for issue_reference in (issue,{'url':issue}):
+            for scope_record in (True,False):
+                historical=deepcopy(state);portable=deepcopy(evidence)
+                historical['resolutions'][review['id']]['issue']=issue_reference
+                portable['resolutions'][review['id']]['issue']=issue_reference
+                if scope_record:
+                    historical['scope_records'][review['id']]['destination']['issue']=issue_reference
+                    portable['scope'][review['id']]['destination']['issue']=issue_reference
+                else:
+                    historical['scope_records']={};portable.pop('scope',None)
+                with self.subTest(issue_reference=issue_reference,historical_scope=scope_record):
+                    rendered=publication.readable([{'commit':self.git('rev-parse','HEAD'),'evidence':portable}],{state['id']:historical})
+                    self.assertIn(issue,rendered)
+        historical=deepcopy(evidence)
+        record=historical['scope'][review['id']]
+        record.update(action='dismiss',destination={'design':'docs/design/0900-fixture.md','section':'## Scope decisions'})
+        resolution=historical['resolutions'][review['id']]
+        resolution.update(choice='accept concerns and dismiss scope',scope=record)
+        resolution.pop('issue',None)
+        publication.validate_evidence(historical)
+        record['destination']['section']='## Unrecorded decisions'
+        with self.assertRaises(Refused):publication.validate_evidence(historical)
 
     def test_standalone_review_after_stop_is_feedback_and_preserves_the_original_run(self):
         from . import native
@@ -501,6 +567,14 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(original_journal.records(),records)
         self.assertEqual(self.git('rev-parse','HEAD'),head)
         self.assertEqual(original['granted'],['1'])
+        feedback=Journal(self.project_id,standalone['run']);feedback_records=feedback.records()
+        resumed=native.resume(self.root,self.human('Resume the approved work.',session='delivery-parent'))
+        self.assertEqual(resumed['run'],original['id'])
+        self.assertEqual(resumed['granted'],original['granted'])
+        self.assertEqual(load_run(self.root)[1]['attempts'],original['attempts'])
+        self.assertEqual(feedback.records(),feedback_records)
+        continuation=native.admit(self.root,'implementation')
+        self.assertEqual(continuation['task'],'1')
 
     def test_legacy_resume_preserves_original_findings_and_consumed_review_allowance(self):
         from . import native
@@ -537,8 +611,32 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
 
     def test_publication_reuses_the_existing_pr_and_unknown_discovery_does_not_reopen_work(self):
         from . import native, publication
-        self.approve();self.assess();self.implement();review=self.reviewed();native.complete(self.root,review['id'])
         self.git('remote','add','origin','https://github.com/example/product.git')
+        (self.root/'manual.txt').write_text('Existing manual PR work to review.',newline='\n')
+        self.git('add','.');self.git('commit','-qm','manual PR starting work')
+        manual=self.git('rev-parse','HEAD');base=self.git('rev-parse','origin/main')
+        pr=pull_request({'publication':{'destination':'https://github.com/example/product.git',
+            'base_branch':'main','branch':'work','head':manual}})
+        from . import branches, prepared
+        run_git=branches.run_git
+        def local_fetch(root,*args,**kwargs):
+            if args[:3]==('fetch','--quiet','origin'):
+                return run_git(root,'fetch','--quiet',str(self.root),*args[3:],**kwargs)
+            return run_git(root,*args,**kwargs)
+        manifest=Path(self.temp.name)/'correction-tasks.json'
+        atomic_json(manifest,{'tasks':self.tasks[:1]})
+        with patch('oh.publication.github',return_value=pr),patch('oh.branches.run_git',side_effect=local_fetch):
+            selected=prepared.prepare(self.root,manifest=manifest,pr=144)
+        scope=json.loads(Path(selected['preview']).with_name('scope.json').read_text())
+        self.assertNotIn('repair_source',scope)
+        self.assertEqual(scope['pr_target']['covers'],[manual])
+        self.assertEqual(scope['pr_target']['review_base'],base)
+        self.assertIn(manual,Path(selected['preview']).read_text())
+        native.approve_scope(self.root,selected['scope_id'],self.human())
+        self.assess();self.implement();review=self.reviewed()
+        packet=json.loads((Path(review['evidence'])/'task-context.json').read_text())
+        self.assertEqual(packet['included_original_work']['covers'],[manual])
+        native.complete(self.root,review['id'])
         for text in ('approve','Do not publish. Keep the work local.','No, publish nothing.'):
             with self.assertRaises(Refused):native.decision(self.root,'publish',self.human(text))
         question='Publish the reviewed work branch to example/product?'
@@ -549,7 +647,9 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         with patch('oh.publication.github',side_effect=Refused('GitHub temporarily unavailable.')):
             with self.assertRaises(Refused):publication.reconcile(self.root)
         self.assertEqual(load_run(self.root)[1]['publication'],grant)
-        pr=pull_request(state)
+        body=publication.render(self.root)
+        self.assertIn(manual,body)
+        pr=pull_request(state)|{'body':body}
         def github(root,host,path,**kwargs):return [pr] if kwargs.get('pages') else pr
         with patch('oh.publication.github',side_effect=github):
             saved=publication.reconcile(self.root)

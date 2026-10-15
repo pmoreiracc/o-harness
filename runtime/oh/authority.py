@@ -135,8 +135,8 @@ def prompted(x,session):
             and not x.get('isCompactSummary') and human(x))
 
 
-def attest(host,payload,root=None):
-    return saved(lambda: _attest(host,payload,root))
+def attest(host,payload,root=None,*,latest=True):
+    return saved(lambda: _attest(host,payload,root,latest=latest))
 
 
 def _attest(host,payload,root=None,*,caller=True,latest=True):
@@ -246,8 +246,9 @@ def _records(path):
             if isinstance(value,dict):yield value
 
 
-def native_human(root, locator, *, since=None, subject=None):
-    """Read a direct human turn or a native question/plan reply, never a claimed approval."""
+def native_human(root, locator, *, since=None, subject=None, latest=True):
+    """Read native human provenance. latest=False identifies already-consumed sources for
+    idempotent replay only; any new authority requires the default freshness check."""
     if not isinstance(locator,dict):raise Refused('Supply a native human evidence locator')
     host=locator.get('host');session=locator.get('session')
     use=locator.get('tool_use_id')
@@ -268,7 +269,7 @@ def native_human(root, locator, *, since=None, subject=None):
             if not matches:raise Saving('This native human turn is not saved yet')
             locator=locator|{'prompt':matches[-1]['prompt'],'transcript_path':str(path)}
         payload=dict(locator,hook_event_name='UserPromptSubmit',session_id=session,turn_id=locator.get('turn'))
-        result=attest(host,payload,root)
+        result=attest(host,payload,root,latest=latest)
         if since and not newer(result.get('at'),since):raise Refused('This human reply predates the subject it would approve')
         context='';context_at=None
         for record in _records(result['transcript_path']):
@@ -286,8 +287,24 @@ def native_human(root, locator, *, since=None, subject=None):
         result['question']=context
         result['question_at']=context_at
         return result
-    path=_path(host,session,locator.get('transcript_path'));call=None;answer=None
+    path=_path(host,session,locator.get('transcript_path'));call=None;answer=None;answered_text=None;superseded=False;inputs=[]
     for record in _records(path):
+        # Supersession follows saved input order, including a human turn whose timestamp
+        # is not yet saved. Tool output and notifications never supersede a human reply.
+        if host=='claude' and prompted(record,session):
+            inputs.append((record.get('timestamp'),None))
+            if answer:superseded=True
+        payload=record.get('payload') or {};text=None
+        if host=='codex' and record.get('type')=='event_msg' and payload.get('thread_id',session)==session:
+            if payload.get('type')=='user_message':text=payload.get('message')
+            elif payload.get('type')=='item_completed':
+                item=payload.get('item') or {}
+                if item.get('type')=='UserMessage':
+                    content=item.get('content');text=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text') if isinstance(content,list) else None
+            # Codex can save the same native reply as both user_message and UserMessage.
+            if isinstance(text,str):
+                inputs.append((record.get('timestamp'),text))
+                if answer and text!=answered_text:superseded=True
         if since and not newer(record.get('timestamp'),since):continue
         if host=='claude':
             if record.get('sessionId')!=session or record.get('isSidechain') or record.get('isMeta'):continue
@@ -299,7 +316,7 @@ def native_human(root, locator, *, since=None, subject=None):
                 if (record.get('type')=='assistant' and part.get('type')=='tool_use' and
                         part.get('id')==use and part.get('name') in ('AskUserQuestion','ExitPlanMode')):
                     call=(record,part)
-                elif (call and record.get('type')=='user' and part.get('type')=='tool_result' and
+                elif (call and not answer and record.get('type')=='user' and part.get('type')=='tool_result' and
                       part.get('tool_use_id')==use and not part.get('is_error') and human(record,menu=True)):
                     native=record.get('toolUseResult')
                     if not isinstance(native,dict):continue
@@ -315,7 +332,6 @@ def native_human(root, locator, *, since=None, subject=None):
                     answer.update(host=host,session=session,turn=use,at=record.get('timestamp'),
                                   record_hashes=[digest(call[0]),digest(record)],transcript_path=str(path))
         else:
-            payload=record.get('payload') or {}
             if record.get('type')=='session_meta':
                 if payload.get('id')!=session or isinstance(payload.get('source'),dict):raise Refused('A delegated session cannot grant authority')
                 if not within(payload.get('cwd'),root):raise Refused('Human reply belongs to another checkout')
@@ -323,12 +339,7 @@ def native_human(root, locator, *, since=None, subject=None):
                 if payload.get('name','').split('.')[-1] not in ('request_user_input','request_user_input_async','send_user_message'):continue
                 call=(record,payload)
             # A function_call_output alone is model/tool text. The host's direct UserMessage is authority.
-            if record.get('type')=='event_msg' and payload.get('type') in ('user_message','item_completed') and call:
-                if payload.get('type')=='item_completed':
-                    item=payload.get('item') or {}
-                    if item.get('type')!='UserMessage':continue
-                    content=item.get('content');text=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text') if isinstance(content,list) else None
-                else:text=payload.get('message')
+            if record.get('type')=='event_msg' and payload.get('type') in ('user_message','item_completed') and call and not answer:
                 if not isinstance(text,str):continue
                 wrapped=re.fullmatch(r'<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>',text,re.S)
                 if not wrapped:continue
@@ -340,7 +351,10 @@ def native_human(root, locator, *, since=None, subject=None):
                 if question_call!=use or question_tool.split('.')[-1]!=call[1].get('name','').split('.')[-1] or question_index!=0:continue
                 answer={'host':host,'session':session,'turn':payload.get('turn_id') or use,'prompt':replies[0]['answer'],
                         'via':'question','at':record.get('timestamp'),'record_hashes':[digest(call[0]),digest(record)],'transcript_path':str(path)}
+                answered_text=text
     if not answer:raise Saving('The native human answer is not saved or was cancelled; no authority was granted')
+    if latest and (superseded or any(newer(at,answer.get('at')) and (host=='claude' or text!=answered_text) for at,text in inputs)):
+        raise Expired('The person supplied newer input in this conversation; the earlier native answer grants no new authority')
     request=call[1].get('input') if host=='claude' else None
     if host=='codex':
         try:request=json.loads(call[1].get('arguments','{}'))

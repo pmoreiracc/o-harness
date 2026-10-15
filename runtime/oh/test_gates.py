@@ -38,7 +38,13 @@ class GateTest(unittest.TestCase):
         def read(rows):
             path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
             return native_human(self.root,locator,subject=self.subject)
-        self.assertEqual(read([initial,call,message(reply)])['prompt'],'Proceed with the task')
+        approved=read([initial,call,message(reply)])
+        self.assertEqual(approved['prompt'],'Proceed with the task')
+        cancellation={'type':'event_msg','timestamp':'2026-10-15T12:00:03Z','payload':{
+            'type':'user_message','turn_id':'cancel','message':'No. Cancel that scope; do not implement it.'}}
+        with self.assertRaises(Refused):read([initial,call,message(reply),cancellation])
+        self.assertEqual(native_human(self.root,locator,subject=self.subject,latest=False),approved)
+        with self.assertRaises(Refused):read([initial,call,cancellation,message(reply)])
         for wrong in ('old','future'):
             answers=deepcopy(reply);answers[0]['questionItemId']=json.dumps(['request_user_input_async',wrong,0])
             with self.subTest(call=wrong),self.assertRaises(Refused):read([initial,call,message(answers)])
@@ -63,7 +69,13 @@ class GateTest(unittest.TestCase):
         def read(values):
             path.write_text(''.join(json.dumps(row)+'\n' for row in values),newline='\n')
             return native_human(self.root,locator,subject=self.subject)
-        self.assertEqual(read(rows)['prompt'],'Accept these concerns')
+        approved=read(rows)
+        self.assertEqual(approved['prompt'],'Accept these concerns')
+        cancellation=common|{'type':'user','promptId':'cancel','entrypoint':'cli','timestamp':'2026-10-15T12:00:03Z',
+                            'message':{'role':'user','content':'No. Cancel that decision; repair the concerns.'}}
+        with self.assertRaises(Refused):read(rows+[cancellation])
+        self.assertEqual(native_human(self.root,locator,subject=self.subject,latest=False),approved)
+        with self.assertRaises(Refused):read([rows[0],cancellation,rows[1]])
         for label in ('model claim','foreign','notification','cancelled'):
             wrong=deepcopy(rows)
             if label=='model claim':wrong[-1].pop('toolUseResult')

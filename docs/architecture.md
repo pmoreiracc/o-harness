@@ -102,7 +102,8 @@ commands. A native permission rejection is not bypassed through another entry.
 Transport cancellation alone does not establish workflow Stop. The recorded Codex
 terminal probe left a delegated command running after parent interruption. Stop must
 be confirmed by supported native cancellation before later work or completion. OH
-adds no replacement process supervisor. The unresolved host behavior blocks rollout;
+adds no replacement process supervisor. The unresolved host behavior is accepted as
+non-blocking and tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81);
 see the validation record rather than assuming parent interruption cancels children.
 
 ## Git subjects, completion and publication

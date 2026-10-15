@@ -6,6 +6,14 @@ READINESS_LISTS=('requirements','rules','surfaces','proof','self_review','family
 DISPOSITIONS=('fixed','routed','accepted','dismissed','still-open','disputed')
 
 
+def family_identity(finding):
+    """Read the shared readable Family/Relation line without changing original evidence."""
+    import re
+    value=finding.get('family') or finding['description']
+    inline=re.fullmatch(r'`([^`]+)`\.?\s+Relation:\s*`?([^`\n]+?)`?\.?',value,re.I)
+    return inline[1] if inline else value.strip('`')
+
+
 def report(attempt):
     if not attempt or not attempt.get('evidence'):return {}
     try:
@@ -60,7 +68,7 @@ def finding_index(state, task):
         scope = state.get('scope_records', {}).get(attempt['id'], {})
         for number, finding in enumerate(attempt.get('findings', []), 1):
             number=attempt.get('finding_positions',list(range(1,len(attempt['findings'])+1)))[number-1]
-            key = (finding['family'], finding['severity'])
+            key = (family_identity(finding), finding['severity'])
             group = families.setdefault(key, {'family': key[0], 'severity': key[1], 'cases': [], 'occurrences': []})
             disposition = 'still-open'
             choice = resolution.get('choice', '')
@@ -136,6 +144,8 @@ def prepare(state, task, role, directory, admission, feedback=''):
             if original.is_file():packet['original_scope_provenance']={'path':str(original),
                 'authority':'Original run provenance; not a newly accepted native scope.'}
     if state.get('repair_source'):packet['repair_source']=state['repair_source']
+    if state.get('pr_target') and not state['summaries']:
+        packet['included_original_work']={k:state['pr_target'][k] for k in ('url','head','review_base','covers') if k in state['pr_target']}
     if state.get('plans'):
         packet['planning'] = state['plans']
         packet['human_refinements'] = [{'source': a['source'], 'feedback': a['feedback']}
@@ -146,7 +156,7 @@ def prepare(state, task, role, directory, admission, feedback=''):
         original=packet;details=directory/'task-details.json'
         atomic_json(details,original,immutable=True)
         packet={'schema':VERSION,'purpose':admission.get('purpose','workflow'),'run':state['id'],'role':role,
-                'task':{'id':task['id'],'title':task['title']},
+                'task':{'id':task['id'],'title':task['title'][:160]},
                 'details':{'path':'task-details.json','hash':digest(original)},
                 'findings':{'path':'finding-index.json','hash':digest(index)}}
     if len(encode(packet))>limit:

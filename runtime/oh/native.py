@@ -152,6 +152,9 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     _immutable(folder/'scope.json',value)
     from .prepared import limits
     preview='\n\n'.join([f"# {workflow.title()} scope",limits(len(tasks),value['config']),*[f"## {t['id']}. {t['title']}\n\n{t['instructions']}" for t in tasks]])+'\n'
+    if target:=value.get('pr_target'):
+        preview+=f"\n## Included original PR work\n\n{target['url']}\n\nReview the original range `{target['review_base']}..{target['head']}` together with the repair candidate.\n"
+        if target.get('covers'):preview+='\nIncluded original commits: '+', '.join('`'+c+'`' for c in target['covers'])+'.\n'
     from .receipts import save
     save(folder/'scope.md',preview,immutable=True)
     result={'scope_id':key,'preview':str(folder/'scope.md'),'tasks':[{k:t[k] for k in ('id','title')} for t in tasks],'config':value['config'],'approved':False}
@@ -178,6 +181,13 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
 
 def approve_scope(root, scope_id, locator):
     scope=_scope(root,scope_id)
+    from .workflow import active_file
+    if active_file(root).exists():
+        _,current=load_run(root)
+        if current.get('scope_id')==scope_id:
+            original=authority.native_human(root,locator,latest=False)
+            if digest({k:original[k] for k in ('host','session','turn','prompt')})==current.get('source'):
+                return select(root)
     source=authority.native_human(root,locator,since=scope['created_at'],subject=_home(root)/'scopes'/scope_id/'scope.md')
     if source.get('via')=='plan':
         preview=(_home(root)/'scopes'/scope_id/'scope.md').read_text()
@@ -273,10 +283,11 @@ def select(root):
 
 
 def _repeated_family(state,task):
+    from .handoff import family_identity
     reviews=[a for a in state['attempts'] if a['task']==task and a['role']=='review' and a.get('finished')]
     seen=set()
     for attempt in reviews:
-        families={f.get('family') or f['description'] for f in attempt.get('findings',[]) if f['severity']=='blocking'}
+        families={family_identity(f) for f in attempt.get('findings',[]) if f['severity']=='blocking'}
         if seen&families:return True
         seen|=families
     return False
@@ -322,16 +333,12 @@ def admit(root,role):
             admission['standalone_subject']={k:selected[k] for k in ('kind','base','revision','git_tree','description') if k in selected}
             admission['checkout_guard']=subject
         if fallback:admission['model_fallback']=fallback
-        # The event is retained before launch, including launches which never return a child ID.
-        if task['id'] not in state['task_started']:
-            journal.append('task.started',{'task':task['id']})
-            best_effort('task.started',state['project'],state['id'],task['id'],title=task['title'],difficulty=(assessment or {}).get('difficulty'),rubric=2)
-        journal.append('attempt.started',admission)
-        best_effort('attempt.started',state['project'],state['id'],task['id'],attempt_id,role=role,phase=role,host=state['host'],**profile)
-        current=reduce(journal.records());attempt=_attempt(current,attempt_id)
+        # No native launch is authorized until every required artifact exists. Save the
+        # charge and admission together, so construction failures cannot orphan a child.
+        admission['started_at']=now()
         from .handoff import prepare
-        packet,index=prepare(current,task,role,directory,admission)
-        admission['task_context']=packet;admission['started_at']=attempt['started_at']
+        packet,index=prepare(state,task,role,directory,admission)
+        admission['task_context']=packet
         snapshots={}
         for name,expected in (subject['artifacts'].items() if state['workflow']!='review' else []):
             target=directory/'artifacts'/hashlib.sha256(name.encode()).hexdigest()
@@ -340,9 +347,16 @@ def admit(root,role):
             snapshots[name]={'path':str(target),'sha256':expected}
         if snapshots:admission['artifact_snapshots']=snapshots
         _immutable(directory/'request.json',admission)
-        journal.append('attempt.admitted',{'id':attempt_id,'hash':digest(admission)})
         from .receipts import request
         request(directory,admission)
+        events=[]
+        if task['id'] not in state['task_started']:events.append({'kind':'task.started','data':{'task':task['id']}})
+        events.extend([{'kind':'attempt.started','data':admission},
+                       {'kind':'attempt.admitted','data':{'id':attempt_id,'hash':digest(admission)}}])
+        journal.append('transition',{'events':events})
+        if task['id'] not in state['task_started']:
+            best_effort('task.started',state['project'],state['id'],task['id'],title=task['title'],difficulty=(assessment or {}).get('difficulty'),rubric=2)
+        best_effort('attempt.started',state['project'],state['id'],task['id'],attempt_id,role=role,phase=role,host=state['host'],**profile)
         return {k:admission[k] for k in ('id','task','role','profile','head','tree','git_tree','task_context','model_fallback','standalone_subject') if k in admission}|{'request':str(directory/'request.json'),'native_task_name':'oh_'+attempt_id.replace('-',''),'fresh_context':True,'fork_turns':'none'}
 
 
@@ -379,7 +393,11 @@ def _report(text):
         finding={'severity':(match[1] or match[2]).lower(),'description':match[3].strip(),'path':''}
         for field in re.finditer(r'(?im)^\s*(?:[-*]\s*)?\*{0,2}([A-Za-z -]+)\*{0,2}\s*:\s*(.*)$',body):
             key=labels.get(field[1].strip().casefold())
-            if key:finding[key]=field[2].strip('* ')
+            if key:
+                finding[key]=field[2].strip('* ')
+                if key=='family':
+                    inline=re.fullmatch(r'`([^`]+)`\.?\s+Relation:\s*`?([^`\n]+?)`?\.?',finding[key],re.I)
+                    if inline:finding.update(family=inline[1],relation=inline[2].rstrip('.'))
         finding.setdefault('family',finding['description']);findings.append(finding)
     assessment=re.search(r'(?im)^\s*difficulty\s*:\s*(simple|standard|complex)\b',text)
     result={'summary':text,'findings':findings}
@@ -595,8 +613,7 @@ def decision(root,kind,locator,attempt=None,destination=None):
             design_folder=Path(state.get('plans',{}).get('designs',''))
             designs=[name for name in artifacts if Path(name).parent==design_folder]
             subject_path=Path(designs[0]) if len(designs)==1 else Path(reviewed['evidence'])/'result.json'
-        source=authority.native_human(root,locator,subject=subject_path)
-        authority.coordinator(root,state,locator)
+        source=authority.native_human(root,locator,subject=subject_path,latest=False)
         if state.get('published'):return select(root)
         if not _affirmed(source['prompt'],kind,source.get('question','')):raise Refused('The native human reply does not authorize this decision')
         key=digest({k:source[k] for k in ('host','session','turn','prompt')})
@@ -607,6 +624,8 @@ def decision(root,kind,locator,attempt=None,destination=None):
                 entries=record['data'].get('events',[]) if record['kind']=='transition' else [{'kind':record['kind'],'data':record['data']}]
                 if any(e['kind']=='decision' and e['data'].get('source')==key and e['data'].get('choice')==kind for e in entries):effect_used=True
             if effect_used:return select(root)
+        source=authority.native_human(root,locator,subject=subject_path)
+        authority.coordinator(root,state,locator)
         if not authority.newer(source.get('at'),since):raise Refused('This human decision predates the current subject or allowance boundary')
         subject=_subject(root,state);events=[]
         def add(name,value):events.append({'kind':name,'data':value})
@@ -622,10 +641,11 @@ def decision(root,kind,locator,attempt=None,destination=None):
             add('review.grant',{'task':task['id'],'rounds':state['config']['review_rounds'],'source':key})
         elif kind in ('accept-concerns','dismiss-scope','route-scope'):
             review=_attempt(state,attempt)
-            if review['role']!='review' or review['outcome']!='needs_resolution' or any(review[k]!=subject[k] for k in ('head','tree','git_tree','artifacts')):
-                raise Refused('This decision requires the current exact-candidate review')
+            if review['role']!='review' or review.get('purpose','workflow')!='workflow' or review['outcome'] not in ('blocking','needs_resolution'):
+                raise Refused('This decision requires retained workflow findings')
             severities={f['severity'] for f in review.get('findings',[])}
-            if 'blocking' in severities:raise Refused('A finding disposition never bypasses blockers')
+            if kind=='accept-concerns' and ('blocking' in severities or any(review[k]!=subject[k] for k in ('head','tree','git_tree','artifacts'))):
+                raise Refused('Concern acceptance requires the current exact candidate with no blockers')
             prior=state.get('resolutions',{}).get(attempt,{})
             accepted=bool(prior.get('concerns_accepted'))
             scope=prior.get('scope')
@@ -634,7 +654,7 @@ def decision(root,kind,locator,attempt=None,destination=None):
                 accepted=True
             else:
                 if 'scope' not in severities:raise Refused('This review has no scope finding to dispose')
-                scope={'attempt':attempt,'task':task['id'],'action':'dismiss' if kind=='dismiss-scope' else 'route','source':source,
+                scope={'attempt':attempt,'task':review['task'],'action':'dismiss' if kind=='dismiss-scope' else 'route','source':source,
                        'findings':[f for f in review['findings'] if f['severity']=='scope'],'destination':{'pr':True}}
                 if kind=='route-scope':
                     if destination and isinstance(destination.get('issue'),str):scope['destination']={'issue':destination['issue']}
@@ -656,7 +676,7 @@ def decision(root,kind,locator,attempt=None,destination=None):
                 if accepted:parts.append('accept concerns')
                 if scope:parts.append('dismiss scope' if scope['action']=='dismiss' else 'route scope')
                 choice=' and '.join(parts)
-            value={'attempt':attempt,'source':key,'sources':prior.get('sources',[])+[key],'tree':subject['git_tree'],
+            value={'attempt':attempt,'source':key,'sources':prior.get('sources',[])+[key],'tree':review['git_tree'],
                    'choice':choice,'concerns_accepted':accepted}
             if scope:
                 value['scope']=scope
@@ -672,7 +692,7 @@ def decision(root,kind,locator,attempt=None,destination=None):
             add('native.private.approved',{'attempt':attempt,'source':source,'artifacts':subject['artifacts']})
         elif kind=='publish':
             if _active(state) or changes(root):raise Refused('Publication requires completed work on its clean reviewed head')
-            from .publication import destination as publication_destination,commits
+            from .publication import destination as publication_destination,commits,made
             from .branches import main_ref,trunk
             dest=publication_destination(root,required=True)|{'base_branch':trunk(root,state['config'])}
             context=source.get('question','')+' '+source['prompt']
@@ -681,7 +701,11 @@ def decision(root,kind,locator,attempt=None,destination=None):
                 raise Refused('The publication decision must identify this branch and repository destination')
             if source.get('question_at') and not authority.newer(source['question_at'],since):raise Refused('The publication question predates the current completed review')
             if destination and destination!=dest:raise Refused('The supplied publication destination differs from the project')
-            own=commits(root,main_ref(root,state['config']),reviewed=None)
+            base=main_ref(root,state['config'])
+            branch_commits=commits(root,base,reviewed=None)
+            prior_states=[other for commit in branch_commits if (other:=made(root,state['project'],commit))]
+            covered={c for other in prior_states for intent in other['commit_intents'].values() for c in (intent.get('publication') or {}).get('covers',[])}
+            own=commits(root,base,reviewed=covered)
             if not state['summaries'] or own[-1]!=state['summaries'][-1].get('commit'):raise Refused('Current head is not the completed reviewed delivery')
             add('decision',{'source':key,'choice':'pr','head':subject['head'],'branch':state['branch'],'base_branch':dest['base_branch'],'destination':dest['destination'],'remote':dest['remote'],'remote_fingerprint':dest['remote_fingerprint'],'commits':own})
             add('run.status',{'status':'pr'})
@@ -712,6 +736,8 @@ def complete(root,attempt_id):
             if review['role']!='review' or review.get('purpose')!='workflow' or review['outcome']!='clean':raise Refused('Additional review remains unresolved')
             subject=_subject(root,state)
             if any(subject[k]!=review[k] for k in ('head','tree','git_tree','artifacts')):raise Refused('Additional review no longer covers current work')
+            from .publication import task_evidence
+            task_evidence(root,state,task,review,subject['head'])
             journal.append('review.checked',{'attempt':attempt_id})
             journal.append('run.status',{'status':state['extra_review']['return_status']})
             return {'review':attempt_id,'outcome':'clean','committed':False}
@@ -785,6 +811,19 @@ def complete(root,attempt_id):
 
 
 def resume(root,locator=None):
+    from .workflow import active_file
+    review_pointer=checkout_file(root,'oh-active-review.json')
+    canonical=checkout_file(root,'oh-active-run.json')
+    if active_file(root)==review_pointer:
+        with _locked(root):
+            _,feedback=load_run(root)
+            if feedback['workflow']=='review' and feedback['status']=='completed':
+                if not canonical.exists():return select(root)
+                saved=read_json(canonical)
+                if saved['checkout']!=checkout_id(root) or saved['project']!=project(root)['id']:
+                    raise Refused('Saved delivery belongs to another checkout or project')
+                reduce(Journal(saved['project'],saved['run']).records())
+                review_pointer.unlink()
     journal,state=load_run(root)
     if state.get('published'):return select(root)
     if locator is not None and not state.get('native_version'):

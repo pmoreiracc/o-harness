@@ -1,8 +1,8 @@
 # Installation and updates
 
-The native workflow candidate is not cleared for development activation or publication.
-The Codex native Stop probe failed; see [the validation record](plans/native-workflows.md).
-The instructions below do not establish that this candidate is ready to use.
+The observed native Codex Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81)
+and does not block activation or release. Required checks and independent review still
+apply; see [the validation record](plans/native-workflows.md).
 
 ## Requirements
 

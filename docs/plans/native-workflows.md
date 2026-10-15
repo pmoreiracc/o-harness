@@ -66,9 +66,10 @@ Routine clarification needs no durable gate. Silence and model claims grant noth
   preserve other changes. The supervisor challenges each phase against this plan.
 - [x] 5. Integrate, migrate historical readers and delete obsolete machinery.
   No parallel legacy execution engine. Preserve original evidence and allowances.
-- [ ] 6. Validate the integrated development candidate and document measured results.
-  Run affected/syntax/platform checks, real host trials, then developer snapshot
-  testing before fresh independent review and a human-merged PR.
+- [ ] 6. Validate the integrated PR candidate and document measured results.
+  Run affected/syntax checks and obtain fresh independent review before the PR.
+  Platform CI remains required. Per the latest maintainer decision, the workflow
+  trial will use the official release rather than a development snapshot.
 
 Dependencies: 3 settles contracts before parallel work in 4; 5 follows integration
 in 4. Stop follow-up in 2 is non-blocking. Do not check an item complete
@@ -161,9 +162,10 @@ readers, not a second executor. Published cycles remain terminal. Work completed
 outside OH (including the recent task-12 delivery) must not be reopened or relabelled
 OH-reviewed. Validate snapshot adoption explicitly; refreshing dev alone is insufficient.
 
-Before publication: integrated affected checks and native trials, developer snapshot
-test, then fresh independent review of the actual OH change. Fix blockers and obtain
-fresh review after changes. The observed Stop limitation is accepted as non-blocking;
+Before publication: integrated affected checks and fresh independent review of the
+actual OH change. The maintainer chose an official-release workflow trial instead
+of the earlier development-snapshot prerequisite. Fix blockers and obtain fresh
+review after changes. The observed Stop limitation is accepted as non-blocking;
 other unverified capabilities must still be reported honestly. Monitoring of consumer
 sessions remains paused.
 
@@ -321,3 +323,42 @@ release instead of the development snapshot. This supersedes the developer snaps
 trial prerequisite for this change, without claiming that trial occurred. Prepare the
 PR with fresh independent review and required checks. Preserve human merge/release
 control and disclose the known Stop limitation and disabled dashboard AI analysis.
+
+### Independent PR review — round 1
+
+A fresh configured GPT-6.1 Sol/high invariant reviewer validated a bound immutable
+admission for the complete main-to-candidate range ending at `7853dd6`. The exact
+committed candidate passed all 23 affected modules and syntax checks before review.
+The review nevertheless found seven concrete blockers and one documentation concern:
+
+1. Native question/plan answers could remain usable after superseding cancellation.
+2. Failed packet construction could strand an unfinished, never-launched admission.
+3. Completed standalone feedback hid the original delivery from Resume.
+4. Mixed blocking/scope findings could leave scope unresolved through completion.
+5. Issue references differed between native decisions and the PR renderer.
+6. Earlier-task corrections confused the original corrected commit with current parent.
+7. Existing-PR corrections omitted review coverage for original manual commits.
+8. Two current documentation passages still described Stop as blocking release.
+
+The original receipt is preserved externally. Repairs extend existing causal scenarios
+through the failed downstream transitions, without weakening publication/authority
+checks or introducing gates. Actual receipt ingestion additionally exposed inline
+Family/Relation metadata being conflated; fix that parsing family while preserving
+the original report. A fresh review of the repaired candidate is required before PR.
+
+Round-1 repairs: newer human input now invalidates unconsumed native answers while
+already-consumed replay remains read-only; admission artifacts are built before the
+atomic admission transition; completed feedback yields to the original delivery on
+Resume. Scope portions can be disposed independently of blockers, and all retained
+scope occurrences require disposition before completion. Publication accepts current
+and historical issue references and historical design dismissals. Corrections bind
+both the original corrected task and current reviewed parent; existing-PR intake binds
+original manual commits into approved scope, review packets and completion evidence.
+Readable inline Family/Relation metadata is normalized without rewriting originals.
+Current Stop documentation now consistently reflects the non-blocking decision.
+
+Validation after repairs: all 23 affected modules / 238 selected cases passed in
+96.88s on macOS, with 12 platform-specific skips. The historical-design-dismissal
+extension passed its existing scenario in 3.850s. Syntax and whitespace checks passed.
+No new test cases or suites were added; existing scenarios now reach the previously
+failing downstream transitions. These repairs still require fresh independent review.

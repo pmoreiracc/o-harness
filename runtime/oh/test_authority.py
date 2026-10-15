@@ -37,6 +37,11 @@ class AuthorityTest(unittest.TestCase):
             self.assertEqual((found['prompt'],found['via'],found['accepted_plan']),('approve','plan',plan))
             self.assertEqual(found['accepted_plan_path'],'native.md')
             self.assertEqual(len(found['record_hashes']),2)
+            cancelled=base|{'type':'user','entrypoint':'cli','promptId':'cancel','timestamp':'2026-10-13T20:00:03+00:00',
+                'message':{'role':'user','content':'No. Cancel that scope; do not implement it.'}}
+            with self.assertRaises(Refused):read(records+[cancelled])
+            self.assertEqual(native_human(root,locator,since=since,latest=False),found)
+            with self.assertRaises(Refused):read([records[0],cancelled,records[1]])
             edited=deepcopy(records);edited[1]['toolUseResult']['plan']+='The person amended this scope.\n'
             self.assertEqual(read(edited)['accepted_plan'],edited[1]['toolUseResult']['plan'])
             # Never turn a model-authored summary or a denied/foreign native result into approval.

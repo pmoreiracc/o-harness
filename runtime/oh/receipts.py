@@ -64,6 +64,10 @@ def request(directory, admission):
         selected=packet.get('standalone_subject') or {}
         lines.extend(['**Selected revision:** '+str(selected.get('revision') or selected.get('head') or 'Working changes'),
                       '**Selected Git tree:** '+str(selected.get('git_tree') or 'Not recorded'), ''])
+    if original:=packet.get('included_original_work'):
+        lines.extend(['## Included original PR work','',original.get('url',''),
+                      'Review the original range `'+original['review_base']+'..'+original['head']+'` together with the repair candidate.',
+                      'Included original commits: '+', '.join(original.get('covers',[]))+'.',''])
     current = packet['current_work']
     lines.append(current['summary'] if current else 'No earlier author report for this task.')
     readiness = current.get('readiness') if current else None
