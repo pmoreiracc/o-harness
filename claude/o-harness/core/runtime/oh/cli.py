@@ -53,6 +53,7 @@ def main(argv=None):
     resource=sub.add_parser('resource');resource.add_argument('path')
     build=sub.add_parser('build-plugin');build.add_argument('destination',type=Path);build.add_argument('--host',required=True,choices=['codex','claude'])
     setup=sub.add_parser('setup');setup.add_argument('--development',action='store_true');setup.add_argument('--if-newer',action='store_true')
+    update=sub.add_parser('update');update.add_argument('--host',choices=['codex','claude'])
     for name in ('profile-import','profile-export'):
         profile=sub.add_parser(name);profile.add_argument('path',type=Path);profile.add_argument('--name')
     trust=sub.add_parser('trust-host');trust.add_argument('host',choices=['codex','claude']);trust.add_argument('path',type=Path,nargs='?')
@@ -118,6 +119,9 @@ def main(argv=None):
         elif args.command=='setup':
             from .installation import setup
             result=setup(development=args.development,if_newer=args.if_newer)
+        elif args.command=='update':
+            from .updater import update
+            raise SystemExit(update(root,args.host))
         elif args.command.startswith('profile-'):
             from .profiles import import_profile,export_profile
             result=import_profile(root,args.path,args.name) if args.command=='profile-import' else export_profile(root,args.path)
