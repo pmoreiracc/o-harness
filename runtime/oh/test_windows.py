@@ -105,21 +105,27 @@ class WindowsTest(unittest.TestCase):
         from .installation import build
         with tempfile.TemporaryDirectory(prefix='OH hook spaces ') as tmp:
             package=Path(tmp)/'o-harness';build(package,'codex')
-            # Keep the packaged hook.cmd, python.cmd and human-event.py. Replace only the
-            # OH subprocess boundary: host attestation is tested separately, never forged here.
-            (package/'scripts/oh').write_text('import json,sys\nassert sys.argv[-2:]==["--host","codex"]\nprint(json.dumps({"received":json.load(sys.stdin),"authorized":False}))\n')  # windows-ok: Python reads either line ending
+            # Keep the native cmd wrappers and source hook. A source hook must only
+            # expose its locator; running the OH helper would cross that boundary.
+            launched=Path(tmp)/'unexpected-helper-launch'
+            (package/'scripts/oh').write_text('from pathlib import Path\nPath('+repr(str(launched))+').write_text("called")\nraise RuntimeError("The source hook must never launch OH.")\n',newline='\n')
             hook=json.loads((package/'hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]['commandWindows']
             shell=os.environ['ComSpec']
             # Mirrors command_runner.rs: cmd.exe /C plus raw_arg("\"{command_line}\"").
             command=f'"{shell}" /C "{hook}"'
-            payload={'hook_event_name':'UserPromptSubmit','session_id':'fixture','prompt':'/oh-design auth','cwd':tmp}
+            payload={'hook_event_name':'UserPromptSubmit','session_id':'fixture','turn_id':'native-turn',
+                     'transcript_path':str(Path(tmp)/'native session.jsonl'),'prompt':'/oh-design auth','cwd':tmp}
             env=dict(os.environ,PLUGIN_ROOT=str(package));env.pop('OH_CHILD_ATTEMPT',None)
             result=subprocess.run(command,executable=shell,env=env,cwd=tmp,input=json.dumps(payload),capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             output=json.loads(result.stdout)['hookSpecificOutput']
             self.assertEqual(output['hookEventName'],'UserPromptSubmit')
-            forwarded=json.loads(output['additionalContext'].removeprefix('OH: '))
-            self.assertEqual(forwarded,{'received':payload,'authorized':False})
+            prefix='Native conversation locator for OH helpers (not an approval): '
+            self.assertTrue(output['additionalContext'].startswith(prefix))
+            forwarded=json.loads(output['additionalContext'][len(prefix):])
+            self.assertEqual(forwarded,{'host':'codex','session':'fixture','turn':'native-turn',
+                                       'transcript_path':payload['transcript_path'],'prompt':'/oh-design auth'})
+            self.assertFalse(launched.exists())
 
     def test_json_values_can_come_from_a_file(self):
         test = fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
@@ -146,7 +152,7 @@ class WindowsTest(unittest.TestCase):
             os.chdir(invocation)
             with patch('oh.system.WINDOWS', True), patch('oh.config.change',save), patch('sys.stdout'):
                 main(['--root',str(test.root),'config','set','checks','@checks.json'])
-            self.assertEqual(Path.cwd(),invocation.resolve())
+            self.assertTrue(Path.cwd().samefile(invocation))
             self.assertEqual(project_checks(test.root),[{'name':'relative','command':['git','status']}])
         finally:os.chdir(original)
 

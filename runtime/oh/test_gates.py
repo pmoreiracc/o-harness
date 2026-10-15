@@ -1,7 +1,7 @@
 """Native questions preserve human provenance without a second OH menu protocol."""
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -35,9 +35,9 @@ class GateTest(unittest.TestCase):
                 'item':{'type':'UserMessage','id':'human-reply','content':[{'type':'text','text':text}]}}}
         initial={'type':'session_meta','payload':{'id':'s','cwd':str(self.root),'source':'vscode'}}
         locator={'host':'codex','session':'s','tool_use_id':'current','transcript_path':str(path)}
-        def read(rows):
+        def read(rows,subject=None):
             path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
-            return native_human(self.root,locator,subject=self.subject)
+            return native_human(self.root,locator,subject=self.subject if subject is None else subject)
         approved=read([initial,call,message(reply)])
         self.assertEqual(approved['prompt'],'Proceed with the task')
         cancellation={'type':'event_msg','timestamp':'2026-10-15T12:00:03Z','payload':{
@@ -55,6 +55,20 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(Refused):
             path.write_text(''.join(json.dumps(row)+'\n' for row in [initial,call,message(reply)]),newline='\n')
             native_human(self.root,locator,since='2026-10-15T12:00:03Z',subject=self.subject)
+        for subject in (self.subject,PureWindowsPath(r'C:\Users\Developer\approved scope.md')):
+            with self.subTest(subject=str(subject)):
+                requested=deepcopy(question);requested['title']='Proceed with the scope in '+str(subject)+'?'
+                selected=deepcopy(reply);selected[0]['question']=requested['title']
+                current=deepcopy(call);current['payload']['arguments']=json.dumps({'questions':[requested]})
+                self.assertEqual(read([initial,current,message(selected)],subject)['prompt'],'Proceed with the task')
+                for hidden_in in ('options','metadata'):
+                    hidden=deepcopy(current);generic=deepcopy(requested);generic['title']='Proceed with this task?'
+                    if hidden_in=='options':generic['options'][0]+=' '+str(subject)
+                    arguments={'questions':[generic]}
+                    if hidden_in=='metadata':arguments['artifact']=str(subject)
+                    hidden['payload']['arguments']=json.dumps(arguments)
+                    with self.subTest(hidden_in=hidden_in),self.assertRaises(Refused):
+                        read([initial,hidden,message(selected)],subject)
 
     def test_claude_question_retains_the_actual_answer_and_rejects_model_or_foreign_text(self):
         from copy import deepcopy
@@ -66,9 +80,9 @@ class GateTest(unittest.TestCase):
               common|{'type':'user','toolUseResult':{'answers':{question:'Accept these concerns'}},
                       'message':{'content':[{'type':'tool_result','tool_use_id':'ask','content':'The user answered.'}]}}]
         locator={'host':'claude','session':'s','tool_use_id':'ask','transcript_path':str(path)}
-        def read(values):
+        def read(values,subject=None):
             path.write_text(''.join(json.dumps(row)+'\n' for row in values),newline='\n')
-            return native_human(self.root,locator,subject=self.subject)
+            return native_human(self.root,locator,subject=self.subject if subject is None else subject)
         approved=read(rows)
         self.assertEqual(approved['prompt'],'Accept these concerns')
         cancellation=common|{'type':'user','promptId':'cancel','entrypoint':'cli','timestamp':'2026-10-15T12:00:03Z',
@@ -86,3 +100,17 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(Refused):
             read(rows)
             native_human(self.root,locator,subject=self.home/'different scope.md')
+        for subject in (self.subject,PureWindowsPath(r'C:\Users\Developer\approved scope.md')):
+            with self.subTest(subject=str(subject)):
+                values=deepcopy(rows);requested='Accept the concerns for '+str(subject)+'?'
+                arguments=values[0]['message']['content'][0]['input']
+                arguments['questions'][0]['question']=requested
+                values[1]['toolUseResult']['answers']={requested:'Accept these concerns'}
+                self.assertEqual(read(values,subject)['prompt'],'Accept these concerns')
+                for hidden_in in ('options','metadata'):
+                    hidden=deepcopy(values);arguments=hidden[0]['message']['content'][0]['input']
+                    arguments['questions'][0]['question']='Accept these concerns?'
+                    if hidden_in=='options':arguments['questions'][0]['options'][0]['label']+=' '+str(subject)
+                    if hidden_in=='metadata':arguments['artifact']=str(subject)
+                    hidden[1]['toolUseResult']['answers']={'Accept these concerns?':'Accept these concerns'}
+                    with self.subTest(hidden_in=hidden_in),self.assertRaises(Refused):read(hidden,subject)

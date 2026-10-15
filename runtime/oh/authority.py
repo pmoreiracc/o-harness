@@ -362,7 +362,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
     questions=request.get('questions',[]) if isinstance(request,dict) else []
     answer['question']=(questions[0].get('question') or questions[0].get('title') or '') if questions and isinstance(questions[0],dict) else ''
     answer['question_at']=call[0].get('timestamp')
-    if subject and answer.get('via')!='plan' and str(subject) not in json.dumps(call[1],ensure_ascii=False):
+    if subject and answer.get('via')!='plan' and str(subject) not in answer['question']:
         raise Refused('This native question does not identify the reviewed artifact; ask about its actual path')
     return answer
 
