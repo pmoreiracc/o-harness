@@ -1,0 +1,7 @@
+interface:
+  display_name: "oh-update"
+  short_description: "Update OH to the latest release"
+  icon_small: "./assets/icon.png"
+  icon_large: "./assets/icon.png"
+policy:
+  allow_implicit_invocation: false

@@ -81,6 +81,20 @@ Windows has been recorded yet, so treat Windows support as a preview.
 
 Merged changes reach you only when a new version is released.
 
+Inside your session, run `/oh-update` in Claude Code or `$oh-update` in Codex to refresh
+the release marketplace and update OH in both installed hosts on Windows, macOS and Linux.
+To select one host, use `/oh-update codex` or `$oh-update claude`.
+
+It reports the installed plugin versions, for example `codex: 0.5.0 -> 0.6.0`, or
+`codex: 0.6.0 — up to date` after a successful refresh finds no change. A host failure does
+not prevent updating the other host; the command reports the error and exits unsuccessfully.
+If the release plugin is missing, the command adds the official release marketplace and
+installs the latest release, reporting `not installed -> <version>`.
+When a session's `PATH` omits another host's CLI, OH revalidates and uses that host's
+previously recorded executable. Hosts it cannot find are reported explicitly as skipped.
+
+You can also use the host commands directly:
+
 - **Claude Code:** turn on auto-update for the `o-harness` marketplace in `/plugin` →
   Marketplaces, or run:
 
