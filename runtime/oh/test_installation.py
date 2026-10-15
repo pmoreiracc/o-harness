@@ -60,6 +60,8 @@ class InstallationTest(unittest.TestCase):
                                         ['add', 'pmoreiracc/o-harness#dist']) if outcome == 'absent' else \
                                        ['upgrade' if name == 'codex' else 'update', 'o-harness']
                             self.assertEqual(rest, expected)
+                            if name == 'codex' and outcome != 'absent':
+                                versions[name] = '0.4.0' if outcome == 'downgrade' else '0.5.0' if outcome == 'current' else '0.6.0'
                         else:
                             self.assertEqual([action, *rest], ['add', updater.PLUGIN] if name == 'codex' else
                                              ['install' if outcome == 'absent' else 'update', updater.PLUGIN, '--scope', 'user'])
@@ -70,6 +72,9 @@ class InstallationTest(unittest.TestCase):
                             contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
                         result = updater.update(Path(tmp))
                     self.assertEqual(result, int(outcome in ('failed', 'invalid', 'downgrade', 'resolution_timeout', 'revalidation_timeout')))
+                    if outcome != 'absent':
+                        self.assertFalse(any(args[0] == 'codex' and args[2] == 'add' for args in calls),
+                                         'An installed Codex plugin must not be reinstalled after marketplace refresh')
                     if outcome in ('updated', 'missing_path'):
                         for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 -> 0.6.0', output.getvalue())
                         self.assertIn('new host session', output.getvalue())

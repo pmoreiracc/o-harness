@@ -107,8 +107,9 @@ You can also use the host commands directly:
 
   ```sh
   codex plugin marketplace upgrade o-harness
-  codex plugin add o-harness@o-harness
   ```
+
+  The marketplace refresh also updates installed plugins.
 
 Start a new session afterwards. The first OH command you run switches to the new version.
 Updates only go forward: versions with Windows support install an `oh` command that older
