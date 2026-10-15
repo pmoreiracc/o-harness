@@ -1,36 +1,48 @@
 ---
 name: deliver
-description: Deliver approved design tasks, prepare a bounded quick fix, or list ready work through OH.
+description: Deliver approved design tasks or a bounded quick fix with fresh native agents and independent review.
 ---
-Read `workflows/runtime.md` once through the same OH resource entry and follow its shared execution protocol.
+Read `workflows/runtime.md` once through OH's resource entry. Follow its native
+delegation, evidence, decision and publication rules. Inspect saved facts first;
+never select an unrelated active task merely because one exists.
 
-A numbered invocation selects a design, not a task. Introduce the design number; name the actual
-task and work only after OH selects it. For a quick fix, the first result is a scope preview.
+A number identifies a design, not a task. Name the actual task only after selection.
+Interpret the requested work as follows:
 
-Pass the user's arguments to `deliver` without reinterpreting a refusal as a different workflow:
+- No arguments: use `plans list` and show ready designs, unavailable reasons and
+  configured limits. Ask which design or quick fix the person wants. An empty list
+  grants no authority to resume old work.
+- Approved design number and optional track: use `scope prepare --doc NNNN
+  [--track TRACK] --human <native-locator.json>` (Codex `scope_prepare`). The helper
+  validates approval and selects the parsed tasks. Do not rebuild them as an arbitrary
+  manifest or ask for another trigger. Missing track/selection needs one ordinary
+  question; preserve the answer.
+- A bounded change in prose: inspect the relevant code and correct base, then prepare
+  an external manifest of ordered tasks with `id`, `title`, `instructions` and optional
+  `needs`. Preserve included original unreviewed edits in one coherent task; do not
+  split an existing dirty change across partially completed repair tasks. Call
+  `scope prepare <manifest.json>` and present its actual scope preview and finite
+  task/review limits. Difficulty and model selection stay outside that manifest.
+- Existing prepared or interrupted work: use the matching retained scope and remaining
+  allowance through `resume`; never convert a preparation ID or agent text into a
+  human approval. A complete saved batch proceeds to its actual decision/publication.
 
-- No arguments lists ready/unavailable designs and reasons. Show the ready commands and limits,
-  then ask which design or quick fix they want. An empty list does not authorize an older run.
-- `0005 [track]` starts or resumes approved work directly. OH preserves a stopped task's useful
-  draft, findings, settings and remaining allowance before any branch refresh. Relay its brief
-  continuation message. No preparation step or second trigger is required.
-  If the saved batch is complete, show its existing final decision. Do not start another task
-  or rerun implementation, checks or review. A recorded publication choice continues publication.
-- Prose returns `quick_fix`. Inspect that bounded change and prepare tasks with `id`, `title`,
-  `instructions` and optional ordered `needs`. In Codex call `prepare`; in Claude save the
-  manifest under external OH project storage and use `prepare <path>`. Present the returned
-  preview, limits and approval question. OH assesses difficulty at runtime.
-  Inspect the configured base for ordinary new work, or the existing PR's head when the
-  person explicitly asks to update that PR. Pass its number as `prepare.pr` in Codex or
-  `prepare --pr NUMBER <path>` in Claude. Preparation selects and validates that branch;
-  do not reset, rebase or switch branches to bypass a refusal. A published delivery remains
-  finished; this is a new bounded correction with its own approval and fresh review.
-- `request:<id>` runs the already prepared scope; the older consumer-profile spelling remains
-  supported. A prepared identifier is not an approval until the human sends or approves it.
+For a quick fix, Claude's native plan viewer Accept is the one scope approval;
+Codex uses a native question or direct human reply. Bind that actual acceptance with
+`scope approve`. Revisions replace the unapproved preview and receive approval of the
+new contents. Inspect original user edits and branch ownership; do not reset, stash,
+rebase or switch branches to bypass a refusal. An explicit existing-PR correction
+keeps that destination and original edits in scope rather than creating another PR.
 
-If OH asks for a track or missing selection, ask in ordinary conversation. Their next reply
-supplies that input. For a bare/prose invocation, call `run` when the input is complete so OH
-binds it before preparation. Never choose a different active design or write plan files yourself.
-A completed design returns its publication decision and admits no more implementation.
+For each admitted task, use a fresh assessment agent and the resulting configured
+implementation profile. The implementation agent owns self-review, candidate preparation,
+checks and repairs. After retaining its native result, admit a fresh independent
+reviewer. Repair blockers within scope, preserving every finding and disposition;
+repeat review only when ready and within the remaining allowance. Complete only the
+exact reviewed candidate through `complete`, then select the next externally pending
+task within the finite batch. No parallel implementation or parent-authored completion.
 
-Use the shared execution protocol for progress, decisions, review results and publication.
+At a real batch/allowance/finding boundary ask the native human decision once. Continue
+approved work automatically inside its scope; routine failures need repair, not a
+Retry menu. A completed design admits no further implementation. Report the actual
+review outcome and checks before the commit or publication decision.

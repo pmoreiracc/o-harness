@@ -42,16 +42,28 @@ def finding(finding):
 
 
 def request(directory, admission):
-    packet = read_json(admission['task_context']['path'])
+    packet_path = Path(admission['task_context']['path'])
+    packet = read_json(packet_path)
+    if packet.get('details'):
+        details = packet['details']
+        detail_path = Path(details['path'])
+        if not detail_path.is_absolute():detail_path = packet_path.parent / detail_path
+        full = read_json(detail_path)
+        if digest(full) != details['hash']:raise Refused('Retained task details changed')
+        packet = full
     task = packet['task']
     standalone=admission.get('purpose')=='standalone'
     lines = [('# Standalone review request' if standalone else f"# Task {task['id']} — {admission['role']} request"), '',
              f"**Purpose:** {admission.get('purpose','workflow')}",
              f"**{'Subject' if standalone else 'Task'}:** {task['title']}", f"**HEAD:** {admission['head']}",
              f"**Working tree:** {admission['tree']}",
-             f"**Reviewed Git tree:** {admission.get('git_tree') or 'Not applicable.'}",
+             f"**{'Checkout guard Git tree' if standalone else 'Reviewed Git tree'}:** {admission.get('git_tree') or 'Not applicable.'}",
              f"**Context SHA-256:** {admission['task_context']['hash']}", '',
              '## Approved scope', '', task['instructions'], '', '## Current work', '']
+    if standalone:
+        selected=packet.get('standalone_subject') or {}
+        lines.extend(['**Selected revision:** '+str(selected.get('revision') or selected.get('head') or 'Working changes'),
+                      '**Selected Git tree:** '+str(selected.get('git_tree') or 'Not recorded'), ''])
     current = packet['current_work']
     lines.append(current['summary'] if current else 'No earlier author report for this task.')
     readiness = current.get('readiness') if current else None
@@ -87,8 +99,12 @@ def completed(directory, admission, result, record, state):
         f"**Host:** {admission.get('host', state['host'])}",
         f"**Model:** {profile.get('model', 'Not recorded')} / {profile.get('effort', 'Not recorded')}",
         f"**Elapsed:** {seconds(record.get('duration_ms'))}", f"**HEAD:** {admission['head']}",
-        f"**Reviewed tree:** {admission.get('git_tree') or admission['tree']}",
+        f"**{'Checkout guard tree' if standalone else 'Reviewed tree'}:** {admission.get('git_tree') or admission['tree']}",
         f"**Attempt:** {record['id']}", f"**Result SHA-256:** {digest(read_json(Path(directory)/'result.json'))}", '']
+    if standalone:
+        selected=state.get('standalone_subject') or {}
+        lines.extend(['**Selected revision:** '+str(selected.get('revision') or selected.get('head') or 'Working changes'),
+                      '**Selected Git tree:** '+str(selected.get('git_tree') or 'Not recorded'), ''])
     if role == 'review':
         lines.extend(['## Findings', ''])
         lines.extend(finding(f) for f in record.get('findings', []))

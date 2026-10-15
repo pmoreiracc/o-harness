@@ -4,17 +4,16 @@ from . import test_workflow as fixtures
 from .registry import profile_path
 from .storage import atomic_json, read_json, Refused
 from .design_adapter import manifest
-from .workflow import start, choose, load_run
-from .runner import run
+from .workflow import load_run
 
 
-class DesignAdapterTest(unittest.TestCase):
+class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
     git=fixtures.WorkflowTest.git
     event=fixtures.WorkflowTest.event
     fake=fixtures.WorkflowTest.fake
 
     def setUp(self):
-        fixtures.WorkflowTest.setUp(self)
+        fixtures.NativeFixture.setUp(self)
         path=profile_path(self.root)
         atomic_json(path,read_json(path)|{'design_profile':'consumer-v1'})
         fixtures.configure(self.root,tasks_per_batch=1)
@@ -25,30 +24,79 @@ class DesignAdapterTest(unittest.TestCase):
         self.git('add','.');self.git('commit','-qm','approved design')
         self.git('update-ref','refs/remotes/origin/main','HEAD')
 
-    def test_design_uses_same_batch_and_reviews_actual_final_document_before_commit(self):
-        data=manifest(self.root,'0900')
-        start(self.root,data,self.event())
-        observed=[]
-        def review_final(*args,**kwargs):
-            if args[4]=='review':
-                admitted=read_json(args[5]/'request.json')
-                observed.append(Path(next(iter(admitted['artifact']['files']))).read_text())
-                self.assertIn('- [ ] **'+args[6]['task']+'.**',self.design.read_text())
-            return self.fake(*args,**kwargs)
-        self.assertEqual(run(self.root,review_final)['status'],'checkpoint')
-        self.assertIn('- [x] **1.**',observed[0])
-        self.assertIn('- [ ] **2.**',observed[0])
-        self.assertIn('status: approved',observed[0])
-        choose(self.root,'continue',self.event('2','continue'))
-        self.assertEqual(run(self.root,review_final)['status'],'completed')
-        self.assertIn('status: frozen',observed[1])
-        self.assertIn('delivered: M1',observed[1])
-        self.assertEqual(self.git('show','HEAD:docs/design/0900-fixture.md'),observed[1].strip())
-        self.assertEqual([x[0] for x in self.calls],['implementation','review','implementation','review'])
-        from .delivery_verify import verify_run
-        verify_run(self.root,load_run(self.root)[1],current=True)
+    def test_candidate_contains_provisional_progress_and_commits_the_exact_final_document(self):
+        from . import native
+        prepared=native.prepare_scope(self.root,doc='0900')
+        native.approve_scope(self.root,prepared['scope_id'],self.human())
+        origin=self.git('rev-parse','HEAD');self.assess();self.implement()
+        native.candidate(self.root)
+        first=self.design.read_text()
+        self.assertIn('- [x] **1.**',first);self.assertIn('- [ ] **2.**',first)
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        native.verify(self.root)
+        finding={'severity':'scope','description':'Logout cleanup belongs to a later task.','family':'logout','path':'logout.py'}
+        review=self.finish_attempt('review',{'verdict':'concern','summary':'Retain later work in the mutable design.','findings':[finding]})
+        before=load_run(self.root)[1]
+        native.decision(self.root,'route-scope',self.human('route scope'),attempt=review['id'])
+        routed=self.design.read_text()
+        self.assertIn('## Open review scope',routed)
+        self.assertIn('> '+finding['description'],routed)
+        self.assertIn('> Evidence: logout.py',routed)
+        state=load_run(self.root)[1]
+        self.assertEqual(state['granted'],before['granted'])
+        self.assertEqual(state['scope_records'][review['id']]['findings'],[finding])
+        self.assertEqual(state['scope_records'][review['id']]['destination']['design'],str(self.design))
+        with self.assertRaises(fixtures.Refused):native.complete(self.root,review['id'])
+        native.candidate(self.root);native.verify(self.root)
+        review=self.finish_attempt('review',{'verdict':'clean','summary':'Checked the routed exact candidate.','findings':[]})
+        self.assertEqual(len(load_run(self.root)[1].get('review_grants',[])),len(before.get('review_grants',[])))
+        first=self.design.read_text()
+        native.complete(self.root,review['id'])
+        self.assertEqual(self.git('show','HEAD:docs/design/0900-fixture.md'),first.strip())
+        native.decision(self.root,'continue',self.human('continue'))
+        self.assess();self.implement(edit=lambda:(self.root/'output.txt').write_text('Second behavior.',newline='\n'))
+        roadmap=self.root/'docs/roadmap.md'
+        roadmap.write_text(roadmap.read_text()+'\nThe sign-in flow is now implemented and verified.\n',newline='\n')
+        candidate=native.candidate(self.root)
+        final=self.design.read_text()
+        self.assertIn('status: frozen',final);self.assertIn('delivered: M1',final)
+        self.assertEqual(load_run(self.root)[1]['done'],['1'])
+        native.verify(self.root)
+        admitted=native.admit(self.root,'review')
+        packet=read_json(admitted['task_context']['path'])
+        self.assertEqual(read_json(packet['scope_snapshot']['path'])['base'],origin)
+        self.assertEqual([task['id'] for task in packet['completed_tasks']],['1'])
+        native.bind(self.root,admitted['id'],{})
+        self.native_results[admitted['id']]={'text':'Clean. No findings.','status':'completed'}
+        native.retain(self.root,admitted['id'],{})
+        native.complete(self.root,admitted['id'])
+        self.assertEqual(self.git('show','HEAD:docs/design/0900-fixture.md'),final.strip())
+        self.assertEqual(self.git('rev-parse','HEAD^{tree}'),candidate['git_tree'])
+        self.assertEqual(load_run(self.root)[1]['done'],['1','2'])
+
+    def test_living_prose_is_allowed_but_approved_tasks_and_unearned_progress_are_not(self):
+        from . import native
+        prepared=native.prepare_scope(self.root,doc='0900')
+        native.approve_scope(self.root,prepared['scope_id'],self.human())
+        self.assess();self.implement();original=self.design.read_text()
+        for changed in (original.replace('Implement first behavior.','Expand the approved scope.'),
+                        original.replace('- [ ] **2.**','- [x] **2.**')):
+            self.design.write_text(changed,newline='\n')
+            with self.assertRaises(Refused):native.candidate(self.root)
+            self.design.write_text(original,newline='\n')
+        self.design.write_text(original+'\n## Delivery notes\n\nThe task also updates the required roadmap status prose.\n',newline='\n')
+        candidate=native.candidate(self.root)
+        self.assertEqual(candidate['task'],'1')
+        self.assertIn('required roadmap status prose',self.design.read_text())
 
     def test_unapproved_or_blocked_design_cannot_become_native_task_scope(self):
+        from . import native
+        from .workflow import active_file
+        with self.assertRaises(Refused):
+            native.prepare_scope(self.root,doc='0900',human=self.human('/oh-review changes'))
+        self.assertFalse(active_file(self.root).exists())
+        admitted=native.prepare_scope(self.root,doc='0900',human=self.human('/oh-deliver 0900'))
+        self.assertEqual(admitted['granted'],['1'])
         # docs/usage.md: a local approved label cannot replace the merged origin base.
         self.git('update-ref','-d','refs/remotes/origin/main')
         with self.assertRaisesRegex(Refused,'Fetch origin/main'):manifest(self.root,'0900')

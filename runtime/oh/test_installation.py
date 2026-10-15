@@ -240,12 +240,12 @@ class InstallationTest(unittest.TestCase):
             self.assertTrue(list((base / 'data/registry/checkouts').glob('*.json')))
             self.assertFalse((Path(tmp) / 'released-data').exists())
             self.assertEqual([p.name for p in consumer.iterdir()], ['.git'])
-            # A hook passes its intentionally isolated data to the generated sibling CLI.
+            # A native locator stays available without launching the development runtime.
             hooked = subprocess.run([sys.executable, '-I', str(plugin / 'scripts/human-event.py'), 'codex'],
                 input=json.dumps({'prompt': '/oh-propose', 'cwd': str(consumer), 'session_id': 'dev-test',
                                   'hook_event_name': 'UserPromptSubmit', 'turn_id': 'fixture'}), capture_output=True, text=True)
             self.assertEqual(hooked.returncode, 0, hooked.stderr)
-            self.assertIn('OH:', hooked.stdout)
+            self.assertIn('Native conversation locator', hooked.stdout)
 
     def test_development_snapshot_freezes_all_entries_and_exec_selects_it(self):
         """CONTRIBUTING: snapshots survive source edits/removal and never activate the released core."""
@@ -289,7 +289,6 @@ class InstallationTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('uncommitted fixture workflow', result.stdout)
                 for script, args, payload in (('human-event.py', [host], {'prompt': 'hello'}),
-                                              ('gate-hook.py', ['pre'], {}),
                                               ('mcp-server', [], {'id': 1, 'method': 'initialize', 'params': {}})):
                     invoked = subprocess.run([sys.executable, '-I', str(plugin / 'scripts' / script), *args],
                         input=json.dumps(payload)+'\n', capture_output=True, text=True)
@@ -454,17 +453,17 @@ class InstallationTest(unittest.TestCase):
             self.assertEqual(older.returncode,0,older.stderr)
             self.assertEqual(read_json(base/'state/runtime/active.json')['revision'][0],'3')
 
-    def test_bare_choices_never_install_the_bundled_core(self):
+    def test_native_source_hook_never_installs_the_bundled_core_or_grants_work(self):
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp);env=os.environ|{'OH_DATA_HOME':str(base/'state')}
             scripts=self.package(base/'v1/o-harness','1'*40,'0.1.0')
-            def send(prompt):
-                return subprocess.run([sys.executable,str(scripts/'human-event.py'),'claude'],input=json.dumps({'prompt':prompt,'cwd':tmp}),
-                    env=env,capture_output=True,text=True,check=True).stdout
-            self.assertEqual(send('continue'),'')
-            self.assertFalse((base/'state').exists())
-            self.assertIn('not registered',send('/oh-propose a plan'))
-            self.assertTrue((base/'state/runtime/active.json').is_file())
+            for prompt in ('continue','Please review this change.','/oh-propose a plan'):
+                result=subprocess.run([sys.executable,str(scripts/'human-event.py'),'claude'],
+                    input=json.dumps({'prompt':prompt,'cwd':tmp,'session_id':'native-session','turn_id':'turn'}),
+                    env=env,capture_output=True,text=True,check=True)
+                context=json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
+                self.assertIn('native-session',context);self.assertIn('not an approval',context)
+                self.assertFalse((base/'state').exists())
 
     def test_ordinary_prompt_hook_has_no_setup_or_project_side_effects(self):
         from .config import HOME
@@ -476,24 +475,17 @@ class InstallationTest(unittest.TestCase):
             self.assertEqual(result.stdout,'')
             self.assertEqual(list(root.iterdir()),[])
 
-    def test_a_plain_message_reaches_oh_only_while_oh_waits_for_it(self):
+    def test_native_source_hook_exposes_only_the_parent_locator_and_never_runs_helpers(self):
         import io,runpy
         from unittest.mock import patch
         from .config import HOME
         with tempfile.TemporaryDirectory() as tmp:
-            def launched(session,prompt='Search my notes',recognized=False):
-                stdin=io.TextIOWrapper(io.BytesIO(json.dumps({'prompt':prompt,'cwd':tmp,'session_id':session}).encode()))
-                with patch.dict(os.environ,{'OH_DATA_HOME':tmp}),patch('sys.stdin',stdin),patch('sys.argv',['hook','claude']),\
-                        patch('subprocess.run') as run:
-                    run.return_value.returncode,run.return_value.stdout=0,''
-                    with self.assertRaises(SystemExit) if not recognized and not (Path(tmp)/'waiting'/(session+'.json')).exists() else contextlib.nullcontext():
-                        runpy.run_path(str(HOME/'plugins/o-harness/scripts/human-event.py'),run_name='__main__')
-                    return run.called
-            (Path(tmp)/'waiting').mkdir();(Path(tmp)/'waiting/s.json').write_text('{}')
-            self.assertTrue(launched('s'))
-            self.assertFalse(launched('other'))
-            from .entry import CHOICES
-            for choice in CHOICES:
-                for text in (choice,choice.capitalize(),choice.upper()):
-                    self.assertTrue(launched('other',text,recognized=True),text)
-            for removed in ('fix scope','fix findings'):self.assertFalse(launched('other',removed),removed)
+            for prompt in ('Search my notes','approve','publish','/oh-design auth'):
+                stdin=io.TextIOWrapper(io.BytesIO(json.dumps({'prompt':prompt,'cwd':tmp,'session_id':'s','turn_id':'t'}).encode()))
+                stdout=io.StringIO()
+                with patch('sys.stdin',stdin),patch('sys.stdout',stdout),patch('sys.argv',['hook','claude']),patch('subprocess.run') as run:
+                    runpy.run_path(str(HOME/'plugins/o-harness/scripts/human-event.py'),run_name='__main__')
+                run.assert_not_called()
+                context=json.loads(stdout.getvalue())['hookSpecificOutput']['additionalContext']
+                self.assertIn('not an approval',context);self.assertIn(json.dumps(prompt),context)
+            self.assertEqual(list(Path(tmp).iterdir()),[])

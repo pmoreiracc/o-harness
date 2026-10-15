@@ -43,6 +43,17 @@ def transitions(before,after,task):
 
 
 def verify_run(root,state,*,current=False):
+    if state.get('native_version'):
+        from .publication import verify_record
+        from .storage import digest
+        from .native import _structure
+        if digest(state['scope_snapshot'])!=state['scope_id']:raise Refused('Native scope snapshot changed')
+        for completed in state['summaries']:
+            if completed.get('commit'):
+                key=completed.get('commit_key',completed['task'])
+                verify_record(root,completed['commit'],state['commit_intents'][key]['publication'])
+        if current:_structure(root,state)
+        return {'tasks':len(state['done']),'design':state.get('design')}
     bound=state.get('delivery')
     if not bound:return  # quick fixes have no design contract
     source=bound.get('authority')

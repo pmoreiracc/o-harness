@@ -101,3 +101,128 @@ one response, opening the modal before receiving that failure. The instructions 
 require a separate completed display call; on failure they use the complete chat
 preview and existing typed choices, without opening another modal. This introduces
 no approval type or authority change. Repeat the host trial to verify the fallback.
+
+### Native Claude quick-fix plan approval
+
+The real Desktop trial disproved the file-display approach: file cards and option
+previews did not reliably show the document. A separate native plan-viewer trial
+rendered the complete document in a scrollable side panel. A harmless Accept trial
+produced a structured host result containing the exact approved plan and request ID;
+Reject produced an error result. Neither diagnostic approved the consumer task.
+
+The golden reference's relevant principle is one decision over the shown scope,
+followed by its existing execution machinery. OH needs a host-specific receipt
+reader because it delegates execution to its runner. No new gate, service or grant
+type is needed. Limit this change to Claude prepared quick fixes (including review
+repairs); other workflow approvals and Codex keep their current paths.
+
+- [x] Read native plan acceptance through existing authority, binding the exact
+  document and current gate; reject stale, changed, foreign and agent receipts.
+- [x] Replace the quick-fix display instructions with native Plan mode and
+  ExitPlanMode. Accept is the single scope approval; OH run consumes it. Rejection
+  grants nothing. A changed plan must be prepared and shown again, never executed.
+- [x] Extend existing authority and prepared-gate fixtures for the new receipt,
+  interruption/replay and unchanged old menu/typed/Codex behavior; run affected
+  checks and syntax, then self-review scope and authority.
+- [x] Enable the development snapshot on both hosts for a fresh Claude trial.
+  Independent review/publication remains after that developer trial.
+
+Implementation evidence: the reader recognized the saved, real Desktop diagnostic
+acceptance without modifying its transcript or OH state. It ignored the rejection.
+The existing prepared-gate fixture now uses a native receipt and passes edited-plan
+refusal, once-only approval, interruption during branch activation, recovery without
+another decision, and ordinary publication (11.9 seconds). The focused authority
+and gate checks passed (7 tests, 19.6 seconds before the added refusal assertion).
+One small table-driven authority case covers source, exact content, gate freshness,
+request/result pairing, main-agent status, rejection, changed content and CRLF.
+No new workflow fixture or production record type was added. The 15 affected modules
+were selected against this change. Fourteen passed on the first affected run.
+The gate module detected a source-version change because implementation was still
+being edited during that run; its production version guard was retained. All 39
+gate tests then passed on stable final source (143.0 seconds), including legacy
+questions/typed replies, Codex Stop, publication, refinements and exact native-plan
+activation. The public-handoff fixture assembles its copy only from fields actually
+returned to the coordinator; that targeted run passed (2 tests, 11.8 seconds).
+Syntax/Windows-risk checks and the Deliver skill validator passed. These are local
+macOS tests with platform fixtures, not live Windows/Linux host trials. No remaining
+affected-test failure is unresolved.
+
+Self-review: only Claude prepared-scope gates select the native viewer. Original
+preview files and journals stay unchanged. The returned native plan and checkpoint
+must match, and the model's original tool arguments must be empty; model prose does
+not grant work. Reading the native display file later is never used as approval.
+Edits request a new preparation; rejection leaves work pending and grants nothing.
+Existing typed choices, ordinary native menus, Codex, review allowances and final
+publication retain their current authority paths. Host permission modes remain
+host-owned. The earlier quick-fix file-card display approach is superseded here;
+other document workflows retain it and are outside this change.
+
+Development snapshot `0.6.0-SNAPSHOT.1791941857442304000` is enabled for Claude and
+Codex. Both packaged authority/gate modules and shared/Deliver instructions match
+the validated source byte-for-byte. The fresh-session user trial is still pending:
+send the original full quick-fix request, read the native side-panel plan and choose
+Accept once; OH should begin through its runner without another scope question.
+
+### Fresh-session entry correction
+
+The fresh-session trial exposed an entry failure, not a failed native receipt:
+status presented the previous session's unapproved gate before consuming the new
+command, then intake treated that unused preview as active work. No worker had
+started. Fix the entry rather than asking the developer to stop old runs.
+
+- [x] Suppress an old prepared gate while a different native work command awaits
+  verification; return the existing run-command instruction, without mutating state.
+- [x] Let a verified newer quick-fix request retire an unused preparation under
+  the existing control lock. Preserve its evidence; never replace granted work,
+  attempts, or interrupted activation. Prepare the new scope before one approval.
+- [x] Route unused preparations to the current installed runtime after upgrades;
+  keep interrupted activation and active work pinned to their retained runtime.
+- [x] Reproduce two sessions and an older snapshot through the actual entry,
+  status, preparation, native approval and execution paths. Check rejected stale
+  receipts and protection for already authorized work. Complete the authorized
+  live-host check if available before enabling dev; report its exact limits.
+- [x] Run affected checks on stable final source, then enable and verify both hosts.
+
+Validation: a new fixture uses the CLI's actual status/run/prepare entrypoints with
+an older prepared snapshot and a fresh native session. It proves status does not
+expose the old gate, newer verified intake retires only an unused preview, original
+records stay unchanged, telemetry reports the old run stopped, an old gate cannot
+approve the replacement, and one native acceptance enters the runner. It also
+checks that granted work and interrupted activation cannot be replaced. Existing
+launcher coverage now checks unused-preparation upgrades and activation pinning.
+
+The affected selector ran 16 modules. Fifteen passed; Gate exposed two refinement
+regressions because the pending-command hint also matched refinement feedback.
+The hint now excludes that existing feedback path. The final authority, gate and
+plugin-transition run passed all 57 tests (189.4 seconds); the other passing modules
+were not repeated. Syntax/Windows-risk checks passed. No test assertion or authority
+guard was weakened. Local macOS coverage includes platform fixtures, not live
+Windows/Linux sessions.
+
+Live validation used a disposable fixture repository and actual Claude Remote
+Control sessions, native Plan panels and ordinary Accept. A real old-snapshot
+session left an unapproved plan. A fresh candidate session automatically retired
+that unused preparation, showed its own exact bound plan, accepted once, and ran
+real assessment/implementation/review agents through a passing check and a reviewed
+local commit. The final corrected build repeated that scenario successfully:
+`0.6.0-SNAPSHOT.1791943622452858000`. Each fresh trial had one ExitPlanMode and one
+scope grant, without an AskUserQuestion scope/cleanup menu. No test publication was
+performed, and my-geoffrey was untouched. The initial test launch inherited Codex
+session identifiers; removing those from the test process environment corrected
+the setup without relaxing OH's host-identity guard.
+
+Host limits: ordinary Accept selected Manual command permissions, requiring normal
+Claude command approvals in the fixture. In the first trial, Claude's permission
+classifier subsequently denied recording the optional final stop decision after
+the task had completed; its reviewed local commit remained unpublished. This was
+not bypassed. The final trial also successfully recorded Finish without a PR after
+its reviewed commit, using a one-time native command permission. OH's scope approval
+and the host's command permissions remain distinct.
+
+Enabled the exact final live-tested build on both hosts:
+`0.6.0-SNAPSHOT.1791943622452858000`. Its runtime and workflow instructions match
+the final source. Reusing the live-tested build initially exposed one extra generated
+Python bytecode cache file; all manifested files were unchanged. Removed only that
+generated file, verified both original package inventories, and activated the same
+build without relaxing integrity checks or changing its code. Fresh consumer sessions
+can send the original request; no manual old-run cleanup is required.

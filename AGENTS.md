@@ -42,13 +42,15 @@ when useful; internal mechanism names alone do not explain the behavior.
 
 ## Development workflow
 
-Use branches from main, independent review, and human-merged PRs. Keep the coordinator
-small: the native OH runner owns automatic task execution; do not reproduce its loop in
-the parent conversation. Parallel task implementation is deferred.
+Use branches from main, independent review, and human-merged PRs. OH skills coordinate
+fresh native host agents; focused helpers validate scope, evidence and completion.
+Do not introduce a second agent runner, permission broker or custom menu engine.
+Consumer task implementation remains sequential.
 
 Reliable execution with minimal interruption is a development requirement on both Claude
-and Codex, across macOS, Linux and Windows. Reuse the working host entry paths and shared
-runner; prefer the smallest complete fix over new machinery, abstractions or approval gates.
+and Codex, across macOS, Linux and Windows. Reuse native host tools and focused
+validation helpers; prefer the smallest complete fix over new machinery, abstractions
+or approval gates.
 
 Handle routine recoverable failures automatically within the existing authorization:
 preserve valid commands and choices, repair what OH owns, and retry with a short bounded

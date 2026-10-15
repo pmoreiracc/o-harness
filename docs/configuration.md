@@ -2,7 +2,9 @@
 
 The easy way: `/oh-config` (Codex: `$oh-config`). With nothing after it, it lists every
 setting with its value and meaning. Or say what you want, for example
-`/oh-config let OH run 15 tasks per batch`; it shows the change and asks you to confirm.
+`/oh-config let OH run 15 tasks per batch`; it shows and applies the authorized change.
+If the request leaves a real choice, the agent asks through the native host or chat.
+There is no separate OH confirmation menu.
 
 ## Your settings file
 
@@ -81,7 +83,9 @@ of them another name with `oh rename`. Files of registrations that were replaced
 deleted checkouts whose name another project now uses, are kept in `backups/` without being
 applied.
 
-Workers can't write the settings folder. `oh backup` includes `settings.json`.
+Native agents are instructed not to hand-edit OH settings or evidence; their actual
+filesystem permissions remain host-owned. Use `oh config set/unset` for validated changes.
+`oh backup` includes `settings.json`.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -97,8 +101,7 @@ Workers can't write the settings folder. `oh backup` includes `settings.json`.
 
 Worker context compaction follows the native host/model settings. OH no longer overrides it
 with a fixed token threshold. Older `context.compact_at_tokens` settings are removed through
-the existing migration with a backup. Covered by `test_renamed_settings_are_moved_once_with_a_backup`
-and `test_codex_menu_is_never_shown_to_workers_or_by_a_different_runtime`.
+the existing migration with a backup.
 
 `oh plans path` shows where a project's plans live; `oh plans check` checks the roadmap and
 design docs against their rules. `oh plans list` shows each initiative's design and approval
@@ -119,20 +122,15 @@ not the external `~/oh-plans` folder: include your visible plan folder in your r
 `max_escalations` is retired. OH removes it from older settings through the existing
 migration, preserving a backup. Checks are repaired automatically on the current profile;
 only a blocking defect family appearing in a second independent review escalates the
-implementer. No Retry approval is required for delivery. Covered by
-`test_checks_repair_without_escalation_and_only_repeated_review_families_escalate`
-and `test_renamed_settings_are_moved_once_with_a_backup`.
+implementer. No Retry approval is required for delivery.
 
 ## Models
 
 OH labels each task **simple**, **standard** or **complex** before it starts, then picks
-that profile's model. Reviews have a separate profile. The `insights` profile controls
-the optional `oh suggest` analysis, not the coordinating chat session.
-
-If analysis fails, the dashboard and `oh suggest` show the error and a retry step. A model
-fallback notice remains separate from that failure; it cannot replace the error message.
-`test_requested_insights_uses_global_profile_without_registering_the_engine` covers these
-failures for both hosts and successful Codex fallback analysis.
+that profile's model and effort for the fresh native implementation agent. Reviews have
+a separate profile. These settings do not change the coordinating chat's model.
+The retained `insights` settings preserve compatibility, but new dashboard analysis
+and the retired `oh suggest` entry are unavailable in this candidate.
 
 | Profile | Claude | Codex |
 |---|---|---|
@@ -150,16 +148,9 @@ allowances stay unchanged. This works during an existing run. A changed CLI exec
 capability discovery. `$oh-config` changes apply to new OH runs, including in the same chat.
 No compatible earlier model, unsupported effort, discovery failure or a rejected native request
 still fails visibly with a recovery step; OH never switches to another family or paid API calls.
-The regression coverage is `test_missing_codex_model_uses_only_an_earlier_compatible_family`,
-`test_failed_review_does_not_repeat_successful_implementation` and
-`test_requested_insights_uses_global_profile_without_registering_the_engine`.
-OH doesn't change the model of the session you are
-talking to: you select that in your host app or CLI, and OH records the observed model in
-telemetry. `insights` is used for a separate agent call that ranks
-dashboard improvement suggestions when you run `oh suggest` and sufficient evidence exists.
-The dashboard’s **Analyze my data** button uses global Codex insights settings;
-`oh suggest --host claude` uses Claude, with project overrides when run in a registered project.
-Python computes the candidates and estimates; the model only ranks their priority.
+OH does not change the model of the session you are talking to; select that in your
+host app or CLI. Native execution and Stop support still require the validation described
+in [usage](usage.md); configured model names alone do not establish host availability.
 
 Older `models.<host>.orchestrator` settings migrate to `models.<host>.insights` with a backup,
 preserving model and effort overrides. Old leaf names remain accepted by `config set/unset`,
@@ -192,8 +183,7 @@ them out if you're unsure. `modes` picks when a check runs (`review`, `pre-push`
 A cancelled or timed-out check fails even if its cleanup exits with code `0`. OH skips
 the remaining checks and cannot advance that attempt to review or commit. `oh verify`
 returns failure, and task and PR summaries label the result failed while retaining the
-actual exit code and cancellation reason. Covered by
-`test_zero_exit_cancelled_check_blocks_delivery_and_is_reported_failed` in `runtime/oh/test_workflow.py`.
+actual exit code and cancellation reason.
 
 
 Before each new Deliver task, a fresh read-only assessment uses the configured `standard`
@@ -201,6 +191,4 @@ profile to examine the actual scope and relevant code. Its difficulty, rationale
 uncertainty and usage stay in OH's external records, and select the configured simple, standard
 or complex implementation profile. Material uncertainty selects complex. The rating is reused
 for repairs and resume; already-started older tasks retain their original selection. Consumer
-design documents contain no model or effort recommendations. Covered by
-`test_initial_and_continue_same_batch_snapshot_and_idempotent_restart` and
-`test_ready_selection_skips_blocked_tasks_and_orders_dependencies`.
+design documents contain no model or effort recommendations.

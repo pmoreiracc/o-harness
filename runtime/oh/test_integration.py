@@ -12,36 +12,6 @@ class IntegrationTest(unittest.TestCase):
     @staticmethod
     def git(root,*args):return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.DEVNULL,text=True).strip()
 
-    def test_codex_document_permissions_preserve_configured_paths(self):
-        # docs/usage.md: the invocation-local profile protects actual configured paths,
-        # including dots/spaces, without changing user settings or removing workspace protections.
-        import tomllib
-        from .hosts import command
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp)/'product';root.mkdir()
-            documents=[root/'my plans'/'approved.task.md',Path(tmp)/'private plans'/'approved.task.md']
-            for doc in documents:doc.parent.mkdir();doc.write_text('pending',newline='\n')
-            with patch('oh.hosts.executable',return_value='codex'),patch('oh.hosts.codex_tool_overrides',return_value=[]):
-                args=command('codex',{'model':'gpt-6.1-sol','effort':'medium'},root,'implementation',None,read_only_paths=documents)
-            self.assertIn('--strict-config',args);self.assertNotIn('--sandbox',args)
-            raw=next(arg.split('=',1)[1] for arg in args if arg.startswith('permissions.oh-delivery='))
-            profile=tomllib.loads('profile='+raw)['profile']
-            self.assertEqual(profile['extends'],':workspace')
-            for doc in documents:self.assertEqual(profile['filesystem'][str(doc.resolve())],'read')
-            # Interactive MCP/plugin processes must not be inherited by subscription workers.
-            from .hosts import codex_tool_overrides
-            home=Path(tmp)/'host';home.mkdir();config=home/'config.toml'
-            config.write_text('[mcp_servers.browser]\ncommand="unchanged"\n[plugins."helper@local"]\nenabled=true\n',newline='\n')
-            project=root/'.codex';project.mkdir();(project/'config.toml').write_text('[mcp_servers.project_tool]\ncommand="unchanged"\n',newline='\n')
-            before=config.read_bytes()
-            with patch('oh.hosts.codex_home',return_value=home):overrides=codex_tool_overrides(root)
-            tables=tomllib.loads('\n'.join(overrides))
-            self.assertFalse(tables['mcp_servers']['browser']['enabled'])
-            self.assertFalse(tables['mcp_servers']['project_tool']['enabled'])
-            self.assertFalse(tables['plugins']['helper@local']['enabled'])
-            self.assertEqual(config.read_bytes(),before)
-
-
     def test_missing_codex_model_uses_only_an_earlier_compatible_family(self):
         from .capabilities import select_profile
         requested={'model':'gpt-6.11-sol','effort':'high'}

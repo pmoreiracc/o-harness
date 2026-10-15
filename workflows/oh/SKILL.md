@@ -1,19 +1,13 @@
 ---
 name: oh
-description: Explicit OH execution and bounded task preparation through the external runner.
+description: Select the requested OH workflow or prepare one bounded quick fix.
 ---
-Read `workflows/runtime.md` once through the same OH resource entry and follow its shared execution protocol.
+Read `workflows/runtime.md` once through OH's resource entry. If the intended work is
+missing, ask one ordinary question and wait. Do not start a run or infer approval from
+this selector invocation alone.
 
-For already prepared scope, use `start` to verify the native invocation and execute its batch.
-For a new quick fix, call `run` once to bind the request and refresh its base before inspecting
-work. It returns preparation without launching implementation. Prepare only the agreed scope:
-`id`, `title`, `instructions`, and optional dependency IDs in `needs`, ordered by dependency.
-Do not assign models or effort; OH assesses each new task at runtime.
-
-In Codex pass the tasks to `prepare`. In Claude save the manifest in external OH project storage
-and use `prepare <absolute-path>`. Present the returned scope preview and limits through its
-Approve / Refine / Cancel question. A prepared identifier remains a typed fallback, never
-something the assistant can send as human approval. For a consumer-v1 project, `prepare-design`
-binds the consumer's approved design without changing its approval policy.
-
-Follow the shared protocol for execution, progress, returned decisions and publication.
+Route an idea to `workflows/propose/SKILL.md`, a roadmap initiative to
+`workflows/design/SKILL.md`, approved design tasks or a bounded quick fix to
+`workflows/deliver/SKILL.md`, and requested inspection to `workflows/review/SKILL.md`.
+Existing saved work uses the matching resume facts. Keep the person's actual request
+and project approval rules; do not turn a request for feedback into implementation.

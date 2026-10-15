@@ -1,26 +1,36 @@
 ---
 name: propose
-description: Route one human idea to the appropriate project plan or bounded improvement.
+description: Route one human idea to a project plan addition or bounded improvement with native approval and review.
 ---
-Read `workflows/runtime.md` once through the same OH resource entry and follow its shared execution protocol.
+Read `workflows/runtime.md` once through OH's resource entry. Without an idea, ask what
+the person wants to propose and wait. Do not invent one or create a waiting run to ask.
+Read `plans path`, resolve an undecided repo/private location once and show its actual
+folder. Respect project policy; planning alone does not authorize product implementation.
 
-Without an idea, ask what the person would like to propose and end the turn before calling
-`run` or choosing plan storage. The next reply supplies the idea; never invent it.
+Prepare one bounded routing task with `scope prepare <manifest.json> --workflow propose
+--human <native-locator.json>` (Codex `scope_prepare`). That request authorizes analysis;
+there is no extra approval merely to obtain a recommendation.
 
-Use `plans path`. If storage is undecided, obtain the person's choice of repository plans
-(approval through PRs) or private plans, then save that setting. Show the actual configured
-folder; private plans default to `~/oh-plans/<project name>/`. Respect project-owned policies;
-OH does not impose ADRs or run product tests while planning.
+Admit a fresh analysis agent with the configured profile, bounded packet,
+`prompts/propose.md` and `prompts/proposal-routing.md`. It examines actual plans and code,
+then writes its preview/report externally, without modifying project planning documents.
+Retain its original native result and show the understanding, recommended route, evidence,
+complete additions and exact destinations. An improvement or unclear route can end here
+with the actual recommendation/question; no unnecessary document or review is required.
 
-Introduce how a proposal agent finds where the idea belongs and shows exactly what would be
-written. Saving and independent review follow human approval when documents are needed.
-Call `run`; OH owns routing, previews, writing, document validation, review and commits.
-Never write plan files or recreate those steps yourself.
+Before additions are written, ask approve/refine/cancel directly through the native
+question surface. Bind approval of the latest analysis report with `decision
+approve-proposal` and its actual native human locator. Refinement revises the unapproved
+proposal; neither permission to analyze nor an author report approves the additions.
 
-For the returned approval preview, explain the understanding, recommended route and evidence.
-The review copy contains exact additions, destinations and any proposed decision. Follow its
-Approve / Refine / Cancel question. After approval call `run`. If review changes the proposed
-route or contents, OH presents the changed proposal for approval. An improvement or unclear
-idea can finish without writing a document or requiring review; report that actual result.
+After approval, admit a fresh analysis agent to apply exactly those additions with
+ordinary tools, safe numbering/links and `plans check`. It prepares the candidate and
+verifies documents without product tests. Retain its result, then admit a fresh
+independent reviewer to challenge routing, dependencies, duplication and requirements.
+If review requires a different route or materially different additions, show the changed
+preview and obtain approval before applying it. Repair other scoped document failures
+within existing authority and remaining review allowance.
 
-Use the shared protocol for progress, finding decisions and publication of repository plans.
+Complete only the exact reviewed candidate. Report the saved proposal, actual review
+outcome and any unresolved product decision. Repository publication uses the shared
+human publication decision; private plans need no commit or PR.

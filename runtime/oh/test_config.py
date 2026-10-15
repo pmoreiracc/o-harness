@@ -217,17 +217,16 @@ class ConfigTest(unittest.TestCase):
         with patch('oh.config.launch'):config.open_settings(self.root)
         self.assertEqual(load(self.root)['review_rounds'],3)
 
-    def test_before_any_run_status_and_run_say_which_command_to_type(self):
+    def test_before_any_run_status_names_the_native_workflow_commands(self):
         import io
-        from contextlib import redirect_stderr,redirect_stdout
+        from contextlib import redirect_stdout
         from .cli import main
         out=io.StringIO()
         with redirect_stdout(out):main(['--root',str(self.root),'status'])
         self.assertEqual(json.loads(out.getvalue())['status'],'none')
-        self.assertIn('Type /oh-propose <idea>',json.loads(out.getvalue())['next'])
-        error=io.StringIO()
-        with redirect_stderr(error),self.assertRaises(SystemExit):main(['--root',str(self.root),'run'])
-        self.assertIn('No OH command is waiting in this checkout. Type /oh-propose <idea>',error.getvalue())
+        guidance=json.loads(out.getvalue())['next']
+        for command in ('/oh-propose','/oh-design','/oh-deliver','$oh-propose','$oh-design','$oh-deliver'):
+            self.assertIn(command,guidance)
 
     def test_the_repair_tools_work_on_broken_files(self):
         for broken in ('{"review_rounds": 3,','{"a": 1, "a": 2}','{"projects": []}','{"projects": {"Fixture": 5}}'):
@@ -309,16 +308,6 @@ class ConfigTest(unittest.TestCase):
         change(self.root,'review_rounds','4')
         self.assertTrue(settings_file().is_symlink());self.assertIn('review_rounds',(dotfiles/'settings.json').read_text())
         self.assertLessEqual({str(config_home()),str(dotfiles.resolve())},set(config.protected_paths()))
-
-    def test_claude_workers_cannot_write_the_settings_folder(self):
-        from .hosts import command
-        with patch('oh.hosts.executable',return_value='claude'):
-            args=command('claude',{'model':'opus','effort':'high'},self.root,'implementation',None)
-        sandbox=json.loads(args[args.index('--settings')+1])
-        if os.name!='nt':self.assertIn(str(config_home()),sandbox['sandbox']['filesystem']['denyWrite'])
-        else:self.assertEqual(sandbox['sandbox'],{'enabled':False})
-        from .hosts import rule_path
-        self.assertIn(f'Edit({rule_path(config_home())}/**)',sandbox['permissions']['deny'])
 
     def test_a_process_that_looks_elsewhere_is_refused_instead_of_using_defaults(self):
         change(self.root,'review_rounds','4')
@@ -411,9 +400,11 @@ class ConfigTest(unittest.TestCase):
 
     def test_every_approval_names_its_limits(self):
         from .prepared import limits
-        self.assertEqual(limits(12,{'tasks_per_batch':5,'review_rounds':3}),
-                         'Runs 5 of 12 tasks, then asks you to continue, up to 3 review rounds each. Change this with /oh-config.')
-        self.assertEqual(limits(1,{'tasks_per_batch':5,'review_rounds':1}),'Runs 1 task, up to 1 review round each. Change this with /oh-config.')
+        for count,tasks,rounds in ((12,5,3),(1,1,1)):
+            text=limits(count,{'tasks_per_batch':5,'review_rounds':rounds})
+            self.assertIn(f'Up to {tasks} task',text)
+            self.assertIn(f'{rounds} independent review',text)
+            self.assertIn('per task before human renewal',text)
 
 
 if __name__=='__main__':unittest.main()

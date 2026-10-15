@@ -85,12 +85,9 @@ def check_failed(result):
     return result.get('returncode') != 0 or bool(result.get('cancellation') or result.get('unavailable'))
 
 
-def verify(root, checks, project_id, *, controlled=False):
+def verify(root, checks, project_id):
     results = []
     for check in checks:
-        if controlled:
-            from .controls import check as control_check
-            control_check(root)
         if not isinstance(check.get('command'), list) or not check['command'] or not all(isinstance(x,str) for x in check['command']):
             raise Refused('Verification commands must be nonempty argument arrays')
         # An omitted dependency list conservatively fingerprints the entire checkout.
@@ -109,7 +106,7 @@ def verify(root, checks, project_id, *, controlled=False):
                 from .processes import capture
                 try:
                     probe_command=[executable(probe_command[0],cwd=root,env=check_env()),*probe_command[1:]]
-                    probe,cancellation=capture(root,probe_command,controlled=controlled,timeout=10,env=check_env())
+                    probe,cancellation=capture(root,probe_command,timeout=10,env=check_env())
                 except FileNotFoundError as exc:
                     return results+[unavailable(check,probe_command,start,str(exc))]
                 if cancellation or probe.returncode:
@@ -127,7 +124,7 @@ def verify(root, checks, project_id, *, controlled=False):
             continue
         start=time.monotonic()
         from .processes import capture
-        try:output,cancellation=capture(root,command,controlled=controlled,timeout=check.get('timeout_seconds',900),env=check_env())
+        try:output,cancellation=capture(root,command,timeout=check.get('timeout_seconds',900),env=check_env())
         except FileNotFoundError as exc:
             return results+[unavailable(check,command,start,str(exc))]
         result={'name':check['name'],'command':command,'fingerprint':fingerprint,'returncode':output.returncode,

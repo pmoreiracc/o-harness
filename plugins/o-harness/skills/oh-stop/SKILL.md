@@ -3,8 +3,21 @@ name: oh-stop
 description: Cancel and end the current OH run, preserving its work and evidence.
 disable-model-invocation: true
 ---
-Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory (from PowerShell or cmd on Windows, use `scripts\oh.cmd` there). Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly. Never install or start anything merely because this skill was discovered.
+Load `workflows/runtime.md` through OH's resource entry. Stop the current run through
+the host's native cancellation tools for its known active agents and commands, then
+record the direct human stop decision. Start no later check, review or completion.
+Retain completed results, attempts and edits. Report stopped only after native work is
+confirmed cancelled; otherwise name the remaining work and the native action needed.
+Never substitute an OH process supervisor or claim that interrupting the parent alone
+establishes child cancellation.
+After retaining terminal cancellation/results, record `decision stop
+<native-locator.json>` (Codex `decision`, kind `stop`) from the person's actual request.
 
-In Codex, call the o-harness `stop` tool with the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> stop`. Describe what happened to the named task in one short sentence, for example “Stopped the delivery; your work is saved.” Use the actual action and result. For PAUSING or STOPPING, say the action is in progress. Mention remaining allowances only when they affect the next step. Keep routing instructions and policy explanations out of routine status reports. If the host is busy and cannot dispatch this skill, the user can run this same command directly in a terminal.
+Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
+(`scripts\oh.cmd` on native Windows). Keep OH configuration and evidence outside
+consumer repositories. Discovery alone does not authorize setup or execution.
 
-If Codex lists no o-harness tools, OH's tool server did not start: tell the person to type `/mcp` to see why, then start a new Codex session; don't run these OH commands from Codex's shell instead.
+In Codex use the connected OH tools with the checkout's absolute `root`; read resources
+with `resource`. In Claude use `<plugin>/scripts/oh --root <checkout> resource <path>`.
+If the Codex connection is missing, report it with the `/mcp` recovery step; do not
+bypass it with shell writes to OH state.

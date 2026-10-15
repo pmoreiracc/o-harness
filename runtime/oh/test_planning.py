@@ -1,44 +1,54 @@
-import json
+"""Planning artifacts use native agents and retain human approval independently of review."""
 import unittest
 from pathlib import Path
-from . import test_workflow as fixtures
-from .workflow import start, choose, load_run
-from .runner import run
+from . import native, plans
+from .config import change
 from .storage import Refused
+from .workflow import load_run
+from .test_workflow import NativeFixture
+from .test_design import BODY
 
 
-class PlanningTest(unittest.TestCase):
-    setUp=fixtures.WorkflowTest.setUp
-    git=fixtures.WorkflowTest.git
-    event=fixtures.WorkflowTest.event
+class PlanningTest(NativeFixture,unittest.TestCase):
+    def planning(self,workflow,location):
+        change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
+        change(self.root,'plans.location',location)
+        self.where=plans.layout(self.root)
+        plans.start_roadmap(self.where,'Fixture');plans.add_milestone(self.root,self.where,'M1','First','It works')
+        plans.add_initiative(self.root,self.where,'M1','auth','Sign-in',[])
+        if location=='repo':self.git('add','.');self.git('commit','-qm','planning context')
+        manifest={'tasks':[{'id':workflow,'title':'Plan the sign-in flow','instructions':'Write the requested bounded plan.'}]}
+        prompt='Plan the sign-in flow.' if workflow=='design' else 'Propose the sign-in flow.'
+        return native.prepare_scope(self.root,manifest,workflow=workflow,human=self.human(prompt))
 
-    def test_each_planning_workflow_reviews_external_artifact_without_product_commit(self):
-        for index,workflow in enumerate(('propose','design')):
-            original=self.git('rev-parse','HEAD')
-            start(self.root,{'workflow':workflow,'tasks':[{'id':workflow,'title':'Plan work','instructions':'Assess the requested change'}]},self.event(str(index)))
-            roles=[]
-            def fake(host,root,profile,prompt,role,directory,context,**kwargs):
-                roles.append(role)
-                if role=='review':
-                    admission=json.loads((Path(directory)/'request.json').read_text())
-                    artifact=Path(admission['artifact']['path'])
-                    self.assertFalse(artifact.is_relative_to(root))
-                    self.assertIn('Read-only plan',artifact.read_text())
-                return {'failed':False,'returncode':0,'duration_ms':1,'text':'Read-only plan',
-                    'structured':{'verdict':'clean','summary':'Reviewed plan','findings':[],'evidence':fixtures.EVIDENCE},'usage_observed':False}
-            result=run(self.root,fake)
-            self.assertEqual(result['status'],'completed')
-            self.assertEqual(roles,['analysis','review'])
-            self.assertEqual(self.git('rev-parse','HEAD'),original)
-            self.assertEqual(self.git('status','--porcelain'),'')
-            with self.assertRaises(Refused):choose(self.root,'pr',self.event('publish-'+str(index),'pr'))
+    def test_private_design_requires_human_approval_of_the_exact_reviewed_artifacts(self):
+        self.planning('design','private');head=self.git('rev-parse','HEAD')
+        with self.assertRaises(Refused):native.admit(self.root,'assessment')
+        def write_plan():
+            number,path=plans.write_design(self.root,self.where,'auth','Sign-in',BODY,'draft')
+            plans.claim(self.root,self.where,'auth',number);self.document=Path(path)
+        self.finish_attempt('analysis',{'summary':'Wrote the bounded design.'},edit=write_plan)
+        review=self.reviewed()
+        with self.assertRaises(Refused):native.complete(self.root,review['id'])
+        original=self.document.read_text();self.document.write_text(original+'\nChanged after review.\n',newline='\n')
+        with self.assertRaises(Refused):
+            native.decision(self.root,'approve-private',self.human('approve'),attempt=review['id'])
+        self.document.write_text(original,newline='\n')
+        native.decision(self.root,'approve-private',self.human('approve'),attempt=review['id'])
+        native.complete(self.root,review['id'])
+        self.assertEqual(self.git('rev-parse','HEAD'),head)
+        self.assertEqual(self.git('status','--porcelain'),'')
+        self.assertEqual(load_run(self.root)[1]['done'],['design'])
+        self.assertTrue(review['artifacts'])
 
-    def test_analysis_that_changes_product_does_not_receive_review_or_completion(self):
-        start(self.root,{'workflow':'propose','tasks':[{'id':'p','title':'Plan','instructions':'Propose only'}]},self.event())
-        def mutation(host,root,profile,prompt,role,directory,context,**kwargs):
-            self.assertEqual(role,'analysis')
-            (root/'unexpected').write_text('preserve for inspection')
-            return {'failed':False,'returncode':0,'duration_ms':1,'text':'changed','structured':None,'usage_observed':False}
-        result=run(self.root,mutation)
-        self.assertEqual(result['status'],'needs_attention')
-        self.assertEqual(result['completed'],0)
+    def test_proposal_approval_does_not_replace_review_or_grant_product_implementation(self):
+        self.planning('propose','repo')
+        author=self.finish_attempt('analysis',{'summary':'Propose a search initiative in the first milestone.'})
+        native.decision(self.root,'approve-proposal',self.human('approve'),attempt=author['id'])
+        plans.add_initiative(self.root,self.where,'M1','search','Search notes',[])
+        native.candidate(self.root);native.verify(self.root)
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        review=self.finish_attempt('review',{'verdict':'clean','summary':'Reviewed the approved addition.','findings':[]})
+        native.complete(self.root,review['id'])
+        self.assertIn('Search notes',self.git('show','HEAD:docs/roadmap.md'))
+        self.assertEqual(load_run(self.root)[1]['done'],['propose'])

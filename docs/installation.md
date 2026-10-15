@@ -1,5 +1,9 @@
 # Installation and updates
 
+The native workflow candidate is not cleared for development activation or publication.
+The Codex native Stop probe failed; see [the validation record](plans/native-workflows.md).
+The instructions below do not establish that this candidate is ready to use.
+
 ## Requirements
 
 - macOS, Linux, or 64-bit Windows 11 (x64 or ARM64) as a preview ([Windows notes](#windows)). The dashboard auto-start
@@ -39,12 +43,10 @@ and creates the `oh` command at `~/.local/share/o-harness/bin/oh`. Add that fold
 2. OH continues the saved command after registration. If setup reports an external obstacle,
    follow its concrete recovery instruction; your original command remains pending.
 
-OH finds your `claude` or `codex` binary on `PATH` each time it starts a worker. It starts
-workers only with a native binary owned by you or the system, outside temporary and project
-folders, that reports itself as Claude Code or Codex (OH runs `--version` to check) and is
-signed in with a subscription. When the CLI updates itself, OH checks the new binary the
-same way and prints a notice. To use a
-binary that isn't on your `PATH`, pin it with `oh trust-host claude <absolute-path>`.
+Native workflow agents run inside the active Claude or Codex host using its signed-in
+subscription and ordinary tool permissions. OH no longer starts a separate headless
+worker or requires a pinned worker executable. Keep the host and its CLI current;
+model/effort availability is checked before admission, with no API fallback.
 
 Registering a project changes nothing in its repository.
 
@@ -68,17 +70,10 @@ Windows has been recorded yet, so treat Windows support as a preview.
   in arguments, so pass JSON from a file: `oh.cmd config set checks @checks.json`.
 - Git for Windows converts line endings by default (`core.autocrlf`); OH accepts files whose
   only difference from what Git stores is their line endings.
-- **Claude workers have no shell on Windows.** Claude Code's sandbox doesn't run on native
-  Windows, so OH's Claude workers use file tools and a restricted `verify` tool. Implementers
-  run your configured checks through that tool and repair failures before returning.
-  Reviewers read the exact change from a file.
-  Codex workers keep Codex's own Windows sandbox. For full Claude workers, run OH inside WSL 2,
-  where it behaves as on Linux.
-- Windows' search of the current folder is off for the commands OH starts (your checks keep
-  it, since they run your project's own scripts), and OH starts `claude` or `codex` only when
-  no one but you, the system or administrators can change the program, add files next to it,
-  or replace a folder above it. Folders on your `PATH` are still searched, including a
-  project's activated virtual environment.
+- Native Claude and Codex agents use their host's available tools and permissions.
+  OH does not remove Claude's shell or install a replacement Windows sandbox.
+  Real native Windows workflow and Stop validation are still required before claiming
+  support for this candidate.
 - `oh service-install` adds a Task Scheduler task that starts the dashboard at logon,
   without admin rights or a window; `oh service-uninstall` removes it.
 
@@ -105,7 +100,9 @@ Start a new session afterwards. The first OH command you run switches to the new
 Updates only go forward: versions with Windows support install an `oh` command that older
 versions' `setup` refuses to replace, so go back to an older version only with a fresh OH
 data folder.
-Batches already in progress finish on the version they started with. The dashboard service
+Finish or cancel active native work before switching builds. Current helpers preserve
+historical evidence and adopt unfinished work only at a quiet boundary; they do not
+restart a retired runner or replenish allowances. The dashboard service
 restarts itself on the new version; if you installed it before version 0.3.0, run
 `oh service-install` once more.
 On Windows, OH retains earlier downloaded Python versions because an installed dashboard
@@ -127,6 +124,9 @@ delete `~/.local/share/o-harness` after uninstalling from both hosts.
 ## Local build
 
 To try a build locally without releasing, run `integrations/package.sh <empty-folder>`
-and add that folder as a local marketplace. OH only switches automatically to a higher
+and add that folder as a local marketplace. The known native Stop limitation is
+tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81) and does not block local
+activation or release.
+OH only switches automatically to a higher
 version, so activate a local build with `scripts/oh setup` from the installed plugin
 (`setup --development` if the checkout had uncommitted changes).

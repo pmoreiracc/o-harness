@@ -62,6 +62,7 @@ PROPOSAL_SCHEMA={'type':'object','additionalProperties':False,
    **{key:{'type':'string'} for key in ('understanding','reason','evidence','text','slug','milestone','milestone_title','milestone_done_when',
                                         'design','track','decision_title','decision_context','decision_alternatives','decision_consequences','summary')}}}
 
+
 def script(stream):
     """A wrapper that needs an interpreter, not a native binary. Windows binaries start with MZ."""
     head=stream.read(2)
@@ -171,7 +172,8 @@ def subscription_env(root=None):
 def authentication(host,root):
     binary=executable(host,root)
     command=[binary,'login','status'] if host=='codex' else [binary,'auth','status']
-    result=subprocess.run(command,cwd=root,env=subscription_env(root),capture_output=True,text=True,timeout=20)
+    # Native children inherit this host environment; do not mask API authentication for the probe.
+    result=subprocess.run(command,cwd=root,env=os.environ.copy(),capture_output=True,text=True,timeout=20)
     if host=='codex':
         valid=result.returncode==0 and 'Logged in using ChatGPT' in result.stdout+result.stderr
     else:
@@ -187,241 +189,6 @@ def codex_home():
     """Codex's own folder: CODEX_HOME when set, as Codex itself reads it."""
     import os
     return Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
-
-
-def codex_tool_overrides(root):
-    """Invocation-only isolation, matching Claude's strict native MCP configuration."""
-    import tomllib
-    names={'plugins':set(),'mcp_servers':set()}
-    root=Path(root).resolve()
-    paths={codex_home()/'config.toml',*(p/'.codex/config.toml' for p in (root,*root.parents))}
-    for path in sorted(paths):
-        try:config=tomllib.loads(path.read_text())
-        except (OSError,ValueError):continue
-        profiles=config.get('profiles',{})
-        for layer in [config,*(profiles.values() if isinstance(profiles,dict) else [])]:
-            if not isinstance(layer,dict):continue
-            for key in names:
-                table=layer.get(key,{})
-                if isinstance(table,dict):names[key].update(table)
-    # CLI dotted-key overrides do not unquote individual path segments. Use TOML
-    # inline tables so server/plugin names containing punctuation remain literal keys.
-    return [key+'={'+','.join(json.dumps(name)+'={enabled=false}' for name in sorted(values))+'}'
-            for key,values in names.items() if values]
-
-
-def command(host,profile,root,role,schema_path,artifact_dir=None,*,standalone=False,read_only_paths=(),verification_dir=None):
-    if standalone and role!='analysis':raise Refused('Standalone execution is only for read-only insights analysis')
-    if host=='codex':
-        args=[executable(host,root),'exec','--json','--color','never','--model',profile['model'],
-          '--config','features.multi_agent=false','--config','features.apps=false','--config','model_provider="openai"','--config','forced_login_method="chatgpt"',
-          '--config',f'model_reasoning_effort="{profile["effort"]}"',
-          '--cd',str(root)]
-        if role=='implementation' and read_only_paths:
-            from .storage import state_home
-            from .config import protected_paths
-            args+=['--strict-config',*codex_document_permissions([*read_only_paths,state_home(),*protected_paths()])]
-        else:args+=['--sandbox','read-only' if role in READ_ONLY_ROLES else 'workspace-write']
-        if standalone:args+=['--skip-git-repo-check']
-        # Workers receive only their native tools, not inherited interactive MCP processes.
-        # User/project files remain unchanged; the native oh_checks definition below wins.
-        for override in codex_tool_overrides(root):args+=['--config',override]
-        if verification_dir:
-            from .storage import read_json
-            server=verification_server(verification_dir)
-            # Fixed commands and an argument-free tool; no arbitrary execution or state access.
-            config=','.join(key+'='+json.dumps(value) for key,value in server.items() if key!='env')
-            env=','.join(key+'='+json.dumps(value) for key,value in server['env'].items())
-            timeout=read_json(Path(verification_dir)/'request.json').get('verification_timeout',60)
-            operation='admission' if role=='review' else 'verify'
-            enabled=[operation]+(['submit_report'] if read_json(Path(verification_dir)/'request.json').get('report_protocol') else [])
-            args+=['--config','mcp_servers.oh_checks={enabled=true,'+config+',env={'+env+'},enabled_tools='+json.dumps(enabled)+',tool_timeout_sec='+str(timeout)+'}']
-        if schema_path:args+=['--output-schema',str(schema_path)]
-        return args+['-']
-    from .storage import state_home
-    from .storage import git
-    git_paths=[] if standalone else [git(root,'rev-parse','--absolute-git-dir'),str(Path(root,git(root,'rev-parse','--git-common-dir')).resolve())]
-    from .config import protected_paths
-    protected=git_paths+[str(state_home()),*protected_paths(),str(Path.home()/'.codex'),str(codex_home()),str(Path.home()/'.claude'),str(Path(root)/'.oh')]
-    if artifact_dir:protected.append(str(artifact_dir))
-    if role in READ_ONLY_ROLES:protected.append(str(root))
-    private=None if standalone else private_plans(root)
-    if private:protected.append(str(private))  # workers read private plans; only OH writes them
-    deny=['Agent','Task']+[f'{tool}({rule_path(p)}/**)' for p in protected for tool in ('Edit','Write')]
-    documents=sorted({str(Path(p).resolve()) for p in read_only_paths})
-    protected+=documents
-    deny += [f'{tool}({rule_path(p)})' for p in documents for tool in ('Edit','Write')]
-    if WINDOWS:
-        # Claude Code's sandbox doesn't run on native Windows, so workers there get no shell at all: they read
-        # and edit files. Their argument-free verify tool runs configured checks without granting a shell.
-        settings={'sandbox':{'enabled':False},'permissions':{'deny':deny+['Bash','PowerShell']}}
-        tools='Read,Glob,Grep' if role in READ_ONLY_ROLES else 'Read,Glob,Grep,Edit,Write'
-    else:
-        settings={'sandbox':{'enabled':True,'failIfUnavailable':True,'allowUnsandboxedCommands':False,'excludedCommands':[],
-          'filesystem':{'disabled':False,'denyWrite':protected}},'permissions':{'deny':deny}}
-        tools='Read,Glob,Grep,Bash' if role in READ_ONLY_ROLES else 'Read,Glob,Grep,Bash,Edit,Write'
-    reporting=False
-    if verification_dir:
-        from .storage import read_json
-        reporting=bool(read_json(Path(verification_dir)/'request.json').get('report_protocol'))
-        operations=['admission' if role=='review' else 'verify']+(['submit_report'] if reporting else [])
-        settings['permissions']['allow']=['mcp__oh_checks__'+operation for operation in operations]
-    args=[executable(host,root),'--settings',json.dumps(settings),'--tools',tools,'--print','--output-format','stream-json','--verbose',
-          '--model',profile['model'],'--effort',profile['effort'],
-          # Plan mode rejects even explicitly allowed evidence submission. Default mode
-          # permits that exact native tool; the read-only filesystem/deny rules above stay.
-          '--permission-mode','default' if role=='review' and reporting else 'plan' if role in READ_ONLY_ROLES else 'acceptEdits',
-          '--permission-prompts','none','--strict-mcp-config','--disable-slash-commands']
-    if schema_path:args+=['--json-schema',schema_path.read_text()]
-    # Every role reads OH's project inputs, admissions and repair feedback. The existing protected
-    # paths still deny edits there: adding a readable directory never grants authority to change it.
-    if artifact_dir:args+=['--add-dir',str(artifact_dir)]
-    if private:args+=['--add-dir',str(private)]
-    if verification_dir:args+=['--mcp-config',json.dumps({'mcpServers':{'oh_checks':verification_server(verification_dir)}})]
-    return args
-
-
-def verification_server(directory):
-    import sys
-    from .config import HOME
-    from .storage import state_home
-    return {'command':sys.executable,'args':['-I',str(HOME/'oh'),'worker-checks',str(directory)],
-            'env':{'OH_DATA_HOME':str(state_home())}}
-
-
-def codex_document_permissions(paths):
-    """Invocation-local profile: keep the host's workspace protections, narrow only approved files."""
-    entries=','.join(json.dumps(path)+'="read"' for path in sorted({str(Path(p).resolve()) for p in paths}))
-    # CLI dotted-key parsing does not preserve quoted path segments. Put paths in
-    # a TOML inline table so dots, spaces and Windows separators retain their meaning.
-    return ['--config','default_permissions="oh-delivery"','--config',
-            'permissions.oh-delivery={extends=":workspace",filesystem={'+entries+'}}']
-
-
-def rule_path(path):
-    """An absolute path the way Claude's permission rules write it: //c/Users/me for C:\\Users\\me, //Users/me on POSIX."""
-    path=str(path)
-    if len(path)>2 and path[1]==':' and path[2] in '\\/':return '//'+path[0].lower()+path[2:].replace('\\','/')
-    return '/'+path
-
-
-def private_plans(root):
-    """This project's private plans folder, or None when its plans live in the repository or aren't chosen yet."""
-    from .plans import layout
-    try:where=layout(root)
-    except Refused:return None
-    return where['base'] if where['location']=='private' else None
-
-
-def parse_usage(host,event,attempt):
-    if host=='codex' and event.get('type')=='turn.completed':
-        u=event.get('usage') or {}
-        return [{'response_id':attempt+':'+str(event.get('turn_id','final')),
-          'input':u.get('input_tokens'),'cached':u.get('cached_input_tokens'),
-          'output':u.get('output_tokens'),'reasoning':u.get('reasoning_output_tokens'),
-          'source':'codex.turn.completed'}]
-    if host=='claude' and event.get('type')=='result':
-        result=[]
-        # modelUsage is the aggregate for this fresh CLI conversation, including cache fields.
-        # Do not also add per-message usage or forwarded child messages.
-        for model,u in (event.get('modelUsage') or {}).items():
-            parts=[u.get('inputTokens'),u.get('cacheReadInputTokens'),u.get('cacheCreationInputTokens')]
-            total=sum(parts) if all(type(x) is int for x in parts) else None
-            result.append({'response_id':attempt+':'+model,'model':model,'input':total,
-              'cached':u.get('cacheReadInputTokens'),'output':u.get('outputTokens'),
-              'reasoning':None,'source':'claude.result.modelUsage'})
-        return result
-    return []
-
-
-def public_message(host,event):
-    """Only public assistant text, never reasoning, tool output or a structured final report."""
-    if host=='codex' and event.get('type')=='item.completed':
-        item=event.get('item',{})
-        text=item.get('text') if item.get('type')=='agent_message' else None
-    elif host=='claude' and event.get('type')=='assistant':
-        text=' '.join(part.get('text','') for part in event.get('message',{}).get('content',[])
-                      if part.get('type')=='text')
-    else:return None
-    if not isinstance(text,str) or not text.strip():return None
-    try:json.loads(text)
-    except ValueError:return ' '.join(text.split())[:600]
-    return None
-
-
-def worker_focus(host,event,directory,previous=None):
-    """A bounded latest public update for status; informational, never execution authority."""
-    message=public_message(host,event)
-    if not message or previous and message==previous['message']:return previous
-    from .storage import digest
-    focus={'message':message,'id':digest(message),'updated_at':datetime.now(timezone.utc).isoformat()}
-    try:atomic_json(Path(directory)/'focus.json',focus)
-    except OSError:pass  # a visibility failure cannot interrupt implementation or review
-    return focus
-
-
-def invoke(host,root,profile,prompt,role,attempt_dir,context,*,schema=None,timeout=None):
-    authentication(host,root)
-    from .capabilities import validate_profile
-    validate_profile(host,profile,root)
-    attempt_dir=Path(attempt_dir);attempt_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
-    schema_path=None
-    if role in ('implementation','review'):
-        from .storage import read_json
-        if read_json(attempt_dir/'request.json').get('report_protocol'):schema=None
-    if schema:
-        schema_path=attempt_dir/'output-schema.json';atomic_json(schema_path,schema,immutable=True)
-    from .storage import state_home
-    artifact_dir=(state_home()/'projects'/context['project'] if not context.get('standalone')
-                  else attempt_dir.parent.parent)
-    args=command(host,profile,root,role,schema_path,artifact_dir,
-                 standalone=context.get('standalone',False),read_only_paths=context.get('read_only_paths',()),
-                 verification_dir=attempt_dir if role in ('implementation','review') else None)
-    started=time.monotonic();final='';usage_seen=False;structured=None;failed=False;focus=None
-    reported=set();last_progress=started
-    with (attempt_dir/'stream.jsonl').open('xb') as raw,(attempt_dir/'stderr.log').open('xb') as error:
-        from .processes import launch
-        controlled=context.get('controlled',False)
-        from contextlib import nullcontext
-        from .worker_checks import service
-        with service(attempt_dir) if role in ('implementation','review') else nullcontext():
-            with launch(root,args,controlled=controlled,timeout=timeout,interrupt=True,cwd=root,
-                        env=subscription_env(root)|{'OH_CHILD_ATTEMPT':context['attempt']},
-                        stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error) as (child,cancelled,reason):
-                try:
-                    child.stdin.write(prompt.encode());child.stdin.close()
-                except BrokenPipeError:
-                    failed=True
-                turn=0
-                for line in child.stdout:
-                    raw.write(line)
-                    try:event=json.loads(line)
-                    except ValueError:continue
-                    focus=worker_focus(host,event,attempt_dir,focus)
-                    now=time.monotonic()
-                    if focus and focus['id'] not in reported and now-last_progress>=210:
-                        import sys
-                        label='independent reviewer' if role=='review' else 'implementation' if role=='implementation' else 'assessment' if role=='assessment' else 'planning'
-                        print(f"The {label} agent: {focus['message']}",file=sys.stderr,flush=True)
-                        reported.add(focus['id']);last_progress=now
-                    if event.get('type')=='turn.completed':turn+=1;event['turn_id']=event.get('turn_id',str(turn))
-                    for usage in parse_usage(host,event,context['attempt']):
-                        usage_seen=True
-                        best_effort('usage',context['project'],context['run'],context.get('task'),context['attempt'],**usage)
-                    if event.get('type')=='item.completed':
-                        item=event.get('item',{})
-                        if item.get('type')=='agent_message':final=item.get('text','')
-                    if event.get('type')=='result':
-                        final=event.get('result','');structured=event.get('structured_output')
-                        failed=bool(event.get('is_error'))
-                    if event.get('type') in ('turn.failed','error'):failed=True
-                raw.flush();os.fsync(raw.fileno())
-            status=child.returncode
-    if schema and structured is None:
-        try:structured=json.loads(final)
-        except ValueError:pass
-    return {'returncode':status,'text':final,'structured':structured,'usage_observed':usage_seen,
-            'duration_ms':round((time.monotonic()-started)*1000),'failed':failed or status!=0 or cancelled.is_set(),'cancellation':reason}
 
 
 def failure_text(result):
@@ -521,3 +288,7 @@ def review_details(result):
 def review_result(result):
     parsed=review_details(result)
     return parsed['outcome'],parsed['findings']
+
+
+def invoke(*args, **kwargs):
+    raise Refused('OH no longer launches host subprocesses. Use a fresh native host agent.')

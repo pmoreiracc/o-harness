@@ -1,224 +1,140 @@
 # Architecture
 
+OH's native workflow candidate uses skills and focused validation helpers. The host
+runs agents and their tools; OH retains scope, allowances and evidence. The observed
+Codex parent-Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81)
+and is accepted as non-blocking for activation and release. OH must still distinguish
+a stopped parent from active children. This is not a claim of validated cancellation
+on other host surfaces; see [the migration plan](plans/native-workflows.md).
+
 | Path | Contents |
 |---|---|
-| `runtime/oh/` | The OH engine: run state, host adapters, checks, reviews, analytics and the dashboard server |
-| `plugins/o-harness/` | The plugin both hosts install: skills, the prompt hook and the launcher |
-| `workflows/` | Instructions the plugin skills load for each workflow |
-| `prompts/` | The shared independent-reviewer prompt |
-| `config/` | Default settings and OH's own invariants |
-| `dashboard/` | Static dashboard files, no build step |
-| `integrations/` | Test and packaging scripts |
-| `.claude/`, `.codex/` | Settings for developing OH itself |
+| `runtime/oh/` | Scope, journals, native provenance, checks, review, completion, publication and analytics |
+| `plugins/o-harness/` | Host plugin skills, Claude agent definitions, passive prompt hook and launchers |
+| `workflows/` | Shared native workflow and workflow-specific instructions |
+| `prompts/` | Authoring and independent-review contracts |
+| `config/` | Defaults and OH's invariants |
+| `dashboard/` | Static dashboard assets |
+| `integrations/` | Test, packaging and development scripts |
+| `.claude/`, `.codex/` | Configuration for developing OH itself |
 
 ## Install layout
 
-A built plugin contains the engine. On the first OH command, the plugin's launcher copies it
-to `~/.local/share/o-harness/versions/<commit>` and marks it active when its version is
-newer than the active one. Each run records its version and keeps using it until it ends,
-so an update never changes a running batch. Explicit Deliver or Resume can continue a settled
-task or decision with a newer engine after validating the saved checkout.
-That transition retains the original configuration, task grant and review history;
-old attempt admissions keep their original version. Both hosts share the installed engine
-and the data folder.
+A built plugin carries the shared core. Its launcher installs a newer version under
+`~/.local/share/o-harness/versions/` and records the active runtime. Both hosts use the
+same OH data and settings. Current helpers read retained historical evidence rather
+than routing requests back to a retired executor. Original admissions, configuration
+snapshots, task grants and consumed allowances are not rewritten by an update.
 
-Session ownership is transferable, not permanent host ownership. Continuation takes the runner
-lock before the control lock, validates retained work and appends one atomic continuation with
-the new native human source and active host. Stop/Pause cleanup gets a short bounded wait; live
-execution is never taken over. Existing admissions and consumed allowances remain unchanged.
-Each attempt records its host; older attempts derive it from the journal's owner at their start.
-New calls use the destination host's profiles in the original configuration. Completed publication
-with later descendant commits routes to PR observation only, leaving the original grant intact.
+Finish or cancel native work before changing builds. Adoption of unfinished work must
+occur at a quiet boundary and preserve its scope, commits, findings and allowances.
+A run completed outside OH must not be reopened or relabelled as OH-reviewed. See
+[installation](installation.md) and [usage](usage.md).
 
-## Authority
+## Native execution and authority
 
-A native human message or menu click approves work. For typed commands, the prompt hook records
-where to find the message, and OH confirms it in the host's saved transcript before starting. Model output, elapsed time
-and restarts never approve anything. Approved scope is fixed when prepared.
+The coordinating skill selects work and launches one fresh native agent at a time.
+Codex uses its default native role with no parent-history fork and explicit model and
+reasoning effort. Claude uses packaged named non-fork agents with invocation-specific
+model and effort. No OH headless model runner, agent scheduler or permission broker
+executes the task.
 
-Missing arguments are collected in ordinary conversation before starting the runner. The skill
-asks directly; no waiting-file write is required to ask. At admission, OH reads the native human
-invocation and its replies, checks their checkout and consumption receipts, and passes the completed
-input to the existing workflow. The actual human message remains the authority source. Quick-fix
-clarifications only prepare scope; its immutable approval menu still grants execution.
-Unresolved locators whose source is missing remain non-executable and do not block a verified
-request. If their source returns, the recorded request/menu chronology prevents stale work from
-reviving. Partially saved existing sources still receive the bounded evidence retry.
+The native host owns tool permissions, shell execution and cancellation. Reviewers
+follow a no-edit contract under inherited host permissions. Candidate mutation
+invalidates their receipt; this does not provide a separate filesystem sandbox and
+cannot detect an edit subsequently reverted.
 
-Approval checkpoints render their complete subject to a stable Markdown review copy under the
-run's menus folder. Codex's blocking MCP menu is bound to that exact preview and records the
-human click without coordinator polling. Previously displayed native async questions remain
-supported: their answers require a native human record in the owning conversation, matched to
-the exact displayed question. Injected user-role text, changed questions, old previews and
-replays cannot grant work. Opening a preview in a host panel is presentation, not approval authority.
+The prompt hook exposes only a native source locator. It neither classifies replies,
+grants work, starts a workflow nor writes a waiting record. Consequential helpers read
+the actual native human message or question/plan acceptance and bind its scope,
+subject and consumption identity. Agent text, sidechain input, elapsed time, retries
+and restarts grant nothing. Trusted native records are accepted under normal host
+permissions; custom host software can imitate such records, an explicit limitation
+in `config/invariants.json`.
 
-A choice can also be a click. In Claude, the agent shows OH's menu with Claude's own question
-tool; a hook refuses a menu whose answer the model filled in, and OH reads the click from the
-saved transcript of the conversation that owns the run. Nothing is handed over in between, and
-only the latest click on exactly the menu OH is waiting on counts, so a click on an older menu,
-in another conversation or on an altered menu never applies. A menu word typed in Claude
-is read from the transcript the same way, so only the person's single latest answer to the
-current menu counts, typed or clicked; if OH refuses it, no earlier answer applies instead. Only
-records trusted under normal host permissions count; peer, sidechain, meta and notification records
-stay excluded. Claude Remote Control menu replies are accepted without asking the person to type
-the choice again. Claude 2.1.294 saves genuine phone clicks with the same approval metadata as
-programmatic SDK answers. Custom SDK software can also stamp typed inputs with human origin, so
-typing does not reliably distinguish that software from a person. OH accepts this SDK automation
-risk for both native menu replies and human-marked inputs, as stated in `config/invariants.json`;
-it does not claim either is unforgeable proof of a physical human action. This applies to task grants
-and review renewals as well as other choices. Exact current-menu matching, unanswered tool input,
-owning session and checkout, latest-answer ordering and one-time receipts remain required.
-Covered by `test_typed_choices_count_as_saved_by_the_desktop_app_but_not_from_other_senders` and
-`test_a_refused_latest_answer_never_lets_an_older_one_apply` and
-`test_native_transcript_binds_host_turn_text_and_checkout`. If OH can't read a typed menu word as the
-latest answer, it applies nothing and asks the person to choose again.
-In Codex, OH's MCP server shows a blocking menu and records the click without coordinator polling,
-which travels from the Codex menu to OH without passing through the model; a click spends any menu word typed before it.
+Skills ask real questions directly through native tools or ordinary chat when those
+tools are unavailable. There is no OH menu engine or exact reply-command protocol.
+Claude quick fixes use the native plan viewer's single Accept, bound to the actual
+accepted scope. Drafting a design needs no extra scope question. Repository design
+approval remains human merge; private design approval binds the reviewed contents.
 
-In Codex, the agent runs OH through that same server rather than the shell. Codex's sandbox lets
-shell commands write only inside the project, while OH's state lives in its own folder so the
-model can't write it; Codex runs a plugin's MCP server outside that sandbox. Each everyday OH
-command (status, init, deliver, prepare, start, run, pause, resume, stop and a few read-only ones)
-is a tool that runs the command through the plugin's `oh` launcher, as the shell would: with the
-person's own shell setup (read once from their login shell, since Codex gives the server almost
-none of it), while OH's and the hosts' own settings come only from Codex, so a command and the
-server always use the same OH state. A command runs in its own session, and OH ignores an output
-nobody reads any more, so a run keeps working if Codex ends the server. OH's progress lines become progress notifications. Each active attempt also retains only its latest
-bounded public assistant focus for status; reasoning and tool output are excluded. This visibility
-data never grants work, completes a task or authorizes a commit.
-The server runs from the core the plugin carries, so its tools exist before setup and right after
-an update; the launcher still picks and activates the installed core. The runner incrementally observes the owning Codex execution turn. Its native
-`turn_aborted` record with `reason: interrupted` requests the same durable stop as `oh-stop`,
-including when Codex cancelled a yielding wait and no MCP cancellation reached OH. Tool
-transport cancellation alone grants no control; another turn or delegated worker cannot
-stop this run. Active steps interrupt/clean up their owned processes, and handoffs fence the
-next check, review or commit. Covered by
-`test_stop_during_check_cancels_owned_group_and_preserves_results` and
-`test_codex_stop_after_worker_prevents_checks_review_and_commit`.
-Each implementation worker gets an argument-free `verify` tool on its separate `oh_checks`
-connection. A temporary loopback connection forwards that fixed request to OH, preserving the original
-check environment without copying it into the subscription worker. OH resolves commands from
-the run's saved project checks, runs them on the worker's request,
-and retains native results bound to the attempt, HEAD, check selection and unchanged working tree.
-Failures return to that same worker. The runner validates these receipts before independent review;
-worker prose never substitutes for a check result. Finished attempts cannot use the tool.
-Covered by `test_review_requires_implementer_checks_for_the_final_unchanged_tree`.
+## Focused helpers
 
-Commands that change what OH runs on the machine (settings and checks, setup, host trust,
-backups, services) are not tools, so Codex asks the person before they run. Codex puts the
-calling conversation in each request's metadata, which the model can't set: a tool acts only on
-the Git checkout that conversation works in (read from Codex's saved session), never on a
-repository around a nested one, a menu answers only in
-the conversation that started the run, and OH checks a typed choice against that conversation's
-saved turn as before. The server is started only by Codex from the plugin, never by an `oh`
-command. OH's worker commands turn OH's Codex plugin off, and the server refuses any tool when an
-OH worker started it.
+`native.py` supplies explicit operations for scope preparation/approval, attempt
+admission/binding/retention, candidate preparation, checks, human decisions, reviewed
+completion and standalone feedback. `status` returns facts, not an agent dispatch or
+generated question. The journal retains each attempt before launch, including failed,
+empty and interrupted launches. Native identity and result records bind the agent to
+that admission without treating an author summary as completion proof.
 
-The runner keeps a hash-chained journal per run. For each new delivery task a fresh read-only assessment on the standard profile selects its
-implementation difficulty from actual scope and relevant code, retaining that assessment for
-repairs/resume. Its usage counts toward the task. The runner starts a fresh implementation worker, validates the worker’s recorded checks, starts an independent reviewer on the exact tree
-and commits only the reviewed tree, with an `OH-Evidence` trailer. `oh pr-summary` checks
-that trailer against every commit on the branch and renders work, verification and review decisions
-from the journal. Local path prefixes are removed before new publication evidence is sealed into
-the commit; local journals retain the originals. Portable evidence stays in hidden PR metadata; validation also accepts existing
-PRs with the original visible JSON format.
-Design delivery also records its approved starting document and checks actual task transitions,
-dependency order, branch ownership and commit subjects before PR. Private designs use their
-human-approved hash and retained progress candidates. Prepared quick fixes wait in a journaled
-approval checkpoint without a task grant or execution branch; the host's Approve click activates
-only that immutable task list and its saved limits. See the behavior tests named in
-[usage](usage.md).
+The implementer prepares provisional task/lifecycle changes and verifies the final
+candidate. A fresh independent reviewer examines that candidate against the immutable
+original scope, project contracts and prior findings. Provisional marks are content,
+not completion authority. Only completion validates the passing checks, review and
+current candidate before recording the task and committing the reviewed tree.
+The last task's review includes the accumulated branch and task interactions.
 
-Workers run through the checked host CLI with API-key variables removed. They can't write
-OH state or Git internals; reviewers are read-only. Pause and stop share a lock with commit,
-so a stop never leaves a half-recorded task.
+Checks and repairs stay within the approved task. A repeated blocking family in two
+independent reviewer receipts triggers implementation escalation. A spent review
+allowance requires a verified human grant; retrying or switching hosts does not renew
+it. Standalone feedback cannot count as workflow review or authorize repairs.
 
-## Git subjects and recovery
+`handoff.py` retains bounded current packets with immutable scope/evidence references
+and complete finding indexes. Full worker transcripts stay outside the mandatory
+coordinator context. Original reports are retained without a mandatory prose schema.
+Author repair claims and independent reviewer closure remain distinguishable, including
+findings from imperfect reports. Supplemental measurements are hashed evidence
+references, not approval.
 
-Local Git reads, review candidates and commits keep the same user configuration, including
-runtime line-ending settings, while discarding inherited selectors for another repository or index.
-The explicit checkout root is validated before fingerprinting or constructing a candidate. A candidate
-uses a temporary index; status reads do not refresh the person's index. Covered by
-`GitSubjectTest.test_git_configuration_agrees_and_inherited_selectors_cannot_choose_a_sibling`.
+## Host entries
 
-Replacing a tracked file with a folder, or a folder with a file, has the same fingerprint before and
-after staging. Nonignored children and tracked files remain visible, even when newly ignored;
-child edits invalidate the reviewed subject. Only indexed gitlinks and actual embedded repositories
-are checked as child repositories, and dirty or uninitialized children require repair before review.
-This repository's nested worktrees remain separate. Conflicted index entries require resolution.
-Covered by `GitSubjectTest.test_file_folder_replacements_are_staging_independent_and_children_remain_visible`,
-`GitSubjectTest.test_real_gitlinks_embedded_repositories_and_nested_worktrees` and
-`GitSubjectTest.test_unmerged_index_is_not_an_arbitrary_review_subject`.
+Claude calls the packaged launcher through its ordinary native tools. Codex calls
+focused OH operations through the plugin MCP bridge because OH state lives outside
+the consumer checkout. The bridge validates the calling native conversation and its
+Git root before invoking the corresponding helper. Native child agents can use
+candidate/check/admission helpers; child prompts cannot grant scope or publication.
 
-If the final fingerprint fails after a worker returns, OH retains its complete answer, finishes the
-attempt as failed with an unknown post-tree, and stops for attention. Repair the checkout and use the
-existing `run` continuation after repairing it; no Retry approval is required for delivery, and
-restarting never replenishes task or review allowances. A supported
-file/folder replacement also survives an interrupted commit without additional model calls. Covered by
-`WorkerCompletionTest.test_post_worker_fingerprint_failure_retains_result_and_spent_attempt` and
-`WorkflowTest.test_recover_clean_review_after_commit_without_new_model_calls`.
+The MCP server does not launch model subprocesses, display questions or accept an
+arbitrary command proxy. Project checks use the saved configuration and ordinary
+check process utilities. Settings, setup, backups and services remain explicit
+commands. A native permission rejection is not bypassed through another entry.
 
-## Data
+Transport cancellation alone does not establish workflow Stop. The recorded Codex
+terminal probe left a delegated command running after parent interruption. Stop must
+be confirmed by supported native cancellation before later work or completion. OH
+adds no replacement process supervisor. The unresolved host behavior blocks rollout;
+see the validation record rather than assuming parent interruption cancels children.
 
-The SQLite analytics database is rebuilt from saved events and never grants anything.
-Backup and restore lock the data folder.
+## Git subjects, completion and publication
 
-## Not yet supported
+Git reads and candidate construction preserve the user's configuration, including
+line endings, while discarding inherited selectors for a different repository or
+index. The explicit checkout is validated before fingerprinting. Candidate trees use
+a temporary index; status does not refresh the user's index. Tracked files,
+nonignored children, file/folder replacements, gitlinks and conflicts remain part of
+the actual subject rather than being hidden by staging differences.
 
-- One task runs at a time. Parallel tasks are tracked in
-  [issue 1](https://github.com/pmoreiracc/o-harness/issues/1).
-- Other hosts need a tested adapter first
-  ([issue 4](https://github.com/pmoreiracc/o-harness/issues/4)).
+Approved task structure and completed history are checked mechanically. Required
+living-document changes remain possible within the original scope; the independent
+review assesses semantic scope drift. Native evidence stays outside consumer
+repositories and their Git directories.
 
+Publication permission binds the reviewed head and destination. Reconciliation reuses
+an existing PR and never treats failed discovery as authority to create a duplicate.
+`oh pr-summary` validates retained commit evidence and renders actual changes, checks,
+findings and decisions. Portable evidence belongs in hidden PR metadata; local reports
+retain original references. A successful push is not CI success, and the person merges.
 
-## Task context and workflow decisions
+Interrupted completion/publication uses retained evidence without inventing another
+grant or repeating already verified work. Historical receipts remain historical; a
+new host, snapshot or result view does not change what they reviewed.
 
-`handoff.py` writes versioned immutable task packets and complete finding indexes. A packet
-binds approved scope, the current author claims and native verification to its admitted subject;
-old author transcripts are not mandatory context. Distinct findings within a family retain
-separate cases and every original locator. Version 3 calls grouping hashes `case_key`; only
-`review-attempt#finding-number` is a finding ID. Report errors are returned to the active author.
-Historical four-list reports remain readable as older claims without invented missing fields.
+## Analytics and limits
 
-`actions.py` supplies the next-action and choice policy shared by execution, status and menus.
-Checks remain implementer-owned. Repairs precede the review-allowance checkpoint; continuation
-never renews it. Publication binds the destination and uses native Codex question provenance
-instead of treating an MCP-only click as host permission to export repository code.
+The SQLite dashboard index is derived from saved observations and never grants work.
+Missing measurements remain unknown and subset counters are not added twice. Dashboard
+reads make no model calls. New dashboard analysis is unavailable in this candidate;
+saved analytics and suggestions remain readable.
 
-`receipts.py` renders readable requests, immutable attempt views and a current run index from
-retained evidence. These derived views have no authority and require no model calls. PR metadata
-still carries portable review evidence; the visible description uses the current whole-change
-summary, native verification and a complete expandable review history.
-
-The existing worker connection exposes `verify` only to the implementer and read-only
-`admission` only to the reviewer. Admission validation checks the journal-bound request,
-current checkout/runtime and packet/artifact hashes. It runs no project checks and grants no
-workflow authority. Reviewers can focus on product correctness without reconstructing OH's
-hashing code or searching installed runtime copies. The existing worker-tool integration test
-covers role isolation, changed packets, changed code and reuse of a completed admission.
-
-Codex worker invocations disable inherited MCP servers and plugins using local CLI overrides;
-only the attempt's native tools are enabled. This matches Claude's strict MCP selection and
-does not rewrite user or project settings. Overrides use TOML tables to preserve literal
-names containing punctuation. See the [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
-Claude reviewers retain read-only filesystem rules and use default permission handling with
-only the two native tools explicitly allowed; plan mode would reject report submission.
-
-Both roles also have `submit_report`. OH retains immutable submissions through the same native
-connection, validates their role and subject, and returns report/check errors before the agent
-exits. The latest submission supersedes earlier submissions, including when it is invalid;
-identical submissions are idempotent. Final chat prose is retained but is not another report.
-The runner rechecks the submission and current subject before admitting the next step.
-Pause may drain an existing agent's report; Stop accepts no further submissions or work.
-Review interpretation preserves recognizable findings and incomplete fragments independently
-of metadata validity. Only complete evidence without unresolved fragments can establish clean.
-An agent that ends without a usable implementation report exposes a handoff failure rather
-than starting implementation again. Incomplete reviews use fresh review authority already held.
-The worker-tool, repair and completion fixtures cover these boundaries.
-
-Legacy v2 case references are converted only when each maps to exactly one original finding.
-The native conversion appends derived evidence, revalidates the original passing checks and
-subject, and leaves original receipts and grants unchanged. A new explicit Deliver can adopt
-a fully paused run in the selected runtime, using its settled HEAD/tree and branch identity.
-`test_v2_handoff_reuses_verified_work_without_rewriting_receipts` and the stopped/paused
-continuation fixtures cover this compatibility path.
+Only sequential task implementation is supported. Additional hosts and platforms need
+their own native capability and cancellation validation. See [dashboard and data](analytics.md).

@@ -1,11 +1,9 @@
-"""Current task context. Durable history is retained without replaying author transcripts."""
+"""Bounded evidence packets, never agent prompts or mandatory prose schemas."""
 from pathlib import Path
 from .storage import Refused, atomic_json, digest, read_json
-
-VERSION = 3
-READINESS_LISTS = ('requirements', 'rules', 'surfaces', 'proof', 'self_review',
-                   'family_closure', 'verification', 'repairs', 'limits')
-DISPOSITIONS = ('fixed', 'routed', 'accepted', 'dismissed', 'still-open', 'disputed')
+VERSION=4
+READINESS_LISTS=('requirements','rules','surfaces','proof','self_review','family_closure','verification','repairs','limits')
+DISPOSITIONS=('fixed','routed','accepted','dismissed','still-open','disputed')
 
 
 def report(attempt):
@@ -14,10 +12,11 @@ def report(attempt):
         if ref:=attempt.get('normalized_report'):
             value=read_json(ref['path'])
             if digest(value)!=ref['hash']:raise Refused('The normalized handoff changed; preserve the original evidence.')
-        else:value = read_json(Path(attempt['evidence'])/'result.json').get('structured')
+        else:
+            saved=read_json(Path(attempt['evidence'])/'result.json')
+            value=saved.get('structured',saved)
     except FileNotFoundError:return {}  # a terminated host may have saved no final report
     return value if isinstance(value, dict) else {}
-
 
 def confirms_repairs(state, attempt):
     """Only valid independent evidence closes earlier in-scope findings."""
@@ -34,7 +33,6 @@ def confirms_repairs(state, attempt):
             'resolutions':state.get('resolutions',{})})
     except Refused:return False
     return True
-
 
 def finding_index(state, task):
     """Distinct cases and original locators, with later review evidence and labelled author claims."""
@@ -89,114 +87,8 @@ def finding_index(state, task):
             group['occurrences'].append(occurrence)
     return {'schema': VERSION, 'task': task, 'families': list(families.values()), 'incomplete_reviews': incomplete}
 
-
-def coordinator_view(journal, value, limit):
-    """Keep a large planning decision available by reference without repeating its full body in status."""
-    from .storage import encode
-    if len(encode(value)) <= limit:return value
-    fingerprint=digest(value);path=journal.path/'views'/(fingerprint+'.json')
-    # This is a regenerable presentation; the original proposal remains in its immutable attempt.
-    atomic_json(path,value)
-    return {k:value[k] for k in ('route','choices') if k in value} | {
-        'summary':str(value.get('summary') or value.get('understanding') or '')[:800],
-        'details':str(path), 'hash':fingerprint}
-
-
 def finding_ids(index):
     return {item['id'] for family in index['families'] for item in family['occurrences']}
-
-
-def readiness_errors(value, expected=None):
-    """Report all correctable handoff problems while the author is still running."""
-    if not isinstance(value, dict) or set(value) != {*READINESS_LISTS, 'prior_findings'}:
-        return ['Return the current readiness sections: '+', '.join((*READINESS_LISTS, 'prior_findings'))+'.']
-    errors=[]
-    for key in READINESS_LISTS:
-        if not isinstance(value[key], list) or any(not isinstance(x, str) or not x.strip() for x in value[key]):
-            errors.append(f'Readiness {key} must be a list of concrete observations.')
-    for key in ('requirements', 'rules', 'surfaces', 'proof', 'self_review', 'verification'):
-        if not value[key]:errors.append(f'Complete readiness {key}; state why a section does not apply when appropriate.')
-    items = value['prior_findings']
-    if not isinstance(items, list):return errors+['Account for every prior finding in prior_findings.']
-    ids=[]
-    for number,item in enumerate(items,1):
-        if (not isinstance(item, dict) or set(item) != {'id', 'disposition', 'proof'} or
-                any(not isinstance(v, str) or not v.strip() for v in item.values()) or
-                item['disposition'] not in DISPOSITIONS):
-            errors.append(f'Prior finding {number} needs its receipt id, valid disposition and concrete proof.')
-        if isinstance(item,dict) and isinstance(item.get('id'),str):ids.append(item['id'])
-    if duplicates:=sorted({key for key in ids if ids.count(key)>1}):errors.append('Duplicate finding ids: '+', '.join(duplicates))
-    if expected is not None:
-        if missing:=sorted(expected-set(ids)):errors.append('Missing finding ids: '+', '.join(missing))
-        if unknown:=sorted(set(ids)-expected):errors.append('Unknown finding ids: '+', '.join(unknown)+'. Use receipt references, not case keys.')
-    return errors
-
-
-def validate_readiness(value, expected=None):
-    return '; '.join(readiness_errors(value,expected)) or None
-
-
-def legacy_report(value,index):
-    """Lossless v2 alias conversion only; repeated cases are deliberately ambiguous."""
-    from copy import deepcopy
-    if index.get('schema')!=2 or not isinstance(value,dict):return None
-    result=deepcopy(value);ready=result.get('readiness')
-    if validate_readiness(ready):return None
-    expected=finding_ids(index);aliases={}
-    for family in index['families']:
-        for item in family['occurrences']:aliases.setdefault(item['case'],set()).add(item['id'])
-    changed=False
-    for item in ready['prior_findings']:
-        if item['id'] in expected:continue
-        matches=aliases.get(item['id'],set())
-        if len(matches)!=1:return None
-        item['id']=next(iter(matches));changed=True
-    return result if changed and not validate_readiness(ready,expected) else None
-
-
-def report_schema(role,index):
-    from copy import deepcopy
-    from .hosts import WORK_SCHEMA,REVIEW_SCHEMA
-    schema=deepcopy(REVIEW_SCHEMA if role=='review' else WORK_SCHEMA)
-    if role=='implementation' and (ids:=sorted(finding_ids(index))):
-        schema['properties']['readiness']['properties']['prior_findings']['items']['properties']['id']['enum']=ids
-    return schema
-
-
-def legacy_pending(attempt):
-    if not (attempt and attempt.get('finished') and attempt.get('outcome')=='unfinished' and
-            attempt.get('evidence') and report(attempt).get('status')=='completed'):return False
-    try:request=read_json(Path(attempt['evidence'])/'request.json')
-    except FileNotFoundError:return False
-    return request.get('context_version')==2
-
-
-def recover_legacy(root,journal,state,attempt):
-    """Append an interpretation, never rewrite a receipt or grant authority."""
-    from .hosts import work_result
-    from .worker_checks import report_errors
-    if not legacy_pending(attempt):raise Refused('No completed legacy handoff is available to normalize.')
-    directory=Path(attempt['evidence']);request=read_json(directory/'request.json');raw=read_json(directory/'result.json')
-    packet=read_json(request['task_context']['path']);index=read_json(packet['findings']['path'])
-    if (raw.get('failed') or raw.get('cancellation') or digest(request)!=attempt.get('request_hash') or
-            digest(packet)!=request['task_context']['hash'] or digest(index)!=packet['findings']['hash']):
-        raise Refused('The legacy handoff is cancelled or its evidence binding changed. Preserve it and inspect that mismatch.')
-    converted=legacy_report(raw.get('structured'),index)
-    if converted is None:raise Refused('Legacy finding references are ambiguous or incomplete. Preserve the draft and inspect the original report; do not restart implementation.')
-    if work_result(raw|{'structured':converted})[0]!='implemented':raise Refused('The legacy report does not claim completed work.')
-    if issues:=report_errors(directory,converted,root,journal,state,attempt):raise Refused('; '.join(issues))
-    from .verification import tree
-    from .storage import git
-    if attempt['tree']!=tree(root) or attempt['head']!=git(root,'rev-parse','HEAD'):
-        raise Refused('The legacy implementation no longer matches the saved work. Preserve the edits and inspect the difference.')
-    path=directory/'normalized-report.json'
-    if path.exists():
-        if read_json(path)!=converted:raise Refused('The retained handoff conversion changed; preserve its original evidence.')
-    else:atomic_json(path,converted,immutable=True)
-    journal.append('handoff.normalized',{'id':attempt['id'],'report':{'path':str(path),'hash':digest(converted)},
-        'source_hash':digest(raw),'index_hash':digest(index),
-        'reason':'Unambiguous v2 case references mapped to original review receipt references; claims and authority unchanged.'})
-
 
 def prepare(state, task, role, directory, admission, feedback=''):
     """An immutable projection of native facts and the latest author's explicitly labelled claims."""
@@ -227,13 +119,38 @@ def prepare(state, task, role, directory, admission, feedback=''):
         'role': role, 'current_work': current, 'remaining_work': feedback,
         'verification': verification,
         'findings': {'path': str(index_path), 'hash': digest(index)},
+        'scope_snapshot':{'path':str(directory.parent.parent/'scope'/'scope.json'),'hash':digest(state['scope_snapshot'])} if state.get('scope_snapshot') else None,
+        'accepted_scope':{'path':str(directory.parent.parent/'scope'/'accepted.md')} if state.get('accepted_scope') else None,
+        'proposal_decisions':state.get('proposal_answers',[]),
+        'supplementary_evidence':state.get('supplementary',[]),
+        'completed_tasks':[{'id':t['id'],'title':t['title']} for t in state['tasks'] if t['id'] in state['done']],
+        'standalone_subject':state.get('standalone_subject'),
+        'standalone_artifact':state.get('standalone_artifact'),
         'history': str(directory.parent.parent),
         'history_policy': 'Read the current packet and complete finding index. Consult original reports only for a specific unresolved question; do not replay prior author reports or transcripts.'}
+    if not state.get('standalone_subject'):
+        approval=directory.parent.parent/'scope'/'approval.json'
+        if approval.is_file():packet['human_scope_approval']={'path':str(approval)}
+        else:
+            original=directory.parent.parent/'000001.json'
+            if original.is_file():packet['original_scope_provenance']={'path':str(original),
+                'authority':'Original run provenance; not a newly accepted native scope.'}
     if state.get('repair_source'):packet['repair_source']=state['repair_source']
     if state.get('plans'):
         packet['planning'] = state['plans']
         packet['human_refinements'] = [{'source': a['source'], 'feedback': a['feedback']}
             for a in state.get('proposal_answers', []) if a['choice'] == 'refine']
+    limit=state['config']['context']['handoff_chars']
+    from .storage import encode
+    if len(encode(packet))>limit:
+        original=packet;details=directory/'task-details.json'
+        atomic_json(details,original,immutable=True)
+        packet={'schema':VERSION,'purpose':admission.get('purpose','workflow'),'run':state['id'],'role':role,
+                'task':{'id':task['id'],'title':task['title']},
+                'details':{'path':'task-details.json','hash':digest(original)},
+                'findings':{'path':'finding-index.json','hash':digest(index)}}
+    if len(encode(packet))>limit:
+        raise Refused('The task title and immutable references exceed the configured context bound; increase context.handoff_chars before admission')
     packet_path = directory/'task-context.json'
     atomic_json(packet_path, packet, immutable=True)
     return {'path': str(packet_path), 'hash': digest(packet)}, index

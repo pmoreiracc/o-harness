@@ -1,43 +1,43 @@
 ---
 name: review
-description: Independently inspect a specified subject, or challenge a completed unpublished Deliver task again.
+description: Independently inspect a specified subject and offer bounded repairs when requested.
 ---
-Read `workflows/runtime.md` once and use its host execution, progress and decision protocol.
+Read `workflows/runtime.md` once through OH's resource entry. Resolve the person's
+subject with targeted reads; ask only when it is ambiguous. Selectors are `changes`,
+`tree`, `paths <relative paths>`, `commit <ref>`, `range <base> <head>` or
+`task <id>` for completed unpublished delivery work. A design number is not a task
+number. A merged
+change is reviewed as a commit or range. Honor an explicit feedback-only request.
 
-Resolve the person's requested subject using targeted reads when needed. Native selectors:
-`changes` (all current uncommitted work), `tree` (current code), `paths <relative paths>`,
-`commit <ref>`, `range <base> <head>`, or `task <id>` (completed unpublished Deliver work).
-Append `--feedback-only` when the person explicitly requests feedback without a repair offer.
-Use one argument per path in Codex; quote paths containing spaces in Claude's shell.
-Ask only when the intended subject is ambiguous.
-Do not interpret a design number as a task number. A merged change is a commit/range review.
+Call `review -- <selector...>` (Codex `review` with selector arguments) to bind that
+subject, then admit a fresh review agent with the configured profile and bounded
+packet. Bind its native child identity, wait and retain its complete original report.
+Do not require an author report or design document, run product tests or start repairs
+merely to obtain feedback. The requested subject and project requirements determine
+which evidence is needed.
 
-Call OH `review` with the selector (`arguments` in Codex; `review -- <selector>` in Claude).
-The runtime retains the original human request and binds the subject before launching a fresh
-reviewer. Do not create an implementation report, require a design document, run tests or
-start implementation merely to obtain feedback. The runtime owns receipt validation.
+Present the actual outcome, concrete findings, evidence and limits with the readable
+report. This standalone receipt is feedback about its exact subject, never a delivery
+round, completion approval or repair authorization. A clean or feedback-only review
+ends here. Do not import old finding history into another standalone review unless
+requested; preserve each original receipt independently.
 
-Present the actual outcome, concrete findings, limits and readable report. A standalone
-receipt is feedback about its exact subject, never a workflow round or completion approval.
-A clean or feedback-only review ends here. Do not carry its finding history into later
-standalone reviews unless the person explicitly requests that context.
+For requested repairs, inspect findings against current code and propose only applicable
+bounded fixes through ordinary Deliver scope preparation, naming the review source.
+Explain obsolete findings and omit their repairs. Include original unreviewed edits or
+commits as one coherent task when they will be completed with the fixes. Do not create
+a roadmap/design document or redesign classification just to repair manual work.
+Resolve real product choices in ordinary conversation before final scope approval.
 
-When the result returns `prepare` and `review_source`, inspect the findings against current
-code and prepare a bounded quick-fix task list through the existing `prepare` tool with
-`review` set to that ID (Claude: `prepare --review <id> <manifest>`). Historical findings
-may already be fixed: explain that and omit obsolete repairs. If none apply, end with the report.
-When original edits or unreviewed commits are included, prepare one coherent repair task
-covering that included change. Its full contents are checked and reviewed before commit;
-do not split an existing uncommitted change across partially completed repair tasks.
-Resolve genuine product choices in ordinary conversation before preparing the final scope.
-Do not create roadmap/design documents or add a redesign classification.
+Show the complete proposed repair scope and included original changes before the single
+native quick-fix approval; the person can refine or keep the review as feedback instead.
+No preliminary repair menu is needed. Approved repairs follow normal native delivery,
+checks, fresh workflow review and exact-candidate completion. The feedback receipt itself
+cannot authorize completion. Existing task corrections preserve prior history and spent
+allowances; never rewrite an earlier receipt or relabel unreviewed work as OH-reviewed.
 
-The returned existing menu offers Approve fixes / Refine / Keep as feedback. Show the
-scope and all original edits included in completion first. There is no preliminary repair
-menu. Refine is ordinary text followed by a revised preview. Keep as feedback ends the
-operation; do not retain an open repair series. Approval enters normal Deliver, including
-implementer-owned affected checks, fresh review, reviewed commit and publication decision.
-
-For `task <id>`, the runtime retains the existing delivery and allowances. A clean re-review
-returns to its decision without a commit. Blocking findings enter the existing scoped repair
-loop and produce a correction commit; no checked task or previous receipt is rewritten.
+For `task <id>`, retain the saved delivery scope, task coverage and remaining review
+allowance. Review the current exact candidate without a new task grant. A clean result
+returns to its previous decision without another commit. Blocking findings enter the
+same task's scoped repair/review cycle and complete as a correction commit; preserve
+earlier completion and publication history instead of rewriting the original receipt.

@@ -1,187 +1,208 @@
-# Shared OH execution protocol
+# Shared native OH workflow
 
-Load this once for the active workflow. The runtime owns execution and decisions; the coordinator
-handles the conversation, the returned questions and authorized publication.
+Load this once for the active workflow. The skill coordinates sequential native agents;
+focused OH helpers preserve scope, allowances, evidence and reviewed completion. Native
+hosts own agent execution, tool permissions and cancellation. Keep OH state outside
+consumer repositories and keep raw worker transcripts out of the coordinator's context.
 
-## Host entry
+## Entries and facts
 
-In Codex, use the o-harness tools with the checkout's absolute `root`. Do not invoke OH through
-Codex's shell: that shell cannot write OH's state. In Claude, use the absolute plugin entry
-`<plugin>/scripts/oh --root <checkout> <command>` (`scripts/oh.cmd` on native Windows).
-Read shared resources through the same `resource` entry. `config set` and `config unset` use the
-plugin command on either host; preserve the person's selected settings.
+In Codex use the connected OH tools with the checkout's absolute `root`. In Claude use
+the absolute plugin launcher, `<plugin>/scripts/oh --root <checkout> <command>`
+(`scripts\oh.cmd` on native Windows). Load resources through the same resource entry.
+If the Codex connection is missing, explain the `/mcp` recovery step; do not bypass it
+with shell writes to OH state. Setup requires an explicit invocation, not discovery.
 
-The explicit invocation registers the checkout. If its name is ambiguous, obtain the intended
-name and use `init --name`. For Deliver without configured checks, use the project's existing
-instructions and CI to register affected checks; preserve existing checks. Planning validates
-its documents without running product tests. Keep OH files and settings outside the consumer.
+Read `status` before selecting work. It returns facts about the scope, current task,
+completed work, profile, attempts, review allowance, candidate and publication. It does
+not execute an agent or issue a generated question. Match saved work to the person's
+current request; a new request does not silently select an unrelated old task.
+Use `resume` for the saved task or decision after prior native work is quiescent.
+A session or host change preserves scope, findings, configuration and consumed allowances.
+Never restart the task or renew a grant merely to transfer hosts. Preserve useful edits.
 
-Deliver and Resume can continue saved work in a fresh session on either host, using the same
-checkout and OH data. Let the runtime transfer ownership; never restart the task or grant new
-allowances to switch hosts. It waits briefly for already-requested Stop/Pause cleanup. If that
-cleanup remains pending, retry the valid command after a short wait without asking for approval.
-A still-active run must first be stopped or paused; do not take it over while workers run.
+Use these focused operations, through their equivalent named OH tools in Codex:
 
-A valid command remains pending through routine internal repair. Follow OH's concrete remedy
-and continue it within existing authority. For the person's uncommitted changes, conflicts,
-missing authority or an external action, explain the actual issue and use the returned choices.
-Never discard, commit or stash their edits by assumption. OH owns checkout/branch transitions.
-A persistent obstacle must name the next action; it does not create a recovery approval.
+| Purpose | Claude command | Codex tool |
+| --- | --- | --- |
+| Prepare bounded work | `scope prepare <manifest.json> [--workflow deliver\|design\|propose] [--human <locator.json>]` | `scope_prepare` |
+| Select approved design tasks | `scope prepare --doc NNNN [--track TRACK] --human <locator.json>` | `scope_prepare` |
+| Approve a quick-fix preview | `scope approve <scope-id> <locator.json>` | `scope_approve` |
+| Admit a fresh phase | `attempt admit assessment\|implementation\|analysis\|review` | `attempt_admit` |
+| Bind the launched native child | `attempt bind <attempt-id> <locator.json>` | `attempt_bind` |
+| Retain its original native result | `attempt retain <attempt-id> <locator.json>` | `attempt_retain` |
+| Validate review admission | `admission <attempt-directory>` | `admission` |
+| Prepare provisional candidate content | `candidate` | `candidate` |
+| Check the current candidate | `verify [base] [mode]` | `verify` |
+| Attach supplementary proof | `evidence <attachment.json>` | `evidence` |
+| Complete the reviewed candidate | `complete <review-attempt-id>` | `complete` |
+| Record a consequential human decision | `decision <kind> <locator.json> [--attempt ID] [--destination FILE]` | `decision` |
+| Prepare standalone feedback | `review -- <selector...>` | `review` |
 
-## Execution and visibility
+Manifest and locator JSON files belong in external writable scratch storage. Codex tools
+receive the equivalent JSON objects. A locator names actual host evidence: `host`,
+`session`, and available `turn`, `transcript_path`, `tool_use_id` or `child_session`.
+Copy identities from native events; do not invent a human message, child ID or result.
+Helpers validate the original record. Prose claiming approval never substitutes for it.
+Do not hand-edit OH journals, snapshots, receipts, counters or configuration files.
 
-Before selection, say you are checking the requested work and saved delivery state. Once the
-runtime selects work, introduce its process once; a saved final decision needs no new worker.
-Use “implementation agent”, “planning agent”
-or “proposal agent”, and “independent reviewer agent”. Independent review challenges correctness,
-requirements, failure paths and test claims. Explain that the work may take several minutes.
+The explicit workflow registers its checkout. If a project name is ambiguous, obtain
+that name and use `init --name`. For delivery without checks, register the project's
+existing affected checks from its instructions/CI; preserve configured checks. Read
+`plans path` before planning and resolve an undecided repo/private location once.
+Configuration changes use `config set`/`unset` and the person's authorized settings.
 
-Each native execution call runs at most one agent phase. The implementation phase includes its
-checks and repairs; the runner saves evidence and finishes deterministic transitions before
-returning. If the result has `continue_execution: true`, call `run` automatically. This continues
-the same approved run with a fresh call budget; it is not a user decision or an interrupted
-attempt. `phase_result` describes the phase that returned; use it for a concise factual handoff.
-Never choose the next agent yourself. Each phase has up to two hours, with cleanup
-headroom; the workflow has no total deadline. Never launch overlapping execution calls.
+Before preparing new work, use the project's configured base and an appropriate work
+branch. Reuse the matching unmerged branch for interrupted work. For ordinary new work,
+create a branch from the refreshed configured base; do not implement or commit on trunk.
+Preserve included original edits and explicit existing-PR corrections. If another
+person's dirty checkout conflicts, use a suitable native worktree rather than discarding
+their changes. Scope preparation binds the current branch/base; it does not switch them.
 
-In Codex, use yielding execution (`functions.exec` with `yield_time_ms: 1000`) and wait for that
-same cell in intervals of at most 60 seconds. About every 210 seconds, read `status` once and
-relay a new concrete `progress.focus.message` in one sentence.
+## Fresh native delegation
 
-In Claude, capture the observer cursor with `observe --run <run-id> --wait 0` before starting
-the next execution phase, using the run id from startup status or the last execution result.
-Start each execution with Bash `run_in_background: true` and `timeout: 7200000`.
-Establish progress observation before yielding; do not rely only on the final background
-notification. Load Monitor if available and run `<plugin>/scripts/oh --root <checkout> observe
---run <run-id> --after <cursor> --follow` with `timeout_ms: 1800000`. Read the run id from startup status or the last
-execution result. Renew an expired watch with its last cursor while that same execution is active; an observer's
-expiry never restarts or stops execution. Without Monitor, use `observe --run <run-id> --wait 60
---after <cursor>` repeatedly, carrying forward the returned cursor and reporting new focus no
-more than about every 210 seconds. With a live Monitor, yield to its notifications; without one,
-stay active through these bounded observation calls. Do not use long Bash sleeps or deprecated TaskOutput polling.
-Read the complete original command result when it finishes; `done` from an observer only says
-to inspect it. Never truncate JSON with head/tail or infer continuation from observer prose.
-Renew observation silently; report new work or an actual obstacle, not the renewal itself.
+Admit before attempting any launch. The helper snapshots the current task, role,
+profile, bounded packet and allowance. Read that admission; do not select a different
+model, broaden scope or construct another dispatch loop. A failed or uncertain launch
+is still an attempt: retain its native outcome once before recovering within the same
+scope and remaining allowance.
+Include the admitted attempt ID, its actual `request.json` path, bounded task-context
+path, role contract and absolute OH entry in the child prompt. Reference original
+scope/evidence files rather than pasting the parent history or full worker transcripts.
 
-Deduplicate by attempt and focus id, including native progress already reported.
-Do not invent progress or reread raw transcripts. Report actual transitions/failures when observed:
-say which agent finished which work and which agent is starting next. During review, challenge
-is in progress, not approval. A spent review allowance means the reviewer has not started.
-Use the original execution result when it finishes; inspect status immediately if interrupted or
-asked. Show each new model compatibility notice once without a new approval.
+- Codex: call native `spawn_agent` with `agent_type: "default"`, `fork_turns: "none"`,
+  the admitted `model` and `reasoning_effort`, the returned `native_task_name` and the self-contained
+  bounded packet. Use native wait/list/interrupt tools for that child. Do not install
+  user roles, fork the parent history, create another app task or launch a headless CLI.
+- Claude: call native `Agent` with the packaged named non-fork type
+  `o-harness:implementation`, `o-harness:analysis`, `o-harness:assessment` or
+  `o-harness:reviewer`. Pass the admitted model and effort explicitly on the invocation.
+  Use the host's native child result/notification and cancellation tools. Do not use
+  the `fork` type or send a new review to a completed agent.
 
-`next_action` describes the runtime's next step. If `next_action.resume` is true, call `run` to finish the
-already-authorized work. Never reproduce the worker/check/review loop in conversation. The
-implementer runs checks and repairs failures; the runtime validates evidence and owns review and
-completion. A review allowance is requested only when the next review is ready. Stop cancels
-owned work and retains edits; Pause lets the current step finish before waiting.
+Bind the returned native child identity immediately. Retain its complete original result
+by native locator only after its terminal native outcome is saved and its owned tools
+have finished; an intermediate assistant `end_turn` does not establish quiescence.
+Send only a short handoff and evidence paths into the coordinator.
+A summary is not the retained report. Never run two implementation agents together or
+modify the subject while review is active. Completed reviewers are never resumed.
 
-## Decisions
+Native agents inherit host permissions. Implementers may run needed commands, network
+or Docker checks and experiments through ordinary native approval. Do not add an OH
+permission broker, unrestricted command proxy or headless fallback. Reviewers follow a
+no-edit contract and narrow available tools; this is not OS-enforced isolation. A changed
+subject invalidates its receipt; equality cannot detect an edit subsequently reverted.
+Show a verified model compatibility notice once and record the actual profile before
+admission. Missing evidence or an unsupported model/effort needs the concrete host remedy;
+never silently substitute a profile or API authentication for subscription execution.
 
-If a result has `prepare_review`, preserve the person's actual request. Answer a question
-directly; for a requested inspection, resolve its subject through `workflows/review/SKILL.md`
-and call Review. This input granted no implementation or publication. Do not reopen the same
-menu merely because the person requested review through its free-text answer.
+## Implementation, checks and review
 
-First give the short delivered-change, check and review context in `gate.summary`, then follow
-`gate.how` and its exact question/choices. This summary precedes the tool that opens the menu,
-on both hosts. Include interrupted attempts in the review count. For review
-findings, explain each current finding and the effect of the offered choices; read the linked
-report for details when needed. For an allowance, state reviews used, remaining work and the
-additional allowance. Prior receipts are history, not new results or new authority.
+Assess a newly selected task with a fresh assessment agent using the configured profile.
+Keep difficulty in external task evidence, not the project design. Use the resulting
+admitted implementation profile. Only a repeated blocking family in two independent
+reviewer receipts triggers implementation escalation; an author claim or first blocker
+is not that evidence.
 
-When `gate.preview` exists, link the complete review copy beside the question. In Codex use
-`open_in_codex` for that file when available. In Claude, use `SendUserFile` with
-`files: [gate.preview]`, `status: "normal"`, `display: "render"` when available.
-Call it alone and wait for its result before asking; never batch file display and
-`AskUserQuestion` in the same response. A call being issued is not successful display.
-Otherwise use `mcp__ccd_view__show_pane` with a scratchpad copy, keeping the original path
-visible; the copy never goes back to OH. Wait for that result too. If Claude reports the
-file was not delivered (including a session without a project thread), display is unavailable,
-or the person cannot see it, show the complete preview, question and existing typed choices
-in chat, then end the turn and wait for their reply. Do not reopen `AskUserQuestion` on this
-fallback: its modal can obscure the plan. Do not ask the person to create a project or change
-their session to read it. Other routine decisions need no side panel. After successful file
-display, keep the returned native question payload unchanged.
+The implementation agent owns the bounded change, documentation, self-review and
+checks. Preserve earlier useful implementation and family repairs. Establish required
+behavior before correcting code, tests or the environment; a failing check is feedback
+to repair within scope, not a new Retry approval. Do not weaken production behavior or
+assertions to obtain a pass. Route unrelated observations instead of implementing them.
 
-For ordinary Codex menus, call `choose` directly and await its answer without polling. For
-publication, `gate.how` or `choose` returns a native question: use `request_user_input_async`
-with exactly `native_ask`, after reporting the result and gate summary. Keep the turn open
-until the person answers, using `clock.sleep` in intervals of at most 60 seconds; new input
-interrupts the wait. Do not send a final answer after opening the question: ending the turn
-can dismiss the unanswered menu. Do not poll OH status or repeat progress while waiting.
-After the actual human reply, call `run`; OH verifies it. If the native question or interruptible
-wait tool is unavailable, or the person reports a disappearing menu, show the complete question
-and typed choices once and wait for a direct human reply instead of reopening that failing menu.
-Bare choices are case-insensitive; preserve the original human message as evidence. Do not
-replace publication permission with an MCP confirmation. In Claude, use exactly `gate.ask`
-with AskUserQuestion, without an `answers` field. A cancelled question or silence grants nothing.
+The implementation agent prepares provisional task marks and lifecycle content with
+`candidate` before final
+verification and review. Those marks are candidate content, never completion authority.
+It runs `verify` for the actual candidate, diagnoses failures, repairs and repeats only after
+a change or unresolved failure. No edits follow passing verification without another
+verification. Preserve actual command results and limits. Supplementary measurements
+can be attached with `evidence`; their hashes make them stable references, not approval.
+The coordinator retains candidate/check references and does not rerun passing final checks.
 
-After Refine, ask `waiting.ask` in ordinary conversation and end the turn. The next message
-supplies the refinement; call `run` to retain it. If OH returns `prepare`, revise only the
-unapproved task list and call `prepare` again. The resulting preview receives its own approval.
-Do not make the person repeat their answer. If an ordinary menu is missing, refresh status and
-reopen its current question; preserve the existing work and choice. For a disappearing publication
-question, use the direct typed fallback above instead of repeating the failed interaction.
+Admit a fresh reviewer only after the final candidate and checks are ready. Supply the
+immutable original scope, current candidate, complete findings and relevant evidence.
+The reviewer validates its supplied attempt directory with `admission` before reading
+the subject. A helper refusal means retain that attempt and repair its actual binding.
+The last task's review includes the accumulated branch and task interactions; do not
+add an obligatory separate final-review stage. The reviewer independently challenges
+requirements, affected callers, failures, authorization, tests and documentation.
 
-## Results and publication
+Retain and report every attempt, including interrupted or imperfect reports. Repair all
+blocking families before a new review; repair any accompanying concerns in that batch.
+Concern-only findings need the person's fix/accept decision. Outside-scope findings need
+a durable route or dismissal, never silent implementation. Combine related choices in
+one native question when useful. Nonempty ambiguity needs a real decision; formatting
+alone does not erase findings or renew an allowance. A spent allowance requires a human
+`grant-review` decision before another review can be admitted.
 
-Report the recorded review outcome and round count once; say “no findings” only for a clean
-receipt with none. Give a short whole-change summary, the actual verification and any unresolved
-limitations. Link `report` for readable receipts. Author claims never mean completion; only
-native completion updates task marks. Never implement findings outside the approved scope.
+Only `complete` may record task completion and commit the exact reviewed candidate.
+Author claims, a task checkbox, green checks or a standalone receipt cannot authorize
+it. A failed completion is repaired idempotently from retained evidence. Select the
+next task from external completion records, under the same finite task batch. At a batch
+boundary ask whether to continue the projected next batch, publish completed work or
+stop; silence grants no additional tasks.
 
-When `gate` is absent and `next_action.kind` is `publish`, publication is already authorized.
-First call `publication` (Claude: `publication`). It checks the approved repository for this run's
-PR and records verified publication. If it returns `published`, use that result below without
-pushing again. If discovery fails, explain its concrete next step; never treat a failed lookup
-as permission to create another PR. If it returns a gate, follow that decision before publishing.
+## Native decisions
 
-For `publication_status: update pending`, this correction targets `existing_pr.url` only.
-Generate `pr_summary` into an external temporary file. If `push_required`, push only
-`publication.head` to `refs/heads/<publication.branch>` on `publication.remote`, without
-force. Update that PR using `gh pr edit <existing_pr.url> --body-file <file>`, then call
-`publication` again. An interruption retains approval and detects whether push or just
-the body update remains. Never create a replacement PR or treat the old PR head as the
-published correction. Once confirmed, attach/report the PR and observe its CI as below.
+Use Claude `AskUserQuestion` or Codex's available native question tool directly for real
+decisions. Keep choices short and explain their effects in chat. If the available tool
+cannot collect that decision or a native menu fails, show the question once and wait for
+a direct human reply. Preserve an existing valid answer; do not require exact wording,
+repeat a command, poll an OH menu or synthesize an approval in an agent message.
 
-Only when it confirms `publication_status: not published`, use `pr_summary` (Claude: `pr-summary`), preserving its entire body and hidden review metadata in
-an external temporary file. It revalidates the reviewed commits and destination. Push only
-`publication.head` to `refs/heads/<publication.branch>` on `publication.remote`, using quoted
-arguments. Check for an existing PR, then create or reuse one against `publication.base_branch`;
-use `gh pr create --body-file` for the saved body. Call `publication` again to verify and retain
-the result; if creation's response was lost, this same call discovers it. In Codex attach its URL
-with `attach_artifact`. Report the PR link, then observe its checks with
-`gh pr view <PR-URL> --json headRefOid,statusCheckRollup,url`.
-Keep each observation compact: current head, check names and states; read job logs only to
-diagnose a failure. Do not accumulate complete check responses in the conversation.
-Bind observations to that head: if it changes, discard the previous head's readiness result and
-inspect the new head's checks. The saved OH review still covers only its recorded commit;
-do not describe a different head as independently reviewed. Wait responsively in intervals of at most 60 seconds while checks
-are queued or running; report meaningful changes, not every poll. Do not use fail-fast watching
-that hides remaining check results. Local checks or a successful push do not establish CI success.
-If no checks appear, allow one short wait for registration, then report that CI was not observed;
-never call an empty check list a pass. Report cancelled, failed, skipped or action-required checks
-honestly; do not call the PR ready when verification failed or is still unresolved.
+Record consequential choices with `decision` and the actual native human locator:
+`continue`, `grant-review`, `accept-concerns`, `route-scope`, `dismiss-scope`, `publish`,
+`pause`, `stop`, `resume`, `approve-proposal` or `approve-private`. Include the concerned
+attempt/destination where required. Routine clarification needs no durable gate.
+The person controls publication and new allowances; reviewer or model prose does not.
 
-For failures, read the relevant job log and explain the cause and smallest concrete correction.
-Do not rerun unchanged failures or edit code as part of this publication step. A correction must
-go through implementation, verification and independent review under appropriate task authority;
-publication permission alone does not authorize edits. If an external action or unavailable CI
-prevents completion, name the check and next step. When interrupted, reuse the PR and inspect its
-current head rather than republishing. End with the PR link, delivered work and actual CI result.
-Human merging remains separate. Never rerun implementation or reviews to recover publication.
+Claude quick fixes use the native plan viewer's single Accept. Put the complete bounded
+scope preview in the plan file designated by `EnterPlanMode`, then call `ExitPlanMode` without an
+extra `AskUserQuestion`. Bind that actual acceptance with `scope approve`. This display
+copy is not a consumer design. An edited preview needs refreshed scope and approval;
+rejection or interruption grants nothing. If native plan tools are unavailable, show
+the preview and obtain a direct human approval in chat. Codex uses a native question
+or direct human reply about the same complete scope. Never ask twice for one approval.
 
-For `next_action.kind: published`, the delivery cycle already finished. State that briefly and
-show `published.url` and its reported status. `publication_status: last verified` is historical,
-not a fresh GitHub observation; explain any `publication_notice`. No ownership transfer, new
-task, review or publication question is needed. For an open PR, follow current-head CI as above;
-merged or closed PRs remain finished and must not be reopened automatically. Later commits
-are not covered by the saved review. A new Deliver command uses normal task admission and
-branch safeguards; never suggest Resume as a way to start the next batch.
+For documents, show the actual complete artifact or preview before its question. Native
+approval questions identify that artifact's actual path as well as its relevant scope.
+Native file display is optional; a failed display falls back to readable chat and a direct
+reply. Do not ask someone to create a project or restart their session just to read it.
+Repository design approval is human merge; private approval is bound to reviewed contents.
 
-If the host rejects publication, retain the work and grant, explain its actual reason and obtain
-only the specific missing native authorization. Never bypass a rejection through another tool.
-A returned `handoff` is unresolved work for human triage, not completion or publication authority.
-For `blocked`, explain the actual obstacle and concrete action needed, then continue within the
-same authority after it is resolved. No routine Retry question is offered.
+## Interruption and recovery
+
+Stop means cancel owned native work before any later phase. Use native cancellation
+for known active children/commands and confirm their outcome; interrupting the parent
+alone is not proof. Do not claim cancellation until confirmed or start another worker
+while old work may run. If the host cannot confirm cancellation, explain the specific
+remaining native task and next action. Do not build a replacement process supervisor.
+Pause lets the current step finish and retains its result before waiting.
+
+After interruption, inspect status and native work before resuming. Preserve attempts,
+findings, settings, scope and spent allowances. Recover a routine helper failure and
+retry the valid operation within existing authority. Never discard, stash or commit
+another person's edits by assumption. An unavoidable blocker names a concrete remedy;
+elapsed time, retries and restarts never create approval.
+
+## Visibility and publication
+
+Introduce the actual work once using implementation/planning/proposal agent and
+independent reviewer agent. Report meaningful native transitions and new findings;
+do not repeat unchanged status or accumulate raw command logs. On completion lead
+with the recorded review outcome, attempts and findings, then the delivered behavior,
+actual checks, commit/artifact and next decision. Say no findings only when none exist.
+
+Publication requires the human decision bound to reviewed HEAD and destination. Use
+`publication` to reconcile the existing PR before pushing or creating one. A failed
+lookup is not permission to create another. Generate `pr-summary` into an external
+file, push the authorized head/branch without force, and create or update only the
+matching PR with `--body-file`. Re-run publication reconciliation after an uncertain
+response. Attach the PR in Codex with `attach_artifact` when available. Human merging
+remains separate; published cycles stay terminal.
+
+Inspect CI for that PR's actual head. Report meaningful check changes and diagnose
+failures from relevant logs. An empty, pending, failed, cancelled or skipped check set
+is not success. Do not make code changes under publication-only authority: corrections
+need bounded implementation, verification and fresh review. A resumed publication
+reuses its grant and PR; it never reruns implementation just to recover publication.

@@ -1,29 +1,37 @@
 ---
 name: design
-description: Design one roadmap initiative with project requirements, ordered tasks and acceptance checks.
+description: Draft and independently review one roadmap initiative's project plan and acceptance checks.
 ---
-Read `workflows/runtime.md` once through the same OH resource entry and follow its shared execution protocol.
+Read `workflows/runtime.md` once through OH's resource entry. Without an initiative,
+ask which one the person wants and wait; `plans list` may help but is not a prerequisite.
+Read `plans path`, resolve an undecided repo/private location once and show its actual
+folder. Respect project policy; OH adds no mandatory ADR process.
 
-Without an initiative slug, ask which roadmap initiative to design and end the turn. `plans list`
-can help when storage is configured, but is not required before asking. Do not select a slug
-or start a waiting run on the person's behalf.
+Prepare one bounded planning task for the requested initiative with `scope prepare
+<manifest.json> --workflow design --human <native-locator.json>` (Codex `scope_prepare`).
+The native request authorizes drafting directly; do not add a scope-approval question.
+Keep project requirements, ordered tasks, dependencies and acceptance checks in the
+plan; keep difficulty/model/effort in external execution evidence.
 
-Use `plans path` and resolve an undecided storage preference once: repository or private plans.
-Save their choice and show the actual path. Project documents contain project requirements,
-ordered tasks, dependencies and acceptance checks; keep harness difficulty/model/effort out.
+Admit a fresh analysis agent with the configured model and effort, the bounded packet
+and `prompts/design.md`. It reads the initiative's contracts, writes the actual draft
+and required roadmap/log links, then validates documents with `plans check` and the
+candidate's `verify`. It does not run product tests or decide open product questions.
+Preserve direct human refinements when revising an existing plan; do not regenerate
+someone's edited prose merely to fit an author report schema.
 
-Introduce how a planning agent drafts the document and a fresh independent reviewer agent
-challenges its approach, tasks and assumptions against the project. Call `run`. OH owns the
-branch, numbering, links, document validation, review, repairs and commits. If another checkout
-holds the required base branch, use the specific remedy returned by OH.
+Retain the original result and independently review the actual candidate with a fresh
+reviewer. Repair blocking families and concerns together when blockers exist; native
+human choices handle concern-only outcomes and outside scope. A consequential product
+question names the decision required and its effect instead of silently choosing.
 
-Repository designs are approved through human merge of their PR. Private designs are presented
-for approval after review, bound to their exact contents. For `approval_checkpoint`, show the
-plan path, task count and summary, then the returned question. Refine preserves the human's
-instructions; editing an existing private design goes to review without rewriting their prose.
-Approving a proposed decision document does not decide the underlying product question.
+Repository designs need human merge of the reviewed design PR to become approved.
+Private designs need native acceptance of their reviewed contents: show the complete
+artifact, ask approve/refine/cancel and bind the answer with `decision approve-private`.
+Refinement returns to scoped authoring, document checks and a fresh review. Accepting
+a proposed decision document does not decide its underlying product question.
 
-For completion, report the document, its summary and actual review result. An unresolved product
-decision names what the person must decide. A completed private design needs no commit, PR or
-extra Stop choice; give its path and Deliver command. Follow the shared protocol for publication
-of repository plans and all other returned decisions.
+Use `complete` only for the exact reviewed candidate and retained approval required
+by its location. Private completion needs no commit, PR or extra Stop question. Give
+the artifact path, actual review result and Deliver command. Repository publication
+uses the shared human publication decision and existing-PR reconciliation.

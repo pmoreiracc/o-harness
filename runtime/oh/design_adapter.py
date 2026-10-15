@@ -50,7 +50,7 @@ def manifest(root, doc, track=''):
     if not tasks:
         if any(row[1]=='pending' for row in rows):raise Refused('This track is complete; other tracks still have work')
         tasks=[{'id':'finalize','title':'Finalize the completed design',
-                'instructions':'Verify the complete design and affected documentation. The runner renders the final lifecycle before review.',
+                'instructions':'Verify the complete design and affected documentation. The candidate helper prepares proposed lifecycle content before final checks and review.',
                 'design':relative,'transition':{'profile':'consumer-v1','doc':doc,'task':'finalize'}}]
     return {'workflow':'deliver','design':doc,'track':track,'tasks':tasks}
 

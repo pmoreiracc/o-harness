@@ -56,53 +56,6 @@ class WindowsTest(unittest.TestCase):
                         self.assertFalse((project/'planted').exists())
                 if name!='private':(bin/name).unlink()
 
-    def test_claude_rules_name_windows_paths_the_way_claude_reads_them(self):
-        from .hosts import rule_path
-        self.assertEqual(rule_path(r'C:\Users\me\.config\o-harness'), '//c/Users/me/.config/o-harness')
-        self.assertEqual(rule_path('D:/work'), '//d/work')
-        self.assertEqual(rule_path('/Users/me/x'), '//Users/me/x')
-
-    def test_claude_workers_on_windows_edit_files_but_have_no_shell(self):
-        from .hosts import command,rule_path
-        root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root)
-        subprocess.run(['git', 'init', '-q', str(root)], check=True)
-        document=root/'configured plans'/'approved.task.md';document.parent.mkdir();document.write_text('pending',newline='\n')
-        for role in ('attempt','review'):
-            (root/role).mkdir()
-            (root/role/'request.json').write_text(json.dumps({'report_protocol':1,'verification_timeout':60}),newline='\n')
-        with patch('oh.hosts.executable', return_value='claude'), patch('oh.hosts.WINDOWS', True):
-            work = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'implementation', None, root / 'artifacts',read_only_paths=[document],verification_dir=root/'attempt')
-            review = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'review', None, root / 'run',verification_dir=root/'review')
-            for host in ('codex','claude'):
-                assessed=command(host,{'model':'fixture','effort':'medium'},root,'assessment',None,root/'run')
-                if host=='codex':self.assertEqual(assessed[assessed.index('--sandbox')+1],'read-only')
-                else:
-                    self.assertEqual(assessed[assessed.index('--tools')+1],'Read,Glob,Grep')
-                    self.assertEqual(assessed[assessed.index('--permission-mode')+1],'plan')
-        self.assertEqual(work[work.index('--tools') + 1], 'Read,Glob,Grep,Edit,Write')
-        self.assertEqual(review[review.index('--tools') + 1], 'Read,Glob,Grep')
-        self.assertIn('--strict-mcp-config',review);self.assertIn('--disable-slash-commands',review)
-        self.assertEqual(json.loads(review[review.index('--settings')+1])['permissions']['allow'],['mcp__oh_checks__admission','mcp__oh_checks__submit_report'])
-        self.assertEqual(review[review.index('--permission-mode')+1],'default')
-        self.assertIn('Write('+rule_path(root)+'/**)',json.loads(review[review.index('--settings')+1])['permissions']['deny'])
-        settings = json.loads(work[work.index('--settings') + 1])
-        self.assertEqual(settings['sandbox'], {'enabled': False})
-        self.assertLessEqual({'Bash', 'PowerShell', 'Agent'}, set(settings['permissions']['deny']))
-        self.assertIn('mcp__oh_checks__verify',settings['permissions']['allow'])
-        server=json.loads(work[work.index('--mcp-config')+1])['mcpServers']['oh_checks']
-        self.assertEqual(server['args'][-2:],['worker-checks',str(root/'attempt')])
-        self.assertEqual(review[review.index('--add-dir') + 1], str(root / 'run'))
-        # docs/usage.md: workers read this project's OH inputs while edits there stay denied.
-        self.assertEqual(work[work.index('--add-dir')+1],str(root/'artifacts'))
-        self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
-        for tool in ('Edit','Write'):self.assertIn(tool+'('+rule_path(document.resolve())+')',settings['permissions']['deny'])
-        with patch('oh.hosts.executable',return_value='claude'),patch('oh.hosts.WINDOWS',False):
-            posix=command('claude',{'model':'opus','effort':'high'},root,'implementation',None,root/'artifacts',read_only_paths=[document])
-        settings=json.loads(posix[posix.index('--settings')+1])
-        self.assertEqual(posix[posix.index('--add-dir')+1],str(root/'artifacts'))
-        self.assertIn(str(root/'artifacts'),settings['sandbox']['filesystem']['denyWrite'])
-        self.assertIn(str(document.resolve()),settings['sandbox']['filesystem']['denyWrite'])
-        self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
 
     @unittest.skipIf(os.name == 'nt', 'Uses POSIX sh and symlinks')
     def test_the_launcher_finds_python_or_says_how_to_get_it(self):
@@ -169,7 +122,7 @@ class WindowsTest(unittest.TestCase):
             self.assertEqual(forwarded,{'received':payload,'authorized':False})
 
     def test_json_values_can_come_from_a_file(self):
-        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+        test = fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
         test.setUp();self.addCleanup(test.doCleanups)
         from .cli import main
         from .config import project_checks
@@ -179,7 +132,7 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(project_checks(test.root), [{'name': 't', 'command': ['git', 'diff', '--check']}])
 
     def test_relative_config_file_uses_invocation_directory_even_with_root_override(self):
-        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+        test = fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
         test.setUp();self.addCleanup(test.doCleanups)
         from .cli import main
         from .config import project_checks,change
@@ -193,7 +146,7 @@ class WindowsTest(unittest.TestCase):
             os.chdir(invocation)
             with patch('oh.system.WINDOWS', True), patch('oh.config.change',save), patch('sys.stdout'):
                 main(['--root',str(test.root),'config','set','checks','@checks.json'])
-            self.assertEqual(Path.cwd(),HOME)
+            self.assertEqual(Path.cwd(),invocation.resolve())
             self.assertEqual(project_checks(test.root),[{'name':'relative','command':['git','status']}])
         finally:os.chdir(original)
 
@@ -274,25 +227,16 @@ class WindowsTest(unittest.TestCase):
             self.assertEqual((Path(tmp)/'service/dashboard-previous.pyw').read_bytes(), b'old starter')
             self.assertTrue(starter.exists())
 
-    def test_reviewers_get_the_exact_change_as_a_file(self):
-        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+    def test_reviewers_get_exact_git_blobs_even_when_attributes_hide_a_diff(self):
+        test=fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
         test.setUp();self.addCleanup(test.doCleanups)
-        from .runner import run
-        from .workflow import start
-        seen = []
-        def fake(host, root, profile, prompt, role, directory, context, **kw):
-            if role == 'review':
-                admission = json.loads((Path(directory) / 'request.json').read_text())
-                seen.append((Path(admission['diff']['path']).read_text(), prompt))
-            return test.fake(host, root, profile, prompt, role, directory, context, **kw)
-        start(test.root, {'tasks': test.tasks[:1]}, test.event())
-        def hiding(host, root, profile, prompt, role, directory, context, **kw):
-            if role != 'review':(Path(root) / '.gitattributes').write_text('* -diff\n')  # a worker hiding its change  # windows-ok: Git reads either line ending
-            return fake(host, root, profile, prompt, role, directory, context, **kw)
-        run(test.root, hiding)
-        diff, prompt = seen[0]
-        self.assertIn('+++ b/output.txt', diff);self.assertIn('+1', diff);self.assertNotIn('Binary files', diff)
-        self.assertIn('change.diff', prompt)
+        from .review import subject,capture
+        (test.root/'output.txt').write_text('the exact candidate\n',newline='\n')
+        (test.root/'.gitattributes').write_text('* -diff\n',newline='\n')
+        selected=subject(test.root,'tree')
+        exported=capture(test.root,Path(test.temp.name)/'review',selected)
+        self.assertEqual((Path(exported['root'])/'output.txt').read_text(),'the exact candidate\n')
+        self.assertEqual(test.git('show',selected['git_tree']+':output.txt'),'the exact candidate')
 
 
 class TaskScheduler:

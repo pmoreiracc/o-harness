@@ -1,223 +1,83 @@
+"""Saved controls fence completion; native cancellation remains a real-host rollout check."""
+import unittest
+import json
 import os
 from pathlib import Path
-import sys
-import threading
-import time
-import unittest
 from unittest.mock import patch
-from . import test_workflow as fixtures
-from .controls import request
-from .workflow import start, choose, load_run
-from .runner import run
+from . import native
 from .storage import Refused
+from .workflow import load_run
+from .test_workflow import NativeFixture
 
 
-class ControlsTest(unittest.TestCase):
-    setUp=fixtures.WorkflowTest.setUp
-    git=fixtures.WorkflowTest.git
-    event=fixtures.WorkflowTest.event
-    fake=fixtures.WorkflowTest.fake
+class ControlsTest(NativeFixture,unittest.TestCase):
+    def test_plain_native_control_turns_need_no_internal_artifact_path(self):
+        from .storage import now
+        self.approve();before=load_run(self.root)[1]
+        home=Path(self.temp.name)/'host';sessions=home/'.codex/sessions';sessions.mkdir(parents=True)
+        with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex')}), \
+                patch('oh.authority.native_human',side_effect=self.native_human_original):
+            def direct(session,text):
+                path=sessions/(session+'.jsonl')
+                rows=[{'type':'session_meta','payload':{'id':session,'source':'cli','cwd':str(self.root)}},
+                      {'type':'response_item','timestamp':now(),'payload':{'type':'message','role':'assistant',
+                       'content':[{'type':'output_text','text':'The current approved work is waiting for your instruction.'}]}},
+                      {'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','turn_id':'control','message':text}}]
+                path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
+                return {'host':'codex','session':session,'turn':'control','prompt':text,'transcript_path':str(path)}
+            native.decision(self.root,'pause',direct('s','/oh-pause'))
+            native.decision(self.root,'stop',direct('s','Stop now'))
+            self.assertEqual(native.resume(self.root)['status'],'stopped')
+            native.resume(self.root,direct('fresh-parent','/oh-resume'))
+            native.decision(self.root,'stop',direct('fresh-parent','Stop and take over'))
+            self.assertEqual(native.resume(self.root)['status'],'stopped')
+            native.resume(self.root,direct('fresh-parent','Resume the approved work.'))
+            with self.assertRaises(Refused):
+                native.decision(self.root,'stop',direct('fresh-parent','[$oh-stop](plugin://o-harness/skills/oh-stop/SKILL.md) unexpected args'))
+            self.assertEqual(native.resume(self.root)['status'],'running')
+            native.decision(self.root,'pause',direct('fresh-parent','/oh-pause'))
+            native.resume(self.root,direct('fresh-parent','[$oh-resume](plugin://o-harness/skills/oh-resume/SKILL.md)'))
+        after=load_run(self.root)[1]
+        self.assertEqual(after['human']['session'],'fresh-parent')
+        self.assertEqual(after['granted'],before['granted']);self.assertEqual(after['config'],before['config'])
 
-    def test_stop_during_worker_settles_without_rereading_unsaved_human_turn(self):
-        # docs/usage.md: an accepted stop drains its worker even if the host's newest turn is not yet readable.
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        def pending(*args,**kwargs):
-            if load_run(self.root)[1]['status']=='stopping':
-                raise Refused('Codex has not saved the calling human turn yet; retry the same OH operation.')
-        def stopped(*args,**kwargs):
-            value=self.fake(*args,**kwargs)
-            self.assertEqual(request(self.root,'stop')['status'],'stopping')
-            return value|{'failed':True,'returncode':-15,'cancellation':['stopped'],'structured':None}
-        with patch('oh.authority.materialize',side_effect=pending):
-            result=run(self.root,stopped)
-        self.assertEqual(result['status'],'stopped')
-        self.assertEqual(result['completed'],0)
-        self.assertEqual(result['last_failure']['cancellation'],['stopped'])
-        self.assertEqual([c[0] for c in self.calls],['implementation'])
-        self.assertTrue((self.root/'output.txt').exists())
+    def test_live_legacy_executor_blocks_adoption_without_changing_its_records(self):
+        from .controls import busy
+        from .storage import checkout_file, checkout_id, lock, Journal, identifier, atomic_json
+        self.approve();journal,state=load_run(self.root)
+        legacy=Journal(state['project'],identifier());start=dict(journal.records()[0]['data']);start['id']=legacy.path.name
+        for key in ('native_version','scope_id','scope_snapshot'):start.pop(key,None)
+        legacy.append('run.started',start)
+        for record in journal.records()[1:]:legacy.append(record['kind'],record['data'])
+        legacy.append('run.status',{'status':'stopped'})
+        atomic_json(checkout_file(self.root,'oh-active-run.json'),
+                    {'project':state['project'],'run':legacy.path.name,'checkout':checkout_id(self.root)})
+        before=legacy.records()
+        with lock(checkout_file(self.root,'oh-runner.lock'),wait=False):
+            self.assertTrue(busy(self.root))
+            with self.assertRaises(Refused):native.resume(self.root,self.human('resume',session='fresh-parent'))
+            with self.assertRaises(Refused):native.admit(self.root,'assessment')
+        self.assertEqual(legacy.records(),before)
 
-    def test_stop_arriving_during_human_record_read_still_settles(self):
-        # The same control can race the read after the implementation has already returned.
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        def pending(*args,**kwargs):
-            if any(a['role']=='implementation' for a in load_run(self.root)[1]['attempts']):
-                request(self.root,'stop')
-                raise Refused('Codex has not saved the calling human turn yet; retry the same OH operation.')
-        with patch('oh.authority.materialize',side_effect=pending):
-            result=run(self.root,self.fake)
-        self.assertEqual(result['status'],'stopped')
-        self.assertEqual(result['completed'],0)
-        self.assertEqual([c[0] for c in self.calls],['implementation'])
+    def test_pause_after_review_fences_commit_and_resume_keeps_exact_review_and_allowance(self):
+        self.approve();self.assess();self.implement();review=self.reviewed()
+        before=load_run(self.root)[1];head=self.git('rev-parse','HEAD')
+        native.decision(self.root,'pause',self.human('pause'))
+        with self.assertRaises(Refused):native.complete(self.root,review['id'])
+        self.assertEqual(self.git('rev-parse','HEAD'),head)
+        native.resume(self.root,self.human('resume',session='fresh-parent'))
+        after=load_run(self.root)[1]
+        self.assertEqual(after['granted'],before['granted'])
+        self.assertEqual(after['attempts'],before['attempts'])
+        native.complete(self.root,review['id'])
+        self.assertEqual(load_run(self.root)[1]['done'],['1'])
 
-    def test_pause_drains_worker_and_resume_keeps_allowances_without_repeating_it(self):
-        journal,_=start(self.root,{'tasks':self.tasks[:1]},self.event())
-        def paused(*args,**kwargs):
-            result=self.fake(*args,**kwargs)
-            if args[4]!='review':
-                from .worker_checks import run as checks
-                self.assertTrue(checks(args[5])['passed'])
-                self.assertEqual(request(self.root,'pause')['status'],'pausing')
-            return result
-        self.assertEqual(run(self.root,paused)['status'],'paused')
-        self.assertEqual([c[0] for c in self.calls],['implementation'])
-        before=len(journal.records())
-        request(self.root,'pause');self.assertEqual(len(journal.records()),before)
-        _,state=load_run(self.root);granted=state['granted']
-        choose(self.root,'resume',self.event('2','oh-resume'))
-        # Already checked implementation resumes directly at review; a paused run grants nothing new.
-        from .verification import verify
-        import subprocess
-        with patch('oh.processes.capture',return_value=(subprocess.CompletedProcess([],1,'','version unavailable'),[])):
-            result=verify(self.root,[{'name':'toolchain','command':[sys.executable,'-c','pass'],
-                         'toolchain':[[sys.executable,'--version']]}],self.project_id)[0]
-        self.assertTrue(result['unavailable']);self.assertEqual(result['returncode'],1)
-        self.assertIn('version unavailable',result['output'])
-        self.assertEqual(run(self.root,self.fake)['status'],'completed')
-        self.assertEqual([c[0] for c in self.calls],['implementation','review'])
-        self.assertEqual(load_run(self.root)[1]['granted'],granted)
-
-    def test_pause_after_review_fences_commit_and_resumes_exact_review(self):
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        original=self.git('rev-parse','HEAD')
-        def paused(*args,**kwargs):
-            result=self.fake(*args,**kwargs)
-            if args[4]=='review':request(self.root,'pause')
-            return result
-        for _ in range(3):
-            result=run(self.root,paused,one_phase=True)
-            if not result['continue_execution']:break
-        self.assertEqual(result['status'],'paused')
-        self.assertEqual(self.git('rev-parse','HEAD'),original)
-        choose(self.root,'resume',self.event('2','oh-resume'))
-        self.assertEqual(run(self.root,self.fake,one_phase=True)['completed'],1)
-        self.assertEqual(len(self.calls),2)
-
-        # Stop after a saved implementation, between calls, prevents the next reviewer/commit.
-        choose(self.root,'stop',self.event('3','stop'))
-        start(self.root,{'tasks':[self.tasks[1]|{'needs':[]}]},self.event('4'))
-        head=self.git('rev-parse','HEAD')
-        self.assertTrue(run(self.root,self.fake,one_phase=True)['continue_execution'])
-        self.assertTrue(run(self.root,self.fake,one_phase=True)['continue_execution'])
-        before=len(self.calls);granted=load_run(self.root)[1]['granted']
-        request(self.root,'stop')
-        result=run(self.root,self.fake,one_phase=True)
-        self.assertEqual((result['status'],result['continue_execution']),('stopped',False))
-        self.assertEqual(len(self.calls),before);self.assertEqual(self.git('rev-parse','HEAD'),head)
-        self.assertEqual(load_run(self.root)[1]['granted'],granted)
-
-    def test_stopped_is_terminal_and_manual_edits_invalidate_paused_resume(self):
-        journal,state=start(self.root,{'tasks':self.tasks[:1]},self.event())
-        before=len(journal.records())
-        self.assertEqual(request(self.root,'stop',expected_run=state['id'],source={'session':'previous-owner'})['status'],'running')
-        self.assertEqual(request(self.root,'stop',expected_run='previous-run',source={'session':'s'})['status'],'running')
-        self.assertEqual(request(self.root,'stop',expected_run=state['id'],source={'host':'claude','session':'s'})['status'],'running')
-        self.assertEqual(len(journal.records()),before)
-        self.assertEqual(request(self.root,'pause')['status'],'paused')
-        (self.root/'manual').write_text('preserve')
-        with self.assertRaises(Refused):choose(self.root,'resume',self.event('2','oh-resume'))
-        self.assertEqual(request(self.root,'stop')['status'],'stopped')
-        self.assertEqual(request(self.root,'stop')['status'],'stopped')
-        with self.assertRaises(Refused):choose(self.root,'resume',self.event('3','oh-resume'))
-        self.assertEqual((self.root/'manual').read_text(),'preserve')
-
-    def test_stop_during_check_cancels_owned_group_and_preserves_results(self):
-        # docs/usage.md: Codex Stop cancels the owned step even without MCP cancellation delivery.
-        from .registry import profile_path
-        from .storage import atomic_json
-        signal_file=Path(self.temp.name)/'check-started'
-        code='import pathlib,time,signal; signal.signal(signal.SIGTERM,signal.SIG_IGN); pathlib.Path('+repr(str(signal_file))+').touch(); time.sleep(90)'
-        from .test_workflow import configure
-        configure(self.root,checks=[{'name':'blocking','command':[sys.executable,'-c',code]}])
-        home=Path(self.temp.name)/'codex'
-        transcript=home/'sessions/2026/10/11/rollout-s.jsonl';transcript.parent.mkdir(parents=True)
-        import json
-        transcript.write_bytes(('\n'.join(json.dumps(e) for e in [
-            {'type':'session_meta','payload':{'id':'s','source':'cli','cwd':str(self.root)}},
-            {'type':'event_msg','payload':{'type':'task_started','turn_id':'current-turn'}},
-            {'type':'event_msg','payload':{'type':'user_message','turn_id':'current-turn','message':'Please wait.'}}])+'\n').encode())
-        environment=patch.dict(os.environ,{'CODEX_HOME':str(home),'CODEX_THREAD_ID':'s','OH_CODEX_TURN_ID':'current-turn'})
-        environment.start();self.addCleanup(environment.stop)
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        outcomes=[]
-        def execute():
-            try:outcomes.append(run(self.root,self.fake))
-            except Exception as exc:outcomes.append(exc)
-        thread=threading.Thread(target=execute);thread.start()
-        deadline=time.monotonic()+15
-        while not signal_file.exists() and thread.is_alive() and time.monotonic()<deadline:time.sleep(.05)
-        self.assertTrue(signal_file.exists(),outcomes)
-        def aborted(turn,reason='interrupted'):
-            return json.dumps({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':turn,'reason':reason}})+'\n'
-        with transcript.open('a',newline='\n') as saved:
-            saved.write(aborted('1'))  # an earlier authority turn cannot stop a new execution turn
-            saved.write(aborted('current-turn','failed'))  # an ordinary host failure is not Codex Stop
-        time.sleep(.2);self.assertEqual(load_run(self.root)[1]['status'],'running')
-        native=aborted('current-turn');middle=len(native)//2
-        with transcript.open('a',newline='\n') as saved:saved.write(native[:middle])
-        time.sleep(.2);self.assertEqual(load_run(self.root)[1]['status'],'running')
-        with transcript.open('a',newline='\n') as saved:saved.write(native[middle:])
-        thread.join(12)
-        self.assertFalse(thread.is_alive())
-        self.assertIsInstance(outcomes[0],dict)
-        self.assertEqual(outcomes[0]['status'],'stopped')
-        self.assertEqual(outcomes[0]['completed'],0)
-        self.assertTrue((self.root/'output.txt').exists())
-        self.assertEqual([c[0] for c in self.calls],['implementation'])
-        journal,state=load_run(self.root)
-        stopping=next(r['data'] for r in journal.records() if r['kind']=='run.status' and r['data']['status']=='stopping')
-        self.assertEqual(stopping['source']['turn'],'current-turn')
-        self.assertEqual(stopping['source']['session'],'s')
-        self.assertIn('record_hash',stopping['source']);self.assertNotIn('recovery_grants',state)
-
-    def test_codex_stop_after_worker_prevents_checks_review_and_commit(self):
-        """docs/usage.md: a saved native Stop also fences the handoff between execution steps."""
-        import json
-        home=Path(self.temp.name)/'codex'
-        transcript=home/'sessions/rollout-s.jsonl';transcript.parent.mkdir(parents=True)
-        transcript.write_bytes(('\n'.join(json.dumps(e) for e in [
-            {'type':'session_meta','payload':{'id':'s','source':'cli','cwd':str(self.root)}},
-            {'type':'event_msg','payload':{'type':'task_started','turn_id':'1'}},
-            {'type':'event_msg','payload':{'type':'user_message','turn_id':'1','message':'Please wait.'}}])+'\n').encode())
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        head=self.git('rev-parse','HEAD')
-        def stopped(*args,**kwargs):
-            value=self.fake(*args,**kwargs)
-            with transcript.open('a',newline='\n') as saved:
-                # Many small host records must not hide the final Stop at a handoff.
-                for _ in range(120):saved.write(json.dumps({'type':'event_msg','payload':{'type':'token_count'}})+'\n')
-                saved.write(json.dumps({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':'1','reason':'interrupted'}})+'\n')
-            return value
-        with patch.dict(os.environ,{'CODEX_HOME':str(home),'CODEX_THREAD_ID':'s','OH_CODEX_TURN_ID':'1'}),patch('oh.worker_checks.verify') as checks:
-            result=run(self.root,stopped)
-        checks.assert_not_called();self.assertEqual(result['status'],'stopped')
-        self.assertEqual(result['completed'],0);self.assertEqual(result['review_rounds'],0)
-        self.assertEqual([c[0] for c in self.calls],['implementation'])
-        self.assertEqual(self.git('rev-parse','HEAD'),head);self.assertTrue((self.root/'output.txt').exists())
-
-    def test_pause_at_batch_checkpoint_cannot_grant_next_batch_on_resume(self):
-        fixtures.configure(self.root,tasks_per_batch=1)  # one task per batch shows it; more only add Git work
-        start(self.root,{'tasks':self.tasks[:2]},self.event())
-        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
-        self.assertEqual(request(self.root,'pause')['status'],'paused')
-        choose(self.root,'resume',self.event('2','oh-resume'))
-        self.assertEqual(run(self.root,self.fake)['status'],'checkpoint')
-        self.assertEqual(len(self.calls),2)  # task 1's implementation and review; resume ran nothing more
-        choose(self.root,'continue',self.event('3','continue'))
-        self.assertEqual(run(self.root,self.fake)['completed'],2)
-
-    def test_accepted_concern_survives_pause_without_spending_another_review(self):
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        def concern(*args,**kwargs):
-            result=self.fake(*args,**kwargs)
-            if args[4]=='review':
-                result['structured'].update(verdict='concern',findings=[{'severity':'concern','description':'Accepted tradeoff','path':'output.txt','family':'accepted-tradeoff','relation':'original'}])
-            return result
-        self.assertEqual(run(self.root,concern)['status'],'findings_checkpoint')
-        choose(self.root,'accept concerns',self.event('2','accept concerns'))
-        request(self.root,'pause')
-        choose(self.root,'resume',self.event('3','oh-resume'))
-        self.assertEqual(run(self.root,self.fake)['completed'],1)
-        self.assertEqual([c[0] for c in self.calls],['implementation','review'])
-
-
-if __name__=='__main__' :unittest.main()
+    def test_edits_while_paused_cannot_borrow_the_previous_review(self):
+        self.approve();self.assess();self.implement();review=self.reviewed()
+        native.decision(self.root,'pause',self.human('pause'))
+        (self.root/'output.txt').write_text('Retained authorized correction.',newline='\n')
+        native.resume(self.root,self.human('resume'))
+        with self.assertRaises(Refused):native.complete(self.root,review['id'])
+        self.assertEqual((self.root/'output.txt').read_text(),'Retained authorized correction.')
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        self.assertEqual(native.resume(self.root)['reviews_used'],1)

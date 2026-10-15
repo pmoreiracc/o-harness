@@ -1,22 +1,21 @@
 ---
 name: oh-design
-description: Turn one roadmap initiative into an actionable plan through specialist drafting and independent review, only when explicitly invoked as /oh-design <slug>.
+description: Turn one supplied roadmap initiative into an actionable plan through specialist drafting and independent review when explicitly invoked as /oh-design.
 argument-hint: "<roadmap-slug>"
 disable-model-invocation: true
 ---
-When invoked without an argument, ask “Which roadmap initiative would you like to design?” in plain chat and end your turn before calling any tools. After the person answers, load the workflow below and continue with their answer. Asking needs no saved waiting record or transcript check. Never invent the argument.
+When no initiative was supplied, ask which roadmap initiative the person wants to
+design and wait for the answer. Do not select one on their behalf.
 
-Apply these communication requirements from the first process message, including before loading the shared workflow:
-- Use the role names “planning agent” and “independent reviewer agent”; retain “agent” whenever naming either role, including in the opening. The reviewer challenges the document's approach, tasks and assumptions against the project's requirements.
-- Once the initiative is supplied, briefly introduce its drafting and independent review process once, including any skill-use announcement in that same explanation. Say this can take several minutes. Use natural wording around the role names.
-- During work, explain observed changes, handoffs and actual findings from OH's returned progress. When review finishes, lead with the recorded review outcome, round count and findings (explicitly “no findings” for a clean review with none), then report the saved document or commit and next choice. Do not announce completion without the review outcome.
+Load `workflows/design/SKILL.md` through OH's resource entry and follow it. Introduce
+the planning agent's draft and the independent reviewer agent's challenge against
+the project's requirements.
 
-Use the workflow below for execution steps and returned decisions.
+Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
+(`scripts\oh.cmd` on native Windows). Keep OH configuration and evidence outside
+consumer repositories. Discovery alone does not authorize setup or execution.
 
-Describe routine handoffs through the work and its result, for example “The task preview is ready to review.” Keep skill-routing instructions out of product copy; the workflow supplies the current question and its context.
-
-Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory (from PowerShell or cmd on Windows, use `scripts\oh.cmd` there). Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly. Never install or start anything merely because this skill was discovered.
-
-Read that workflow and follow it: in Codex, call the o-harness `resource` tool with `path` `workflows/design/SKILL.md` and the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> resource workflows/design/SKILL.md`. Keep the coordinator small; the shared runner owns planning workers, document validation, reviews, commits and batch boundaries. Do not recreate that loop in the parent conversation.
-
-If Codex lists no o-harness tools, OH's tool server did not start: tell the person to type `/mcp` to see why, then start a new Codex session; don't run these OH commands from Codex's shell instead.
+In Codex use the connected OH tools with the checkout's absolute `root`; read resources
+with `resource`. In Claude use `<plugin>/scripts/oh --root <checkout> resource <path>`.
+If the Codex connection is missing, report it with the `/mcp` recovery step; do not
+bypass it with shell writes to OH state.

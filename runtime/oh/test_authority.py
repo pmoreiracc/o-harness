@@ -15,6 +15,204 @@ class AuthorityTest(unittest.TestCase):
         # Evidence-delay tests advance the saved transcript, not the wall clock.
         delay=patch('oh.authority.sleep');delay.start();self.addCleanup(delay.stop)
 
+    def test_native_plan_retains_the_actual_human_accepted_scope(self):
+        """The native plan viewer supplies approval once, without an OH menu identifier."""
+        from copy import deepcopy
+        from .authority import native_human
+        with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home', return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            path=home/'.claude/projects/session.jsonl';path.parent.mkdir(parents=True)
+            plan='# Approved scope\n\nFix the sign-in timeout.\n'
+            since='2026-10-13T20:00:00+00:00';at='2026-10-13T20:00:01+00:00'
+            base={'sessionId':'s','cwd':str(root),'entrypoint':'sdk-cli','timestamp':at}
+            call={'type':'tool_use','id':'plan','name':'ExitPlanMode','input':{'plan':plan,'planFilePath':'native.md'}}
+            reply={'type':'tool_result','tool_use_id':'plan','content':'User has approved your plan.'}
+            records=[base|{'type':'assistant','message':{'content':[call]}},
+                     base|{'type':'user','toolUseResult':{'plan':plan,'filePath':'native.md','isAgent':False},'message':{'content':[reply]}}]
+            locator={'host':'claude','session':'s','tool_use_id':'plan','transcript_path':str(path)}
+            def read(rows):
+                path.write_text(''.join(json.dumps(r)+'\n' for r in rows),newline='\n')
+                return native_human(root,locator,since=since)
+            found=read(records)
+            self.assertEqual((found['prompt'],found['via'],found['accepted_plan']),('approve','plan',plan))
+            self.assertEqual(found['accepted_plan_path'],'native.md')
+            self.assertEqual(len(found['record_hashes']),2)
+            edited=deepcopy(records);edited[1]['toolUseResult']['plan']+='The person amended this scope.\n'
+            self.assertEqual(read(edited)['accepted_plan'],edited[1]['toolUseResult']['plan'])
+            # Never turn a model-authored summary or a denied/foreign native result into approval.
+            for label in ('pending','denied','prose only','agent','leader','wrong result id',
+                          'old request','old reply','foreign request','foreign reply','foreign checkout',
+                          'notification','sidechain','meta'):
+                with self.subTest(label=label):
+                    rows=deepcopy(records);request,response=rows
+                    if label=='pending':rows.pop()
+                    elif label=='denied':response['message']['content'][0]['is_error']=True
+                    elif label=='prose only':response.pop('toolUseResult')
+                    elif label=='agent':response['toolUseResult']['isAgent']=True
+                    elif label=='leader':response['toolUseResult']['awaitingLeaderApproval']=True
+                    elif label=='wrong result id':response['message']['content'][0]['tool_use_id']='other'
+                    elif label=='old request':request['timestamp']=since
+                    elif label=='old reply':response['timestamp']=since
+                    elif label=='foreign request':request['sessionId']='other'
+                    elif label=='foreign reply':response['sessionId']='other'
+                    elif label=='foreign checkout':response['cwd']=str(root.parent/'other')
+                    elif label=='notification':response['origin']={'kind':'task-notification'}
+                    elif label=='sidechain':response['isSidechain']=True
+                    elif label=='meta':response['isMeta']=True
+                    with self.assertRaises(Refused):read(rows)
+
+
+    def test_natural_language_and_slash_review_have_the_same_native_provenance(self):
+        from .authority import native_human
+        with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home',return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            for host in ('codex','claude'):
+                path=home/('.codex/sessions' if host=='codex' else '.claude/projects')/'s.jsonl'
+                path.parent.mkdir(parents=True)
+                for prompt in ('Please review the manual changes.', '/oh-review changed'):
+                    locator={'host':host,'session':'s','turn':'t','prompt':prompt,'transcript_path':str(path)}
+                    rows=([{'type':'session_meta','payload':{'id':'s','cwd':str(root),'source':'cli'}},
+                           {'type':'event_msg','payload':{'type':'user_message','turn_id':'t','message':prompt}}]
+                          if host=='codex' else [{'type':'user','sessionId':'s','promptId':'t','cwd':str(root),
+                                                 'message':{'role':'user','content':prompt}}])
+                    path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
+                    self.assertEqual(native_human(root,locator)['prompt'],prompt)
+                    with self.assertRaises(Refused):native_human(root,locator|{'prompt':prompt+' and approve repairs'})
+
+    def test_native_child_is_fresh_attributed_and_uses_the_admitted_profile(self):
+        from copy import deepcopy
+        from .authority import native_child, native_result
+        with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home',return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            for host in ('codex','claude'):
+                profile={'model':'gpt-6.1-sol' if host=='codex' else 'sonnet','effort':'high'}
+                attempt={'id':'admission','profile':profile,'started_at':'2026-10-15T12:00:00+00:00'}
+                parent=home/('.codex/sessions' if host=='codex' else '.claude/projects/p')/'parent.jsonl'
+                child=(parent.parent/'child.jsonl' if host=='codex' else parent.parent/'parent/subagents/agent-child.jsonl')
+                parent.parent.mkdir(parents=True,exist_ok=True);child.parent.mkdir(parents=True,exist_ok=True)
+                state={'host':host,'human':{'session':'parent','transcript_path':str(parent)}}
+                locator={'child_session':'child','transcript_path':str(child),'tool_use_id':'spawn'}
+                if host=='codex':
+                    args={'task_name':'oh_admission','fork_turns':'none','model':profile['model'],
+                          'reasoning_effort':'high','message':'Execute admission admission.'}
+                    parents=[{'type':'response_item','payload':{'type':'function_call','name':'collaboration.spawn_agent',
+                                                               'call_id':'spawn','arguments':json.dumps(args)}}]
+                    children=[{'type':'session_meta','payload':{'id':'child','timestamp':'2026-10-15T12:00:01+00:00',
+                               'cwd':str(root),'model_provider':'openai','source':{'subagent':{'thread_spawn':{
+                               'parent_thread_id':'parent','agent_path':'/root/oh_admission'}}}}},
+                              {'type':'turn_context','payload':{'model':profile['model'],'effort':'high'}}]
+                    final={'type':'event_msg','payload':{'type':'task_complete','last_agent_message':'Complete public report.'}}
+                else:
+                    args={'prompt':'Execute admission admission.','model':profile['model'],'effort':'high','fork_context':False}
+                    parents=[{'type':'assistant','message':{'content':[{'type':'tool_use','id':'spawn','name':'Agent','input':args}]}},
+                             {'type':'user','sessionId':'parent','cwd':str(root),'timestamp':'2026-10-15T12:00:01+00:00',
+                              'toolUseResult':{'isAsync':True,'status':'async_launched','agentId':'child','resolvedModel':'claude-sonnet-4-6'},
+                              'message':{'content':[{'type':'tool_result','tool_use_id':'spawn','content':'Native agent launched.'}]}}]
+                    children=[{'type':'assistant','agentId':'child','sessionId':'parent','cwd':str(root),
+                               'timestamp':'2026-10-15T12:00:01+00:00',
+                               'message':{'model':'claude-sonnet-4-6','content':[{'type':'tool_use','name':'Read'}]}}]
+                    final={'type':'user','agentId':'child','sessionId':'parent','cwd':str(root),
+                           'timestamp':'2026-10-15T12:00:03+00:00','toolUseResult':'User rejected tool use',
+                           'message':{'content':[{'type':'tool_result','tool_use_id':'bash','is_error':True,
+                                                  'content':'User rejected tool use'}]}}
+                def save(pr=parents,ch=children):
+                    parent.write_text(''.join(json.dumps(row)+'\n' for row in pr),newline='\n')
+                    child.write_text(''.join(json.dumps(row)+'\n' for row in ch),newline='\n')
+                save();bound=native_child(root,state,attempt,locator)
+                self.assertEqual(bound['profile'],profile)
+                self.assertEqual(bound['child_session'],'child')
+                with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                if host=='claude':
+                    progress={'type':'assistant','agentId':'child','sessionId':'parent','cwd':str(root),
+                              'message':{'model':'claude-sonnet-4-6','stop_reason':'end_turn',
+                                         'content':[{'type':'text','text':'The background task is still working.'}]}}
+                    pending=parents+[{'type':'system','subtype':'turn_duration','sessionId':'parent',
+                                      'pendingBackgroundAgentCount':1}]
+                    save(pr=pending,ch=children+[progress])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    killed=parents+[{'type':'system','subtype':'agents_killed','sessionId':'parent',
+                                     'cwd':str(root),'timestamp':'2026-10-15T12:00:03+00:00',
+                                     'isSidechain':False,'isMeta':False,'entrypoint':'cli'}]
+                    save(pr=killed,ch=children+[progress,final])
+                else:save(ch=children+[final])
+                result=native_result(root,state,attempt|{'native_child':bound},locator)
+                if host=='codex':self.assertEqual((result['text'],result['status']),('Complete public report.','completed'))
+                else:
+                    self.assertEqual(result['status'],'interrupted')
+                    self.assertIn('The background task is still working.',result['text'])
+                    completion={'type':'user','sessionId':'parent','timestamp':'2026-10-15T12:00:02Z',
+                        'toolUseResult':{'agentId':'child','status':'completed'},
+                        'message':{'content':[{'type':'tool_result','tool_use_id':'spawn','content':'Native completion.'}]}}
+                    finished={'type':'assistant','agentId':'child','sessionId':'parent','cwd':str(root),
+                        'timestamp':'2026-10-15T12:00:02Z','message':{'model':'claude-sonnet-4-6',
+                        'content':[{'type':'text','text':'Complete public report.'}]}}
+                    save(pr=parents+[completion,killed[-1]],ch=children+[finished])
+                    completed=native_result(root,state,attempt|{'native_child':bound},locator)
+                    self.assertEqual((completed['status'],completed['text']),('completed','Complete public report.'))
+                    forked=deepcopy(parents);forked[0]['message']['content'][0]['input']['subagent_type']='fork'
+                    save(pr=forked)
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                with self.assertRaises(Refused):
+                    native_result(root,state,attempt|{'native_child':bound},locator|{'child_session':'foreign'})
+                with self.assertRaises(Refused):
+                    native_child(root,state,attempt|{'profile':profile|{'effort':'low'}},locator)
+                with self.assertRaises(Refused):
+                    native_child(root,state,attempt|{'started_at':'2026-10-15T12:00:02+00:00'},locator)
+                unrelated=deepcopy(parents)
+                if host=='codex':
+                    other_args=args|{'task_name':'unrelated_earlier_task'}
+                    unrelated[0]['payload']['arguments']=json.dumps(other_args)
+                else:unrelated[0]['message']['content'][0]['input']['prompt']='An unrelated earlier task.'
+                save(pr=unrelated)
+                with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                wrong=deepcopy(children)
+                if host=='codex':wrong[0]['payload']['source']['subagent']['thread_spawn']['parent_thread_id']='foreign'
+                else:wrong[0]['sessionId']='foreign'
+                save(ch=wrong)
+                with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+
+    def test_native_failed_launch_is_attributed_without_inventing_a_child(self):
+        from .authority import native_result
+        with tempfile.TemporaryDirectory() as name,patch('pathlib.Path.home',return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            for host in ('codex','claude'):
+                path=home/('.codex/sessions' if host=='codex' else '.claude/projects')/'parent.jsonl'
+                path.parent.mkdir(parents=True)
+                state={'host':host,'human':{'session':'parent','transcript_path':str(path)}}
+                attempt={'id':'admission','profile':{'model':'fixture','effort':'high'},'started_at':'2026-10-15T12:00:00Z'}
+                if host=='codex':
+                    request={'type':'response_item','timestamp':'2026-10-15T12:00:01Z','payload':{'type':'function_call','name':'collaboration.spawn_agent',
+                        'call_id':'launch','arguments':json.dumps({'task_name':'oh_admission','fork_turns':'none',
+                                                                'model':'fixture','reasoning_effort':'high'})}}
+                    failure={'type':'response_item','timestamp':'2026-10-15T12:00:02Z','payload':{'type':'function_call_output','call_id':'launch',
+                        'output':'Error parsing native spawn: unavailable model.'}}
+                else:
+                    request={'type':'assistant','timestamp':'2026-10-15T12:00:01Z','sessionId':'parent','message':{'content':[{'type':'tool_use','id':'launch',
+                        'name':'Agent','input':{'prompt':'Execute admission admission.','model':'fixture','effort':'high','fork_context':False}}]}}
+                    failure={'type':'user','timestamp':'2026-10-15T12:00:02Z','sessionId':'parent','message':{'content':[{'type':'tool_result',
+                        'tool_use_id':'launch','is_error':True,'content':'Native agent launch failed.'}]}}
+                def save(rows):path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
+                save([request,failure])
+                result=native_result(root,state,attempt,{'tool_use_id':'launch'})
+                self.assertEqual(result['status'],'failed')
+                self.assertIsNone(result['profile'])
+                self.assertEqual(result['admitted_profile'],attempt['profile'])
+                self.assertNotIn('native_id',result)
+                self.assertEqual(len(result['record_hashes']),2)
+                with self.assertRaises(Refused):native_result(root,state,attempt,{'tool_use_id':'foreign'})
+                with self.assertRaises(Refused):native_result(root,state,attempt|{'started_at':'2026-10-15T12:00:03Z'},{'tool_use_id':'launch'})
+                wrong_profile=json.loads(json.dumps(request))
+                if host=='codex':
+                    args=json.loads(wrong_profile['payload']['arguments']);args.update(model='unavailable',reasoning_effort='low')
+                    wrong_profile['payload']['arguments']=json.dumps(args)
+                else:wrong_profile['message']['content'][0]['input'].update(model='unavailable',effort='low')
+                save([wrong_profile,failure])
+                failed=native_result(root,state,attempt,{'tool_use_id':'launch'})
+                self.assertIsNone(failed['profile']);self.assertEqual(failed['admitted_profile'],attempt['profile'])
+                self.assertEqual(failed['requested_profile']['model'],'unavailable')
+                save([request,{'type':'assistant','message':{'content':[{'type':'text','text':'Native launch failed.'}]}}])
+                with self.assertRaises(Refused):native_result(root,state,attempt,{'tool_use_id':'launch'})
+
     def test_native_transcript_binds_host_turn_text_and_checkout(self):
         with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home',return_value=Path(name)):
             home=Path(name);root=home/'project';root.mkdir()
@@ -66,7 +264,7 @@ class AuthorityTest(unittest.TestCase):
                 else:records[0]['promptSource']='sdk'
                 save()
                 with self.assertRaises(Refused):attest(host,payload,root)
-                path.write_text('')
+                path.write_text('',newline='\n')
                 with patch('oh.authority.sleep') as pause:
                     with self.assertRaises(Refused):attest(host,payload,root)
                     self.assertEqual(pause.call_count,4)
@@ -141,245 +339,3 @@ class AuthorityTest(unittest.TestCase):
             save('<command-name>/other:oh-stop</command-name>','oh-stop')  # another plugin's command of the same name
             with self.assertRaises(Refused):attest('claude',payload|{'prompt':'/oh-stop'},root)
             with self.assertRaises(Refused):attest('claude',payload|{'prompt':'approve'},root)  # only slash commands are tagged
-
-    def test_desktop_fallback_uses_only_current_native_human_turn(self):
-        import os
-        from .authority import desktop_pending,pending_file,attest
-        from .storage import atomic_json,identifier
-        import subprocess
-        with tempfile.TemporaryDirectory() as name,patch('pathlib.Path.home',return_value=Path(name)),patch.dict(os.environ,{'CODEX_THREAD_ID':'session','OH_DATA_HOME':name+'/state'}):
-            home=Path(name);root=home/'project';root.mkdir();subprocess.run(['git','init','-q',str(root)],check=True)
-            path=home/'.codex/sessions/session.jsonl';path.parent.mkdir(parents=True)
-            records=[{'type':'session_meta','payload':{'id':'session','cwd':str(root),'source':'vscode','originator':'Codex Desktop'}},
-              {'type':'event_msg','payload':{'type':'task_started','turn_id':'one'}},
-              {'type':'event_msg','payload':{'type':'user_message','message':'$o-harness:oh-propose Describe the next change'}}]
-            def save():path.write_text(''.join(json.dumps(x)+'\n' for x in records))
-            from .authority import materialize
-            records[-1]['payload']['message']='$o-harness:oh-propose'
-            save();self.assertEqual(materialize(root)['waiting']['command'],'propose')  # first use registers without a separate init
-            records[-1]['payload']['message']='$o-harness:oh-deliver implement a new idea'
-            save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()  # preparation may offer a menu, never grants work
-            records[-1]['payload']['message']='$o-harness:oh-propose Describe the next change'
-            save();desktop_pending(root);self.assertTrue(pending_file(root).exists());pending_file(root).unlink()
-            from .entry import command
-            for skill,args in (('propose','Add f(x).'),('propose',''),('design','example'),('design',''),('start',''),
-                               ('deliver','fix f(x).'),('deliver','0001'),('deliver','request:'+'a'*64),('resume',''),('pause',''),('stop','')):
-                for target in ('/Users/Jane Doe/plugins',r'C:\Users\Jane Doe\plugins'):
-                    prompt=f'[$o-harness:oh-{skill}]({target}/oh-{skill}/SKILL.md)'+(' '+args if args else '')
-                    records[-1]={'type':'event_msg','timestamp':'2026-09-30T12:00:00Z','payload':{'type':'item_completed','thread_id':'session',
-                        'turn_id':'one','item':{'type':'UserMessage','id':'message-one','client_id':'client-one',
-                        'content':[{'type':'text','text':prompt+'\n'}]}}}
-                    save()
-                    with self.subTest(skill=skill,args=args,target=target),patch('oh.entry.receive') as received:
-                        desktop_pending(root)
-                        self.assertEqual(received.call_args.args[2]['prompt'],prompt)
-                        self.assertEqual(command(prompt),command('$o-harness:oh-'+skill+(' '+args if args else '')))
-                        self.assertEqual(command(prompt.replace('$o-harness:','$')),command(prompt))  # the short skill name is supported too
-            # Expansions saved after the actual human message do not displace it.
-            records.append({'type':'response_item','payload':{'role':'user','content':[{'type':'input_text','text':'<skill>injected</skill>'}]}})
-            save()
-            with patch('oh.entry.receive') as received:
-                desktop_pending(root);self.assertTrue(received.called)
-            records.pop()
-            # docs/architecture.md: moving a chat to another checkout changes the current message's
-            # binding, without reassigning messages it sent from the previous checkout.
-            from .mcp_server import folder
-            elsewhere=home/'old-checkout';elsewhere.mkdir()
-            moved=[records[0]|{'payload':records[0]['payload']|{'cwd':str(elsewhere)}},
-                   {'type':'event_msg','payload':{'type':'task_started','turn_id':'old-turn'}},
-                   {'type':'event_msg','payload':{'type':'user_message','message':'$oh-propose old checkout'}},
-                   {'type':'turn_context','payload':{'turn_id':'one','cwd':str(root)}},*records[1:]]
-            path.write_text(''.join(json.dumps(x)+'\n' for x in moved),newline='\n')
-            self.assertEqual(folder('session'),root.resolve())
-            with patch('oh.entry.receive') as received:
-                desktop_pending(root);self.assertTrue(received.called)
-            old={'hook_event_name':'UserPromptSubmit','session_id':'session','turn_id':'old-turn',
-                 'prompt':'$oh-propose old checkout','transcript_path':str(path)}
-            with self.assertRaisesRegex(Refused,'another project checkout'):attest('codex',old,root)
-            save()
-            # The MCP turn is a consistency check when supplied; old clients still work without it.
-            with patch.dict(os.environ,{'OH_CODEX_TURN_ID':'two'}),patch('oh.authority.sleep'),patch('oh.entry.receive') as received:
-                with self.assertRaises(Refused):desktop_pending(root)
-                received.assert_not_called()
-            records[0]['payload']['source']='cli'
-            save()
-            with patch('oh.entry.receive') as received:
-                desktop_pending(root);self.assertTrue(received.called)
-            records[0]['payload']['source']='vscode'
-            records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'two'}},{'type':'event_msg','payload':{'type':'user_message','message':'Discuss a different subject'}}]
-            save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
-            # While OH waits for this conversation's answer (a bare $oh-propose), a plain message typed after the
-            # question is the answer; one typed before it is not.
-            from .authority import wait_for
-            from .storage import now,read_json
-            wait_for(root,{'host':'codex','session':'session'},'propose',"What's the idea?")
-            desktop_pending(root);self.assertFalse(pending_file(root).exists())
-            records += [{'type':'event_msg','payload':{'type':'task_started','turn_id':'three'}},
-                        {'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','message':'Search my notes'}}]
-            save();desktop_pending(root);self.assertEqual(read_json(pending_file(root))['idea'],'propose');pending_file(root).unlink()
-            records[0]['payload']['source']='exec';records[-1]['payload']['message']='continue'
-            save();desktop_pending(root);self.assertFalse(pending_file(root).exists())
-            # docs/usage.md: a delayed hook or invented locator cannot spend the actual latest command.
-            # Staging happens before the transcript is saved; only materialization may choose between them.
-            from .authority import Saving,stage,used_file
-            from .workflow import human_event
-            for host in ('codex','claude'):
-                for delayed in ('old','invented','late','replay'):
-                    session=f'queued-{host}-{delayed}'
-                    transcript=home/('.codex/sessions' if host=='codex' else '.claude/projects')/(session+'.jsonl')
-                    transcript.parent.mkdir(parents=True,exist_ok=True)
-                    proof=[{'type':'session_meta','payload':{'id':session,'cwd':str(root),'source':'cli'}}] if host=='codex' else []
-                    locators={}
-                    for turn,at in (('old','2026-09-30T12:00:00Z'),('new','2026-09-30T12:01:00Z')):
-                        prompt=('$' if host=='codex' else '/')+'oh-propose '+turn
-                        locators[turn]={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,
-                            'prompt':prompt,'transcript_path':str(transcript)}
-                        proof.append(({'type':'event_msg','timestamp':at,'payload':{'type':'user_message','turn_id':turn,'message':prompt}}
-                            if host=='codex' else {'type':'user','timestamp':at,'sessionId':session,'promptId':turn,
-                                'cwd':str(root),'message':{'role':'user','content':prompt}}))
-                    if delayed in ('old','late','replay'):
-                        # Separate conversations: the older evidence is complete while the newer one is saving.
-                        other_session=session+'-other';other_path=transcript.with_name(other_session+'.jsonl')
-                        older=([proof[0]|{'payload':proof[0]['payload']|{'id':other_session}},proof[1]] if host=='codex'
-                            else [proof[0]|{'sessionId':other_session}])
-                        other_path.write_text(''.join(json.dumps(x)+'\n' for x in older),newline='\n')
-                        locators['old']|={'session_id':other_session,'transcript_path':str(other_path)}
-                    transcript.write_text('')
-                    stage(root,host,locators['new'])
-                    if delayed in ('old','invented'):
-                        stage(root,host,locators['old'] if delayed=='old' else locators['new']|{'prompt':'/oh-propose fabricated'})
-                    event=human_event(locators['new'],host)
-                    self.assertFalse(used_file(root,event).exists())
-                    complete=''.join(json.dumps(x)+'\n' for x in proof)
-                    transcript.write_text(complete[:-8],newline='\n')
-                    if delayed=='old':
-                        with patch.dict(os.environ,{'CODEX_THREAD_ID':'','CODEX_SESSION_ID':''}),patch('oh.authority.sleep') as pause,\
-                                patch('oh.cli.host_hook') as apply:
-                            with self.assertRaises(Saving):materialize(root)
-                            apply.assert_not_called();self.assertEqual(pause.call_count,4)
-                        self.assertEqual(len(read_json(pending_file(root))['prior']),1)
-                        self.assertFalse(used_file(root,event).exists())
-                        self.assertFalse(used_file(root,human_event(locators['old'],host)).exists())
-                    def finish(_):
-                        self.assertFalse(used_file(root,event).exists())
-                        self.assertTrue(pending_file(root).exists())
-                        transcript.write_text(complete,newline='\n')
-                    with patch.dict(os.environ,{'CODEX_THREAD_ID':'','CODEX_SESSION_ID':''}),patch('oh.authority.sleep',side_effect=finish),\
-                            patch('oh.cli.host_hook',return_value={'waiting':{'command':'propose'}}):
-                        self.assertEqual(materialize(root)['waiting']['command'],'propose')
-                    self.assertIn('result',read_json(used_file(root,event)))
-                    if delayed in ('late','replay'):
-                        older_event=human_event(locators['old'],host)
-                        self.assertFalse(used_file(root,older_event).exists())
-                        if delayed=='replay':
-                            stage(root,host,locators['new']);stage(root,host,locators['old'])
-                            with patch.dict(os.environ,{'CODEX_THREAD_ID':'','CODEX_SESSION_ID':''}),patch('oh.cli.host_hook') as apply:
-                                self.assertEqual(materialize(root)['waiting']['command'],'propose')
-                                apply.assert_not_called()
-                            self.assertIn('Superseded',read_json(used_file(root,older_event))['refused'])
-                        # A delayed old hook cannot become fresh work after the newer request finished.
-                        stage(root,host,locators['old'])
-                        with patch.dict(os.environ,{'CODEX_THREAD_ID':'','CODEX_SESSION_ID':''}),patch('oh.cli.host_hook') as apply:
-                            with self.assertRaisesRegex(Refused,'Superseded'):materialize(root)
-                            apply.assert_not_called()
-                        self.assertIn('Superseded',read_json(used_file(root,older_event))['refused'])
-                    stage(root,host,locators['new']);stage(root,host,locators['old'])
-                    cancelled=({'type':'event_msg','payload':{'type':'user_message','turn_id':'cancel','message':'never mind'}}
-                        if host=='codex' else {'type':'user','sessionId':session,'promptId':'cancel','cwd':str(root),
-                            'message':{'role':'user','content':'never mind'}})
-                    transcript.write_text(complete+json.dumps(cancelled)+'\n',newline='\n')
-                    with patch.dict(os.environ,{'CODEX_THREAD_ID':'','CODEX_SESSION_ID':''}),self.assertRaises(Refused):
-                        materialize(root)
-                    self.assertFalse(pending_file(root).exists())
-
-    def test_conversational_intake_needs_no_waiting_state(self):
-        import subprocess
-        from .authority import materialize,pending_file,stage,used_file,waits
-        from .entry import receive
-        from .storage import read_json
-        from .workflow import human_event
-        with tempfile.TemporaryDirectory() as name,patch('pathlib.Path.home',return_value=Path(name)),patch.dict(os.environ,{'OH_DATA_HOME':name+'/state'}):
-            home=Path(name);root=home/'project';root.mkdir();subprocess.run(['git','init','-q',str(root)],check=True)
-            case=0
-            for host in ('codex','claude'):
-                if host=='claude':
-                    from .config import change
-                    change(root,'plans.location','private')
-                for kind,args,replies,expected in (
-                        ('propose','',['Add a tiny smoke script'],'Add a tiny smoke script'),
-                        ('design','',['smoke'],'smoke'),
-                        ('deliver','',['0001'],'0001'),
-                        ('deliver','',['0001','ui'],'0001 ui'),
-                        ('deliver','0001',['ui'],'0001 ui'),
-                        ('deliver','',['Fix the smoke message'],'Fix the smoke message'),
-                        ('deliver','Fix the smoke message',['Use exactly OK'],'Fix the smoke message\nUse exactly OK')):
-                    with self.subTest(host=host,kind=kind,args=args,replies=replies):
-                        case+=1;session=host+'-'+str(case)
-                        path=home/('.codex/sessions' if host=='codex' else '.claude/projects')/(session+'.jsonl')
-                        path.parent.mkdir(parents=True,exist_ok=True)
-                        records=[{'type':'session_meta','payload':{'id':session,'cwd':str(root),'source':'cli'}}] if host=='codex' else []
-                        def message(turn,text):
-                            payload={'hook_event_name':'UserPromptSubmit','session_id':session,'turn_id':turn,'prompt':text,'transcript_path':str(path)}
-                            at=f'2026-10-01T12:{case:02d}:0{turn}Z'
-                            if host=='codex':
-                                records.extend([{'type':'event_msg','payload':{'type':'task_started','turn_id':turn}},
-                                    {'type':'event_msg','timestamp':at,'payload':{'type':'user_message','turn_id':turn,'message':text}}])
-                            else:records.append({'type':'user','sessionId':session,'promptId':turn,'cwd':str(root),
-                                'timestamp':at,'message':{'role':'user','content':text}})
-                            path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
-                            return payload
-                        original=message('1',('$' if host=='codex' else '/')+'oh-'+kind+(' '+args if args else ''))
-                        # Claude has a prompt hook. Codex Desktop can first reach OH only after the answer.
-                        if host=='claude':receive(root,host,original)
-                        with patch.dict(os.environ,{'CODEX_THREAD_ID':session if host=='codex' else ''}),\
-                                patch('oh.delivery.track_question',return_value={'waiting':{'tracks':['core','ui']}}):
-                            for index,reply in enumerate(replies,2):
-                                payload=message(str(index),reply)
-                                if host=='claude':receive(root,host,payload)
-                                missing=original|{'session_id':'missing','turn_id':'old','transcript_path':str(path.with_name('missing.jsonl'))}
-                                from .registry import index_path
-                                if index_path(root).exists():stage(root,host,missing)
-                                # No waiting record exists, even between design-number and track answers.
-                                self.assertEqual(waits(root),{})
-                                final=index==len(replies)+1
-                                result={'kind':'quick_fix','prepare':True} if final and 'smoke message' in expected else (
-                                    {'run':'fixture','status':'running'} if final else {'waiting':{'tracks':['core','ui']}})
-                                with patch('oh.cli.host_hook',return_value=result) as apply:
-                                    self.assertEqual(materialize(root),result)
-                                    self.assertEqual(apply.call_args.kwargs['request'],(kind,expected if final else reply))
-                                    self.assertEqual(apply.call_args.args[2]['prompt'],reply)  # real source, never a synthesized command
-                                # A missing old chat cannot block either the initial request or its retry.
-                                stage(root,host,missing)
-                                if host=='claude':stage(root,host,payload,idea='conversation')
-                                with patch('oh.cli.host_hook') as apply:
-                                    self.assertEqual(materialize(root),result);apply.assert_not_called()
-                                self.assertFalse(used_file(root,human_event(missing,host)).exists())
-                        pending_file(root).unlink(missing_ok=True)
-
-    def test_prepared_scope_cannot_be_widened_after_human_trigger(self):
-        import os,subprocess
-        from datetime import datetime,timedelta,timezone
-        from .prepared import prepare,resolve,directory
-        from .storage import atomic_json,identifier,read_json
-        from .cli import host_hook
-        from .workflow import load_run
-        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
-            root=Path(tmp)/'consumer';root.mkdir()
-            for args in [('init','-qb','main'),('config','user.name','Fixture'),('config','user.email','fixture@example.invalid')]:subprocess.run(['git','-C',str(root),*args],check=True)
-            register(root,'Fixture')
-            (root/'product.txt').write_text('fixture')
-            from .test_workflow import configure
-            configure(root,checks=[{'name':'check','command':['true']}])
-            subprocess.run(['git','-C',str(root),'add','.'],check=True);subprocess.run(['git','-C',str(root),'commit','-qm','base'],check=True)
-            tasks={'tasks':[{'id':'1','title':'Fix','instructions':'Fix agreed behavior'}],'checks':[]}
-            atomic_json(profile_path(root).parent/'tasks.json',tasks)
-            request=prepare(root,str(profile_path(root).parent/'tasks.json'))
-            event={'host':'codex','session':'s','turn':'t','prompt':request['trigger'],'at':(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()}
-            atomic_json(profile_path(root).parent/'tasks.json',{'tasks':tasks['tasks']+[{'id':'2','title':'Extra','instructions':'Unapproved'}]})
-            configure(root,tasks_per_batch=99,review_rounds=99)
-            with self.assertRaises(Refused):resolve(root,'request:'+request['request'],event|{'at':'2000-01-01T00:00:00+00:00'},'tasks')
-            host_hook(root,'codex',{'prompt':request['trigger']},verified=event)
-            _,run=load_run(root);self.assertEqual(len(run['tasks']),1);self.assertEqual(run['config']['tasks_per_batch'],5);self.assertEqual(run['config']['review_rounds'],3)
-            prepared=directory(root)/(request['request']+'.json');data=read_json(prepared);data['manifest']['tasks'].append({'id':'2'})
-            prepared.write_text(json.dumps(data))
-            with self.assertRaises(Refused):resolve(root,'request:'+request['request'],event,'tasks')

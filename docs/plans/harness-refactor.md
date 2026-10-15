@@ -1,5 +1,9 @@
 # OH harness refactor
 
+Current direction (2026-10-15): [native workflows](native-workflows.md) supersedes
+the execution architecture below. This document retains the earlier implementation
+and validation history. Native migration implementation is authorized; native Stop is tracked as a non-blocking limitation in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81).
+
 Status: handoff correction and local host acceptance passed; awaiting the developer's new Desktop trial.
 Branch: `codex/harness-refactor`. Independent review and publication remain pending.
 

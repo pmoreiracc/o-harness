@@ -1,7 +1,4 @@
 from __future__ import annotations
-
-from .storage import checkout_file
-
 import argparse
 import json
 import os
@@ -9,198 +6,7 @@ from pathlib import Path
 import shlex
 import sys
 from .config import HOME
-from .storage import Refused, atomic_json, checkout_id, digest, identifier, project, read_json, state_home
-from .workflow import active_file, checkpoint, choose, human_event, start
-
-
-def host_hook(root,host,payload,*,verified,idea=None,request=None):
-    """Carry out a verified typed command. `idea`: the command whose argument the text is, because OH asked for it
-    (see authority.wait_for)."""
-    from .entry import invocation
-    prompt=invocation(payload.get('prompt','')) if not idea else payload.get('prompt','').strip()
-    if request:prompt='/oh-'+request[0]+' '+request[1]
-    import re
-    prompt=re.sub(r'^[$/](?:o-harness:)?(oh-(?:pause|resume|stop))$',lambda m:m[1],prompt)
-    prompt={'oh-pause':'pause','oh-stop':'stop','oh-resume':'resume'}.get(prompt,prompt)
-    planning=re.fullmatch(r'[$/](?:o-harness:)?(?:oh-start\s+|oh-)(propose|design)\s+(.+)',prompt,re.S)
-    from .workflow import load_run,occupied,unfinished
-    if idea=='refine':
-        from .workflow import refinement_for
-        from .authority import newer
-        pending=refinement_for(root,host,verified['session'])
-        if not pending or not newer(verified.get('at'),pending['source'].get('at')):
-            raise Refused('No current request for changes precedes this reply; run status to see the current preview.')
-        if load_run(root)[1]['status']=='prepared_checkpoint':
-            from .prepared import remember
-            remember(root,host,payload,verified)
-        choose(root,'refine: '+prompt,verified)
-        return checkpoint(root)
-    if idea in ('review','review-request'):
-        return {'kind':'review','prepare_review':True,'human':verified,'intent':prompt}
-    if idea:
-        if idea=='design':
-            from .plans import listing
-            if prompt not in {i['slug'] for i in listing(root)['initiatives'] if 'design' not in i}:
-                # Not one of the rows OH offered: ask again, rather than keep an answer OH can't use.
-                return ask_for(root,verified,'design')|{'note':f'"{prompt[:80]}" is not one of those rows; OH asked again.'}
-        planning=[None,idea,prompt]
-    elif bare:=re.fullmatch(r'[$/](?:o-harness:)?oh-(propose|design)',prompt):
-        if unfinished(root,verified):raise occupied(load_run(root)[1])
-        return ask_for(root,verified,bare[1])
-    if planning:
-        kind,intent=planning[1],planning[2]
-        if unfinished(root,verified):raise occupied(load_run(root)[1])
-        from .plans import layout
-        if not started(root,verified) and layout(root)['location']=='repo':
-            from .branches import from_main
-            from_main(root)
-        if kind=='design':
-            from .plans import design_manifest
-            manifest,plan=design_manifest(root,intent.strip())
-            start(root,manifest,verified,plan=plan)
-        else:
-            from .plans import propose_manifest
-            manifest,plan=propose_manifest(root,intent)
-            start(root,manifest,verified,plan=plan)
-        return checkpoint(root)
-    from .entry import command
-    parsed=command(prompt)
-    if parsed and parsed[0]=='choice':prompt=parsed[1]  # retain the original human text in verified evidence
-    if prompt=='resume' and active_file(root).exists() and load_run(root)[1]['status']=='completed':
-        from .review import dismiss_finished
-        dismiss_finished(root)
-    if prompt=='resume' and active_file(root).exists():
-        from .workflow import carry_on
-        return carry_on(root,verified)
-    if parsed and parsed[0]=='review':
-        if not parsed[1]:return ask_for(root,verified,'review')
-        return {'kind':'review','prepare_review':True,'human':verified,'intent':parsed[1]}
-    if parsed and parsed[0] in ('deliver','propose','design','oh-resume'):
-        from .review import dismiss_finished
-        dismiss_finished(root)
-    from .delivery import parse
-    delivery=parse(parsed[1]) if parsed and parsed[0]=='deliver' else None
-    if delivery and delivery['kind']=='list':
-        from .delivery import listing
-        return listing(root)
-    if delivery and delivery['kind']=='quick_fix' or parsed==('oh-start',''):
-        if unfinished(root,verified):raise occupied(load_run(root)[1])
-        # Preparation selects the base or an explicitly requested existing PR. A
-        # prose invocation alone must not switch away from the requested work.
-        from .prepared import remember
-        remember(root,host,payload,verified)
-        return delivery or {'prepare':True,'authorized':False,'next':'Prepare the agreed tasks and show the returned approval menu.'}
-    if delivery and delivery['kind']=='design':
-        from .workflow import carry_on,load_run,occupied,unfinished
-        if not delivery['request'] and not started(root,verified):
-            from .delivery import continue_stopped
-            if continued:=continue_stopped(root,delivery['doc'],delivery['track'],verified):return continued
-        if unfinished(root,verified):
-            _,state=load_run(root)
-            # The same design typed again carries on with its run.
-            if (state.get('design'),state.get('track') or '')==(delivery['doc'],delivery['track']):return carry_on(root,verified)
-            raise occupied(state)
-        if started(root,verified):return checkpoint(root)
-        from .delivery import track_question
-        if not delivery['track'] and not delivery['request'] and (question:=track_question(root,delivery['doc'])):
-            return question
-        from .prepared import resolve
-        if delivery['request']:  # prepared on a branch it is bound to, which OH leaves where it is
-            prepared=resolve(root,delivery['request'],verified,'design')
-            if prepared['doc']!=delivery['doc'] or prepared['track']!=delivery['track']:raise Refused('Prepared design and requested track differ')
-            start(root,prepared['manifest'],verified,prepared=prepared)
-        else:
-            from .branches import delivery_branch,refresh,to_delivery
-            from .delivery import finished
-            name=delivery_branch(delivery['doc'],delivery['track'])
-            if base:=to_delivery(root,name):
-                if active_file(root).exists():
-                    _,prior=load_run(root)
-                    if prior.get('published') and prior['branch']==name:
-                        raise Refused('The previous delivery is already published: '+prior['published']['url']+
-                                      '. Its branch still has unmerged work. Finish or resolve that PR before delivering the next batch on this branch, or select another approved task.')
-                if again:=finished(root,delivery['doc'],delivery['track'],name,verified):return again
-                refresh(root,name,base)
-            from .delivery import selection
-            from .plans import editing
-            with editing(root):
-                manifest,binding=selection(root,delivery['doc'],delivery['track'])
-                start(root,manifest,verified,plan=binding)
-        return checkpoint(root)
-    if parsed and parsed[0] in ('oh-start','deliver') and parsed[1].startswith('request:'):
-        from .prepared import resolve
-        prepared=resolve(root,parsed[1],verified,'tasks')
-        if active_file(root).exists():
-            _,waiting=load_run(root)
-            if waiting['status']=='prepared_checkpoint' and waiting.get('prepared_request')==parsed[1].split(':')[1]:
-                choose(root,'approve',verified)
-                return checkpoint(root)
-        start(root,prepared['manifest'],verified,prepared=prepared)
-        return checkpoint(root)
-    from .entry import CHOICES,REFINE
-    if (prompt in CHOICES|{'pause'} or re.fullmatch(REFINE,prompt,re.S)) and active_file(root).exists():
-        if prompt.startswith('refine:') and load_run(root)[1]['status']=='prepared_checkpoint':
-            from .prepared import remember
-            remember(root,host,payload,verified)
-        choose(root,prompt,verified)
-        return checkpoint(root)
-    return None
-
-
-def ask_for(root,event,kind):
-    """A command typed without its argument waits for the person's next message instead of failing."""
-    from .authority import wait_for
-    from .storage import Final
-    from .workflow import WAIT_NEXT
-    extra={}
-    if kind=='design':
-        from .plans import listing
-        free=[{k:i[k] for k in ('slug','milestone','depends')} for i in listing(root)['initiatives'] if 'design' not in i]
-        if not free:raise Final('Every roadmap initiative has a design already. New ideas start with /oh-propose.')
-        ask,extra='Which initiative should OH design?',{'initiatives':free}
-    elif kind=='review':ask='What should OH review: your changes, a commit/range, files, or a completed delivery task?'
-    else:ask="What's the idea?"
-    wait_for(root,event,kind,ask)
-    return {'waiting':{'command':kind,'ask':ask,'next':WAIT_NEXT}|extra}
-
-
-def started(root,event):
-    """Whether this very command already started the checkout's run, so carrying it out again only continues it."""
-    from .workflow import active_file,load_run
-    if not active_file(root).exists():return False
-    _,state=load_run(root);source=digest({k:event[k] for k in ('host','session','turn','prompt')})
-    return state['source']==source or any(c['source']==source for c in state.get('continuations',[]))
-
-
-def git_branch(root):
-    from .storage import git
-    return git(root,'branch','--show-current')
-
-
-def executable_run(root,admitted):
-    """An authorized continuation may have no new event; a different terminal run is not a command result."""
-    from .workflow import load_run
-    _,state=load_run(root)
-    if admitted and admitted.get('run') and admitted['run']!=state['id']:
-        raise Refused('That command belongs to an earlier run. Use status to inspect the current run; no work was started.')
-    if admitted and admitted.get('published'):
-        if admitted['published'].get('id')!=(state.get('published') or {}).get('id'):
-            raise Refused('The publication result does not match the current run; inspect its saved status.')
-        return  # reporting a verified finished cycle needs no execution owner
-    if admitted is None and state['status'] in ('stopped','completed','pr'):
-        raise Refused('No new OH command was recognized. The previous run is '+state['status']+
-                      '; use status to inspect it, or invoke the intended OH skill in this checkout.')
-    if os.environ.get('CODEX_THREAD_ID') and (state['host']!='codex' or state['human']['session']!=os.environ['CODEX_THREAD_ID']):
-        raise Refused('This run belongs to another conversation; continue it there, or stop it before starting new work here.')
-    if state['status']=='needs_attention':
-        from .storage import checkout_file,lock
-        with lock(checkout_file(root,'oh-control.lock')):
-            journal,current=load_run(root)
-            if current['status']=='needs_attention':
-                # Continuation repairs the same granted work. It renews neither task
-                # scope nor review rounds; past attempts remain in the journal.
-                journal.append('run.status',{'status':'running','reason':'Continuing the existing approved task after repairing its obstacle.'})
-
+from .storage import Refused, read_json
 
 class Tolerant:
     """An output whose reader may go away, such as a host that ended a tool call: OH's notes, progress and result
@@ -215,272 +21,146 @@ class Tolerant:
     def __getattr__(self,name):return getattr(self.stream,name)
 
 
+
 def main(argv=None):
-    import time
-    call_started=time.monotonic()
     for name in ('stdout','stderr'):
         if not isinstance(getattr(sys,name),Tolerant):setattr(sys,name,Tolerant(getattr(sys,name)))
     parser=argparse.ArgumentParser(prog='oh')
     parser.add_argument('--root',type=Path)
     sub=parser.add_subparsers(dest='command',required=True)
-    build=sub.add_parser('build-plugin');build.add_argument('destination',type=Path);build.add_argument('--host',choices=['codex','claude'],required=True)
-    install=sub.add_parser('setup');install.add_argument('--development',action='store_true');install.add_argument('--if-newer',action='store_true')
-    plugin_hook=sub.add_parser('plugin-hook');plugin_hook.add_argument('--host',choices=['codex','claude'],required=True)
-    review_command=sub.add_parser('review');review_command.add_argument('arguments',nargs='*')
-    launch=sub.add_parser('start');launch.add_argument('request',nargs='?')
-    export=sub.add_parser('profile-export');export.add_argument('destination',type=Path)
-    imported=sub.add_parser('profile-import');imported.add_argument('source',type=Path);imported.add_argument('--name',help='register the project under another name')
-    renamed=sub.add_parser('rename');renamed.add_argument('name')
-    prep=sub.add_parser('prepare');prep.add_argument('manifest');prep.add_argument('--review');prep.add_argument('--pr',type=int)
-    clash=sub.add_parser('conflict');clash.add_argument('choice',choices=['fresh','keep']);clash.add_argument('doc');clash.add_argument('track',nargs='?',default='')
-    prep_design=sub.add_parser('prepare-design');prep_design.add_argument('doc');prep_design.add_argument('track',nargs='?',default='')
-    verification=sub.add_parser('verify');verification.add_argument('base',nargs='?');verification.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
-    worker_checks=sub.add_parser('worker-checks',help=argparse.SUPPRESS);worker_checks.add_argument('attempt',type=Path)
-    publication=sub.add_parser('pr-summary');publication.add_argument('base',nargs='?');publication.add_argument('--validate-event',type=Path)
-    published=sub.add_parser('publication');published.add_argument('--pr',type=int)
-    trusted=sub.add_parser('trust-host');trusted.add_argument('host',choices=['codex','claude']);trusted.add_argument('path',type=Path,nargs='?')
-    init=sub.add_parser('init');init.add_argument('--name',help='defaults to the repository\'s project, or the repository\'s folder name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
-    backup=sub.add_parser('backup');backup.add_argument('destination',type=Path)
-    restore=sub.add_parser('restore');restore.add_argument('source',type=Path)
-    sub.add_parser('pause');sub.add_parser('stop');sub.add_parser('cancel');sub.add_parser('resume');sub.add_parser('status');sub.add_parser('run');sub.add_parser('collect');sub.add_parser('rebuild');sub.add_parser('observe-ci')
-    observer=sub.add_parser('observe');observer.add_argument('--run',required=True);observer.add_argument('--after',default='')
-    observer.add_argument('--wait',type=int,default=60);observer.add_argument('--follow',action='store_true')
-    settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?')
-    settings.add_argument('--global',dest='everywhere',action='store_true',help='change your settings for every project')
-    planning=sub.add_parser('plans');planning.add_argument('action',choices=['path','check','list'])
-    hook=sub.add_parser('host-hook');hook.add_argument('--host',choices=['codex','claude'],required=True)
-    serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4319 if os.environ.get('OH_DASHBOARD_MODE')=='development' else 4318)
-    sub.add_parser('service-install');sub.add_parser('service-uninstall')
-    suggest=sub.add_parser('suggest');suggest.add_argument('--host',choices=['codex','claude'],default='codex')
-    deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*')
+    scope=sub.add_parser('scope');actions=scope.add_subparsers(dest='action',required=True)
+    prep=actions.add_parser('prepare');prep.add_argument('manifest',type=Path,nargs='?');prep.add_argument('--doc');prep.add_argument('--track',default='');prep.add_argument('--workflow',default='deliver',choices=['deliver','design','propose']);prep.add_argument('--human',type=Path)
+    approve=actions.add_parser('approve');approve.add_argument('scope_id');approve.add_argument('locator',type=Path)
+    attempt=sub.add_parser('attempt');attempts=attempt.add_subparsers(dest='action',required=True)
+    admit=attempts.add_parser('admit');admit.add_argument('role',choices=['assessment','implementation','analysis','review'])
+    for action in ('bind','retain'):
+        step=attempts.add_parser(action);step.add_argument('attempt');step.add_argument('locator',type=Path)
+    sub.add_parser('candidate')
+    evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
+    complete=sub.add_parser('complete');complete.add_argument('attempt')
+    decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator',type=Path);decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
+    resume=sub.add_parser('resume');resume.add_argument('--human',type=Path)
+    sub.add_parser('status')
+    review=sub.add_parser('review');review.add_argument('arguments',nargs='*');review.add_argument('--human',type=Path)
+    deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*');deliver.add_argument('--human',type=Path)
+    prep=sub.add_parser('prepare');prep.add_argument('manifest',type=Path);prep.add_argument('--review');prep.add_argument('--pr',type=int)
+    pd=sub.add_parser('prepare-design');pd.add_argument('doc');pd.add_argument('track',nargs='?',default='')
+    verify=sub.add_parser('verify');verify.add_argument('base',nargs='?');verify.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
+    admission=sub.add_parser('admission');admission.add_argument('directory',type=Path)
+    pub=sub.add_parser('publication');pub.add_argument('--pr',type=int)
+    summary=sub.add_parser('pr-summary');summary.add_argument('base',nargs='?')
+    plans=sub.add_parser('plans');plans.add_argument('action',choices=['path','check','list'])
     resource=sub.add_parser('resource');resource.add_argument('path')
+    build=sub.add_parser('build-plugin');build.add_argument('destination',type=Path);build.add_argument('--host',required=True,choices=['codex','claude'])
+    setup=sub.add_parser('setup');setup.add_argument('--development',action='store_true');setup.add_argument('--if-newer',action='store_true')
+    for name in ('profile-import','profile-export'):
+        profile=sub.add_parser(name);profile.add_argument('path',type=Path);profile.add_argument('--name')
+    trust=sub.add_parser('trust-host');trust.add_argument('host',choices=['codex','claude']);trust.add_argument('path',type=Path,nargs='?')
+    init=sub.add_parser('init');init.add_argument('--name');init.add_argument('--replace',action='store_true');init.add_argument('--attach');init.add_argument('--reattach');init.add_argument('--kind',choices=['harness','product'],default='product')
+    rename=sub.add_parser('rename');rename.add_argument('name')
+    settings=sub.add_parser('config');settings.add_argument('action',nargs='?',choices=['set','unset','open']);settings.add_argument('key',nargs='?');settings.add_argument('value',nargs='?');settings.add_argument('--global',dest='everywhere',action='store_true')
+    for name in ('backup','restore'):
+        backup=sub.add_parser(name);backup.add_argument('path',type=Path)
+    for name in ('collect','rebuild','observe-ci','service-install','service-uninstall'):sub.add_parser(name)
+    serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4319 if os.environ.get('OH_DASHBOARD_MODE')=='development' else 4318)
     args=parser.parse_args(argv);invocation=Path.cwd();root=(args.root or invocation).resolve()
-    if args.command in ('start','run','resume','deliver','review'):
-        from .runner import PHASE_SECONDS,PHASE_CLEANUP_SECONDS
-        phase_deadline=call_started+PHASE_SECONDS-PHASE_CLEANUP_SECONDS
-    from .system import WINDOWS
-    if WINDOWS:
-        # CreateProcess searches OH's own current folder for bare commands whatever that variable says, so OH
-        # leaves the checkout for its own installed folder once every path argument is absolute.
-        for name,value in vars(args).items():
-            if isinstance(value,Path):setattr(args,name,value.resolve())
-        os.chdir(HOME)
     try:
-        if args.command=='build-plugin':
+        from . import native
+        if args.command=='scope':
+            result=(native.prepare_scope(root,read_json(args.manifest) if args.manifest else None,args.doc,args.track,args.workflow,read_json(args.human) if args.human else None)
+                    if args.action=='prepare' else native.approve_scope(root,args.scope_id,read_json(args.locator)))
+        elif args.command=='attempt':
+            result=native.admit(root,args.role) if args.action=='admit' else getattr(native,args.action)(root,args.attempt,read_json(args.locator))
+        elif args.command=='candidate':result=native.candidate(root)
+        elif args.command=='evidence':result=native.attach_evidence(root,read_json(args.attachment))
+        elif args.command=='complete':result=native.complete(root,args.attempt)
+        elif args.command=='decision':result=native.decision(root,args.kind,read_json(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
+        elif args.command=='resume':result=native.resume(root,read_json(args.human) if args.human else None)
+        elif args.command=='status':
+            from .workflow import active_file
+            result=native.select(root) if active_file(root).exists() else {'status':'none','next':'Use /oh-propose <idea>, /oh-design <initiative>, or /oh-deliver <design or quick fix> (in Codex: $oh-propose, $oh-design, $oh-deliver).'}
+        elif args.command=='review':result=native.review(root,shlex.join(args.arguments),read_json(args.human) if args.human else None)
+        elif args.command=='deliver':
+            from .delivery import parse,listing
+            selected=parse(' '.join(args.arguments))
+            if selected['kind']=='list':result=listing(root)
+            elif selected['kind']=='design':result=native.prepare_scope(root,doc=selected['doc'],track=selected['track'],human=read_json(args.human) if args.human else None)
+            else:result=selected
+        elif args.command in ('prepare','prepare-design'):
+            from .prepared import prepare
+            result=prepare(root,manifest=args.manifest,review=args.review,pr=args.pr) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
+        elif args.command=='verify':
+            from .workflow import active_file
+            if active_file(root).exists():result=native.verify(root,args.base,args.mode)
+            else:
+                from .checks import run
+                result=run(root,args.base,args.mode)
+        elif args.command=='admission':
+            from .worker_checks import admission
+            result=admission(args.directory)
+        elif args.command=='publication':
+            from .publication import reconcile
+            result=reconcile(root,args.pr)
+        elif args.command=='pr-summary':
+            from .publication import reference,render
+            print(render(root,args.base or reference(root)));return
+        elif args.command=='plans':
+            from .plans import layout,check,listing
+            where=layout(root)
+            result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
+        elif args.command=='resource':
+            path=(HOME/args.path).resolve()
+            if not path.is_relative_to(HOME):raise Refused('Resource outside OH')
+            print(path.read_text());return
+        elif args.command=='build-plugin':
             from .installation import build
             result=build(args.destination,args.host)
         elif args.command=='setup':
             from .installation import setup
             result=setup(development=args.development,if_newer=args.if_newer)
-        elif args.command in ('profile-export','profile-import'):
-            from .profiles import export_profile,import_profile
-            result=export_profile(root,args.destination) if args.command=='profile-export' else import_profile(root,args.source,args.name)
-        elif args.command=='plugin-hook':
-            from .entry import receive
-            result=receive(root,args.host,json.load(sys.stdin))
-        elif args.command in ('prepare','prepare-design'):
-            from .prepared import prepare
-            result=prepare(root,manifest=args.manifest,review=args.review,pr=args.pr) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
-        elif args.command=='worker-checks':
-            from .worker_checks import serve
-            serve(args.attempt,sys.stdin,sys.stdout)
-            return
-        elif args.command=='verify':
-            from .checks import run
-            from .verification import check_failed
-            result=run(root,args.base,args.mode)
-            print(json.dumps(result,indent=2))
-            raise SystemExit(1 if any(check_failed(x) for x in result) else 0)
-        elif args.command=='publication':
-            from .publication import reconcile
-            if args.pr is not None and args.pr<=0:raise Refused('The PR number must be positive')
-            result=reconcile(root,args.pr)
-        elif args.command=='pr-summary':
-            from .publication import has_native_history,reference,render,validate_event
-            args.base=args.base or reference(root)
-            if not args.base:raise Refused('No base branch found; set base_branch with oh config')
-            if not args.validate_event and args.base.startswith('origin/'):
-                from .branches import fetched
-                args.base=fetched(root,args.base[len('origin/'):])
-            if not has_native_history(root,args.base):raise Refused('This branch has no OH-reviewed commits to summarize')
-            if args.validate_event:result=validate_event(root,read_json(args.validate_event),args.base)
-            else:print(render(root,args.base));return
+        elif args.command.startswith('profile-'):
+            from .profiles import import_profile,export_profile
+            result=import_profile(root,args.path,args.name) if args.command=='profile-import' else export_profile(root,args.path)
+        elif args.command=='init':
+            from .registry import register
+            from .config import ensure_project
+            result=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace)|ensure_project(root)
         elif args.command=='trust-host':
             from .hosts import trust
-            # Host trust is machine-wide: the current folder is a project only when --root names it.
-            result=trust(args.host,args.path,args.root.resolve() if args.root else None)
+            result=trust(args.host,args.path,root)
         elif args.command=='rename':
             from .registry import rename
             result=rename(root,args.name)
-        elif args.command=='init':
-            from .registry import register
-            from .config import ensure_project,layers,read_file
-            layers(read_file())  # a settings problem stops init before anything is registered
-            registered=register(root,args.name,args.kind,attach=args.attach,reattach=args.reattach,replace=args.replace);settings=ensure_project(root)
-            notes=[n for n in (registered.get('note'),settings.get('note')) if n]
-            result=registered|settings|({'note':' '.join(notes)} if notes else {})
-        elif args.command=='backup':
-            from .backup import backup
-            result=backup(args.destination)
-        elif args.command=='restore':
-            from .backup import restore
-            result=restore(args.source)
         elif args.command=='config':
             from .config import change,describe,open_settings
             if not args.action:result=describe(root)
             elif args.action=='open':result=open_settings(root)
-            elif not args.key or (args.action=='set')!=(args.value is not None):raise Refused('Use: oh config set <key> <value>, or oh config unset <key>')
             else:
                 value=args.value
-                # @file reads the value from a file: JSON passes through PowerShell and cmd without losing its quotes.
-                if value and value.startswith('@') and len(value)>1:value=(invocation/Path(value[1:]).expanduser()).read_text(encoding='utf-8-sig')
+                if value and value.startswith('@'):value=(invocation/Path(value[1:]).expanduser()).read_text(encoding='utf-8-sig')
                 result=change(root,args.key,value if args.action=='set' else None,scope='global' if args.everywhere else None)
-        elif args.command=='plans':
-            if args.action=='path':
-                from .registry import index_path
-                from .authority import desktop_pending
-                if not index_path(root).is_file():desktop_pending(root)
-            from .plans import check,layout,listing
-            where=layout(root)
-            result=check(root,where) if args.action=='check' else listing(root) if args.action=='list' else {k:str(v) for k,v in where.items()}
-        elif args.command=='observe':
-            from .progress import observe,follow
-            if args.follow:follow(root,args.run,after=args.after);return
-            if not 0<=args.wait<=60:raise Refused('Observation waits must be between zero and sixty seconds')
-            result=observe(root,args.run,after=args.after,wait=args.wait)
-        elif args.command=='status':
-            from .authority import waits
-            from .workflow import NO_RUN,WAIT_NEXT
-            waiting=[{'command':w['command'],'ask':w['ask'],'next':WAIT_NEXT} for w in waits(root).values()]
-            result=(checkpoint(root) if active_file(root).exists() else
-                    {'status':'waiting','waiting':waiting[0]} if waiting else {'status':'none','next':NO_RUN})
-        elif args.command in ('pause','stop'):
-            from .controls import request
-            result=request(root,args.command)
-        elif args.command=='conflict':
-            from .delivery import conflict
-            result=conflict(root,args.choice,args.doc,args.track)
-        elif args.command=='cancel':
-            from .authority import cancel
-            result=cancel(root)
-        elif args.command=='resume':
-            from .authority import materialize
-            admitted=materialize(root)
-            if admitted and admitted.get('published'):
-                executable_run(root,admitted)
-                print(json.dumps(admitted,indent=2));return
-            executable_run(root,admitted)
-            from .workflow import load_run
-            _,state=load_run(root)
-            if state['status']=='paused':raise Refused('Submit /oh-resume (Codex: $oh-resume) in the owning host conversation, then run oh resume')
-            from .runner import run
-            result=run(root,one_phase=True,deadline=phase_deadline)
-        elif args.command=='host-hook':
-            from .authority import stage
-            result=stage(root,args.host,json.load(sys.stdin))
-        elif args.command in ('run','start','review'):
-            from .authority import materialize
-            if args.command=='review':
-                from .registry import index_path
-                if not index_path(root).is_file():
-                    from .authority import desktop_pending
-                    desktop_pending(root)
-                    if not index_path(root).is_file():
-                        from .review import input_event
-                        if not input_event(root):raise Refused('Invoke oh-review in this checkout so OH can identify your request.')
-                        from .entry import enroll
-                        if setup:=enroll(root):
-                            print(json.dumps(setup,indent=2));return
-            admitted=materialize(root)
-            if args.command=='review' and admitted is None:
-                from .review import input_event
-                if event:=input_event(root):
-                    from .entry import enroll
-                    if setup:=enroll(root):
-                        print(json.dumps(setup,indent=2));return
-                    admitted={'prepare_review':True,'human':event,'intent':event['prompt']}
-            if args.command=='review' and admitted and admitted.get('prepare_review'):
-                from .review import start as start_review
-                selected=shlex.join(args.arguments) if args.arguments else admitted['intent']
-                admitted=start_review(root,selected,admitted['human'])
-                if admitted.get('review_request_applied'):
-                    print(json.dumps(admitted,indent=2));return
-            elif admitted and admitted.get('prepare_review'):
-                print(json.dumps(admitted,indent=2));return
-
-            if admitted and admitted.get('published'):
-                executable_run(root,admitted)
-                print(json.dumps(admitted,indent=2));return
-            if admitted and admitted.get('note'):print(admitted['note'],flush=True)
-            if admitted and admitted.get('continuation'):print(admitted['continuation']['message'],file=sys.stderr,flush=True)
-            if admitted and (admitted.get('waiting') or admitted.get('prepare') or admitted.get('kind') in ('quick_fix','list') or admitted.get('authorized') is False):
-                print(json.dumps(admitted,indent=2));return  # preparation/waiting cannot run an older batch
-            executable_run(root,admitted)
-            if args.command=='review':
-                from .workflow import load_run
-                _,reviewing=load_run(root)
-                if reviewing.get('workflow')!='review' and not reviewing.get('extra_review'):
-                    raise Refused('No additional review was requested; use oh-review with its subject.')
-            if args.command=='start' and args.request:
-                from .workflow import load_run
-                _,state=load_run(root)
-                if args.request not in state['human']['prompt']:
-                    raise Refused('This request has no matching native human authorization')
-            from .runner import run
-            result=run(root,one_phase=True,deadline=phase_deadline)
-        elif args.command=='observe-ci':
-            from .observability import observe_ci
-            result=observe_ci(root)
-        elif args.command=='rebuild':
-            from .telemetry import rebuild
-            result=rebuild()
+        elif args.command in ('backup','restore'):
+            from .backup import backup,restore
+            result=backup(args.path) if args.command=='backup' else restore(args.path)
         elif args.command=='collect':
             from .telemetry import collect
             result={'ingested':collect()}
+        elif args.command=='rebuild':
+            from .telemetry import rebuild
+            result=rebuild()
+        elif args.command=='observe-ci':
+            from .observability import observe_ci
+            result=observe_ci(root)
         elif args.command=='serve':
             from .server import serve
             serve(args.port);return
-        elif args.command.startswith('service-'):
+        else:
             from .service import install,uninstall
             result=install() if args.command=='service-install' else uninstall()
-        elif args.command=='suggest':
-            from .suggestions import generate
-            result=generate(root,args.host)
-        elif args.command=='deliver':
-            from .delivery import parse,listing
-            from .registry import index_path
-            if not index_path(root).is_file():
-                from .authority import desktop_pending
-                desktop_pending(root)
-            selected=parse(' '.join(args.arguments))
-            if selected['kind']=='list':result=listing(root)
-            elif selected['kind']=='quick_fix':
-                from .authority import materialize
-                result=materialize(root) or selected
-            else:
-                from .authority import materialize
-                admitted=materialize(root)
-                if admitted and admitted.get('published'):
-                    executable_run(root,admitted)
-                    print(json.dumps(admitted,indent=2));return
-                if admitted and admitted.get('continuation'):print(admitted['continuation']['message'],file=sys.stderr,flush=True)
-                if admitted and admitted.get('waiting'):
-                    print(json.dumps(admitted,indent=2));return
-                executable_run(root,admitted)
-                if admitted and admitted.get('limits'):print(admitted['limits'],flush=True)
-                if admitted and admitted.get('note'):
-                    # A menu answer set the typed command aside: say so, and carry on with nothing else.
-                    print(admitted['note'],flush=True);result=admitted
-                elif selected['kind']=='design':
-                    from .design_runner import run
-                    result=run(root,selected['doc'],selected['track'],one_phase=True,deadline=phase_deadline)
-                else:
-                    from .runner import run
-                    result=run(root,one_phase=True,deadline=phase_deadline)
-        elif args.command=='resource':
-            path=(HOME/args.path).resolve()
-            if not path.is_relative_to(HOME):raise Refused('Resource outside OH')
-            print(path.read_text());return
         if result is not None:print(json.dumps(result,indent=2))
+        if args.command=='verify':
+            from .verification import check_failed
+            checks=result.get('checks',[]) if isinstance(result,dict) else result
+            if any(check_failed(check) for check in checks):raise SystemExit(1)
     except (Refused,OSError,ValueError,KeyError) as exc:
         print(f'OH: {exc}',file=sys.stderr);raise SystemExit(2)
