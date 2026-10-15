@@ -16,6 +16,86 @@ RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class InstallationTest(unittest.TestCase):
+    def test_release_updater_reports_versions_and_continues_after_host_failure(self):
+        from . import updater
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OH_DATA_HOME': tmp}), \
+                patch.object(updater.hosts, 'executable') as executable, \
+                patch.object(updater.hosts, 'trust', return_value={'path': 'codex'}) as trust, \
+                patch.object(updater.shutil, 'which') as which:
+            for outcome in ('updated', 'missing_path', 'unavailable', 'current', 'failed', 'absent', 'invalid', 'downgrade',
+                            'resolution_timeout', 'revalidation_timeout'):
+                with self.subTest(outcome=outcome):
+                    calls = []
+                    versions = dict.fromkeys(updater.HOSTS, '0.5.0')
+                    def resolve(name, root):
+                        if name == 'codex' and outcome == 'resolution_timeout':raise subprocess.TimeoutExpired('codex --version', 10)
+                        return name
+                    def revalidate(name, path, root, **kwargs):
+                        if outcome == 'revalidation_timeout':raise subprocess.TimeoutExpired('codex --version', 10)
+                        return {'path': name}
+                    executable.side_effect = resolve
+                    trust.side_effect = revalidate
+                    which.side_effect = lambda name, **kw: None if outcome in ('missing_path', 'unavailable', 'revalidation_timeout') and name == 'codex' else 'installed'
+                    record = Path(tmp) / 'hosts/codex.json'
+                    if outcome in ('missing_path', 'revalidation_timeout'):
+                        record.parent.mkdir(exist_ok=True)
+                        record.write_text(json.dumps({'path': 'codex', 'pinned': False}))
+                    def command(args, **kwargs):
+                        name, _, action, *rest = args
+                        calls.append(args)
+                        self.assertEqual(kwargs['cwd'], Path.home())
+                        if action == 'list':
+                            if name == 'codex':self.assertEqual(rest, ['--marketplace', 'o-harness', '--json'])
+                            else:self.assertEqual(rest, ['--json'])
+                            item = {'pluginId' if name == 'codex' else 'id': updater.PLUGIN,
+                                    'version': versions[name], 'scope': 'user'}
+                            items = [] if outcome == 'absent' and versions[name] == '0.5.0' else [item]
+                            if outcome == 'invalid':item['version'] = None
+                            return SimpleNamespace(returncode=0, stdout=json.dumps({'installed': items} if name == 'codex' else items))
+                        if outcome == 'failed' and name == 'codex':
+                            return SimpleNamespace(returncode=1, stdout='', stderr='network unavailable')
+                        if action == 'marketplace':
+                            expected = (['add', 'pmoreiracc/o-harness', '--ref', 'dist'] if name == 'codex' else
+                                        ['add', 'pmoreiracc/o-harness#dist']) if outcome == 'absent' else \
+                                       ['upgrade' if name == 'codex' else 'update', 'o-harness']
+                            self.assertEqual(rest, expected)
+                        else:
+                            self.assertEqual([action, *rest], ['add', updater.PLUGIN] if name == 'codex' else
+                                             ['install' if outcome == 'absent' else 'update', updater.PLUGIN, '--scope', 'user'])
+                            versions[name] = '0.4.0' if outcome == 'downgrade' else '0.5.0' if outcome == 'current' else '0.6.0'
+                        return SimpleNamespace(returncode=0, stdout='')
+                    output, error = io.StringIO(), io.StringIO()
+                    with patch.object(updater.subprocess, 'run', side_effect=command), \
+                            contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+                        result = updater.update(Path(tmp))
+                    self.assertEqual(result, int(outcome in ('failed', 'invalid', 'downgrade', 'resolution_timeout', 'revalidation_timeout')))
+                    if outcome in ('updated', 'missing_path'):
+                        for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 -> 0.6.0', output.getvalue())
+                        self.assertIn('new host session', output.getvalue())
+                        if outcome == 'missing_path':
+                            trust.assert_called_once_with('codex', 'codex', Path(tmp), pinned=False)
+                            record.unlink()
+                    elif outcome in ('resolution_timeout', 'revalidation_timeout'):
+                        self.assertIn('codex: host identity check timed out. Retry oh-update.', error.getvalue())
+                        self.assertIn('claude: 0.5.0 -> 0.6.0', output.getvalue())
+                        if outcome == 'revalidation_timeout':record.unlink()
+                    elif outcome == 'unavailable':
+                        self.assertIn('codex: not found on PATH', output.getvalue())
+                        self.assertIn('claude: 0.5.0 -> 0.6.0', output.getvalue())
+                    elif outcome == 'current':
+                        for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 — up to date', output.getvalue())
+                        self.assertNotIn('new host session', output.getvalue())
+                    elif outcome == 'failed':
+                        self.assertIn('network unavailable', error.getvalue())
+                        self.assertIn('claude: 0.5.0 -> 0.6.0', output.getvalue())
+                    elif outcome == 'absent':
+                        for name in updater.HOSTS:self.assertIn(f'{name}: not installed -> 0.6.0', output.getvalue())
+                    elif outcome == 'invalid':
+                        self.assertTrue(all(args[2] == 'list' for args in calls))
+                        self.assertNotIn('up to date', output.getvalue())
+                    else:self.assertIn('older version', error.getvalue())
+
     @staticmethod
     def development():
         import importlib.util
