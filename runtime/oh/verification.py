@@ -85,12 +85,9 @@ def check_failed(result):
     return result.get('returncode') != 0 or bool(result.get('cancellation') or result.get('unavailable'))
 
 
-def verify(root, checks, project_id, *, controlled=False):
+def verify(root, checks, project_id):
     results = []
     for check in checks:
-        if controlled:
-            from .controls import check as control_check
-            control_check(root)
         if not isinstance(check.get('command'), list) or not check['command'] or not all(isinstance(x,str) for x in check['command']):
             raise Refused('Verification commands must be nonempty argument arrays')
         # An omitted dependency list conservatively fingerprints the entire checkout.
@@ -109,7 +106,7 @@ def verify(root, checks, project_id, *, controlled=False):
                 from .processes import capture
                 try:
                     probe_command=[executable(probe_command[0],cwd=root,env=check_env()),*probe_command[1:]]
-                    probe,cancellation=capture(root,probe_command,controlled=controlled,timeout=10,env=check_env())
+                    probe,cancellation=capture(root,probe_command,timeout=10,env=check_env())
                 except FileNotFoundError as exc:
                     return results+[unavailable(check,probe_command,start,str(exc))]
                 if cancellation or probe.returncode:
@@ -127,7 +124,7 @@ def verify(root, checks, project_id, *, controlled=False):
             continue
         start=time.monotonic()
         from .processes import capture
-        try:output,cancellation=capture(root,command,controlled=controlled,timeout=check.get('timeout_seconds',900),env=check_env())
+        try:output,cancellation=capture(root,command,timeout=check.get('timeout_seconds',900),env=check_env())
         except FileNotFoundError as exc:
             return results+[unavailable(check,command,start,str(exc))]
         result={'name':check['name'],'command':command,'fingerprint':fingerprint,'returncode':output.returncode,
@@ -148,9 +145,18 @@ def failure_summary(results, limit):
                      (', '+', '.join(r['cancellation']) if r.get('cancellation') else '')+').' for r in failed)
     output='\n'.join(r.get('output','') for r in failed)
     output=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',output)
+    # A tail can start with hundreds of passing tests and hide the actual assertion
+    # when status further bounds it. Put error locations/messages first, retaining
+    # surrounding context and the original full output in the journal.
+    lines=output.splitlines()
+    errors=[i for i,line in enumerate(lines) if re.search(
+        r'\b(?:FAIL|ERROR|AssertionError|Traceback|error TS\d+|error:)|^\s*Error:|\d+:\d+\s+error\b',line)]
+    if errors:
+        indices=sorted({j for i in errors[:5] for j in range(max(0,i-1),min(len(lines),i+8))})
+        output='\n'.join(lines[i] for i in indices)+'\n\n'+output
     header=(header+'\n')[:limit]
     remaining=limit-len(header)
-    return header+(output[-remaining:] if remaining else '')
+    return header+(output[:remaining] if errors else output[-remaining:] if remaining else '')
 
 
 def check_env():
@@ -184,6 +190,11 @@ def candidate_tree(root,replacements=None):
             if Path(name).is_absolute() or '..' in Path(name).parts:raise Refused('Invalid final-tree replacement')
             info=command('ls-files','--stage','--',name).decode().split()
             if not info or info[0] not in ('100644','100755'):raise Refused('Final-tree replacement requires an ordinary tracked file')
-            blob=command('hash-object','-w','--',str(replacement)).decode().strip()
+            # Apply this tracked path's Git attributes to the proposed bytes, just as
+            # staging the published file will (including core.autocrlf on Windows).
+            blob=command('hash-object','-w','--path='+name,'--',str(replacement)).decode().strip()
+            data=Path(replacement).read_bytes();stored=command('cat-file','blob',blob)
+            if data!=stored and data.replace(b'\r\n',b'\n')!=stored:
+                raise Refused(f'Git filters transform proposed {name} beyond line endings')
             command('update-index','--cacheinfo',info[0],blob,name)
         return command('write-tree').decode().strip() if replacements else oid

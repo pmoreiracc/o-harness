@@ -42,20 +42,18 @@ runs `oh observe-ci` after the PR checks finish.
 
 ## Suggestions
 
-**Analyze my data** runs one subscription-backed analysis when you click it, never on its
-own. It needs at least ten tasks with good usage coverage and saves up to three
-suggestions. Savings shown are estimates from your data, not promises. Python computes
-the candidates, explanations and estimates; the requested model ranks the candidates.
-The dashboard uses `models.codex.insights`; `oh suggest --host claude` uses
-`models.claude.insights`. Viewing or switching dashboards never requests model analysis.
-Global profile selection and standalone host launches are covered by
-`test_requested_insights_uses_global_profile_without_registering_the_engine`.
+New analysis is unavailable in the native workflow candidate. The dashboard's analysis
+action is disabled and the retired `oh suggest` command is not available. Saved metrics
+and earlier suggestions remain readable; their savings are estimates, not promises.
+Viewing or switching dashboards makes no model request. No headless analysis fallback
+runs behind the disabled action.
 
 ## Privacy
 
-- All data stays in `~/.local/share/o-harness`: run journals, review evidence, raw worker
-  output, usage and the database. Raw output can contain your source code; keep backups
-  private.
+- OH journals, retained results, usage and the analytics database stay in
+  `~/.local/share/o-harness` (or the configured data folder). Native host transcripts
+  remain in the host's own storage, such as `~/.claude` or `~/.codex`. Reports and
+  transcripts can contain source code; keep both locations private.
 - Nothing is deleted automatically.
 - The dashboard listens only on localhost and rejects other hosts and origins. Don't expose
   it through a tunnel. It can't approve or control runs.

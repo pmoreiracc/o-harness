@@ -3,8 +3,18 @@ name: oh-pause
 description: Request a cooperative pause of the current OH run.
 disable-model-invocation: true
 ---
-Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory (from PowerShell or cmd on Windows, use `scripts\oh.cmd` there). Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly. Never install or start anything merely because this skill was discovered.
+Load `workflows/runtime.md` through OH's resource entry. Request a cooperative pause:
+let the current native agent or check finish, retain its actual result, then start no
+next phase. Preserve scope, work, findings and consumed allowances. Report whether
+pausing is pending or complete; do not describe a still-running agent as paused.
+Record the actual human request with `decision pause <native-locator.json>`
+(Codex `decision`, kind `pause`).
 
-In Codex, call the o-harness `pause` tool with the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> pause`. Describe what happened to the named task in one short sentence, for example “Paused the delivery; your work is saved.” Use the actual action and result. For PAUSING or STOPPING, say the action is in progress. Mention remaining allowances only when they affect the next step. Keep routing instructions and policy explanations out of routine status reports. If the host is busy and cannot dispatch this skill, the user can run this same command directly in a terminal.
+Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
+(`scripts\oh.cmd` on native Windows). Keep OH configuration and evidence outside
+consumer repositories. Discovery alone does not authorize setup or execution.
 
-If Codex lists no o-harness tools, OH's tool server did not start: tell the person to type `/mcp` to see why, then start a new Codex session; don't run these OH commands from Codex's shell instead.
+In Codex use the connected OH tools with the checkout's absolute `root`; read resources
+with `resource`. In Claude use `<plugin>/scripts/oh --root <checkout> resource <path>`.
+If the Codex connection is missing, report it with the `/mcp` recovery step; do not
+bypass it with shell writes to OH state.

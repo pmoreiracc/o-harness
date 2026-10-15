@@ -31,59 +31,20 @@ class AnalyticsTest(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         env=patch.dict(os.environ,{'OH_DATA_HOME':self.tmp.name});env.start();self.addCleanup(env.stop)
 
-    def test_requested_insights_uses_global_profile_without_registering_the_engine(self):
-        # docs/analytics.md: global insights uses a native read-only launch outside Git.
-        from .config import HOME,write_file
-        from .suggestions import generate
-        write_file({'models':{'codex':{'insights':{'model':'gpt-6.1-sol','effort':'medium'}}}})
-        with connect() as db:
-            fixture(db,days=12)
-            db.execute('UPDATE tasks SET expected_reviews=2')  # observed rework supplies a real supported candidate
-        answer={'failed':False,'duration_ms':1,'structured':{'priority':['review-rework']}}
-        with patch('oh.suggestions.invoke',return_value=answer) as invoke, \
-                patch('oh.hosts.invoke',invoke), \
-                patch('oh.capabilities.codex_models',return_value={'gpt-6-sol':{'medium'}}) as models, \
-                patch('oh.suggestions.project',side_effect=AssertionError('The engine is not a consumer project')):
-            from .storage import Refused,read_json
-            for host in ('codex','claude'):
-                for failure in ('exception','native','ranking'):
-                    with self.subTest(host=host,failure=failure):
-                        invoke.side_effect=Refused('Subscription unavailable. Sign in again.') if failure=='exception' else None
-                        invoke.return_value=({'failed':True,'duration_ms':1,'text':'Subscription unavailable. Sign in again.','structured':None}
-                                             if failure=='native' else answer|{'structured':{'priority':[]}})
-                        failed=generate(host=host)
-                        self.assertEqual(failed['status'],'failed')
-                        self.assertIn('Analysis failed:',failed['message'])
-                        self.assertIn('Sign in again.' if failure!='ranking' else 'invalid ranking',failed['message'])
-                        self.assertNotIn('Continuing with',failed['message'])
-                        self.assertTrue(read_json(Path(failed['evidence'])/'result.json')['failed'])
-                        if host=='codex':self.assertIn('gpt-6-sol',failed['model_notices'][0])
-                        else:self.assertNotIn('model_notices',failed)
-            models.side_effect=Refused('Discovery failed. Update the Codex CLI.')
-            failed=generate()
-            self.assertIn('Discovery failed. Update the Codex CLI.',failed['message'])
-            self.assertNotIn('model_notices',failed)
-            models.side_effect=None;invoke.side_effect=None;invoke.return_value=answer;invoke.reset_mock()
-            result=generate()
-            self.assertEqual((result['status'],result['saved']),('saved',1))
-            self.assertIn('Continuing with gpt-6-sol / medium',result['message'])
-            self.assertEqual(result['model_notices'],[result['message']])
-            self.assertEqual(invoke.call_args.args[:3],('codex',HOME,{'model':'gpt-6-sol','effort':'medium'}))
-            self.assertTrue(invoke.call_args.args[6]['standalone'])
-            self.assertEqual(generate()['status'],'unchanged')
-            invoke.assert_called_once()
-        # Native host arguments support the packaged engine outside Git, with read-only permissions.
-        from .hosts import command
-        with patch('oh.hosts.executable',side_effect=lambda host,root:host), \
-                patch('oh.storage.git',side_effect=AssertionError('Standalone analysis must not require Git')):
-            for windows in (False,True):
-                with patch('oh.hosts.WINDOWS',windows):
-                    codex=command('codex',{'model':'gpt-6.1-sol','effort':'medium'},Path(self.tmp.name),'analysis',None,60000,standalone=True)
-                    claude=command('claude',{'model':'opus','effort':'high'},Path(self.tmp.name),'analysis',None,60000,standalone=True)
-                self.assertIn('--skip-git-repo-check',codex)
-                self.assertEqual(codex[codex.index('--sandbox')+1],'read-only')
-                self.assertEqual(claude[claude.index('--permission-mode')+1],'plan')
-                self.assertNotIn('Edit',claude[claude.index('--tools')+1])
+    def test_unavailable_dashboard_analysis_never_launches_a_model_or_alters_saved_analytics(self):
+        from types import SimpleNamespace
+        from .server import Handler
+        with connect() as db:fixture(db,days=2)
+        before=overview({})
+        sent=[]
+        handler=SimpleNamespace(trusted=lambda:True,path='/api/suggestions',
+            headers={'X-OH-Token':'token','Origin':'http://localhost:4318'},
+            server=SimpleNamespace(token='token',server_port=4318),send=lambda code,value:sent.append((code,value)))
+        with patch('subprocess.run',side_effect=AssertionError('Analytics must not launch an agent')):
+            Handler.do_POST(handler)
+        self.assertEqual(sent[0][0],503)
+        self.assertIn('unavailable',sent[0][1]['error'])
+        self.assertEqual(overview({})['summary'],before['summary'])
 
     def test_invalid_event_does_not_block_valid_events(self):
         emit('usage','p',attempt='bad',response_id='bad',source='fixture',input=2,cached=3)

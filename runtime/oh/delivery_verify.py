@@ -43,6 +43,17 @@ def transitions(before,after,task):
 
 
 def verify_run(root,state,*,current=False):
+    if state.get('native_version'):
+        from .publication import verify_record
+        from .storage import digest
+        from .native import _structure
+        if digest(state['scope_snapshot'])!=state['scope_id']:raise Refused('Native scope snapshot changed')
+        for completed in state['summaries']:
+            if completed.get('commit'):
+                key=completed.get('commit_key',completed['task'])
+                verify_record(root,completed['commit'],state['commit_intents'][key]['publication'])
+        if current:_structure(root,state)
+        return {'tasks':len(state['done']),'design':state.get('design')}
     bound=state.get('delivery')
     if not bound:return  # quick fixes have no design contract
     source=bound.get('authority')
@@ -58,7 +69,8 @@ def verify_run(root,state,*,current=False):
     tracks={row[2] for row in approved.values()}
     from .branches import delivery_branch
     if len(tracks)>1 and not state.get('track') and any(t['id']!='finalize' for t in state['tasks']):raise Refused('A design with several tracks needs its per-track delivery branch')
-    if state['branch']!=delivery_branch(bound['doc'],state.get('track') or ''):raise Refused('Delivery is on the wrong design/track branch; return to '+delivery_branch(bound['doc'],state.get('track') or ''))
+    expected_branch=source.get('branch') or delivery_branch(bound['doc'],state.get('track') or '')
+    if state['branch']!=expected_branch:raise Refused('Delivery is on the wrong design/track branch; return to '+expected_branch)
     records=Journal(state['project'],state['id']).records()
     renders={r['data']['task']:r['data'] for r in records if r['kind']=='delivery.render'}
     # Scope records can retain a later version of the same private candidate.
@@ -70,11 +82,19 @@ def verify_run(root,state,*,current=False):
     before=initial
     from .publication import verify_record
     for done in state['summaries']:
-        task=done['task'];commit=done['commit'];evidence=state['commit_intents'][task]['publication']
+        task=done['task'];commit=done['commit'];evidence=state['commit_intents'][done.get('commit_key',task)]['publication']
         verify_record(root,commit,evidence)
         # Portable evidence redacts local paths; commits retain the approved run's title.
         title=next(t['title'] for t in state['tasks'] if t['id']==task)
-        if git(root,'show','-s','--format=%s',commit)!=f"task {task}: {title}":raise Refused(f'Commit {commit[:12]} needs the recorded task {task}: title and OH trailers; repair its message before PR')
+        if git(root,'show','-s','--format=%s',commit)!=(('fix ' if done.get('correction_of') else '')+f"task {task}: {title}"):raise Refused(f'Commit {commit[:12]} needs the recorded task {task}: title and OH trailers; repair its message before PR')
+        if done.get('correction_of'):
+            if done['correction_of']!=evidence.get('correction_of') or task not in before or before[task][1]!='done':
+                raise Refused('Correction must refer to previously completed approved work')
+            if not private:
+                _,parent=parsed(contents(root,evidence['parent'],source['path']))
+                _,after=parsed(contents(root,commit,source['path']))
+                if parent!=before or after!=before:raise Refused('Correction changed approved design progress or scope')
+            continue
         if task!='finalize':
             row=approved.get(task)
             if not row or row[1]!='pending' or row[4] or (state.get('track') and row[2]!=state['track']):raise Refused(f'Task {task} was not approved and ready on this delivery track; restore its approved scope before PR')
@@ -95,7 +115,7 @@ def verify_run(root,state,*,current=False):
         transitions(before,actual,None)
         from .delivery import guard
         guard(root,state)
-    return {'tasks':len(state['summaries']),'design':bound['doc']}
+    return {'tasks':len(state['done']),'design':bound['doc']}|({'corrections':len(state['corrections'])} if state.get('corrections') else {})
 
 
 def verify(root,state):

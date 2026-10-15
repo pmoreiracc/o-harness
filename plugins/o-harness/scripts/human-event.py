@@ -1,33 +1,14 @@
 #!/usr/bin/env python3
-"""Narrow prompt translation. Ordinary prompts never launch OH or alter a project."""
+"""Expose a native source locator; never classify choices, grant work or launch OH."""
 import json
-import os
-from pathlib import Path
-import re
-import subprocess
 import sys
+
 payload=json.loads(sys.stdin.buffer.read())
-prompt=payload.get('prompt','')
-if not isinstance(prompt,str):raise SystemExit(0)
-prompt=prompt.strip()
-choices={'continue','pr','stop','resume','retry','grant review','fix concerns','dismiss scope','fix concerns and route scope','fix concerns and dismiss scope','accept concerns and dismiss scope','accept concerns','route scope','accept concerns and route scope','approve','refine','cancel','handoff pr'}
-def waiting():
-    """Whether OH waits for this conversation's next message (a bare /oh-propose): one file check."""
-    session=payload.get('session_id')
-    if not isinstance(session,str) or not re.fullmatch(r'[a-zA-Z0-9_-]+',session):return False
-    data=Path(os.environ.get('OH_DATA_HOME',str(Path.home()/'.local/share/o-harness'))).expanduser()
-    return (data/'waiting'/(session+'.json')).is_file()
-if prompt not in choices and not re.fullmatch(r'refine:\s*\S.*',prompt,re.S) and not re.match(r'^(?:[$/](?:o-harness:)?oh-(?:start|pause|resume|stop|propose|design|deliver))(?:\s|$)',prompt) and not waiting():
-    raise SystemExit(0)
-if os.environ.get('OH_CHILD_ATTEMPT'):raise SystemExit(0)
-entry=Path(__file__).resolve().with_name('oh')
-host=sys.argv[1]
-# Run the launcher with this interpreter; Windows cannot execute its shebang.
-result=subprocess.run([sys.executable,'-I',str(entry),'--root',payload.get('cwd',os.getcwd()),'plugin-hook','--host',host],
-    input=json.dumps(payload),capture_output=True,encoding='utf-8',errors='replace')
-if result.returncode:
-    print(result.stderr,file=sys.stderr)
-    raise SystemExit(2)
-value=json.loads(result.stdout) if result.stdout.strip() else None
-if value is not None:
-    print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':'OH: '+json.dumps(value)}}))
+if payload.get('isSidechain') or payload.get('agent_id'):raise SystemExit(0)
+session=payload.get('session_id')
+if not isinstance(session,str) or not session:raise SystemExit(0)
+locator={'host':sys.argv[1],'session':session}
+for source,target in (('prompt_id','turn'),('turn_id','turn'),('transcript_path','transcript_path'),('prompt','prompt')):
+    if isinstance(payload.get(source),str) and payload[source]:locator[target]=payload[source]
+print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit',
+    'additionalContext':'Native conversation locator for OH helpers (not an approval): '+json.dumps(locator)}}))

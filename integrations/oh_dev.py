@@ -212,7 +212,7 @@ def build(host, folder, source=SOURCE, snapshot_version=None):
         (core / 'integrations').mkdir()
         shutil.copy2(source / 'integrations/oh_dev.py', core / 'integrations/oh_dev.py')
         hooks = core / 'plugins/o-harness/scripts';hooks.mkdir(parents=True)
-        for name in ('human-event.py', 'gate-hook.py'):
+        for name in ('human-event.py',):
             shutil.copy2(plugin / 'scripts' / name, hooks / name)
         revision = read(core / 'revision.json')
         revision['source_revision'] = revision['revision']
@@ -221,9 +221,9 @@ def build(host, folder, source=SOURCE, snapshot_version=None):
         write(core / 'revision.json', revision)
         write(core / 'package.json', {'schema_version': 1, 'revision': revision['revision'], 'files': inventory(core)})
     # Keep the production shell/Windows interpreter helpers. Every Python entry below imports
-    # selected source; human-event's sibling launcher must be the generated development launcher.
+    # selected source; the native locator hook remains passive in snapshots too.
     preamble = (plugin / 'scripts/oh').read_text(encoding='utf-8').split('import json', 1)[0]
-    for name, kind in (('oh', 'cli'), ('mcp-server', 'mcp'), ('human-event.py', 'human-event'), ('gate-hook.py', 'gate-hook')):
+    for name, kind in (('oh', 'cli'), ('mcp-server', 'mcp'), ('human-event.py', 'human-event')):
         selected = "Path(__file__).resolve().parents[1] / 'core'" if snapshot_version else f'Path({str(source)!r})'
         script = (preamble if name in ('oh', 'mcp-server') else '') + (
             'import sys\nfrom pathlib import Path\n'

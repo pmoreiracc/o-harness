@@ -3,11 +3,9 @@
   "base_branch": "",
   "tasks_per_batch": 5,
   "review_rounds": 3,
-  "max_escalations": 1,
   "context": {
     "handoff_chars": 12000,
-    "result_chars": 4000,
-    "compact_at_tokens": 60000
+    "result_chars": 4000
   },
   "models": {
     "codex": {

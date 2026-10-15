@@ -56,34 +56,6 @@ class WindowsTest(unittest.TestCase):
                         self.assertFalse((project/'planted').exists())
                 if name!='private':(bin/name).unlink()
 
-    def test_claude_rules_name_windows_paths_the_way_claude_reads_them(self):
-        from .hosts import rule_path
-        self.assertEqual(rule_path(r'C:\Users\me\.config\o-harness'), '//c/Users/me/.config/o-harness')
-        self.assertEqual(rule_path('D:/work'), '//d/work')
-        self.assertEqual(rule_path('/Users/me/x'), '//Users/me/x')
-
-    def test_claude_workers_on_windows_edit_files_but_have_no_shell(self):
-        from .hosts import command,rule_path
-        root = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, root)
-        subprocess.run(['git', 'init', '-q', str(root)], check=True)
-        with patch('oh.hosts.executable', return_value='claude'), patch('oh.hosts.WINDOWS', True):
-            work = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'implementation', None, 60000, root / 'artifacts')
-            review = command('claude', {'model': 'opus', 'effort': 'high'}, root, 'review', None, 60000, root / 'run')
-        self.assertEqual(work[work.index('--tools') + 1], 'Read,Glob,Grep,Edit,Write')
-        self.assertEqual(review[review.index('--tools') + 1], 'Read,Glob,Grep')
-        settings = json.loads(work[work.index('--settings') + 1])
-        self.assertEqual(settings['sandbox'], {'enabled': False})
-        self.assertLessEqual({'Bash', 'PowerShell', 'Agent'}, set(settings['permissions']['deny']))
-        self.assertEqual(review[review.index('--add-dir') + 1], str(root / 'run'))
-        # docs/usage.md: workers read this project's OH inputs while edits there stay denied.
-        self.assertEqual(work[work.index('--add-dir')+1],str(root/'artifacts'))
-        self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
-        with patch('oh.hosts.executable',return_value='claude'),patch('oh.hosts.WINDOWS',False):
-            posix=command('claude',{'model':'opus','effort':'high'},root,'implementation',None,60000,root/'artifacts')
-        settings=json.loads(posix[posix.index('--settings')+1])
-        self.assertEqual(posix[posix.index('--add-dir')+1],str(root/'artifacts'))
-        self.assertIn(str(root/'artifacts'),settings['sandbox']['filesystem']['denyWrite'])
-        self.assertIn('Edit('+rule_path(root/'artifacts')+'/**)',settings['permissions']['deny'])
 
     @unittest.skipIf(os.name == 'nt', 'Uses POSIX sh and symlinks')
     def test_the_launcher_finds_python_or_says_how_to_get_it(self):
@@ -133,24 +105,30 @@ class WindowsTest(unittest.TestCase):
         from .installation import build
         with tempfile.TemporaryDirectory(prefix='OH hook spaces ') as tmp:
             package=Path(tmp)/'o-harness';build(package,'codex')
-            # Keep the packaged hook.cmd, python.cmd and human-event.py. Replace only the
-            # OH subprocess boundary: host attestation is tested separately, never forged here.
-            (package/'scripts/oh').write_text('import json,sys\nassert sys.argv[-2:]==["--host","codex"]\nprint(json.dumps({"received":json.load(sys.stdin),"authorized":False}))\n')  # windows-ok: Python reads either line ending
+            # Keep the native cmd wrappers and source hook. A source hook must only
+            # expose its locator; running the OH helper would cross that boundary.
+            launched=Path(tmp)/'unexpected-helper-launch'
+            (package/'scripts/oh').write_text('from pathlib import Path\nPath('+repr(str(launched))+').write_text("called")\nraise RuntimeError("The source hook must never launch OH.")\n',newline='\n')
             hook=json.loads((package/'hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]['commandWindows']
             shell=os.environ['ComSpec']
             # Mirrors command_runner.rs: cmd.exe /C plus raw_arg("\"{command_line}\"").
             command=f'"{shell}" /C "{hook}"'
-            payload={'hook_event_name':'UserPromptSubmit','session_id':'fixture','prompt':'/oh-design auth','cwd':tmp}
+            payload={'hook_event_name':'UserPromptSubmit','session_id':'fixture','turn_id':'native-turn',
+                     'transcript_path':str(Path(tmp)/'native session.jsonl'),'prompt':'/oh-design auth','cwd':tmp}
             env=dict(os.environ,PLUGIN_ROOT=str(package));env.pop('OH_CHILD_ATTEMPT',None)
             result=subprocess.run(command,executable=shell,env=env,cwd=tmp,input=json.dumps(payload),capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             output=json.loads(result.stdout)['hookSpecificOutput']
             self.assertEqual(output['hookEventName'],'UserPromptSubmit')
-            forwarded=json.loads(output['additionalContext'].removeprefix('OH: '))
-            self.assertEqual(forwarded,{'received':payload,'authorized':False})
+            prefix='Native conversation locator for OH helpers (not an approval): '
+            self.assertTrue(output['additionalContext'].startswith(prefix))
+            forwarded=json.loads(output['additionalContext'][len(prefix):])
+            self.assertEqual(forwarded,{'host':'codex','session':'fixture','turn':'native-turn',
+                                       'transcript_path':payload['transcript_path'],'prompt':'/oh-design auth'})
+            self.assertFalse(launched.exists())
 
     def test_json_values_can_come_from_a_file(self):
-        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+        test = fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
         test.setUp();self.addCleanup(test.doCleanups)
         from .cli import main
         from .config import project_checks
@@ -160,7 +138,7 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(project_checks(test.root), [{'name': 't', 'command': ['git', 'diff', '--check']}])
 
     def test_relative_config_file_uses_invocation_directory_even_with_root_override(self):
-        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+        test = fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
         test.setUp();self.addCleanup(test.doCleanups)
         from .cli import main
         from .config import project_checks,change
@@ -174,7 +152,7 @@ class WindowsTest(unittest.TestCase):
             os.chdir(invocation)
             with patch('oh.system.WINDOWS', True), patch('oh.config.change',save), patch('sys.stdout'):
                 main(['--root',str(test.root),'config','set','checks','@checks.json'])
-            self.assertEqual(Path.cwd(),HOME)
+            self.assertTrue(Path.cwd().samefile(invocation))
             self.assertEqual(project_checks(test.root),[{'name':'relative','command':['git','status']}])
         finally:os.chdir(original)
 
@@ -255,25 +233,16 @@ class WindowsTest(unittest.TestCase):
             self.assertEqual((Path(tmp)/'service/dashboard-previous.pyw').read_bytes(), b'old starter')
             self.assertTrue(starter.exists())
 
-    def test_reviewers_get_the_exact_change_as_a_file(self):
-        test = fixtures.WorkflowTest('test_initial_and_continue_same_batch_snapshot_and_idempotent_restart')
+    def test_reviewers_get_exact_git_blobs_even_when_attributes_hide_a_diff(self):
+        test=fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
         test.setUp();self.addCleanup(test.doCleanups)
-        from .runner import run
-        from .workflow import start
-        seen = []
-        def fake(host, root, profile, prompt, role, directory, context, **kw):
-            if role == 'review':
-                admission = json.loads((Path(directory) / 'request.json').read_text())
-                seen.append((Path(admission['diff']['path']).read_text(), prompt))
-            return test.fake(host, root, profile, prompt, role, directory, context, **kw)
-        start(test.root, {'tasks': test.tasks[:1]}, test.event())
-        def hiding(host, root, profile, prompt, role, directory, context, **kw):
-            if role != 'review':(Path(root) / '.gitattributes').write_text('* -diff\n')  # a worker hiding its change  # windows-ok: Git reads either line ending
-            return fake(host, root, profile, prompt, role, directory, context, **kw)
-        run(test.root, hiding)
-        diff, prompt = seen[0]
-        self.assertIn('+++ b/output.txt', diff);self.assertIn('+1', diff);self.assertNotIn('Binary files', diff)
-        self.assertIn('change.diff', prompt)
+        from .review import subject,capture
+        (test.root/'output.txt').write_text('the exact candidate\n',newline='\n')
+        (test.root/'.gitattributes').write_text('* -diff\n',newline='\n')
+        selected=subject(test.root,'tree')
+        exported=capture(test.root,Path(test.temp.name)/'review',selected)
+        self.assertEqual((Path(exported['root'])/'output.txt').read_text(),'the exact candidate\n')
+        self.assertEqual(test.git('show',selected['git_tree']+':output.txt'),'the exact candidate')
 
 
 class TaskScheduler:

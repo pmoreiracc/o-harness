@@ -106,7 +106,7 @@ def main(archive):
 
     print('== Codex starts OH\'s tools', flush=True)
     tools = codex_tools(codex, env, project)
-    if not {'status', 'deliver', 'choose'} <= tools:sys.exit(f'Codex lists these OH tools: {sorted(tools) or "none"}')
+    if not {'status', 'scope_prepare', 'attempt_admit', 'admission', 'complete'} <= tools:sys.exit(f'Codex lists these OH tools: {sorted(tools) or "none"}')
     print(f'OK: OH {version} installs and starts in Claude Code and Codex ({len(tools)} tools)', flush=True)
 
 

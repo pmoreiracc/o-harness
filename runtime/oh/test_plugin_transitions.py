@@ -7,13 +7,9 @@ import sys
 import unittest
 from unittest.mock import patch
 from . import test_workflow as fixtures
-from .entry import receive
-from .authority import pending_file
 from .config import HOME, project_checks
 from .test_workflow import configure, write_settings
 from .storage import atomic_json,digest,read_json,Refused
-from .workflow import start
-from .runner import run
 # POSIX users run OH's scripts directly, so tests do too; Windows needs the interpreter.
 RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
@@ -24,81 +20,24 @@ class PluginTransitions(unittest.TestCase):
     event=fixtures.WorkflowTest.event
     fake=fixtures.WorkflowTest.fake
 
-    def test_first_use_and_unprepared_work_do_not_block_a_later_exact_trigger(self):
-        payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root),'prompt':'$o-harness:oh-deliver implement the agreed change'}
-        hook=HOME/'plugins/o-harness/scripts/human-event.py'
-        result=subprocess.run([sys.executable,str(hook),'codex'],input=json.dumps(payload),text=True,capture_output=True)
-        self.assertEqual(result.returncode,0,result.stderr)
-        self.assertIn('onboarding',result.stdout)
-        from .workflow import active_file
-        # Preparation is staged for native approval; neither entry point grants a run.
-        for prompt in (payload['prompt'],'$o-harness:oh-start'):
-            self.assertTrue(receive(self.root,'codex',payload|{'prompt':prompt})['pending'])
-            self.assertEqual(read_json(pending_file(self.root))['payload']['prompt'],prompt)
-            self.assertFalse(active_file(self.root).exists())
-        exact='$o-harness:oh-deliver request:'+'a'*64
-        self.assertTrue(receive(self.root,'codex',payload|{'turn_id':'2','prompt':exact})['pending'])
-        self.assertEqual(read_json(pending_file(self.root))['payload']['prompt'],exact)
-        # The first command typed in a new checkout registers it, as init would, and carries on.
-        fresh=Path(self.temp.name)/'fresh';fresh.mkdir();subprocess.run(['git','init','-q',str(fresh)],check=True)
-        self.assertTrue(receive(fresh,'codex',payload|{'cwd':str(fresh),'prompt':'$o-harness:oh-propose an idea'})['pending'])
-
-    def test_unprefixed_prose_is_not_an_invocation(self):
-        payload={'hook_event_name':'UserPromptSubmit','session_id':'s','turn_id':'1','cwd':str(self.root)}
-        for prompt in ('design a new logo','propose a name','deliver it today','oh-stop','/design a logo','/deliver it','oh start request:'+'a'*64,'$oh request:'+'a'*64):
-            self.assertIsNone(receive(self.root,'codex',payload|{'prompt':prompt}))
-        self.assertFalse(pending_file(self.root).exists())
-
-    def test_bare_choices_get_no_onboarding_before_setup(self):
-        hook=HOME/'plugins/o-harness/scripts/human-event.py'
-        with __import__('tempfile').TemporaryDirectory() as home:
-            def send(prompt):
-                return subprocess.run([sys.executable,str(hook),'claude'],input=json.dumps({'prompt':prompt,'cwd':str(self.root)}),
-                    text=True,capture_output=True,env=os.environ|{'OH_DATA_HOME':home},check=True).stdout
-            self.assertEqual(send('continue'),'')
-            self.assertIn('onboarding',send('/oh-propose a plan'))
-
-    def test_launcher_pins_only_unfinished_runs_after_an_upgrade(self):
+    def test_launcher_selects_current_helpers_without_restarting_a_retired_executor(self):
         home=Path(os.environ['OH_DATA_HOME']);key=digest(str(self.root.resolve()))
         checkout=read_json(home/'registry/checkouts'/(key+'.json'))['checkout']
-        atomic_json(home/'runtime/active.json',{'revision':'v2'})
-        for revision in ('v1','v2'):
+        for revision in ('old-runner','current'):
             path=home/'versions'/revision/'oh';path.parent.mkdir(parents=True)
-            path.write_text('print('+repr(revision)+')')
+            path.write_text('print('+repr(revision)+')',newline='\n')
+        atomic_json(home/'runtime/active.json',{'revision':'current'})
         atomic_json(home/'checkout-state'/checkout/'oh-active-run.json',{'project':self.project_id,'run':'fixture'})
         journal=home/'projects'/self.project_id/'runs/fixture'
-        atomic_json(journal/'000001.json',{'kind':'run.started','data':{'harness_version':'v1'}})
+        atomic_json(journal/'000001.json',{'kind':'run.started','data':{'harness_version':'old-runner'}})
         entry=HOME/'plugins/o-harness/scripts/oh'
-        def call():return subprocess.check_output([*RUN,str(entry),'--root',str(self.root),'start'],text=True).strip()
-        self.assertEqual(call(),'v1')
-        for terminal in ('completed','stopped','pr'):
-            atomic_json(journal/'000002.json',{'kind':'transition','data':{'events':[{'kind':'run.status','data':{'status':terminal}}]}})
-            self.assertEqual(call(),'v2')
-        (home/'versions/v1/oh').unlink()
-        self.assertEqual(call(),'v2')
-
-    def test_repair_review_retains_prior_family_and_exact_subject(self):
-        start(self.root,{'tasks':self.tasks[:1]},self.event())
-        manifests=[]
-        repair_history=[]
-        def review(*args,**kwargs):
-            value=self.fake(*args,**kwargs)
-            if args[4]=='implementation':
-                request=read_json(args[5]/'request.json')
-                if request.get('prior_reviews'):
-                    binding=request['prior_reviews'];prior=read_json(binding['path'])
-                    self.assertEqual(digest(prior),binding['hash']);repair_history.append(prior)
-            if args[4]=='review':
-                request=read_json(args[5]/'request.json');binding=request['prior_reviews'];prior=read_json(Path(binding['path']))
-                self.assertEqual(digest(prior),binding['hash']);manifests.append(prior)
-                if len(manifests)==1:
-                    value['structured'].update(verdict='blocking',findings=[{'severity':'blocking','description':'Fix both sibling paths','path':'output.txt','family':'sibling-paths','relation':'original'}])
-            return value
-        self.assertEqual(run(self.root,review)['completed'],1)
-        self.assertEqual(manifests[0],[])
-        self.assertEqual(manifests[1][0]['findings'][0]['family'],'sibling-paths')
-        self.assertEqual(repair_history,[manifests[1]])
-        self.assertTrue(manifests[1][0]['git_tree'])
+        for status in ('running','prepared_checkpoint','paused','review_checkpoint','stopped','completed','pr'):
+            atomic_json(journal/'000002.json',{'kind':'run.status','data':{'status':status}})
+            for command in ('status','resume'):
+                self.assertEqual(subprocess.check_output([*RUN,str(entry),'--root',str(self.root),command],text=True).strip(),'current')
+        # Runtime selection is not permission to adopt or launch the retained unfinished work.
+        (home/'versions/old-runner/oh').unlink()
+        self.assertEqual(subprocess.check_output([*RUN,str(entry),'--root',str(self.root),'status'],text=True).strip(),'current')
 
     def tracked_script(self):
         script=self.root/'checks.sh';script.write_text('#!/bin/sh\nexit 0\n',newline='\n')
@@ -121,7 +60,6 @@ class PluginTransitions(unittest.TestCase):
         self.assertNotEqual(lookup(clone)['checkout'],lookup(self.root)['checkout'])
         self.assertNotEqual(imported['profile']['id'],self.project_id)
         self.assertEqual(project_checks(clone),value['checks'])
-        self.assertFalse(pending_file(clone).exists())
         self.assertFalse((clone/'.oh').exists())
         subprocess.run([shutil.which('bash'),'checks.sh','main'],cwd=clone,check=True)
         with self.assertRaises(Refused):import_profile(clone,destination,'Fixture clone')

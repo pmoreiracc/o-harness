@@ -19,7 +19,7 @@ MODEL = r'[A-Za-z0-9][A-Za-z0-9._:/-]*'
 FOLDER = r'^(~(?:[/\\].*)?|/.*|[A-Za-z]:[\\/].*)'  # absolute, or in your home folder
 PLAN_PATH = r'^(?!.*(^|/)\.\.?(/|$))[A-Za-z0-9_-][A-Za-z0-9._/-]*'  # relative, no . or .. parts
 ROLE_MEANING = {'simple': 'small, bounded tasks', 'standard': 'ordinary tasks',
-                'complex': 'cross-cutting or safety-sensitive tasks, and retries after a failure',
+                'complex': 'cross-cutting or safety-sensitive tasks, and repairs after a repeated independent blocking finding',
                 'review': 'independent reviews', 'insights': 'ranking computed dashboard improvements on request; does not select the model of your chat'}
 SCHEMA_NAME = 'settings.schema.json'
 MODES = ('review', 'pre-push', 'ci')
@@ -27,6 +27,8 @@ MODES = ('review', 'pre-push', 'ci')
 # once, after keeping a copy in backups/, so an update never breaks a setting or drops it silently.
 RENAMED = {f'models.{host}.orchestrator.{field}':f'models.{host}.insights.{field}'
            for host in ('codex','claude') for field in ('model','effort')}
+RENAMED['max_escalations']=None
+RENAMED['context.compact_at_tokens']=None
 
 
 def rules():
@@ -36,10 +38,8 @@ def rules():
                'Branch new work starts from and PRs target; empty detects origin/HEAD, then main or master'),
               ('tasks_per_batch', number(1, 100), 'Tasks one approval covers; each "continue" approves this many more'),
               ('review_rounds', number(1, 100), 'Review rounds a task may use before OH asks you'),
-              ('max_escalations', number(0, 2), 'Retries on the complex model after a failed attempt, before OH asks you'),
               ('context.handoff_chars', number(1000, 100000), 'Maximum task handoff text sent to a worker'),
               ('context.result_chars', number(1000, 100000), 'Maximum feedback text kept in model prompts'),
-              ('context.compact_at_tokens', number(1000, 100000), 'Context size at which Codex workers compact (Codex only)'),
               ('plans.location', {'type': 'string', 'enum': ['ask', 'private', 'repo']},
                'Where roadmaps, design docs and decisions live: repo (committed in the repository), private (OH\'s folder), or ask'),
               ('plans.roadmap', {'type': 'string', 'pattern': PLAN_PATH + r'\.md$'}, 'Roadmap file, relative to where plans live'),
@@ -834,7 +834,7 @@ def snapshot(root):
     config = load(root)
     from .branches import trunk
     config['base_branch']=trunk(root,config) or ''
-    return {'config': config, 'config_hash': digest(config), 'harness_version': version(), 'rubric_version': 1}
+    return {'config': config, 'config_hash': digest(config), 'harness_version': version(), 'rubric_version': 2}
 
 
 def classify(task):

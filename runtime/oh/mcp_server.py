@@ -1,23 +1,16 @@
-"""OH's tools for Codex. Codex runs its sandboxed shell where it can write only inside the project, but OH
-keeps its runs, approvals and locks in its own folder, which the model must not be able to write. Codex runs
-a plugin's MCP server outside that sandbox, so OH's everyday commands are tools of this server: each runs one
-OH command through the plugin's own `oh` launcher, exactly as the shell would. `choose` shows the choice OH is
-waiting for as a native menu (MCP elicitation) and records the click itself; `confirm` asks any other question
-OH's instructions need answered the same way.
+"""Focused OH records and validation tools. Native host tools own agents and questions.
 
-Commands that change what OH runs on the machine (settings and checks, setup, host trust, backups, services)
-are not tools: they run in the shell, where Codex asks the person first. Codex names the conversation and
-turn that called a tool in the request's metadata, which the model can't set; every tool acts only on the
-checkout that conversation works in. Codex starts this server from the plugin: no `oh` command reaches it."""
+The MCP bridge exists to access OH's external storage from Codex. It neither displays
+menus nor executes model-selected shell commands or launches agent subprocesses.
+"""
 import json
 import os
 from pathlib import Path
-import queue
 import re
 import subprocess
 import sys
 import threading
-from .storage import Refused, identifier, now
+from .storage import Refused
 
 VERSION = '2025-06-18'
 ROOT = {'type': 'string', 'description': 'Absolute path of the project checkout (the Git repository root)'}
@@ -31,85 +24,113 @@ def tool(name, title, description, properties=None, required=(), read_only=False
             'annotations': {'readOnlyHint': read_only, 'destructiveHint': destructive, 'idempotentHint': read_only, 'openWorldHint': False}}
 
 
-LONG = ' It can take a long time. Stopping this call does not stop OH: call `status` to follow it and `stop` to end it.'
-
-
+# These are focused record/validation operations. Native host tools own agents and questions.
+OBJECT = {'type': 'object'}
 TOOLS = [
-    tool('status', 'OH status', 'Shows the OH run in this checkout: its status, tasks and what it is waiting for.', read_only=True),
-    tool('config', 'OH settings', 'Shows every OH setting with its value, default and meaning, and this project\'s checks. '
-         'Read only: changing a setting is `config set` in the shell, which Codex asks the person to approve.', read_only=True),
-    tool('init', 'Register the project', 'Registers this checkout with OH: it joins the project of the same repository, or '
-         'names a new one after the repository folder.', {'name': TEXT | {'description': 'Only when the person asks for another name'}}),
-    tool('plans', 'OH plans', 'Where this project\'s plans live (path), whether they are consistent (check), and the designs (list).',
-         {'action': {'type': 'string', 'enum': ['path', 'check', 'list']}}, ['action'], read_only=True),
-    tool('resource', 'OH workflow', 'Returns one of OH\'s workflow instructions, such as workflows/deliver/SKILL.md.',
-         {'path': TEXT}, ['path'], read_only=True),
-    tool('deliver', 'Deliver', 'Runs `deliver` with the person\'s arguments: none lists ready work, a design number delivers '
-         'it, and prose proposes a quick fix.' + LONG, {'arguments': {'type': 'array', 'items': TEXT}}),
-    tool('prepare', 'Prepare tasks', 'Saves a task list in OH\'s storage for the person to approve. Returns the exact '
-         'trigger the person types to approve it.', {'tasks': {'type': 'array', 'items': {'type': 'object'},
-         'description': 'Tasks with id, title, instructions and optional needs, ordered by dependency'}}, ['tasks']),
-    tool('prepare_design', 'Prepare a design', 'Binds an approved design document for delivery.',
-         {'doc': TEXT, 'track': TEXT}, ['doc']),
-    tool('start', 'Start prepared work', 'Verifies the person\'s approval and runs the prepared work.' + LONG, {'request': TEXT}),
-    tool('run', 'Run OH', 'Verifies the person\'s latest choice and carries it out, or continues the current run.' + LONG),
-    tool('pause', 'Pause', 'Asks the current run to pause at a safe point.'),
-    tool('resume', 'Resume', 'Resumes the paused run with the allowances it already had.' + LONG),
-    tool('stop', 'Stop', 'Ends the current run for good, keeping its work and evidence.', destructive=True),
-    tool('conflict', 'Delivery conflict', 'Carries out the person\'s pick when their delivery branch conflicts with the base branch: '
-         'fresh discards the branch to start over from the base branch, keep finishes without the base branch\'s changes.',
-         {'choice': {'type': 'string', 'enum': ['fresh', 'keep']}, 'doc': TEXT, 'track': TEXT}, ('choice', 'doc'), destructive=True),
-    tool('cancel', 'Cancel', 'Drops the command the person typed that OH has not run yet; only when they chose that.', destructive=True),
-    tool('pr_summary', 'PR summary', 'Refresh the selected base reference and generate the review summary for this branch\'s pull request.', {'base': TEXT}),
-    tool('choose', 'Ask the person to choose', 'Shows the person the choice OH is waiting for (continue, approve, stop...) '
-         'as a menu and records their click in OH. Prefer gate.native_ask with request_user_input_async when an interruptible wait tool can keep the turn open; '
-         'choose is the fallback. Call it when OH output has a `gate`, in the conversation that '
-         'started the run. The result says what was recorded and whether to call `run`.'),
-    tool('confirm', 'Ask the person', 'Shows the person a question and its options as a menu and waits for their click. '
-         'Use it for a question outside an OH `gate`; use the returned gate menu for workflow decisions. The result '
-         'is their answer, or says none was given: never answer for them.',
-         {'question': TEXT, 'options': {'type': 'array', 'items': TEXT, 'minItems': 1, 'maxItems': 10},
-          'typed': {'type': 'boolean', 'description': 'Also let the person type their own answer'}},
-         ['question', 'options'], read_only=True),
+    tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; launches nothing.', read_only=True),
+    tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT}),
+    tool('admission', 'Read review admission', 'Read the immutable subject and review request for the admitted reviewer.', {'attempt_directory':TEXT}, ['attempt_directory'], read_only=True),
+    tool('config', 'OH settings', 'Read project settings and configured checks.', read_only=True),
+    tool('init', 'Register project', 'Register this checkout with OH.', {'name': TEXT}),
+    tool('plans', 'Project plans', 'Read plan locations, validate plans, or list designs.',
+         {'action': {'type':'string','enum':['path','check','list']}}, ['action'], read_only=True),
+    tool('resource', 'OH workflow', 'Read a packaged workflow or role reference.', {'path':TEXT}, ['path'], read_only=True),
+    tool('scope_prepare', 'Prepare scope', 'Retain the scope to present through native host tools. Grants no implementation authority.',
+         {'manifest':OBJECT,'workflow':{'type':'string','enum':['deliver','design','propose']},'doc':TEXT,'track':TEXT,'human':OBJECT}),
+    tool('scope_approve', 'Record scope approval', 'Verify a native human reply for the identified scope; model claims cannot approve it.',
+         {'scope':TEXT,'human':OBJECT}, ['scope','human']),
+    tool('attempt_admit', 'Admit native agent', 'Bind a fresh agent attempt and its packet; review admission consumes its allowance once.',
+         {'role':{'type':'string','enum':['assessment','implementation','analysis','review']}}, ['role']),
+    tool('attempt_bind', 'Bind native agent identity', 'Bind the native child returned by the host to its prior admission.',
+         {'attempt':TEXT,'source':OBJECT}, ['attempt','source']),
+    tool('attempt_retain', 'Retain native result', 'Retain the public native agent result against its admission and subject.',
+         {'attempt':TEXT,'source':OBJECT}, ['attempt','source']),
+    tool('candidate', 'Prepare review candidate', 'Prepare provisional completion metadata for final checks and independent review; does not complete work.'),
+    tool('verify', 'Record project checks', 'Execute configured project checks and retain results against the current candidate.',
+         {'base':TEXT,'mode':{'type':'string','enum':['review','pre-push','ci']}}),
+    tool('evidence', 'Attach evidence', 'Retain supplementary evidence references for implementation and review; grants no authority.',
+         {'attachment':OBJECT}, ['attachment']),
+    tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate.',
+         {'attempt':TEXT}, ['attempt']),
+    tool('decision', 'Record human decision', 'Verify a native human decision about task/review allowance, findings or publication. Displays no menu.',
+         {'kind':TEXT,'human':OBJECT,'attempt':TEXT,'destination':OBJECT}, ['kind','human']),
+    tool('review', 'Prepare independent review', 'Bind changes, tree, paths, commit, range or task for fresh native read-only review. Grants no repairs.',
+         {'arguments':{'type':'array','items':TEXT},'human':OBJECT}),
+    tool('pr_summary', 'PR summary', 'Render retained change, verification and review evidence for publication.', {'base':TEXT}),
+    tool('publication', 'Reconcile publication', 'Reconcile the approved PR destination with retained publication evidence.',
+         {'pr':{'type':'integer','minimum':1}}),
 ]
 NAMES = {t['name'] for t in TOOLS}
 
 
+def payload(root, value):
+    """Store tool arguments outside the consumer; these inputs are not approval evidence."""
+    from .storage import atomic_json, digest, read_json, state_home
+    if not isinstance(value,dict):raise Refused('The helper payload must be an object')
+    if len(json.dumps(value).encode())>1048576:raise Refused('Reference large artifacts instead of embedding them in tool arguments')
+    path=state_home()/'requests'/digest(str(root))/('native-'+digest(value)+'.json')
+    try:atomic_json(path,value,immutable=True)
+    except FileExistsError:
+        if read_json(path)!=value:raise Refused('Retained request differs from its content identity')
+    return str(path)
+
+
 def command(name, arguments, root):
-    """The `oh` arguments a tool runs. Values follow `--`, so none can be read as an option."""
+    """Map a focused tool to the same CLI operation used by Claude."""
     def text(key, required=False):
-        value = arguments.get(key)
+        value=arguments.get(key)
         if value is None and not required:return None
-        if not isinstance(value, str) or not value.strip():raise Refused(f'`{key}` must be text')
+        if not isinstance(value,str) or not value.strip():raise Refused(f'`{key}` must be text')
         return value
-    if name in ('status', 'config', 'run', 'pause', 'resume', 'stop', 'cancel'):return [name]
-    if name == 'init':return ['init'] + ([f'--name={text("name")}'] if text('name') else [])
-    if name == 'plans':
-        if arguments.get('action') not in ('path', 'check', 'list'):raise Refused('`action` is path, check or list')
-        return ['plans', arguments['action']]
-    if name == 'resource':return ['resource', '--', text('path', True)]
-    if name == 'deliver':
-        values = arguments.get('arguments') or []
-        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):raise Refused('`arguments` is a list of text')
-        return ['deliver', '--', *values]
-    if name == 'prepare':return ['prepare', '--', str(manifest(root, arguments.get('tasks')))]
-    if name == 'conflict':
-        if arguments.get('choice') not in ('fresh', 'keep'):raise Refused('`choice` is fresh or keep')
-        return ['conflict', arguments['choice'], '--', text('doc', True)] + ([text('track')] if text('track') else [])
-    if name == 'prepare_design':return ['prepare-design', '--', text('doc', True)] + ([text('track')] if text('track') else [])
-    if name == 'start':return ['start'] + (['--', text('request')] if text('request') else [])
-    if name == 'pr_summary':return ['pr-summary'] + (['--', text('base')] if text('base') else [])
+    if name not in NAMES:raise Refused('Unknown tool')
+    if name in ('status','config','candidate'):return [name]
+    if name=='resume':return ['resume']+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
+    if name=='admission':return ['admission','--',text('attempt_directory',True)]
+    if name=='init':return ['init']+([f'--name={text("name")}'] if text('name') else [])
+    if name=='plans':
+        if arguments.get('action') not in ('path','check','list'):raise Refused('Invalid plans action')
+        return ['plans',arguments['action']]
+    if name=='resource':return ['resource','--',text('path',True)]
+    if name=='scope_prepare':
+        workflow=arguments.get('workflow','deliver')
+        if workflow not in ('deliver','design','propose'):raise Refused('Invalid workflow')
+        args=['scope','prepare','--workflow',workflow]
+        for key in ('doc','track'):
+            if text(key):args+=[f'--{key}',text(key)]
+        if arguments.get('human') is not None:args+=['--human',payload(root,arguments['human'])]
+        if text('doc') and 'manifest' not in arguments:return args
+        return args+['--',payload(root,arguments.get('manifest',{}))]
+    if name=='scope_approve':return ['scope','approve','--',text('scope',True),payload(root,arguments.get('human'))]
+    if name=='attempt_admit':
+        role=arguments.get('role')
+        if role not in ('assessment','implementation','analysis','review'):raise Refused('Invalid agent role')
+        return ['attempt','admit',role]
+    if name in ('attempt_bind','attempt_retain'):
+        return ['attempt',name.split('_',1)[1],'--',text('attempt',True),payload(root,arguments.get('source'))]
+    if name=='evidence':return ['evidence','--',payload(root,arguments.get('attachment'))]
+    if name=='complete':return ['complete','--',text('attempt',True)]
+    if name=='decision':
+        args=['decision']
+        if text('attempt'):args+=['--attempt',text('attempt')]
+        if arguments.get('destination') is not None:args+=['--destination',payload(root,arguments['destination'])]
+        return args+['--',text('kind',True),payload(root,arguments.get('human'))]
+    if name=='review':
+        values=arguments.get('arguments') or []
+        if not isinstance(values,list) or not all(isinstance(v,str) for v in values):raise Refused('arguments must be a list of text')
+        return ['review']+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])+['--',*values]
+    if name=='verify':
+        mode=arguments.get('mode','review')
+        if mode not in ('review','pre-push','ci'):raise Refused('Invalid verification mode')
+        if not text('base'):
+            if mode!='review':raise Refused('Pass the comparison base when selecting a non-default verification mode')
+            return ['verify']
+        return ['verify','--',text('base'),mode]
+    if name=='pr_summary':return ['pr-summary']+(['--',text('base')] if text('base') else [])
+    if name=='publication':
+        number=arguments.get('pr')
+        if number is not None and (type(number) is not int or number<=0):raise Refused('The PR number must be positive')
+        return ['publication']+(['--pr',str(number)] if number is not None else [])
     raise Refused('Unknown tool')
-
-
-def manifest(root, tasks):
-    """Save a task list where `prepare` reads it: OH's storage for this project, which the model can't write."""
-    from .prepared import directory
-    from .storage import atomic_json, digest
-    if not isinstance(tasks, list) or not tasks:raise Refused('`tasks` is a nonempty list')
-    path = directory(root).parent / 'manifests' / (digest(tasks)[:16] + '.json')
-    atomic_json(path, {'tasks': tasks})
-    return path
 
 
 def conversation(meta):
@@ -124,12 +145,25 @@ def conversation(meta):
 
 def folder(thread):
     """The folder the conversation works in, from Codex's own saved session."""
-    from .authority import saved, Saving, codex_history
+    from .authority import saved, Saving
     from .hosts import codex_home
     def read():
         files = list((codex_home() / 'sessions').rglob('*' + thread + '.jsonl'))
         if len(files) != 1:raise Saving('OH could not find this Codex conversation\'s saved session; retry the same OH operation.')
-        return codex_history(files[0], thread)[3]
+        # Native children may record checks, but their prompts cannot grant authority.
+        # Resolve only checkout identity here; consequential helpers attest human input.
+        with files[0].open('rb') as stream:
+            try:record=json.loads(stream.readline())
+            except ValueError:raise Saving('Codex is still saving this conversation.')
+            meta=record.get('payload',{})
+            if record.get('type')!='session_meta' or meta.get('id')!=thread:
+                raise Refused('The native conversation identity does not match this call.')
+            cwd=meta.get('cwd')
+            for line in stream:
+                try:record=json.loads(line)
+                except ValueError:continue
+                if record.get('type')=='turn_context':cwd=record.get('payload',{}).get('cwd') or cwd
+        return cwd
     cwd = saved(read)
     if not isinstance(cwd, str) or not cwd:raise Refused('OH could not tell which folder this Codex conversation works in.')
     return Path(cwd).resolve()
@@ -153,7 +187,7 @@ def checkout(arguments, thread):
 
 
 # OH's and the hosts' own settings: taken from what Codex passes this server, never from the person's shell.
-FORWARDED = {'OH_CHILD_ATTEMPT', 'OH_DATA_HOME', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
+FORWARDED = {'OH_DATA_HOME', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
 MARK = '__OH_SHELL_ENVIRONMENT__'
 
 
@@ -174,9 +208,10 @@ def shell_environment():
 
 
 class Server:
+    tools=TOOLS
     def __init__(self, stdin, stdout, launcher=None):
         self.stdin, self.stdout, self.launcher, self.client = stdin, stdout, launcher, {}
-        self.lock, self.reading, self.replies, self.cancelled, self.shell = threading.Lock(), threading.Lock(), {}, {}, None
+        self.lock, self.reading, self.cancelled, self.shell = threading.Lock(), threading.Lock(), {}, None
 
     def send(self, message):
         with self.lock:
@@ -184,21 +219,20 @@ class Server:
 
     def serve(self):
         """Read the host's messages. Tool calls run on their own threads, so the server keeps answering (a ping,
-        a menu's reply, a cancel) while a long OH run is working."""
+        a cancel) while a configured check is working."""
         for line in iter(self.stdin.readline, ''):
             try:message = json.loads(line)
             except ValueError:continue
             if not isinstance(message, dict):continue
             method, ident = message.get('method'), message.get('id')
-            if method is None and ident in self.replies:self.replies[ident].put(message)
-            elif method == 'notifications/cancelled':
+            if method == 'notifications/cancelled':
                 cancelled = self.cancelled.get((message.get('params') or {}).get('requestId'))
                 if cancelled:cancelled.set()
             elif method == 'initialize':
                 self.client = message.get('params') or {}
                 self.send({'id': ident, 'result': {'protocolVersion': self.client.get('protocolVersion', VERSION),
                     'capabilities': {'tools': {}}, 'serverInfo': {'name': 'o-harness', 'version': '1'}}})
-            elif method == 'tools/list':self.send({'id': ident, 'result': {'tools': TOOLS}})
+            elif method == 'tools/list':self.send({'id': ident, 'result': {'tools': self.tools}})
             elif method == 'tools/call':
                 self.cancelled[ident] = threading.Event()
                 threading.Thread(target=self.call, args=(message,), daemon=True).start()
@@ -212,17 +246,14 @@ class Server:
         except Exception as exc:text, error = f'OH failed unexpectedly: {exc!r}', True  # never leave a call unanswered
         cancelled = self.cancelled.pop(ident)
         # The host gave up on this call (the person interrupted it, or it timed out): it expects no reply.
-        # OH itself was not stopped; `status` shows where it is.
+        # Transport cancellation alone grants no workflow authority. Native Stop rollout is gated.
         if not cancelled.is_set():self.send({'id': ident, 'result': {'content': [{'type': 'text', 'text': text}], 'isError': error}})
 
     def tool(self, name, arguments, meta, ident):
-        if os.environ.get('OH_CHILD_ATTEMPT'):raise Refused('OH workers cannot use OH\'s tools.')
         if name not in NAMES:raise Refused('Unknown tool')
         if not isinstance(arguments, dict):raise Refused('Arguments must be an object')
         thread = conversation(meta)
         root = checkout(arguments, thread)
-        if name == 'choose':return self.choose(root, thread, ident)
-        if name == 'confirm':return self.confirm(arguments, ident)
         native=meta.get('x-codex-turn-metadata')
         turn=native.get('turn_id') if isinstance(native,dict) else None
         return self.oh(root, command(name, arguments, root), thread, meta.get('progressToken'), turn)
@@ -240,118 +271,18 @@ class Server:
         return environment
 
     def oh(self, root, argv, thread, token, turn=None):
-        """Run one OH command through the plugin's launcher, as the shell would, in the calling conversation.
-        OH's progress lines become progress notifications when the host asked for them."""
+        """Run a focused helper with the calling native conversation identity."""
         environment = self.environment(thread,turn)
-        output, lines = [], []
-        # OH keeps working if Codex ends this server: its own session on POSIX, its own process group on Windows.
-        detached = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
         utf8 = ['-X', 'utf8'] if os.name == 'nt' else []
-        with subprocess.Popen([sys.executable, '-I', *utf8, str(self.launcher), '--root', str(root), *argv], stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, text=True, encoding='utf-8', errors='replace',
-                              **detached) as process:
-            reader = threading.Thread(target=lambda: output.append(process.stdout.read()), daemon=True);reader.start()
-            for count, line in enumerate(process.stderr, 1):
-                lines.append(line.rstrip())
-                if token is not None:self.send({'method': 'notifications/progress', 'params': {'progressToken': token, 'progress': count, 'message': line.strip()}})
-            reader.join()
+        process=subprocess.run([sys.executable,'-I',*utf8,str(self.launcher),'--root',str(root),*argv],
+                               stdin=subprocess.DEVNULL,capture_output=True,env=environment,
+                               text=True,encoding='utf-8',errors='replace')
+        output=[process.stdout];lines=process.stderr.splitlines()
         code = process.returncode
         if code:
             said = [line[4:] for line in lines if line.startswith('OH: ')]
             raise Refused(said[-1] if said else '\n'.join(lines[-5:]) or f'OH exited with {code}')
         return ''.join(output).strip() or 'Done.'
-
-    def elicit(self, message, schema, call):
-        ident = 'oh-menu-' + identifier()  # unguessable, so only the host can answer this menu
-        replies = self.replies[ident] = queue.Queue()
-        try:
-            self.send({'id': ident, 'method': 'elicitation/create', 'params': {'message': message, 'requestedSchema': schema}})
-            while True:
-                try:return replies.get(timeout=0.2)
-                except queue.Empty:
-                    if call not in self.cancelled or self.cancelled[call].is_set():return {'result': {'action': 'cancel'}}
-        finally:self.replies.pop(ident, None)
-
-    def text_answer(self, message, title, call):
-        """Ask for words only after the person chose Other or Refine, never beside the choice menu."""
-        reply = self.elicit(message, {'type': 'object', 'required': ['answer'],
-            'properties': {'answer': {'type': 'string', 'title': title, 'minLength': 1}}}, call)
-        result = reply.get('result') or {}
-        if result.get('action') != 'accept':return None
-        answer = (result.get('content') or {}).get('answer')
-        return answer if isinstance(answer, str) and answer.strip() else None
-
-    def confirm(self, arguments, call):
-        """Asks the person a question OH's instructions need answered and waits for the click: the call stays open
-        until they answer or close the menu, so the conversation can't move on without them."""
-        question, options, typed = arguments.get('question'), arguments.get('options'), arguments.get('typed', False)
-        if not isinstance(question, str) or not question.strip() or len(question) > 2000:raise Refused('question must be text of up to 2000 characters')
-        if not isinstance(options, list) or not 1 <= len(options) <= 10 or len(set(options)) != len(options) \
-                or not all(isinstance(o, str) and o.strip() and len(o) <= 200 for o in options):
-            raise Refused('options must be 1 to 10 different texts of up to 200 characters')
-        if not isinstance(typed, bool):raise Refused('typed must be true or false')
-        if typed and 'Other' in options:raise Refused('With typed, Other is added for the typed answer; leave it out of options')
-        fallback = 'No answer was given. Ask the person in plain text and end your turn; never answer for them.'
-        if 'elicitation' not in (self.client.get('capabilities') or {}):return 'This Codex surface cannot show menus. ' + fallback
-        properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': options}}
-        if typed:
-            properties['choice']['enum'] = options + ['Other']
-        reply = self.elicit(question, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
-        result = reply.get('result') or {}
-        if result.get('action') != 'accept':return 'The menu was closed. ' + fallback
-        content = result.get('content') or {}
-        choice = content.get('choice')
-        if choice not in properties['choice']['enum']:return 'The menu came back without a valid choice. ' + fallback
-        if choice == 'Other' and typed:
-            answer = self.text_answer(question, 'Your answer', call)
-            if answer is None:return 'Other needs an answer, and none was typed. ' + fallback
-            return 'The person answered: ' + answer
-        return 'The person chose: ' + choice
-
-    def choose(self, root, thread, call):
-        from .config import version
-        from .gates import apply, current
-        from .workflow import load_run
-        gate = current(root)
-        if not gate:return 'No OH choice is waiting in this checkout.'
-        if gate['host'] != 'codex':raise Refused('This run belongs to Claude; ask there.')
-        _, state = load_run(root)
-        if thread != state['human']['session']:raise Refused('Ask in the Codex conversation that started this run.')
-        typed = ', '.join(o['choice'] for o in gate['options']) + (', or refine: <what to change>' if gate['words'] else '')
-        fallback = f'No choice was made. Ask the person to type one of: {typed}.'
-        from .authority import answered, supersede, typed_choice
-        if typed_choice(root, 'codex'):
-            return 'The person already typed a choice; call `run` to apply it instead of asking again.'
-        if state['harness_version'] != version():
-            return 'OH was updated after this run started, so its menu is not shown. ' + fallback
-        if 'elicitation' not in (self.client.get('capabilities') or {}):
-            return 'This Codex surface cannot show OH menus. ' + fallback
-        menu = gate['options']
-        properties = {'choice': {'type': 'string', 'title': 'Your choice', 'enum': [o['choice'] for o in menu],
-                                 'enumNames': [o['label'] for o in menu]}}
-        if gate.get('preview'):
-            # The review copy holds the proposal and destinations; the popup holds only the decision.
-            message = gate['question'].split(' [OH gate ',1)[0]
-        else:
-            message = gate['question'].removesuffix(' [OH gate '+gate['id']+']')
-        reply = self.elicit(message, {'type': 'object', 'required': ['choice'], 'properties': properties}, call)
-        result = reply.get('result') or {}
-        if result.get('action') != 'accept':
-            return 'The menu was closed or could not be shown here. ' + fallback
-        content = result.get('content') or {}
-        choice = content.get('choice')
-        if choice not in [o['choice'] for o in menu]:return 'The menu came back without a valid choice. ' + fallback
-        event = {'host': 'codex', 'session': thread, 'turn': 'menu-' + identifier(), 'prompt': choice, 'via': 'elicitation', 'at': now()}
-        after = apply(root, event, gate['id'])
-        dropped = supersede(root, 'codex', event)
-        answered(root, 'codex', thread, state['human'].get('transcript_path'))
-        label = next((o['label'] for o in menu if o['choice'] == choice.split(':')[0]), choice)
-        if dropped:label += f' (this set aside {dropped}, which the person typed earlier; they type it again to run it)'
-        if after.get('waiting'):return json.dumps(after)
-        if after['status']=='pr':return json.dumps(after)
-        if after['status'] in ('stopped', 'completed') and not after.get('gate'):
-            return f'Recorded the person\'s choice: {label}. The run is {after["status"]}; there is nothing left to run.'
-        return f'Recorded the person\'s choice: {label}. Call `run` to carry it out. Status now: {after["status"]}.'
 
 
 def serve(stdin, stdout, launcher=None):
