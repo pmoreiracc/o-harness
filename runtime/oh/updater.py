@@ -62,9 +62,13 @@ def update(root, host=None):
                 source = ('pmoreiracc/o-harness', '--ref', 'dist') if name == 'codex' else ('pmoreiracc/o-harness#dist',)
                 command('marketplace', 'add', *source)
             else:command('marketplace', 'upgrade' if name == 'codex' else 'update', 'o-harness')
-            action = 'add' if name == 'codex' else 'update' if before else 'install'
-            command(action, PLUGIN, *(() if name == 'codex' else ('--scope', 'user')))
-            after = installed(name, command)
+            # Codex refreshes installed plugins with the marketplace. Re-adding the same version
+            # replaces its cache unnecessarily and can fail while a Windows session uses it.
+            after = installed(name, command) if name == 'codex' else None
+            if name != 'codex' or after is None:
+                action = 'add' if name == 'codex' else 'update' if before else 'install'
+                command(action, PLUGIN, *(() if name == 'codex' else ('--scope', 'user')))
+                after = installed(name, command)
             if after is None:raise Refused('OH is missing after the update. Reinstall o-harness@o-harness, then retry oh-update.')
             old, new = before['version'] if before else 'not installed', after['version']
             if before and tuple(map(int, new.split('.'))) < tuple(map(int, old.split('.'))):
