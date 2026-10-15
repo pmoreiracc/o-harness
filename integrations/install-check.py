@@ -1,5 +1,5 @@
 """Install a built OH package into the real Claude Code and Codex apps the way a user does, and check that it works:
-both apps load it, OH sets up from the installed plugin, Claude's menu hook runs, and Codex starts OH's tools. It
+both apps load it, OH sets up from the installed plugin, Claude's native source hook runs, and Codex starts OH's tools. It
 needs no AI login. The release workflow runs it on Windows, macOS and Linux before publishing anything.
 
   python integrations/install-check.py <package.tgz>   (the package integrations/package.sh builds, as a .tgz)
@@ -80,13 +80,23 @@ def main(archive):
     missing = [name for name in [f'o-harness {version}', *expected, *hooks] if name not in details]
     if missing:sys.exit(f'Claude Code did not load all of OH: missing {missing}\n{details}')
 
-    print('== Claude runs OH\'s menu hook, which refuses an answer the model filled in', flush=True)
-    command = hooks['PreToolUse'][0]['hooks'][0]['command']
-    menu = {'tool_name': 'AskUserQuestion', 'tool_input': {'questions': [{'question': 'OH gate check: Approve?', 'header': 'OH',
-            'options': [{'label': 'Approve'}, {'label': 'Reconsider'}], 'multiSelect': False}], 'answers': {'OH gate check: Approve?': 'Approve'}}}
-    said = run(os.environ.get('OH_CHECK_BASH', 'bash'), '-c', command, input=json.dumps(menu),
-               env=env | {'CLAUDE_PLUGIN_ROOT': plugin.as_posix()})
-    if '"deny"' not in said:sys.exit(f'OH\'s menu hook did not refuse a filled-in answer: {said!r}')
+    print("== Claude's native source hook preserves the locator without granting approval", flush=True)
+    command = hooks['UserPromptSubmit'][0]['hooks'][0]['command']
+    payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'install-check',
+               'prompt_id': 'native-turn', 'transcript_path': str(temp / 'native session.jsonl'),
+               'prompt': '/oh-propose installation check', 'cwd': str(temp)}
+    hook_env = env | {'CLAUDE_PLUGIN_ROOT': plugin.as_posix()}
+    said = run(os.environ.get('OH_CHECK_BASH', 'bash'), '-c', command,
+               input=json.dumps(payload), env=hook_env)
+    locator = {'host': 'claude', 'session': 'install-check', 'turn': 'native-turn',
+               'transcript_path': payload['transcript_path'], 'prompt': payload['prompt']}
+    expected_output = {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit',
+        'additionalContext': 'Native conversation locator for OH helpers (not an approval): '+json.dumps(locator)}}
+    if json.loads(said) != expected_output:sys.exit(f'Native source hook returned an unexpected locator: {said!r}')
+    for child in ({'isSidechain': True}, {'agent_id': 'child'}):
+        said = run(os.environ.get('OH_CHECK_BASH', 'bash'), '-c', command,
+                   input=json.dumps(payload | child), env=hook_env)
+        if said.strip():sys.exit(f'Native source hook exposed a delegated input as a human locator: {said!r}')
 
     print(f'== Codex loads OH {version}', flush=True)
     codex = program('codex')
