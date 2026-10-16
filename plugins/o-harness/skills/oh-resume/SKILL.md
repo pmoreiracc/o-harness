@@ -11,8 +11,13 @@ remaining allowances. Confirm old native work is quiescent before a fresh agent 
 never reuse a completed reviewer or renew allowances to switch hosts. Preserve useful
 unfinished edits. Report the actual resumed work, not a new implementation introduction
 when only a decision or publication remains.
-Bind a requested ownership transfer with `resume --run ID --human <native-locator.json>`
+Bind the requested continuation with `resume --run ID --human <native-locator.json>`
 (Codex `resume` with its human locator); a factual status read alone grants nothing.
+The old conversation may remain open. Require no prior Stop/Pause when no attempt or
+check is executing, even if legacy saved status still says running. After continuation,
+only the current coordinator launches further OH operations; keep earlier attempts
+bound to their original native parents. Await any executing native check and retry
+the same still-valid continuation without another question.
 
 Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
 (`scripts\oh.cmd` on native Windows). Keep OH configuration and evidence outside

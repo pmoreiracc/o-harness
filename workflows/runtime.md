@@ -34,7 +34,12 @@ work is quiescent, bind continuation with `resume --run ID --human <locator.json
 can authorize continuation; an empty invocation requires its actual selection answer.
 Plain conversational continuation uses the existing native Resume question/reply.
 These helpers preserve the original scope, settings, findings, approvals and remaining
-allowances. Do not reprepare free-text scope merely to transfer a session or host.
+allowances. Saved work belongs to the person across sessions: an old conversation can
+stay open, and its saved status need not say paused or stopped when no attempt or check
+is executing. Do not ask for Stop or Pause before continuation. The accepted continuation
+selects the current coordinator; a superseded coordinator must launch no further OH
+operations on this work. Attempts retain their actual original host and native parent.
+Do not reprepare free-text scope merely to transfer a session or host.
 
 Resume the actual phase: retain terminal child evidence, continue unfinished authoring,
 use valid completed author/check/review evidence, restore the latest proposal preview or
@@ -230,8 +235,18 @@ Stop means cancel owned native work before any later phase. Use native cancellat
 for known active children/commands and confirm their outcome; interrupting the parent
 alone is not proof. Do not claim cancellation until confirmed or start another worker
 while old work may run. If the host cannot confirm cancellation, explain the specific
-remaining native task and next action. Do not build a replacement process supervisor.
-Pause lets the current step finish and retains its result before waiting.
+remaining native task and next action. Saved stopped status records the instruction to
+launch nothing further; it alone does not prove native cancellation. While a known
+check is still executing, report Stop requested; cancellation pending, and use its
+native host cancellation. Retaining its eventual check evidence starts no later phase.
+Do not build a replacement process supervisor.
+Pause lets the current step finish and retains its result before waiting. A bound author
+can finish its provisional candidate and checks after Pause; no later agent starts.
+Pause and Stop are optional controls, never prerequisites for a future matching work
+command. Discovery alone lifts neither. If continuation meets a running check, await
+that native step and retry the same still-valid command within existing authority;
+do not ask for another confirmation or make the person retype it. A later human
+Pause/Stop or other decision must still be respected.
 
 After interruption, inspect status and native work before resuming. Preserve attempts,
 findings, settings, scope and spent allowances. Recover a routine helper failure and

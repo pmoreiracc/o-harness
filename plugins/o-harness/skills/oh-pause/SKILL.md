@@ -10,6 +10,10 @@ pausing is pending or complete; do not describe a still-running agent as paused.
 Record the actual human request with `decision pause <native-locator.json>`
 (Codex `decision`, kind `pause`).
 
+A later explicit matching work command may continue the saved work in a new native
+conversation. This control is optional, never a prerequisite for that continuation;
+discovery alone does not lift it.
+
 Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
 (`scripts\oh.cmd` on native Windows). Keep OH configuration and evidence outside
 consumer repositories. Discovery alone does not authorize setup or execution.

@@ -671,11 +671,15 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         for key in ('native_version','scope_id','scope_snapshot'):data.pop(key,None)
         legacy.append('run.started',data)
         for record in journal.records()[1:]:legacy.append(record['kind'],record['data'])
-        legacy.append('run.status',{'status':'stopped'})
         atomic_json(checkout_file(self.root,'oh-active-run.json'),
                     {'project':self.project_id,'run':legacy.path.name,'checkout':checkout_id(self.root)})
         original=legacy.records();before=reduce(original);result=read_json(Path(first['evidence'])/'result.json')
-        resumed=native.resume(self.root,self.human('resume',session='fresh-session'))
+        self.assertEqual(before['status'],'running')
+        with self.assertRaisesRegex(Refused,'predates'):
+            native.resume(self.root,self.human('resume',session='fresh-session',at=original[0]['at']))
+        self.assertEqual(legacy.records(),original)
+        self.assertNotIn('native_version',load_run(self.root)[1])
+        resumed=native.resume(self.root,self.human('/oh-deliver finish the same bounded work',session='fresh-session'))
         self.assertEqual(resumed['granted'],state['granted'])
         self.assertEqual((resumed['reviews_used'],resumed['reviews_allowed']),(1,2))
         after=load_run(self.root)[1]

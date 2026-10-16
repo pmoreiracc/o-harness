@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 from . import native
+from .authority import coordinator as native_coordinator
 from .storage import Refused
 from .workflow import load_run
 from .test_workflow import NativeFixture
@@ -62,6 +63,128 @@ class ControlsTest(NativeFixture,unittest.TestCase):
             with self.assertRaises(Refused):native.admit(self.root,'assessment')
         self.assertEqual(legacy.records(),before)
 
+    def test_explicit_continuation_transfers_running_work_and_fences_the_old_parent(self):
+        from .storage import now
+        self.approve();before=load_run(self.root)[1]
+        home=Path(self.temp.name)/'host'
+        with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex')}), \
+                patch('oh.authority.native_human',side_effect=self.native_human_original), \
+                patch('oh.authority.coordinator',side_effect=native_coordinator):
+            previous=None
+            for host in ('codex','claude'):
+                session=host+'-new-parent'
+                path=home/('.codex/sessions' if host=='codex' else '.claude/projects/p')/(session+'.jsonl')
+                path.parent.mkdir(parents=True,exist_ok=True)
+                prompt='/oh-deliver finish the same bounded work'
+                locator={'host':host,'session':session,'turn':'continue','prompt':prompt,'transcript_path':str(path)}
+                rows=([{'type':'session_meta','payload':{'id':session,'source':'cli','cwd':str(self.root)}},
+                       {'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','turn_id':'continue','message':prompt}}]
+                      if host=='codex' else [{'type':'user','sessionId':session,'promptId':'continue','cwd':str(self.root),
+                          'timestamp':now(),'message':{'role':'user','content':prompt}}])
+                path.write_text(''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8',newline='\n')
+                env={'CODEX_THREAD_ID':session if host=='codex' else '', 'OH_NATIVE_SESSION_ID':session if host=='claude' else ''}
+                with patch.dict(os.environ,env):
+                    native.resume(self.root,locator,run=before['id'])
+                    state=load_run(self.root)[1]
+                    self.assertEqual((state['status'],state['human']['session']),('running',session))
+                    self.assertEqual(state['granted'],before['granted'])
+                    self.assertEqual(state['config'],before['config'])
+                    if previous:
+                        with self.assertRaisesRegex(Refused,'superseded'):native.resume(self.root,previous,run=before['id'])
+                    admitted=native.admit(self.root,'assessment')
+                    attempt=load_run(self.root)[1]['attempts'][-1]
+                    self.assertEqual(attempt['parent'],{'host':host,'session':session,'transcript_path':str(path)})
+                    with self.assertRaisesRegex(Refused,'current native attempt'):native.admit(self.root,'assessment')
+                    second=(rows[-1]|{'timestamp':now()})
+                    if host=='codex':second['payload']=second['payload']|{'turn_id':'again'}
+                    else:second['promptId']='again'
+                    with path.open('a',encoding='utf-8',newline='\n') as transcript:transcript.write(json.dumps(second)+'\n')
+                    with self.assertRaisesRegex(Refused,'native attempt'):native.resume(self.root,locator|{'turn':'again'})
+                    self.native_results[admitted['id']]={'text':'Interrupted assessment','status':'interrupted'}
+                    native.retain(self.root,admitted['id'],{})
+                with patch.dict(os.environ,{'CODEX_THREAD_ID':'superseded-parent','OH_NATIVE_SESSION_ID':''}):
+                    with self.assertRaisesRegex(Refused,'superseded'):native.admit(self.root,'assessment')
+                    with self.assertRaisesRegex(Refused,'superseded'):native.verify(self.root)
+                previous=locator
+        state=load_run(self.root)[1]
+        self.assertEqual([a['parent']['host'] for a in state['attempts']],['codex','claude'])
+        self.assertTrue(all(a['finished'] for a in state['attempts']))
+
+    def test_checks_keep_human_controls_available_and_block_transfer_until_quiescent(self):
+        self.approve();before=load_run(self.root)[1]
+        continuation=self.human('/oh-deliver finish the same bounded work',session='fresh-parent')
+        def checking(*args,**kwargs):
+            with self.assertRaisesRegex(Refused,'still executing'):native.resume(self.root,continuation)
+            with self.assertRaisesRegex(Refused,'still executing'):native.admit(self.root,'assessment')
+            with self.assertRaisesRegex(Refused,'still executing'):native.review(self.root,'tree',self.human('/oh-review tree'))
+            native.decision(self.root,'pause',self.human('pause'))
+            native.decision(self.root,'stop',self.human('stop'))
+            self.assertEqual(native.resume(self.root)['status'],'stopped')
+            return [{'name':'fixture','returncode':0}]
+        with patch('oh.verification.verify',side_effect=checking):proof=native.verify(self.root)
+        state=load_run(self.root)[1]
+        self.assertEqual(state['status'],'stopped')
+        self.assertEqual(state['human']['session'],before['human']['session'])
+        self.assertEqual(state['verification']['1'],proof)
+        # Stop remains until a later explicit continuation; discovery did not lift it.
+        native.resume(self.root,self.human('/oh-deliver finish the same bounded work',session='fresh-parent'))
+        self.assertEqual(load_run(self.root)[1]['human']['session'],'fresh-parent')
+        self.assertEqual(load_run(self.root)[1]['granted'],before['granted'])
+
+    def test_pause_stop_and_continuation_preserve_the_pending_phase_and_decision(self):
+        self.approve();journal,before=load_run(self.root)
+        publication={'choice':'pr','source':'original-publication','head':self.git('rev-parse','HEAD')}
+        journal.append('decision',publication)
+        for phase in ('pr','prepared_checkpoint','approval_checkpoint'):
+            with self.subTest(phase=phase):
+                journal.append('run.status',{'status':phase})
+                if phase!='pr':journal.append('refinement.requested',{'feedback':'Keep the pending human refinement.'})
+                native.decision(self.root,'pause',self.human('pause'))
+                native.decision(self.root,'stop',self.human('stop'))
+                native.saved_work(self.root);native.resume(self.root)
+                self.assertEqual(load_run(self.root)[1]['status'],'stopped')
+                native.resume(self.root,self.human('/oh-deliver finish the same bounded work',session='fresh-parent'))
+                state=load_run(self.root)[1]
+                self.assertEqual(state['status'],phase)
+                self.assertEqual(state['publication'],publication)
+                self.assertEqual(state['granted'],before['granted'])
+                if phase!='pr':self.assertEqual(state['refinement']['feedback'],'Keep the pending human refinement.')
+                with self.assertRaises(Refused):native.admit(self.root,'assessment')
+        # A recoverable executor label grants nothing and must not strand approved work.
+        for control in (None,'pause','stop'):
+            with self.subTest(recoverable_control=control):
+                journal.append('run.status',{'status':'needs_attention'})
+                if control:native.decision(self.root,control,self.human(control))
+                resumed=native.resume(self.root,self.human('/oh-deliver finish the same bounded work',session='fresh-parent'))
+                self.assertEqual(resumed['status'],'running')
+                self.assertEqual(resumed['granted'],before['granted'])
+        # Requested review of a completed task is still pending work after a control.
+        journal.append('task.completed',{'task':'1','commit':self.git('rev-parse','HEAD')})
+        journal.append('review.requested',{'task':'1','return_status':'completed'})
+        native.decision(self.root,'pause',self.human('pause'))
+        resumed=native.resume(self.root,self.human('/oh-deliver finish the same bounded work',session='fresh-parent'))
+        self.assertEqual(resumed['status'],'running')
+        self.assertEqual(resumed['task']['id'],'1')
+        self.assertEqual(load_run(self.root)[1]['extra_review']['task'],'1')
+
+    def test_bound_author_can_finish_candidate_and_checks_after_pause(self):
+        self.approve();self.assess()
+        admitted=native.admit(self.root,'implementation')
+        native.bind(self.root,admitted['id'],{'child_session':'active-author'})
+        for caller in ('parent','other-child'):
+            with patch.dict(os.environ,{'CODEX_THREAD_ID':caller}),self.assertRaisesRegex(Refused,'bound author'):
+                native.verify(self.root)
+        native.decision(self.root,'pause',self.human('pause'))
+        with patch.dict(os.environ,{'CODEX_THREAD_ID':'active-author'}):
+            candidate=native.candidate(self.root)
+            proof=native.verify(self.root)
+        self.assertEqual(proof['tree'],candidate['tree'])
+        self.assertEqual(load_run(self.root)[1]['status'],'paused')
+        with self.assertRaises(Refused):native.admit(self.root,'review')
+        self.native_results[admitted['id']]={'text':'Author finished its paused step.','status':'completed'}
+        native.retain(self.root,admitted['id'],{})
+        self.assertEqual(load_run(self.root)[1]['status'],'paused')
+
     def test_pause_after_review_fences_commit_and_resume_keeps_exact_review_and_allowance(self):
         self.approve();self.assess();self.implement();review=self.reviewed()
         before=load_run(self.root)[1];head=self.git('rev-parse','HEAD')
@@ -86,11 +209,14 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         self.assertEqual(native.resume(self.root)['reviews_used'],1)
 
     def test_discovery_and_selected_reads_preserve_both_bindings_and_live_work(self):
-        from .storage import checkout_file
+        from .storage import checkout_file, now
         from .config import change
         change(self.root,'review_rounds','1')
-        self.approve();journal,original=load_run(self.root)
-        request=self.human('/oh-review tree')
+        self.approve()
+        continuation=self.human('/oh-deliver finish the same bounded work',at=now())
+        native.resume(self.root,continuation)
+        journal,original=load_run(self.root)
+        request=self.human('/oh-review tree',session='review-parent',at=now())
         feedback=native.review(self.root,'tree',request)
         feedback_journal,review_state=load_run(self.root)
         before={name:checkout_file(self.root,name).read_bytes() for name in ('oh-active-run.json','oh-active-review.json')}
@@ -98,14 +224,27 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         self.assertEqual({x['run'] for x in native.saved_work(self.root)['saved_work']},{original['id'],feedback['run']})
         self.assertEqual(native.resume(self.root,run=original['id'])['run'],original['id'])
         self.assertEqual(native.review(self.root,'tree',request)['run'],feedback['run'])
+        with self.assertRaisesRegex(Refused,'superseded'):
+            native.resume(self.root,continuation,run=original['id'])
+        self.assertEqual(load_run(self.root)[1]['id'],feedback['run'])
         self.assertEqual(journal.records(),records);self.assertEqual(feedback_journal.records(),review_records)
         # A review binding must not let new scope overwrite the hidden workflow.
         prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
         with self.assertRaisesRegex(Refused,'saved scope'):
             native.approve_scope(self.root,prepared['scope_id'],self.human())
         self.assertEqual({name:checkout_file(self.root,name).read_bytes() for name in before},before)
-        # Selecting the ordinary workflow retains the unfinished review for later.
-        native.resume(self.root,self.human('resume'),run=original['id'])
+        # A failed binding write recovers with the same valid command, without
+        # allowing an older command to steal a newer selection.
+        selection=self.human('resume',at=now())
+        bind_selection=native._resume_binding
+        def interrupted_binding(root,state,*,write=False):
+            if write:raise OSError('Interrupted active binding write')
+            return bind_selection(root,state)
+        with patch('oh.native._resume_binding',side_effect=interrupted_binding):
+            with self.assertRaisesRegex(OSError,'Interrupted active binding'):
+                native.resume(self.root,selection,run=original['id'])
+        self.assertEqual(load_run(self.root)[1]['id'],feedback['run'])
+        native.resume(self.root,selection,run=original['id'])
         self.assertEqual(load_run(self.root)[1]['id'],original['id'])
         self.assertEqual({x['run'] for x in native.saved_work(self.root)['saved_work']},{original['id'],feedback['run']})
         native.resume(self.root,self.human('/oh-review tree'),run=feedback['run'])

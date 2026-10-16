@@ -1,5 +1,5 @@
 """Focused evidence/admissibility helpers. Native skills, never this module, run agents."""
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import hashlib
 import json
@@ -72,6 +72,11 @@ def _attempt(state, attempt_id):
 
 
 def _active(state):return [a for a in state['attempts'] if not a.get('finished')]
+
+
+def _idle(root):
+    from .controls import busy
+    if busy(root):raise Refused('OH is still executing in this checkout; wait for its current step, then retry the same operation')
 
 
 def _owner(root,state):
@@ -246,6 +251,7 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
 
 
 def _resume_binding(root,state,*,write=False):
+    _idle(root)
     for _,other in _saved_runs(root):
         if other['id']!=state['id'] and _active(other):
             raise Refused('Another native attempt still owns this checkout; retain its terminal result before continuation')
@@ -369,6 +375,7 @@ def approve_scope(root, scope_id, locator):
 def _start(root,key,source):
     scope=_scope(root,key)
     with _locked(root):
+        _idle(root)
         for journal,prior in _saved_runs(root):
             if prior.get('scope_id')==key:return select(root,prior['id'])
             if _active(prior):raise Refused('A native attempt still owns this checkout; retain its terminal result before different work')
@@ -464,7 +471,7 @@ def _repeated_family(state,task):
 def admit(root,role):
     if role not in ('assessment','implementation','analysis','review'):raise Refused('Unknown native agent role')
     with _locked(root):
-        journal,state=load_run(root);_owner(root,state)
+        journal,state=load_run(root);_owner(root,state);_idle(root)
         if state['status']!='running':raise Refused('This scope is not running; retain existing work and resolve its actual state')
         if _active(state):raise Refused('Retain the current native attempt before admitting another')
         task=next_task(state)
@@ -496,7 +503,8 @@ def admit(root,role):
         profile,fallback=select_profile(state['host'],requested,root)
         attempt_id=identifier();directory=journal.path/'attempts'/attempt_id
         admission={'id':attempt_id,'task':task['id'],'role':role,'profile':profile,'purpose':'standalone' if state['workflow']=='review' else 'workflow',
-                   'evidence':str(directory),'config_hash':state['config_hash'],'root':str(Path(root).resolve()),'run':state['id'],**subject}
+                   'evidence':str(directory),'config_hash':state['config_hash'],'root':str(Path(root).resolve()),'run':state['id'],
+                   'parent':{k:state['human'][k] for k in ('host','session','transcript_path') if k in state['human']},**subject}
         if state['workflow']=='review':
             selected=state['standalone_subject']
             admission['standalone_subject']={k:selected[k] for k in ('kind','base','revision','git_tree','description') if k in selected}
@@ -650,17 +658,21 @@ def attach_evidence(root,attachment):
         return value
 
 
+def _author(root,state):
+    active=_active(state)
+    if active:
+        import os
+        caller=os.environ.get('CODEX_THREAD_ID') or os.environ.get('OH_NATIVE_SESSION_ID')
+        if len(active)!=1 or active[0]['role'] not in ('implementation','analysis') or not active[0].get('native_child') or caller and active[0]['native_child']['child_session']!=caller:
+            raise Refused('Only the bound author may prepare or verify the active candidate')
+        return active[0]
+    _owner(root,state)
+
+
 def candidate(root):
     with _locked(root):
-        journal,state=load_run(root)
-        active=_active(state)
-        if active:
-            import os
-            caller=os.environ.get('CODEX_THREAD_ID') or os.environ.get('OH_NATIVE_SESSION_ID')
-            if len(active)!=1 or active[0]['role'] not in ('implementation','analysis') or not active[0].get('native_child') or caller and active[0]['native_child']['child_session']!=caller:
-                raise Refused('Only the bound author may prepare the active candidate')
-        else:_owner(root,state)
-        task=next_task(state)
+        journal,state=load_run(root);_idle(root);author=_author(root,state)
+        task=next_task(state|{'status':'running'} if author and state['status']=='paused' else state)
         if not task:raise Refused('No granted pending task')
         _structure(root,state)
         if state.get('delivery') and not state.get('correction') and not state.get('extra_review'):
@@ -683,29 +695,38 @@ def candidate(root):
 
 
 def verify(root,base=None,mode='review'):
-    journal,state=load_run(root);task=next_task(state)
-    if not task:raise Refused('No granted pending task to verify')
-    if state['status'] not in ('running','paused'):raise Refused('Saved work is not available for verification')
-    before=_subject(root,state)
-    if state['workflow'] in ('design','propose'):
-        from .plans import check
-        where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
-        if where['location']=='private':
-            from .plans import verify_roadmap,verify_design
-            if where['roadmap'].exists():verify_roadmap(root,where)
-            if where['designs'].exists():verify_design(root,where,approving=True)
-        else:check(root,where)
-        results=[]
-    else:
-        from .checks import resolve
-        from .verification import verify as run_checks
-        checks=resolve(root,state['project_checks'],base or state['base'],mode)
-        results=run_checks(root,checks,state['project'])
-    after=_subject(root,state)
-    if before!=after:raise Refused('Checks changed the candidate; inspect those changes and verify the final candidate again')
-    value={'task':task['id'],**after,'checks':results,'at':now()}
-    with _locked(root):journal.append('verification',value)
-    return value
+    # The existing execution lock protects checks while short control transitions
+    # remain available for human Pause/Stop. A new coordinator waits for this step.
+    with ExitStack() as executing:
+        with _locked(root):
+            journal,state=load_run(root);author=_author(root,state)
+            executing.enter_context(lock(checkout_file(root,'oh-runner.lock'),wait=False))
+            task=next_task(state|{'status':'running'} if author and state['status']=='paused' else state)
+            if not task:raise Refused('No granted pending task to verify')
+            if state['status'] not in ('running','paused'):raise Refused('Saved work is not available for verification')
+            before=_subject(root,state)
+        if state['workflow'] in ('design','propose'):
+            from .plans import check
+            where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
+            if where['location']=='private':
+                from .plans import verify_roadmap,verify_design
+                if where['roadmap'].exists():verify_roadmap(root,where)
+                if where['designs'].exists():verify_design(root,where,approving=True)
+            else:check(root,where)
+            results=[]
+        else:
+            from .checks import resolve
+            from .verification import verify as run_checks
+            checks=resolve(root,state['project_checks'],base or state['base'],mode)
+            results=run_checks(root,checks,state['project'])
+        with _locked(root):
+            _,current=load_run(root);current_author=_author(root,current)
+            if (current['id'],current['human'],current_author)!=(state['id'],state['human'],author):raise Refused('Saved work changed during verification; retry checks for the selected work')
+            after=_subject(root,current)
+            if before!=after:raise Refused('Checks changed the candidate; inspect those changes and verify the final candidate again')
+            value={'task':task['id'],**after,'checks':results,'at':now()}
+            journal.append('verification',value)
+        return value
 
 
 def _intents(text):
@@ -795,13 +816,25 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
         if state.get('published'):return select(root,state['id'])
         if not (_affirmed(source['prompt'],kind,source.get('question','')) or (kind=='resume' and _workflow_resume(state,source))):raise Refused('The native human reply does not authorize this decision')
         key=digest({k:source[k] for k in ('host','session','turn','prompt')})
-        if kind=='resume':_resume_binding(root,state)
+        if kind=='resume':
+            from .workflow import active_file
+            if active_file(root).exists():
+                selected_journal,selected=load_run(root)
+                if selected['id']!=state['id']:
+                    boundaries=[r['at'] for r in selected_journal.records() if r['kind']=='decision' or
+                                (r['kind']=='transition' and any(e['kind']=='decision' for e in r['data'].get('events',[])))]
+                    boundary=max(boundaries+[selected_journal.records()[0]['at']])
+                    if not authority.newer(source.get('at'),boundary):
+                        raise Refused('This continuation was superseded by another work selection; use a new explicit matching work command')
+            _resume_binding(root,state)
         if key in state['decisions']:
             if kind not in ('accept-concerns','dismiss-scope','route-scope'):
                 if kind=='resume':
                     resumed=any(e['kind']=='decision' and e['data'].get('choice')=='resume' and e['data'].get('source')==key
                                 for r in journal.records() for e in (r['data'].get('events',[]) if r['kind']=='transition' else [{'kind':r['kind'],'data':r['data']}]))
                     if not resumed:raise Refused('This human input was already used for another decision; keep its saved result')
+                    owner_key=digest({k:state['human'][k] for k in ('host','session','turn','prompt')})
+                    if key!=owner_key:raise Refused('This continuation was superseded; use the current explicit matching work command to continue')
                     from .workflow import active_file
                     if read_json(active_file(root)).get('run')!=state['id']:
                         authority.native_human(root,locator)
@@ -816,8 +849,23 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
         source=authority.native_human(root,locator,subject=subject_path)
         authority.coordinator(root,state,locator)
         if not authority.newer(source.get('at'),since):raise Refused('This human decision predates the current subject or allowance boundary')
+        adoption=None
+        if kind=='resume' and not state.get('native_version'):
+            if _active(state):raise Refused('A legacy attempt is unsettled; finish its native host cleanup before adoption')
+            documents={}
+            if state.get('delivery'):
+                bound=state['delivery'];documents[bound['path']]=(bound.get('authority') or {}).get('start_text',Path(bound['path']).read_text())
+            scope={k:state.get(k) for k in ('tasks','config','config_hash','harness_version','base','branch','workflow','design','track','project_checks','delivery','plans')}
+            scope.update(schema=2,documents=documents,checkout=checkout_id(root),created_at=journal.records()[0]['at'])
+            scope_id=digest(scope)
+            adoption={'native_version':2,'scope_id':scope_id,'scope_snapshot':scope}
+            state=state|adoption
         subject=_subject(root,state);events=[]
         def add(name,value):events.append({'kind':name,'data':value})
+        if adoption:
+            _immutable(_home(root)/'scopes'/scope_id/'scope.json',scope)
+            _immutable(journal.path/'scope'/'scope.json',scope)
+            add('native.adopted',adoption)
         task=next_task(state|{'status':'running'}) or next((t for t in state['tasks'] if t['id'] not in state['done']),state['tasks'][-1])
         if kind=='continue':
             if _active(state):raise Refused('A task grant cannot replace an active attempt')
@@ -909,8 +957,10 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             add('run.owner',{'human':source})
             status=state['status']
             if status=='completed' and state['workflow']=='review' and not _finished(state):status='running'
-            if status in ('paused','stopped'):
-                status='completed' if len(state['done'])==len(state['tasks']) else 'running' if next_task(state|{'status':'running'}) else 'checkpoint'
+            if status in ('paused','stopped','pausing'):
+                status=state.get('control_return_status') or state.get('pause_return_status') or 'running'
+            if status in ('running','needs_attention'):
+                status='running' if next_task(state|{'status':'running'}) else 'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint'
             add('run.status',{'status':status})
         if kind!='publish':add('decision',{'choice':kind,'source':key,'head':subject['head'],'scope':state.get('scope_id'),'attempt':attempt})
         journal.append('transition',{'events':events})
@@ -924,7 +974,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
 
 def complete(root,attempt_id):
     with _locked(root):
-        journal,state=load_run(root);_owner(root,state);review=_attempt(state,attempt_id)
+        journal,state=load_run(root);_owner(root,state);_idle(root);review=_attempt(state,attempt_id)
         task=next((t for t in state['tasks'] if t['id']==review['task']),None)
         existing=next((d for d in state['summaries'] if d.get('review')==attempt_id),None)
         if existing:return existing
@@ -1020,25 +1070,6 @@ def resume(root,locator=None,run=None):
     journal,state=load_run(root,run)
     if locator is None or _finished(state):
         return select(root,state['id'])
-    if locator is not None and not state.get('native_version'):
-        source=authority.native_human(root,locator)
-        if not (_affirmed(source['prompt'],'resume',source.get('question','')) or _workflow_resume(state,source)):
-            raise Refused('The native human reply does not authorize continuation')
-        authority.coordinator(root,state,locator)
-        with _locked(root):
-            _resume_binding(root,state)
-            from .controls import busy
-            if busy(root) or _active(state):raise Refused('A legacy attempt is unsettled; finish its native host cleanup before adoption')
-            if state['status'] not in ('stopped','paused','completed','checkpoint','needs_attention'):raise Refused('Stop legacy work at a quiescent boundary before native adoption')
-            if git(root,'branch','--show-current')!=state['branch']:raise Refused('Return to the saved execution branch before adoption')
-            documents={}
-            if state.get('delivery'):
-                bound=state['delivery'];documents[bound['path']]=(bound.get('authority') or {}).get('start_text',Path(bound['path']).read_text())
-            scope={k:state.get(k) for k in ('tasks','config','config_hash','harness_version','base','branch','workflow','design','track','project_checks','delivery','plans')}
-            scope.update(schema=2,documents=documents,checkout=checkout_id(root),created_at=journal.records()[0]['at'])
-            key=digest(scope);_immutable(_home(root)/'scopes'/key/'scope.json',scope)
-            _immutable(journal.path/'scope'/'scope.json',scope)
-            journal.append('native.adopted',{'native_version':2,'scope_id':key,'scope_snapshot':scope})
     return decision(root,'resume',locator,run=state['id'])
 
 
@@ -1060,7 +1091,7 @@ def review(root,arguments,human=None):
             return_status=saved['status']
             if source:resume(root,source,saved['id'])
         with _locked(root):
-            journal,state=load_run(root);_owner(root,state)
+            journal,state=load_run(root);_owner(root,state);_idle(root)
             if state.get('published') or state['workflow']!='deliver' or state['status'] not in ('running','completed','checkpoint','stopped') or words[1] not in state['done']:
                 raise Refused('Task review requires completed unpublished work from this delivery')
             if _active(state):raise Refused('Retain the current attempt before additional review')
@@ -1076,6 +1107,7 @@ def review(root,arguments,human=None):
     selected=subject(root,arguments)
     if source and (existing:=_matching_entry(root,source,'review',selected=selected)) is not None:return existing
     with _locked(root):
+        _idle(root)
         host=source['host'] if source else 'codex' if __import__('os').environ.get('CODEX_THREAD_ID') else 'claude'
         session=source['session'] if source else __import__('os').environ.get('CODEX_THREAD_ID') or __import__('os').environ.get('OH_NATIVE_SESSION_ID')
         if not session:raise Refused('Native standalone review needs its current host session identity')

@@ -71,6 +71,28 @@ Reuse saved-state-first behavior, not its branch conventions, ADR policies or lo
 - [x] Run affected tests and syntax/Windows checks; inspect durations and avoid duplicate
   full-run fixtures. Extend existing causal coverage before adding new suites.
 
+## Session-independent continuation follow-up
+
+Saved work belongs to the person across native conversations. An explicit matching
+continuation may select a new coordinator while the earlier conversation stays open;
+no saved Pause/Stop ceremony is required when no attempt or check is executing.
+Discovery changes nothing. The new continuation preserves actual pending decisions,
+exact scope/review evidence and remaining allowances. Superseded coordinator helpers
+are fenced, and attempts retain their original host/parent even after a host transfer.
+Legacy adoption and continuation are recorded together after native human validation.
+Recoverable legacy needs_attention continues from existing task/grant facts; pending
+approval and publication phases retain their decisions. A consumed command cannot
+reselect work over a newer selection, while interrupted selection writes recover
+with the same still-valid command. Requested task review remains pending even when
+all original implementation tasks are complete.
+The existing execution lock protects running checks while Pause/Stop remain available;
+a bound author may finish its current candidate/check step after Pause.
+
+This follows the golden reference's durable branch/task progress and preserves OH's
+native host execution, without its Geoffrey-specific branch policies. No scheduler,
+background runner, expiry lease or new natural-language decision parser is added.
+Automated verification is recorded below; live Mac acceptance is still required.
+
 ## Delivery and acceptance
 
 - [x] Preserve all eight reviewed fixes on codex/native-workflow-bugfixes.
@@ -97,7 +119,29 @@ restarting through a simple skill.
 Implementation and automated checks are complete. Live host acceptance, independent
 review and publication remain unchecked above. OH dev has not been activated.
 
-- `bash integrations/test.sh affected origin/main` (Windows Git Bash): all 16 selected
+- Session-independent continuation follow-up: all controls and native authority tests,
+  plus the retained legacy-finding/allowance regression, passed: 18 tests in 424.945
+  seconds on Windows. This covers running-work takeover on both hosts, original child
+  provenance, live execution exclusion, cooperative Pause, durable Stop intent and
+  pending publication/approval phases. The earlier five causal tests passed in
+  107.195 seconds. The broader run overlapped the affected suite; its slowest case
+  was existing discovery coverage at 62.927 seconds. Git Bash syntax/Windows-risk
+  checks and `git diff --check` passed.
+- Final parent review corrected recoverable execution-state normalization, pending
+  task-review restoration and cross-run stale-command selection while retaining
+  interrupted-write recovery. The six final targeted cases passed incrementally:
+  the six-case run took 260.653 seconds, with four clean completions and two Windows
+  fixture-cleanup errors after their assertions; those two passed cleanly in 75.614
+  seconds using an isolated short temporary root outside the watched checkout.
+- The follow-up official affected suite selected 16 modules: 14 passed outright;
+  three cases in delivery/planning hit the existing 260-character Windows hard-link
+  path limit. A separate temporary-file diagnostic reproduced that limit without OH.
+  Those three passed with shorter process-local temporary paths. No production
+  receipt behavior or test assertion was weakened. The final syntax/Windows-risk
+  check and `git diff --check` passed. This is incremental validation, not a single
+  final all-green affected invocation. Mac host acceptance remains outstanding.
+- Previous resumption implementation: `bash integrations/test.sh affected origin/main`
+  (Windows Git Bash) passed all 16 selected
   modules passed. Focused follow-up runs cover the final changes to failed-review
   recovery, terminal Design discovery and phase hints; there are 164 distinct cases
   across the selected modules. This was incremental verification, not one final

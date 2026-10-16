@@ -181,7 +181,9 @@ the earlier clean commit cannot override a newly discovered blocker.
 `oh-pause` requests a cooperative pause: the current native step finishes and its
 result is retained before another phase starts. `oh-stop` requests cancellation of
 owned native work and preserves edits and evidence. Stopped is reported only after
-native cancellation is confirmed; a parent interruption alone is not that proof.
+native cancellation is confirmed; a parent interruption or saved stopped status
+alone is not that proof. If a known native check remains live, OH reports Stop
+requested; cancellation pending, cancels it through the host and starts no later phase.
 The native parent-Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81).
 It does not block release. There is no OH process supervisor workaround.
 
@@ -199,7 +201,13 @@ inputs. These are focused helpers, not another agent runner.
 
 After native work is quiet, `oh-resume` continues the saved task or decision with its
 original scope, settings, findings and remaining allowances. A new session or host
-must not start another agent while an old child may still be running. Resume does not
+can continue even while the old conversation remains open; no prior Pause or Stop
+is needed when no attempt or check is executing. The new coordinator continues the
+same work and the superseded coordinator launches nothing further. Existing attempts
+keep their original native parents. If a check is still executing, OH waits for that
+step before retrying the valid continuation. A new session must not start another
+agent while an old child may still be running. Discovery alone does not lift a saved
+Pause or Stop; a later explicit matching continuation can. Resume does not
 renew a spent review allowance, accept findings or widen scope. This uses the same
 checkout and OH data, not migration to another computer.
 

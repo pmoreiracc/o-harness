@@ -9,9 +9,15 @@ record the direct human stop decision. Start no later check, review or completio
 Retain completed results, attempts and edits. Report stopped only after native work is
 confirmed cancelled; otherwise name the remaining work and the native action needed.
 Never substitute an OH process supervisor or claim that interrupting the parent alone
-establishes child cancellation.
+establishes child cancellation. A saved stopped status alone is not cancellation
+proof: if a known check is still live, report Stop requested; cancellation pending,
+use native cancellation, and launch no later phase.
 After retaining terminal cancellation/results, record `decision stop
 <native-locator.json>` (Codex `decision`, kind `stop`) from the person's actual request.
+
+A later explicit matching work command may continue the saved work in a new native
+conversation. This control is optional, never a prerequisite for that continuation;
+discovery alone does not lift it.
 
 Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
 (`scripts\oh.cmd` on native Windows). Keep OH configuration and evidence outside

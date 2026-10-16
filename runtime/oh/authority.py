@@ -60,7 +60,7 @@ def codex_history(path,session):
 
 
 def owner_transcript(human):
-    """The saved transcript of the Claude conversation that owns the run."""
+    """The saved transcript of the coordinating Claude conversation."""
     allowed=(Path.home()/'.claude/projects').resolve()
     if human.get('transcript_path'):paths=[Path(human['transcript_path']).expanduser().resolve()]
     else:paths=[p.resolve() for p in allowed.glob('*/'+human['session']+'.jsonl')] if re.fullmatch(r'[a-zA-Z0-9_-]+',human['session']) else []
@@ -375,7 +375,7 @@ def coordinator(root, state, locator=None):
         if session and session!=source['session']:raise Refused('The native caller cannot use another session’s human grant')
         return source
     if session and session!=state['human']['session']:
-        raise Refused('Completion and decisions belong to the native owning parent session')
+        raise Refused('This coordinator was superseded; continue from the current native parent or use a new explicit matching work command')
     session=session or state['human']['session']
     path=_path(state['host'],session,state['human'].get('transcript_path'))
     if state['host']=='codex':codex_history(path,session)
@@ -388,8 +388,15 @@ def native_child(root, state, attempt, locator):
     return _child(root,state,attempt,locator,binding=True)
 
 
+def _attempt_parent(state,attempt):
+    # Historical attempts keep the host/parent in effect at admission, even after
+    # another native conversation continues the durable work.
+    return state|{'host':attempt.get('host',state['host']),'human':attempt.get('parent',state['human'])}
+
+
 def _child(root,state,attempt,locator,*,binding):
     """Identification may retain a failed binding; only strict validation admits its work."""
+    state=_attempt_parent(state,attempt)
     issues=[];requested_profile=None;context={}
     def mismatch(message):
         if binding:raise Refused(message)
@@ -470,6 +477,7 @@ def _child(root,state,attempt,locator,*,binding):
 
 
 def native_result(root, state, attempt, locator):
+    state=_attempt_parent(state,attempt)
     bound=attempt.get('native_child')
     if not bound:
         parent=_path(state['host'],state['human']['session'],state['human'].get('transcript_path'))

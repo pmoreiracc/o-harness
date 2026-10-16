@@ -163,6 +163,13 @@ class AuthorityTest(unittest.TestCase):
                     forked=deepcopy(parents);forked[0]['message']['content'][0]['input']['subagent_type']='fork'
                     save(pr=forked)
                     with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                # Transfer changes the current host/parent, never this attempt's provenance.
+                original=attempt|{'host':host,'parent':{'host':host,**state['human']},'native_child':bound}
+                transferred={'host':'claude' if host=='codex' else 'codex',
+                             'human':{'session':'new-parent','transcript_path':str(home/'unrelated.jsonl')}}
+                if host=='claude':save(pr=parents+[completion],ch=children+[finished])
+                expected=native_result(root,state,original,locator)
+                self.assertEqual(native_result(root,transferred,original,locator),expected)
                 with self.assertRaises(Refused):
                     native_result(root,state,attempt|{'native_child':bound},locator|{'child_session':'foreign'})
                 with self.assertRaises(Refused):
