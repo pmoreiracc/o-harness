@@ -151,6 +151,18 @@ def index(journal, state):
     if published:=state.get('published'):
         lines.extend([f"**Delivery finished:** [PR #{published['number']}]({published['url']})",
                       f"Publication verified at {published['verified_at']}; reviewed commit `{published['approved_head']}`. Current PR checks and later commits are separate from this receipt.", ''])
+    from .scope import followups
+    pending=followups(state)
+    if pending:
+        lines.extend(['## Follow-up work outside approved scope','','These findings remain outside implementation authority. Tracking them does not approve a new task.',''])
+        for item in pending:
+            destination=item['destination']
+            from .publication import issue_url
+            target=issue_url(destination.get('issue')) or (destination['design']+' '+destination.get('section','') if destination.get('design') else 'saved with this workflow')
+            lines.append('- '+item['action']+' — '+target)
+            if item.get('suggested_design') and destination.get('saved'):lines.append('  Related design: '+item['suggested_design']+'; no task has been added.')
+            for finding in item['findings']:lines.append('  '+finding['description'].replace('\n','\n  '))
+        lines.append('')
     for task in state['tasks']:
         attempts = [a for a in state['attempts'] if a['task'] == task['id']]
         if not attempts:continue

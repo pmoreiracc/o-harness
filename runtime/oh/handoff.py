@@ -46,7 +46,7 @@ def confirms_repairs(state, attempt):
     try:
         validate_evidence({'schema':1,'attempts':[attempt],'review':attempt['id'],
             'git_tree':attempt.get('git_tree'),'parent':attempt.get('head'),
-            'resolutions':state.get('resolutions',{})})
+            'resolutions':state.get('resolutions',{}),'scope':state.get('scope_records',{}),'scope_policy':'retained-followups'})
     except Refused:return False
     return True
 

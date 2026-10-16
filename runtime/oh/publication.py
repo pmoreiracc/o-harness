@@ -264,7 +264,7 @@ def task_evidence(root,state,task,review,parent):
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
         'host':state['host'],'version':state['harness_version'],'config_hash':state['config_hash'],'branch':state['branch'],
-        'parent':parent,'git_tree':review['git_tree'],'review':review['id'],'attempts':history,'resolutions':resolutions}
+        'parent':parent,'git_tree':review['git_tree'],'review':review['id'],'attempts':history,'resolutions':resolutions,'scope_policy':'retained-followups'}
     if state.get('correction'):
         value['correction_of']=state['correction']['prior_commit']
         correction_ancestor(root,value)
@@ -289,6 +289,8 @@ def validate_scope(value):
         if not findings:continue
         record=value.get('scope',{}).get(attempt['id']) or value.get('resolutions',{}).get(attempt['id'],{}).get('scope',{})
         resolution=value.get('resolutions',{}).get(attempt['id'],{})
+        if not record and value.get('scope_policy')=='retained-followups':continue
+        if record.get('action')=='retained' and record.get('destination')=={'saved':True} and record.get('findings')==findings and record.get('attempt')==attempt['id'] and value.get('scope_policy')=='retained-followups':continue
         if not record and resolution.get('issue') and 'route scope' in resolution.get('choice',''):
             continue  # historical exact-review disposition predates separate scope records
         if record.get('attempt')!=attempt['id'] or record.get('findings')!=findings or not record.get('source'):
@@ -323,8 +325,12 @@ def validate_evidence(value):
     if final['outcome']=='clean' and not findings:return
     if final['outcome']!='needs_resolution' or not severities or not severities<={'concern','scope'}:raise Refused('Native final review is unresolved')
     resolution=value.get('resolutions',{}).get(final['id'],{})
+    if value.get('scope_policy')=='retained-followups':
+        severities=severities-{'scope'}
+        if not severities:return
     expected={'accept concerns':{'concern'},'route scope':{'scope'},'accept concerns and route scope':{'concern','scope'},
               'dismiss scope':{'scope'},'accept concerns and dismiss scope':{'concern','scope'}}
+    if value.get('scope_policy')=='retained-followups':expected={k:v-{'scope'} for k,v in expected.items()}
     if expected.get(resolution.get('choice'))!=severities or resolution.get('tree')!=value['git_tree'] or not resolution.get('source'):raise Refused('Missing exact-tree human finding disposition')
 
 
@@ -493,7 +499,7 @@ def readable(records,states,root=None):
     lines.extend(['','## Independent review',''])
     for record in records:
         evidence=record['evidence'];reviews=evidence['attempts']
-        outcome='clean' if reviews[-1]['outcome']=='clean' else 'completed with recorded finding decisions'
+        outcome=('clean' if reviews[-1]['outcome']=='clean' else 'ready with outside-scope follow-ups' if {f['severity'] for f in reviews[-1].get('findings',[])}=={'scope'} else 'completed with recorded concern acceptance')
         lines.append(f"- Task {evidence['task']}: {outcome}; {len(reviews)} round"+('s' if len(reviews)!=1 else '')+'.')
     lines.extend(['','<details><summary>Review history, findings and decisions</summary>',''])
     for record in records:
@@ -517,9 +523,11 @@ def readable(records,states,root=None):
             if scope:
                 destination=scope['destination']
                 where=(issue_url(destination['issue']) if destination.get('issue') else
-                       Path(destination['design']).name+' '+destination['section'] if destination.get('design') else 'this PR')
+                       Path(destination['design']).name+' '+destination['section'] if destination.get('design') else 'saved workflow follow-ups' if destination.get('saved') else 'this PR')
                 lines.append('Scope: '+scope['action']+'; recorded in '+escape(where)+'.')
             elif resolution and resolution.get('issue'):lines.append('Destination: '+issue_url(resolution['issue'])+'.')
+            elif any(f['severity']=='scope' for f in attempt.get('findings',[])):
+                lines.append('Outside-scope work remains open in saved workflow follow-ups; it was not implemented or dismissed.')
     # Choices to repair and renew review are journal decisions, not final resolutions.
     # Present them without changing portable approval evidence or inventing old details.
     for run_id in dict.fromkeys(r['evidence']['run'] for r in records):

@@ -28,7 +28,12 @@ class PlanningTest(NativeFixture,unittest.TestCase):
             number,path=plans.write_design(self.root,self.where,'auth','Sign-in',BODY,'draft')
             plans.claim(self.root,self.where,'auth',number);self.document=Path(path)
         self.finish_attempt('analysis',{'summary':'Wrote the bounded design.'},edit=write_plan)
-        review=self.reviewed()
+        outside={'severity':'scope','description':'Add a separate sign-out task later.','family':'signout','path':''}
+        review=self.reviewed({'verdict':'scope','summary':'The bounded design is ready; retain a future task.','findings':[outside]})
+        from .scope import track,followups
+        self.assertEqual(track(self.root,review['id'])['destination'],{'saved':True})
+        self.assertEqual(followups(load_run(self.root)[1])[0]['findings'],[outside])
+        self.assertEqual(native.select(self.root)['continuation']['pending_decision'],'private_approval')
         with self.assertRaises(Refused):native.complete(self.root,review['id'])
         original=self.document.read_text();self.document.write_text(original+'\nChanged after review.\n',newline='\n')
         with self.assertRaises(Refused):

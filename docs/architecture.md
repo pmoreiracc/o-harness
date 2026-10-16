@@ -53,10 +53,21 @@ permissions; custom host software can imitate such records, an explicit limitati
 in `config/invariants.json`.
 
 Skills ask real questions directly through native tools or ordinary chat when those
-tools are unavailable. There is no OH menu engine or exact reply-command protocol.
+tools are unavailable. `decision-request` binds the precise presented effect and current
+subject before a consequential native question. `decision` verifies the actual answer
+against that record, including the exact additional review count; it does not classify
+arbitrary prose as a grant. Native tools render the question. Ordinary conversation and
+tracking instructions stay with the host agent. Older canonical choices remain supported
+for recovery, without extending their phrase vocabulary.
 Claude quick fixes use the native plan viewer's single Accept, bound to the actual
 accepted scope. Drafting a design needs no extra scope question. Repository design
 approval remains human merge; private design approval binds the reviewed contents.
+
+Outside-scope observations are durable follow-ups in retained reviews and the run index,
+not mandatory completion gates. Optional tracking records a real issue URL or a mutable
+design note. Notes never extend approved tasks, and changing a reviewed document requires
+checks and fresh review. Repo and private plans use the same policy; frozen designs and
+work without a design retain follow-ups without forcing an issue destination.
 
 ## Focused helpers
 

@@ -82,7 +82,7 @@ class CodexToolsTest(unittest.TestCase):
         names={tool['name'] for tool in TOOLS}
         self.assertEqual(names,{'status','resume','config','init','plans','resource','scope_prepare','scope_approve',
             'attempt_admit','attempt_bind','attempt_retain','candidate','verify','evidence','complete','decision',
-            'review','pr_summary','publication','admission','review_check'})
+            'review','pr_summary','publication','admission','review_check','decision_request','finding_track'})
         self.assertFalse(names & {'run','start','choose','confirm'})
         for tool in TOOLS:
             self.assertFalse(tool['inputSchema']['additionalProperties'])
@@ -117,6 +117,10 @@ class CodexToolsTest(unittest.TestCase):
         resumed=command('resume',{'human':human},self.root)
         self.assertEqual(resumed[:2],['resume','--human'])
         self.assertEqual(read_json(resumed[-1]),human)
+        self.assertEqual(command('decision_request',{'kind':'grant-review','rounds':1},self.root),['decision-request','--rounds','1','--','grant-review'])
+        tracked=command('finding_track',{'attempt':'review','destination':{'saved':True}},self.root)
+        self.assertEqual(read_json(tracked[2]),{'saved':True})
+        self.assertEqual(tracked[-2:],['--','review'])
         self.assertEqual(command('status',{'saved':True},self.root),['status','--saved'])
         selected=command('resume',{'run':'saved-run','human':human},self.root)
         self.assertEqual(selected[:3],['resume','--run','saved-run'])

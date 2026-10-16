@@ -24,8 +24,9 @@ which evidence is needed.
 
 Present the actual outcome, concrete findings, evidence and limits with the readable
 report. This standalone receipt is feedback about its exact subject, never a delivery
-round, completion approval or repair authorization. A clean or feedback-only review
-ends here. Do not import old finding history into another standalone review unless
+round, completion approval or repair authorization. Apply the shared outside-scope follow-up policy: preserve and surface findings, offer
+context-appropriate tracking when useful, and never require routing just to return feedback.
+A clean or feedback-only review ends here. Do not import old finding history into another standalone review unless
 requested; preserve each original receipt independently.
 
 For requested repairs, inspect findings against current code and propose only applicable

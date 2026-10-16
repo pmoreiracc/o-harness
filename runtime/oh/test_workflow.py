@@ -238,7 +238,9 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         unused.append('run.status',{'status':'prepared_checkpoint'});prior=unused.records()
         atomic_json(checkout_file(self.root,'oh-active-run.json'),
                     {'project':self.project_id,'run':unused.path.name,'checkout':checkout_id(self.root)})
-        native.approve_scope(self.root,prepared['scope_id'],self.human('Approve',session='fresh-parent'))
+        from .storage import now
+        approval=prepared['approval']
+        native.approve_scope(self.root,prepared['scope_id'],self.human('yes',session='fresh-parent',question=approval['question'],question_at=now(),decision=approval['decision']))
         journal,state=load_run(self.root);original=journal.records()
         self.assertEqual(state['granted'],['1'])
         self.assertNotEqual(state['id'],unused.path.name)
@@ -404,12 +406,49 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual((before['reviews_used'],before['reviews_allowed']),(2,2))
         for text in ('Discuss the findings.','Do not grant another review window.'):
             with self.assertRaises(Refused):native.decision(self.root,'grant-review',self.human(text))
-        locator=self.human('Grant another review window.')
-        native.decision(self.root,'grant-review',locator)
-        native.decision(self.root,'grant-review',locator)
-        self.assertEqual(native.resume(self.root)['reviews_allowed'],4)
+        from .decisions import prepare as decision_request,verify as verify_decision
+        from .storage import now
+        offer=decision_request(self.root,'grant-review',rounds=1,also='create an issue for the retained follow-up')
+        home=Path(self.temp.name)/'native-home'
+        # Exercise the same effect binding through actual saved Claude and Codex answers.
+        # Host provenance is real here; only author/reviewer execution is synthetic.
+        with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex')}):
+            for host in ('claude','codex'):
+                call_at=now();answer_at=now();question=offer['question'];label=offer['options'][0]
+                if host=='claude':
+                    path=home/'.claude/projects/s.jsonl'
+                    common={'sessionId':'s','cwd':str(self.root)}
+                    rows=[common|{'type':'assistant','timestamp':call_at,'message':{'content':[{'type':'tool_use','id':'grant','name':'AskUserQuestion','input':{'questions':[{'question':question,'options':[{'label':label},{'label':'Not now'}]}]}}]}},
+                          common|{'type':'user','timestamp':answer_at,'toolUseResult':{'answers':{question:label}},'message':{'content':[{'type':'tool_result','tool_use_id':'grant','content':'The user answered.'}]}}]
+                else:
+                    path=home/'.codex/sessions/s.jsonl'
+                    reply='<send_user_message_question_reply>'+json.dumps([{'questionItemId':json.dumps(['request_user_input_async','grant',0]),'answer':label}])+'</send_user_message_question_reply>'
+                    rows=[{'type':'session_meta','payload':{'id':'s','cwd':str(self.root),'source':'vscode'}},
+                          {'type':'response_item','timestamp':call_at,'payload':{'type':'function_call','name':'request_user_input_async','call_id':'grant','arguments':json.dumps({'questions':[{'title':question,'options':offer['options']}]})}},
+                          {'type':'event_msg','timestamp':answer_at,'payload':{'type':'user_message','thread_id':'s','turn_id':'grant-reply','message':reply}}]
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text(''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8',newline='\n')
+                locator={'host':host,'session':'s','tool_use_id':'grant','transcript_path':str(path),'decision':offer['decision']}
+                source=self.native_human_original(self.root,locator)
+                self.assertNotIn('result.json',source['question'])
+                self.assertEqual(verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source)['rounds'],1)
+                for invalid in ('Not now','Do not allow another review.'):
+                    with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'prompt':invalid})
+                with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'question_at':'2000-01-01T00:00:00Z'})
+            with patch('oh.authority.native_human',side_effect=self.native_human_original):
+                with self.assertRaises(Refused):native.decision(self.root,'continue',locator)
+                native.decision(self.root,'grant-review',locator)
+                native.decision(self.root,'grant-review',locator)
+        self.assertEqual(native.resume(self.root)['reviews_allowed'],3)
+        journal,state=load_run(self.root)
+        grant=state['review_grants'][-1]
+        proof=json.loads((journal.path/'decisions'/(grant['source']+'.json')).read_text())
+        self.assertEqual(proof['prepared']['rounds'],1)
+        self.assertEqual(proof['human']['prompt'],offer['options'][0])
         clean=self.finish_attempt('review','OH-REVIEW-DECISION: '+json.dumps({'verdict':'clean','findings':[]})+'\nIndependently checked repairs. An illustrative [BLOCKING] label in prose is not another finding.')
-        with self.assertRaises(Refused):native.complete(self.root,clean['id'])
+        from .publication import task_evidence
+        state=load_run(self.root)[1]
+        task_evidence(self.root,state,state['tasks'][0],clean,clean['head'])  # An older unrelated finding no longer blocks completion.
         native.decision(self.root,'route-scope',self.human('Route scope'),attempt=first['id'],
                         destination={'issue':'https://github.com/example/product/issues/20'})
         with self.assertRaises(Refused):
@@ -591,6 +630,30 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         path.write_text(json.dumps(value),newline='\n')
         with self.assertRaises(Refused):journal.records()
 
+    def test_outside_scope_followups_preserve_ready_work_and_remain_visible(self):
+        from . import native,scope,publication
+        self.approve();self.assess();self.implement()
+        finding={'severity':'scope','description':'A separate indexing task is needed.','family':'index','path':'index.py'}
+        review=self.reviewed({'verdict':'scope','summary':'Approved behavior is ready.','findings':[finding]})
+        state=load_run(self.root)[1];before=self.git('status','--porcelain')
+        self.assertIsNone(native.select(self.root)['continuation']['pending_decision'])
+        self.assertEqual(scope.track(self.root,review['id'])['destination'],{'saved':True})
+        # Tracking facts do not consume a human source, change scope, or renew a budget.
+        issue='https://github.com/example/product/issues/158'
+        tracked=scope.track(self.root,review['id'],{'issue':issue})
+        self.assertFalse(tracked['candidate_changed'])
+        self.assertEqual(scope.track(self.root,review['id'])['destination'],{'issue':issue})
+        after=load_run(self.root)[1]
+        for key in ('decisions','granted','scope_id','config'):self.assertEqual(after[key],state[key])
+        self.assertEqual(self.git('status','--porcelain'),before)
+        native.complete(self.root,review['id'])
+        self.assertIn(finding['description'],(load_run(self.root)[0].path/'index.md').read_text())
+        self.assertEqual(native.select(self.root)['followups']['count'],1)
+        self.assertEqual(scope.followups(load_run(self.root)[1])[0]['destination'],{'issue':issue})
+        evidence=load_run(self.root)[1]['commit_intents']['1']['publication']
+        publication.validate_evidence(evidence)
+        self.assertEqual(evidence['attempts'][0]['findings'],[finding])
+
     def test_scope_routing_and_concern_acceptance_are_separate_exact_subject_decisions(self):
         from . import native
         self.approve();self.assess();self.implement()
@@ -599,13 +662,21 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         review=self.reviewed({'verdict':'concern','summary':'Two distinct dispositions.','findings':[concern,scope]})
         with self.assertRaises(Refused):
             native.decision(self.root,'accept-concerns',self.human('Do not accept concerns; fix them.'),attempt=review['id'])
-        issue='https://github.com/example/product/issues/19'
-        native.decision(self.root,'route-scope',self.human('route scope'),attempt=review['id'],destination={'issue':issue})
         with self.assertRaises(Refused):native.complete(self.root,review['id'])
-        native.decision(self.root,'accept-concerns',self.human('accept concerns'),attempt=review['id'])
+        from .decisions import prepare as decision_request
+        from .storage import now
+        offer=decision_request(self.root,'accept-concerns',attempt=review['id'])
+        native.decision(self.root,'accept-concerns',self.human(offer['options'][0],question=offer['question'],question_at=now(),decision=offer['decision'],via='question'),attempt=review['id'])
+        state=load_run(self.root)[1]
+        from .publication import task_evidence
+        # Concern acceptance is complete even while the outside-scope work stays saved.
+        task_evidence(self.root,state,state['tasks'][0],review,review['head'])
+        issue='https://github.com/example/product/issues/19'
+        from .scope import track
+        track(self.root,review['id'],{'issue':issue})
         state=load_run(self.root)[1]
         self.assertEqual(state['scope_records'][review['id']]['findings'],[scope])
-        self.assertIn(issue,json.dumps(state['resolutions'][review['id']]))
+        self.assertIn(issue,json.dumps(state['scope_records']))
         self.assertEqual(state['attempts'][-1]['findings'],[concern,scope])
         native.complete(self.root,review['id'])
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
@@ -628,6 +699,10 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
                 with self.subTest(issue_reference=issue_reference,historical_scope=scope_record):
                     rendered=publication.readable([{'commit':self.git('rev-parse','HEAD'),'evidence':portable}],{state['id']:historical})
                     self.assertIn(issue,rendered)
+                    from .receipts import index as receipt_index
+                    journal=load_run(self.root)[0]
+                    receipt_index(journal,historical)
+                    self.assertIn(issue,(journal.path/'index.md').read_text())
         historical=deepcopy(evidence)
         record=historical['scope'][review['id']]
         record.update(action='dismiss',destination={'design':'docs/design/0900-fixture.md','section':'## Scope decisions'})

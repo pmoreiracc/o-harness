@@ -38,7 +38,15 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         finding={'severity':'scope','description':'Logout cleanup belongs to a later task.','family':'logout','path':'logout.py'}
         review=self.finish_attempt('review',{'verdict':'scope','summary':'Retain later work in the mutable design.','findings':[finding]})
         before=load_run(self.root)[1]
-        native.decision(self.root,'route-scope',self.human('route scope'),attempt=review['id'])
+        from .scope import track
+        retained=track(self.root,review['id'])
+        self.assertEqual(retained['destination'],{'saved':True})
+        self.assertEqual(self.design.read_text(),first)
+        self.assertIsNone(native.select(self.root)['continuation']['pending_decision'])
+        # Explicitly choosing a design note changes the candidate and must be reviewed.
+        routed_record=track(self.root,review['id'],{'design':str(self.design)})
+        self.assertTrue(routed_record['requires_review'])
+        self.assertFalse(track(self.root,review['id'],{'design':str(self.design)})['candidate_changed'])
         routed=self.design.read_text()
         self.assertIn('## Open review scope',routed)
         self.assertIn('> '+finding['description'],routed)

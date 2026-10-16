@@ -178,9 +178,11 @@ def _continuation(state):
             if latest['role']=='analysis' and state['workflow']=='propose' and not state.get('proposal_answers'):decision='proposal_approval'
             elif latest['role']=='review':
                 resolution=state.get('resolutions',{}).get(latest['id'],{})
-                if latest.get('outcome')=='needs_resolution' and any((f['severity']=='concern' and not resolution.get('concerns_accepted')) or (f['severity']=='scope' and not resolution.get('scope')) for f in latest.get('findings',[])):decision='review_findings'
-                elif state['workflow']=='design' and latest.get('outcome')=='clean' and state.get('plans',{}).get('location')=='private' and state.get('private_native_approval',{}).get('attempt')!=latest['id']:decision='private_approval'
+                if latest.get('outcome')=='needs_resolution' and any(f['severity']=='concern' and not resolution.get('concerns_accepted') for f in latest.get('findings',[])):decision='review_findings'
+                elif state['workflow']=='design' and latest.get('outcome') in ('clean','needs_resolution') and state.get('plans',{}).get('location')=='private' and state.get('private_native_approval',{}).get('attempt')!=latest['id']:decision='private_approval'
+    from .scope import followups
     return {'phase':phase,'pending_decision':decision,'pending_attempts':[{'id':a['id'],'role':a['role'],'native_child':a.get('native_child',{}).get('child_session')} for a in pending],
+            'followup_count':sum(len(item['findings']) for item in followups(state)),
             'latest_result':({k:history[-1].get(k) for k in ('id','role','outcome','evidence')} if history else None)}
 
 
@@ -319,6 +321,9 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     from .receipts import save
     save(folder/'scope.md',preview,immutable=True)
     result={'scope_id':key,'preview':str(folder/'scope.md'),'tasks':[{k:t[k] for k in ('id','title')} for t in tasks],'config':value['config'],'approved':False}
+    if human is None and workflow=='deliver':
+        from .decisions import scope_request
+        result['approval']=scope_request(root,value)
     if human is not None:
         prompt=source['prompt'].strip()
         linked=re.fullmatch(r'\[(\$(?:o-harness:)?oh-[a-z]+)\]\([^\r\n]*SKILL\.md\)(.*)',prompt,re.S)
@@ -348,12 +353,16 @@ def approve_scope(root, scope_id, locator):
             original=authority.native_human(root,locator,latest=False)
             if digest({k:original[k] for k in ('host','session','turn','prompt')})==current.get('source'):
                 return select(root)
-    source=authority.native_human(root,locator,since=scope['created_at'],subject=_home(root)/'scopes'/scope_id/'scope.md')
+    source=authority.native_human(root,locator,since=scope['created_at'],subject=None if locator.get('decision') else _home(root)/'scopes'/scope_id/'scope.md')
     if source.get('via')=='plan':
         preview=(_home(root)/'scopes'/scope_id/'scope.md').read_text()
         if source.get('accepted_plan','').replace('\r\n','\n')!=preview:
             raise Refused('The person accepted changed scope. Preserve the accepted plan and prepare its actual tasks; the old task projection is not approved.')
-    if source.get('via')!='plan' and not _affirmed(source['prompt'],'approve',source.get('question','')):
+    if locator.get('decision') and source.get('via')!='plan':
+        from .decisions import verify_scope
+        verify_scope(root,scope,locator,source)
+        source=source|{'decision':locator['decision']}
+    elif source.get('via')!='plan' and not _affirmed(source['prompt'],'approve',source.get('question','')):
         raise Refused('The native human reply did not approve this scope; no work was granted')
     authority.coordinator(root,{'human':source,'host':source['host']},locator)
     return _start(root,scope_id,source)
@@ -413,7 +422,9 @@ def select(root,run=None):
         if attempt.get('native_child'):item['native_child']={'child_session':attempt['native_child']['child_session']}
         attempts.append(item)
     result={k:state.get(k) for k in ('id','status','workflow','design','track','branch','scope_id','published')}
-    result.update(continuation=_continuation(state),run=state['id'],task={k:task[k] for k in ('id','title')} if task else None,
+    from .scope import followups
+    pending_followups=followups(state)
+    result.update(followups={'count':sum(len(i['findings']) for i in pending_followups),'index':str(journal.path/'index.md')},continuation=_continuation(state),run=state['id'],task={k:task[k] for k in ('id','title')} if task else None,
                   granted=state['granted'],done=state['done'],attempts=attempts,attempt_count=len(state['attempts']),
                   scope=str(journal.path/'scope'/'scope.json') if state.get('native_version') and state.get('scope_id') else None,
                   report=str(journal.path/'report.md') if (journal.path/'report.md').is_file() else None,journal=str(journal.path),
@@ -439,7 +450,7 @@ def select(root,run=None):
         if result.get('publication'):
             result['publication']={k:state['publication'].get(k) for k in ('head','branch','base_branch','destination','remote')}
     if len(encode(result))>state['config']['context']['result_chars']:
-        result={k:result[k] for k in ('run','status','task','report','attempt_count','reviews_used','reviews_allowed','done_count','granted_count') if k in result}
+        result={k:result[k] for k in ('run','status','task','report','attempt_count','reviews_used','reviews_allowed','done_count','granted_count','followups') if k in result}
     if len(encode(result))>state['config']['context']['result_chars']:result={'run':state['id'],'status':state['status'],'attempt_count':len(state['attempts'])}
     return result
 
@@ -626,7 +637,7 @@ def retain(root,attempt_id,locator):
             journal.append('run.status',{'status':'completed'})
             best_effort('task.finished',state['project'],state['id'],attempt['task'],status='feedback',wall_ms=None)
             best_effort('run.status',state['project'],state['id'],status='completed')
-        elif state.get('extra_review') and attempt['role']=='review' and outcome in ('blocking','needs_resolution') and not state.get('correction'):
+        elif state.get('extra_review') and attempt['role']=='review' and (outcome=='blocking' or outcome=='needs_resolution' and any(f['severity']=='concern' for f in findings)) and not state.get('correction'):
             extra=state['extra_review']
             journal.append('correction.started',{'task':attempt['task'],'prior_commit':extra['prior_commit'],'return_status':extra['return_status'],'key':attempt['task']+'-correction-'+attempt_id})
         index(journal,reduce(journal.records()))
@@ -716,61 +727,20 @@ def verify(root,base=None,mode='review'):
         return value
 
 
-def _intents(text):
-    text=re.sub(r'\((?:recommended|default)\)','',text,flags=re.I).casefold()
-    result=set()
-    patterns={'publish':r'\b(?:publish|ship|open\s+(?:a\s+|the\s+)?(?:pr|pull request))\b',
-              'pause':r'\bpause\b','stop':r'\bstop\b','resume':r'\bresume\b',
-              'continue':r'\bcontinue\b',
-              'grant-review':r'\b(?:grant|allow|renew)\b.*\breview',
-              'accept-concerns':r'\baccept\b.*\bconcerns?\b',
-              'route-scope':r'\broute\b.*\bscope\b','dismiss-scope':r'\bdismiss\b.*\bscope\b',
-              'approve':r'\bapprove\b|\baccept(?:ed)?\s+(?:the\s+)?(?:plan|scope|proposal|design)\b'}
-    for kind,pattern in patterns.items():
-        if re.search(pattern,text):result.add(kind)
-    if text.strip() in ('accept','accepted','approve','approved'):result.add('approve')
-    return result
-
-
-def _positive_actions(text):
-    text=re.sub(r'\((?:recommended|default)\)','',text,flags=re.I).strip().casefold().rstrip('.!')
-    linked=re.fullmatch(r'\[(\$(?:o-harness:)?oh-[a-z]+)\]\([^\r\n]*skill\.md\)(.*)',text,re.S)
-    if linked:text=linked[1]+linked[2]
-    command=re.fullmatch(r'[$/](?:o-harness:)?oh-(resume|pause|stop)',text)
-    if command:text=command[1]
-    text=re.sub(r'^please\s+|\s+please$','',text)
-    patterns={
-        'approve':r'(?:approve|accept)(?: (?:the|this) (?:scope|plan|proposal|design))?',
-        'publish':r'(?:open (?:a |the )?(?:pr|pull request)|publish(?: (?:the |this )?(?:reviewed |approved )?(?:work|changes))?)',
-        'continue':r'continue(?: with (?:the )?next task window)?',
-        'grant-review':r'grant(?: another| next)? review window|grant review',
-        'accept-concerns':r'accept(?: these| the)? concerns',
-        'route-scope':r'route(?: the)? scope(?: to https?://\S+)?',
-        'dismiss-scope':r'dismiss(?: the)? scope',
-        'pause':r'pause(?: (?:the )?work)?',
-        'stop':r'stop(?: now| and take (?:it )?over)?|keep (?:the )?work local',
-        'resume':r'resume(?: the approved work)?'}
-    whole={kind for kind,pattern in patterns.items() if re.fullmatch(pattern,text)}
-    if len(whole)==1:return whole
-    pieces=re.split(r'\s+and\s+',text)
-    result=set()
-    for piece in pieces:
-        found={kind for kind,pattern in patterns.items() if re.fullmatch(pattern,piece)}
-        if len(found)!=1:return set()
-        result.update(found)
-    if len(result)>1 and not result<={'accept-concerns','route-scope','dismiss-scope'}:return set()
-    if {'route-scope','dismiss-scope'}<=result:return set()
-    return result
-
-
 def _affirmed(text,kind,question=''):
+    """Compatibility for already-presented canonical choices; new grants use bound effects."""
+    labels={'approve':('approve','approved','accept','accepted'), 'publish':('publish','open pr'),
+            'continue':('continue','continue with next task window','continue with the next task window'), 'grant-review':('grant review','grant next review window','grant another review window'),
+            'accept-concerns':('accept concerns',), 'route-scope':('route scope',), 'dismiss-scope':('dismiss scope',),
+            'resume':('resume','resume the approved work'), 'pause':('pause','pause work'),
+            'stop':('stop','stop now','stop and take over','keep work local')}
     expected='approve' if kind in ('approve-private','approve-proposal') else kind
-    positive=_positive_actions(text)
-    if positive:return expected in positive
-    generic=re.sub(r'[.!]','',text.strip().casefold()) in ('yes','yes please','proceed','proceed with the task')
-    if not generic or re.search(r"\b(?:not|never|no|don't|reject|decline)\b",question,re.I):return False
-    context=_intents(question)
-    return expected in context and (len(context)==1 or context<={'accept-concerns','route-scope','dismiss-scope'})
+    prompt=text.strip().casefold().rstrip('.!')
+    command=_command({'prompt':text})
+    if command:return expected in ('pause','stop','resume') and command==('oh-'+expected,'')
+    combined={'accept concerns and route scope':{'accept-concerns','route-scope'},
+              'accept concerns and dismiss scope':{'accept-concerns','dismiss-scope'}}
+    return prompt in labels.get(expected,()) or expected in combined.get(prompt,set())
 
 
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
@@ -791,9 +761,9 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             relevant += [r['at'] for r in journal.records() if r['kind'] in ('task.completed','run.status','transition')]
             since=max(relevant+[since])
         subject_path=None
-        if kind in ('accept-concerns','dismiss-scope','route-scope','approve-proposal'):
+        if not locator.get('decision') and kind in ('accept-concerns','dismiss-scope','route-scope','approve-proposal'):
             subject_path=Path(_attempt(state,attempt)['evidence'])/'result.json'
-        elif kind=='approve-private':
+        elif not locator.get('decision') and kind=='approve-private':
             reviewed=_attempt(state,attempt)
             artifacts=reviewed.get('artifacts',{})
             design_folder=Path(state.get('plans',{}).get('designs',''))
@@ -801,9 +771,13 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             subject_path=Path(designs[0]) if len(designs)==1 else Path(reviewed['evidence'])/'result.json'
         source=authority.native_human(root,locator,subject=subject_path,latest=False)
         if state.get('published'):return select(root,state['id'])
-        if kind=='resume' and (_saved_subject(state) not in source.get('question','') or state['branch'] not in source.get('question','')):
+        if not locator.get('decision') and kind=='resume' and (_saved_subject(state) not in source.get('question','') or state['branch'] not in source.get('question','')):
             raise Refused('Ask whether to resume '+_saved_subject(state)+' on '+state['branch']+', then use the native answer; no continuation was started')
-        if not _affirmed(source['prompt'],kind,source.get('question','')):raise Refused('The native human reply does not authorize this decision')
+        prepared=None
+        if locator.get('decision'):
+            from .decisions import verify as verify_decision
+            prepared=verify_decision(root,state,kind,locator,source,attempt,replay=True)
+        elif not _affirmed(source['prompt'],kind,source.get('question','')):raise Refused('This reply needs its bound decision effect. Include the decision identity returned before the question in the same native locator and retry; do not ask the person to answer again.')
         key=digest({k:source[k] for k in ('host','session','turn','prompt')})
         if kind=='resume':
             from .workflow import active_file
@@ -837,6 +811,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             if effect_used:return select(root)
         source=authority.native_human(root,locator,subject=subject_path)
         authority.coordinator(root,state,locator)
+        if prepared:verify_decision(root,state,kind,locator,source,attempt)
         if not authority.newer(source.get('at'),since):raise Refused('This human decision predates the current subject or allowance boundary')
         adoption=None
         if kind=='resume' and not state.get('native_version'):
@@ -864,7 +839,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
         elif kind=='grant-review':
             used=sum(a['role']=='review' and a['task']==task['id'] for a in state['attempts'])
             if used<review_limit(state,task['id']):raise Refused('Existing review allowance is not spent')
-            add('review.grant',{'task':task['id'],'rounds':state['config']['review_rounds'],'source':key})
+            add('review.grant',{'task':task['id'],'rounds':prepared['rounds'] if prepared else state['config']['review_rounds'],'source':key})
         elif kind in ('accept-concerns','dismiss-scope','route-scope'):
             review=_attempt(state,attempt)
             if review['role']!='review' or review.get('purpose','workflow')!='workflow' or review['outcome'] not in ('blocking','needs_resolution'):
@@ -874,7 +849,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                 raise Refused('Concern acceptance requires the current exact candidate with no blockers')
             prior=state.get('resolutions',{}).get(attempt,{})
             accepted=bool(prior.get('concerns_accepted'))
-            scope=prior.get('scope')
+            scope=state.get('scope_records',{}).get(attempt) or prior.get('scope')
             if kind=='accept-concerns':
                 if 'concern' not in severities:raise Refused('This review has no concerns to accept')
                 accepted=True
@@ -894,13 +869,12 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                         scope['destination']={'design':str(path),'section':heading}
                     else:raise Refused('Name an existing authorized issue, or dismiss the scope finding into the retained PR record')
                 add('scope.recorded',scope)
-            scope_done='scope' not in severities or scope is not None
             concern_done='concern' not in severities or accepted
             choice='partial disposition'
-            if scope_done and concern_done:
+            if concern_done:
                 parts=[]
                 if accepted:parts.append('accept concerns')
-                if scope:parts.append('dismiss scope' if scope['action']=='dismiss' else 'route scope')
+                if scope and scope['action']!='retained':parts.append('dismiss scope' if scope['action']=='dismiss' else 'route scope')
                 choice=' and '.join(parts)
             value={'attempt':attempt,'source':key,'sources':prior.get('sources',[])+[key],'tree':review['git_tree'],
                    'choice':choice,'concerns_accepted':accepted}
@@ -914,7 +888,9 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             add('proposal',{'attempt':attempt,'choice':'approve','source':source,'shown':author['native_source']})
         elif kind=='approve-private':
             review=_attempt(state,attempt)
-            if state.get('plans',{}).get('location')!='private' or review['outcome']!='clean' or any(review[k]!=subject[k] for k in ('head','tree','git_tree','artifacts')):raise Refused('Private approval requires the exact reviewed private artifact')
+            if state.get('plans',{}).get('location')!='private' or review['outcome'] not in ('clean','needs_resolution') or any(review[k]!=subject[k] for k in ('head','tree','git_tree','artifacts')):raise Refused('Private approval requires the exact reviewed private artifact')
+            from .publication import task_evidence
+            task_evidence(root,state,next(t for t in state['tasks'] if t['id']==review['task']),review,subject['head'])
             add('native.private.approved',{'attempt':attempt,'source':source,'artifacts':subject['artifacts']})
         elif kind=='publish':
             from .publication import settled
@@ -952,6 +928,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                 status='running' if next_task(state|{'status':'running'}) else 'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint'
             add('run.status',{'status':status})
         if kind!='publish':add('decision',{'choice':kind,'source':key,'head':subject['head'],'scope':state.get('scope_id'),'attempt':attempt})
+        _immutable(journal.path/'decisions'/(key+'.json'),{'human':source,'prepared':prepared})
         journal.append('transition',{'events':events})
         for event in events:
             if event['kind']=='run.status':best_effort('run.status',state['project'],state['id'],status=event['data']['status'])
@@ -969,14 +946,14 @@ def complete(root,attempt_id):
         if existing:return existing
         correction=state.get('correction')
         if state.get('extra_review') and not correction:
-            if review['role']!='review' or review.get('purpose')!='workflow' or review['outcome']!='clean':raise Refused('Additional review remains unresolved')
+            if review['role']!='review' or review.get('purpose')!='workflow' or review['outcome'] not in ('clean','needs_resolution'):raise Refused('Additional review remains unresolved')
             subject=_subject(root,state)
             if any(subject[k]!=review[k] for k in ('head','tree','git_tree','artifacts')):raise Refused('Additional review no longer covers current work')
             from .publication import task_evidence
             task_evidence(root,state,task,review,subject['head'])
             journal.append('review.checked',{'attempt':attempt_id})
             journal.append('run.status',{'status':state['extra_review']['return_status'],**({'head':subject['head'],'tree':subject['tree']} if state['extra_review']['return_status']=='paused' else {})})
-            return {'review':attempt_id,'outcome':'clean','committed':False}
+            return {'review':attempt_id,'outcome':review['outcome'],'committed':False}
         if state['status']!='running' or _active(state) or not task or (not correction and (task['id'] not in state['granted'] or task['id'] in state['done'])):
             raise Refused('No remaining completion authority for this task')
         if review['role']!='review' or review.get('purpose')!='workflow':raise Refused('Standalone feedback cannot authorize completion')

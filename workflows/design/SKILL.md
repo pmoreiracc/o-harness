@@ -26,7 +26,8 @@ someone's edited prose merely to fit an author report schema.
 
 Retain the original result and independently review the actual candidate with a fresh
 reviewer. Repair blocking families and concerns together when blockers exist; native
-human choices handle concern-only outcomes and outside scope. A consequential product
+human choices handle concern-only outcomes. Apply shared outside-scope follow-up tracking;
+related future tasks are notes until approved, and do not block this design merely for filing. A consequential product
 question names the decision required and its effect instead of silently choosing.
 
 Repository designs need human merge of the reviewed design PR to become approved.

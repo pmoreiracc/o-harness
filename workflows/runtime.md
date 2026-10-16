@@ -58,7 +58,7 @@ phase labels are hints, not authority to bypass admission checks. A live child i
 or cancelled through its host before replacement; another session or elapsed time is not
 proof of termination. Completed reviewers are never resumed. A changed candidate needs
 its existing verification/review path, while unchanged work does not need repeated analysis.
-A spent allowance, proposal approval, finding decision, private approval or publication
+A spent allowance, proposal approval, concern acceptance, private approval or publication
 still needs its existing human decision; continuation cannot supply it.
 
 Completed work presents its result or outstanding publication/handoff rather than
@@ -85,6 +85,8 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Check the current candidate | `verify [base] [mode]` | `verify` |
 | Attach supplementary proof | `evidence <attachment.json>` | `evidence` |
 | Complete the reviewed candidate | `complete <review-attempt-id>` | `complete` |
+| Bind the effect before a native question | `decision-request <kind> [--attempt ID] [--rounds N] [--run ID]` | `decision_request` |
+| Track retained outside-scope findings | `finding-track ID [--destination FILE]` | `finding_track` |
 | Record a consequential human decision | `decision <kind> <locator.json> [--attempt ID] [--destination FILE]` | `decision` |
 | Prepare standalone feedback | `review -- <selector...>` | `review` |
 
@@ -197,11 +199,14 @@ requirements, affected callers, failures, authorization, tests and documentation
 
 Retain and report every attempt, including interrupted or imperfect reports. Repair all
 blocking families before a new review; repair any accompanying concerns in that batch.
-Concern-only findings need the person's fix/accept decision. Outside-scope findings need
-a durable route or dismissal, never silent implementation. Combine related choices in
-one native question when useful. Nonempty ambiguity needs a real decision; formatting
-alone does not erase findings or renew an allowance. A spent allowance requires a human
-`grant-review` decision before another review can be admitted.
+Concern-only findings need the person's fix/accept decision. Outside-scope observations
+are automatically preserved in the existing review history and the run index's Follow-up
+work section. They do not require a disposition to complete otherwise valid scoped work.
+Never silently implement them, call them fixed, or treat tracking as scope approval.
+Nonempty ambiguity needs a real decision; formatting alone does not erase findings or
+renew an allowance. A spent allowance requires a human `grant-review` decision before
+another reviewer can be admitted. Ask for exactly the count the person intends; a request
+for one round must never grant the configured larger window.
 Read the finding index's incomplete reviews and original finding positions as well as
 its classified findings. Unclassified fragments remain review evidence to address.
 Reviewers return the minimal decision defined in the shared review prompt and check it
@@ -221,6 +226,46 @@ select its bounded `finalize` task and use the same candidate/check/review/compl
 Finish any requested completed-task re-review and its correction before publication;
 an earlier clean completion does not resolve a newer blocker.
 
+## Outside-scope follow-ups
+
+Apply this policy consistently to Deliver, Design, Propose and standalone Review.
+Retaining the reviewer result already saves every finding durably. Show the open
+follow-ups and their actual destinations in the final report and on continuation;
+use the existing run index, not a new backlog database or only a PR footnote.
+
+Use ordinary conversation and native tools for tracking instructions. If a decision
+is useful, offer context-appropriate choices such as Add a follow-up to this design,
+Create or link a GitHub issue, or Keep in saved follow-ups. There is no mandatory
+routing menu. Report retained follow-ups without posting an optional question that
+would keep ready work waiting. Ask only when a requested tracking action needs a real
+decision or missing authority. Honor an existing explicit preference without asking again. GitHub
+tracking may find an appropriate existing issue or create one under explicit or standing
+human authority; do not require the person to predict an existing issue URL. Record the
+resulting URL with `finding-track --destination` (`finding_track`) without another
+routing approval. Recording a URL grants no permission to create an issue or fix it.
+
+For Deliver with a mutable repo or private design, related future work can be quoted
+in its `## Open review scope` section using `finding-track`. This is a follow-up note,
+not a new approved task. If the work belongs to an existing future task, identify that
+relationship instead of duplicating it. Adding executable tasks or expanding requirements
+goes through Design/Propose and the appropriate approval; it cannot alter the admitted
+task list, grant more tasks, or silently reopen a frozen design.
+
+During scoped blocker repair, the default tracking helper can append notes to the
+mutable delivery design before the next candidate/check/review. An already successful
+exact-candidate review is preserved: the default retains the follow-up externally
+instead of editing its reviewed design. If the person chooses an actual document edit,
+include that changed document in checks and a fresh review before completion. Explain
+that effect before making the choice. Never spend another review merely to file a note
+when keeping it in saved follow-ups satisfies the person's request.
+
+Design and approved Propose additions can use a mutable design in their configured
+repo/private designs folder for informational notes, within the current initiative.
+Material additions still need the existing refinement/approval process. Frozen designs,
+correction runs, quick fixes without a design and standalone reviews keep findings in
+saved follow-ups or an authorized issue; offer a separate Design/Propose follow-up when
+appropriate. No destination decision blocks an otherwise ready scoped task.
+
 ## Native decisions
 
 Use Claude `AskUserQuestion` or Codex's available native question tool directly for real
@@ -229,7 +274,7 @@ it is actually needed. Defer finding-disposition questions until the current rev
 and approved repairs are retained, rather than asking while that work is in progress.
 
 State the question and short choices in ordinary chat before posting its native menu,
-including the actual artifact reference where required. Say the person can also reply
+including the actual artifact preview when approving contents. Say the person can also reply
 in chat. These are two presentations of one decision, never two approvals. Submission
 success establishes no menu visibility. If the person reports a missing menu, use the
 readable chat question and their direct reply; do not just repost a popup or keep
@@ -260,11 +305,31 @@ make the person restart the work or repeat their command to restore a missing me
 Preserve an existing valid answer; do not require exact wording, poll an OH menu or
 synthesize an approval in an agent message.
 
-Record consequential choices with `decision` and the actual native human locator:
-`continue`, `grant-review`, `accept-concerns`, `route-scope`, `dismiss-scope`, `publish`,
-`pause`, `stop`, `resume`, `approve-proposal` or `approve-private`. Include the concerned
-attempt/destination where required. Routine clarification needs no durable gate.
-The person controls publication and new allowances; reviewer or model prose does not.
+Before a consequential question, call `decision-request` (`decision_request`) for its
+kind and concerned attempt, plus `--rounds N` for an exact additional review count.
+When combining this with a routine action such as creating an issue, `--also TEXT`
+includes that instruction in the same presented choice. The runtime grants only the
+bound consequential effect; the host carries out the accompanying authorized action.
+It binds the current subject and effect without granting anything. Present its returned
+question and positive choice through the native host, unchanged; keep the returned
+refine/cancel alternatives where relevant, or offer other non-granting alternatives; explanations and full previews
+belong in the surrounding conversation. Include its `decision` identity in the actual
+human locator when calling `decision` (or `resume`). A direct Yes about this same shown
+question also works when a menu is unavailable. Preserve the prepared identity and actual
+answer across recoverable failures; do not regenerate the question after it was answered.
+If the person changes the requested scope/count, prepare that actual effect and ask only
+for the changed boundary. Do not infer grants from a model's paraphrase of free text.
+
+Consequential kinds are `continue`, `grant-review`, `accept-concerns`, `publish`, `pause`,
+`stop`, `resume`, `approve-proposal` and `approve-private`. Scope preparation returns its
+own `approval` question for native quick-fix acceptance. Claude plan-viewer acceptance
+continues to bind the actual full plan directly, without an extra decision request.
+Native Pause/Stop commands remain immediately usable. Older already-presented canonical
+choices remain readable for recovery; do not build new wording around that compatibility.
+Routine clarification, issue tracking and follow-up bookkeeping need no durable grant.
+An instruction to create an issue and allow another review needs only the review allowance
+recorded as a grant; recording the authorized issue URL does not consume the human answer
+or require a second confirmation. The person controls publication, scope and allowances.
 
 Claude quick fixes use the native plan viewer's single Accept. Put the complete bounded
 scope preview in the plan file designated by `EnterPlanMode`, then call `ExitPlanMode` without an
@@ -274,8 +339,9 @@ rejection or interruption grants nothing. If native plan tools are unavailable, 
 the preview and obtain a direct human approval in chat. Codex uses a native question
 or direct human reply about the same complete scope. Never ask twice for one approval.
 
-For documents, show the actual complete artifact or preview before its question. Native
-approval questions identify that artifact's actual path as well as its relevant scope.
+For documents, show the actual complete artifact or preview before its bound question.
+Use readable artifact names and explain their relevant scope; internal result.json paths
+are not part of the person's approval vocabulary.
 Native file display is optional; a failed display falls back to readable chat and a direct
 reply. Do not ask someone to create a project or restart their session just to read it.
 Repository design approval is human merge; private approval is bound to reviewed contents.

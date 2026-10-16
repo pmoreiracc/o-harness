@@ -54,6 +54,10 @@ TOOLS = [
          {'attachment':OBJECT}, ['attachment']),
     tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate.',
          {'attempt':TEXT}, ['attempt']),
+    tool('decision_request', 'Bind decision effect', 'Prepare the precise effect for one native human choice; displays no menu and grants nothing.',
+         {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1},'run':TEXT,'also':TEXT}, ['kind']),
+    tool('finding_track', 'Track outside-scope findings', 'Record a saved follow-up, design note or an issue URL. Grants no implementation or issue-creation authority.',
+         {'attempt':TEXT,'destination':OBJECT}, ['attempt']),
     tool('decision', 'Record human decision', 'Verify a native human decision about task/review allowance, findings or publication. Displays no menu.',
          {'kind':TEXT,'human':OBJECT,'attempt':TEXT,'destination':OBJECT}, ['kind','human']),
     tool('review', 'Prepare independent review', 'Bind changes, tree, paths, commit, range or task for fresh native read-only review. Grants no repairs.',
@@ -115,6 +119,16 @@ def command(name, arguments, root):
     if name=='review_check':return ['review-check','--',payload(root,{'report':text('report',True)})]
     if name=='evidence':return ['evidence','--',payload(root,arguments.get('attachment'))]
     if name=='complete':return ['complete','--',text('attempt',True)]
+    if name=='decision_request':
+        args=['decision-request']
+        for key in ('attempt','run','also'):
+            if text(key):args+=['--'+key,text(key)]
+        if 'rounds' in arguments:
+            if type(arguments['rounds']) is not int or arguments['rounds']<1:raise Refused('rounds must be a positive whole number')
+            args+=['--rounds',str(arguments['rounds'])]
+        return args+['--',text('kind',True)]
+    if name=='finding_track':
+        return ['finding-track']+(['--destination',payload(root,arguments['destination'])] if arguments.get('destination') is not None else [])+['--',text('attempt',True)]
     if name=='decision':
         args=['decision']
         if text('attempt'):args+=['--attempt',text('attempt')]

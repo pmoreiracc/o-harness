@@ -40,6 +40,8 @@ def main(argv=None):
     evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
     complete=sub.add_parser('complete');complete.add_argument('attempt')
     decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator',type=Path);decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
+    request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int);request.add_argument('--run');request.add_argument('--also')
+    track=sub.add_parser('finding-track');track.add_argument('attempt');track.add_argument('--destination',type=Path)
     resume=sub.add_parser('resume');resume.add_argument('--human',type=Path);resume.add_argument('--run')
     status=sub.add_parser('status');status.add_argument('--saved',action='store_true')
     review=sub.add_parser('review');review.add_argument('arguments',nargs='*');review.add_argument('--human',type=Path)
@@ -80,6 +82,12 @@ def main(argv=None):
         elif args.command=='evidence':result=native.attach_evidence(root,read_json(args.attachment))
         elif args.command=='complete':result=native.complete(root,args.attempt)
         elif args.command=='decision':result=native.decision(root,args.kind,read_json(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
+        elif args.command=='decision-request':
+            from .decisions import prepare
+            result=prepare(root,args.kind,args.attempt,args.rounds,args.run,args.also)
+        elif args.command=='finding-track':
+            from .scope import track
+            result=track(root,args.attempt,read_json(args.destination) if args.destination else None)
         elif args.command=='resume':result=native.resume(root,read_json(args.human) if args.human else None,args.run)
         elif args.command=='status':
             from .workflow import active_file

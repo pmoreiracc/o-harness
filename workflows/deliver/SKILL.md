@@ -48,7 +48,11 @@ repeat review only when ready and within the remaining allowance. Complete only 
 exact reviewed candidate through `complete`, then select the next externally pending
 task within the finite batch. No parallel implementation or parent-authored completion.
 
-At a real batch/allowance/finding boundary ask the native human decision once. Continue
+Apply shared outside-scope tracking for both repo and private designs; a follow-up note
+never becomes an executable task in the current approved batch. Preserve a successful
+review when retaining notes externally; an actual design edit needs checks and fresh review.
+
+At a real batch/allowance/concern boundary ask the native human decision once. Continue
 approved work automatically inside its scope; routine failures need repair, not a
 Retry menu. A completed design admits no further implementation. Report the actual
 review outcome and checks before the commit or publication decision.

@@ -124,14 +124,24 @@ The approved scope stays fixed. For example, fixing a login timeout may reveal a
 problem; that observation does not authorize building a second feature.
 
 Blocking findings must be repaired. Concern-only findings let you choose whether to fix
-or accept the concern. Outside-scope findings need a durable destination or an explicit
-dismissal. Creating an external issue still needs the appropriate authorization.
+or accept the concern. Outside-scope findings stay in saved workflow follow-ups without
+blocking otherwise ready work for a filing decision. Creating an external issue still
+needs explicit or standing human authorization.
 Original findings remain available alongside author repair claims and later reviewer
 closure; a formatting problem does not erase an attempt or its findings. Reviewers
 provide a small structured decision (verdict, finding severities, claims and stable
 family identifiers), check it before finishing, and keep the full receipt flexible.
 The implementation agent reads that full receipt before judging and repairing findings;
 OH does not interpret Markdown wording as approval or a new defect family.
+
+OH keeps unrelated review findings in the saved workflow's follow-up section and shows
+them when reporting or continuing the work. They do not block completion merely because
+a filing destination is undecided, and retaining them never authorizes their implementation.
+You can ask the agent to create or link a GitHub issue, keep the saved follow-up, or add
+a note to a related mutable design. A design note is future work, not an approved new task.
+Repo and private designs behave alike. Frozen designs stay frozen. Editing a document
+after a successful review requires checks and another review; keeping a saved follow-up
+does not. An additional review allowance grants the exact count presented in its question.
 
 By default a batch covers five tasks and each task has three review rounds. `oh-config`
 shows the actual project settings. When the task batch ends, choose whether to continue

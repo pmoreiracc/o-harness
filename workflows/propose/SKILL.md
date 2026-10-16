@@ -34,6 +34,10 @@ If review requires a different route or materially different additions, show the
 preview and obtain approval before applying it. Repair other scoped document failures
 within existing authority and remaining review allowance.
 
+Apply shared outside-scope tracking after review. Related new work remains a follow-up;
+adding it to the proposal requires the same changed-preview approval as any other addition.
+Tracking does not create product implementation authority or require a routing confirmation.
+
 Complete only the exact reviewed candidate. Report the saved proposal, actual review
 outcome and any unresolved product decision. Repository publication uses the shared
 human publication decision; private plans need no commit or PR.
