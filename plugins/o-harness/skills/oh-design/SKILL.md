@@ -6,7 +6,7 @@ disable-model-invocation: true
 ---
 Before asking for missing arguments, follow the shared workflow's saved-work entry.
 Show relevant unfinished work and ask once whether to resume it or select new work.
-A supplied matching request continues the saved phase without a redundant question.
+A supplied matching request still needs this one Resume choice before continuation.
 
 Load `workflows/design/SKILL.md` through OH's resource entry and follow it. Introduce
 the planning agent's draft and the independent reviewer agent's challenge against

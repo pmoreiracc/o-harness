@@ -4,7 +4,10 @@ description: Deliver approved design tasks or a bounded quick fix with fresh nat
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Follow its native
 delegation, evidence, decision and publication rules. Inspect saved facts first;
-never select an unrelated active task merely because one exists.
+never select an unrelated active task merely because one exists. Always ask once
+whether to resume selected unfinished work, even with a supplied design number or
+matching quick fix. Bind the answer before continuing; do not repeat that choice
+inside the accepted workflow or while retrying a routine recoverable operation.
 
 A number identifies a design, not a task. Name the actual task only after selection.
 Interpret the requested work as follows:
@@ -19,7 +22,7 @@ Interpret the requested work as follows:
   manifest or ask for another trigger. Missing track/selection needs one ordinary
   question; preserve the answer.
 - A bounded change in prose: first compare saved quick-fix scope and reports with
-  the requested outcome; resume the same work without requiring identical wording.
+  the requested outcome; offer to resume the same work without requiring identical wording.
   For genuinely new work, inspect the relevant code and correct base, then prepare
   an external manifest of ordered tasks with `id`, `title`, `instructions` and optional
   `needs`. Preserve included original unreviewed edits in one coherent task; do not

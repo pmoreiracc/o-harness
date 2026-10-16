@@ -3,8 +3,9 @@ name: oh-review
 description: Request a fresh OH invariant review of manual changes, code, documents, a commit or completed delivery work, with optional repairs after scope approval.
 ---
 Load `workflows/review/SKILL.md` through OH's resource entry and inspect saved work
-before resolving a missing subject or binding another review. Continue matching
-unfinished review work; with no subject, show it and ask once. Introduce the fresh independent reviewer agent briefly. Standalone
+before resolving a missing subject or binding another review. Always ask once whether
+to resume selected unfinished review work, even with a matching supplied subject.
+Introduce a fresh independent reviewer only when the saved phase actually needs one. Standalone
 review produces feedback; fixes use the existing bounded quick-fix approval.
 
 Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`

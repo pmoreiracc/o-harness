@@ -11,9 +11,10 @@ saved phase with the same scope, settings, findings, attempts and remaining allo
 A developer should not need to reproduce their original words, remember a run ID,
 manage abandoned agents or debug OH storage.
 
-A matching supplied request continues without a redundant resume confirmation.
-A command with no subject shows relevant unfinished work and asks once whether to
-continue it or choose different work. Multiple plausible matches require selection;
+Every entry into unfinished saved work asks once whether to resume it, including a
+matching supplied request and oh-resume. The native question names the saved subject
+and branch; only its human answer can transfer ownership or continue work. A command
+with no subject shows relevant unfinished work before that question. Multiple plausible matches require selection;
 recency alone is not intent. Clearly different requests remain different work.
 Completed work presents its result or pending publication/handoff. An explicitly
 requested new review after completion uses a fresh reviewer.
@@ -35,10 +36,10 @@ Reuse saved-state-first behavior, not its branch conventions, ADR policies or lo
 - [x] Add resume --run ID and MCP run input. Read selected facts without mutation;
   verify project, checkout, branch and native human authority before ownership or
   selection changes. Recheck under the existing control lock; retries are idempotent.
-- [x] Recognize matching nonempty native workflow invocations as continuation.
-  Validate structured initiative/design/track/review selectors. Hosts compare free-text
-  intent with scope; no fuzzy thresholds or natural-language similarity parser.
-  Empty commands require the selected continuation answer. Keep /oh-resume.
+- [x] Recognize matching nonempty workflow invocations for discovery only. Validate
+  structured initiative/design/track/review selectors. Hosts compare free-text intent
+  with scope; no fuzzy thresholds or natural-language similarity parser. Always bind
+  the actual selected Resume answer before continuation, including oh-resume.
 - [x] Preserve the ordinary workflow beneath standalone review and prevent live child
   duplication. Repeated matching preparation/review must not create replacement runs.
 - [x] Store new Design initiative identity in existing scope metadata. Recover older
@@ -96,8 +97,9 @@ Automated verification is recorded below; live Mac acceptance is still required.
 ## Delivery and acceptance
 
 - [x] Preserve all eight reviewed fixes on codex/native-workflow-bugfixes.
-- [ ] Implement and verify locally, then developer activates candidate. Do not activate
-  OH dev or change host settings. Mac launcher must be built on the Mac.
+- [x] Implement and verify the host follow-up locally.
+- [ ] Activate the Mac-built candidate through the developer-authorized Mac agent.
+  Do not activate OH dev on the Windows checkout.
 - [ ] Developer exercises both hosts, including the actual interrupted Mac Design run;
   inspect its saved state before promising seamless recovery.
 - [ ] After live validation, obtain fresh invariant review with configured profile and
@@ -108,17 +110,57 @@ Automated verification is recorded below; live Mac acceptance is still required.
 
 No cross-machine state synchronization, cross-checkout grant adoption, background
 execution or historical-run browser is included. Execution stays host-owned and
-sequential. Explicit matching continuation may lift Pause/Stop; discovery alone cannot.
+sequential. An actual human Resume answer may lift Pause/Stop; discovery alone cannot.
 
 Acceptance: every work entry discovers relevant saved work before preparation and
 continues the correct phase with existing authority, requiring less supervision than
 restarting through a simple skill.
 
+## Mac smoke follow-up: consent, completion and presentation
+
+The observed Claude run skipped consent because both shared guidance and the helper
+accepted a matching command as continuation. This follow-up replaces that shortcut
+with one native Resume / Not now question naming the saved subject and branch.
+Discovery is read-only, declining changes nothing, and accepted retry retains the
+same answer while settling prior native evidence. This covers unfinished task-review
+reentry as well as Design, Propose, Deliver and standalone Review.
+
+Claude 2.1.296 used an acknowledged SubagentHandback instead of the older completed
+Agent result shape. Retention now recognizes its linked native call/terminal tool
+acknowledgement and attributed peer handback, checks owned tool quiescence and keeps
+the original child receipt verbatim. Parent warning text and indentation do not
+become a report schema or human approval. The child transcript is derived from its
+original parent's saved location, recovering an omitted or accidentally copied parent
+path without launching another reviewer or spending another round.
+
+Shared guidance now asks before saying Resuming, presents the draft/next action and
+remaining review allowance, keeps updates about meaningful progress, and distinguishes
+OH document validation from consumer check results. Tool-card rendering remains owned
+by each host. Real Mac presentation and recovery acceptance are still required.
+
+Deferred observed work is tracked in [refactor leftovers #97](https://github.com/pmoreiracc/o-harness/issues/97),
+including planning-check selection policy, consumer UTF-8 script failure, unexplained
+startup delay, Windows receipt path limits, background-tool completion evidence and
+broader host UX validation. The native Stop limitation remains #81. Existing #82–#89
+fixes stay in this branch; this follow-up does not close or approve them.
+
 ## Local verification record
 
 Implementation and automated checks are complete. Live host acceptance, independent
-review and publication remain unchecked above. OH dev has not been activated.
+review and publication remain unchecked above. Windows OH dev was not activated
+for these checks.
 
+- Consent/Claude handback follow-up: the official affected suite selected 16 modules.
+  Fifteen passed; controls initially had two native-fixture errors (missing Claude
+  call cwd and equal-millisecond plain-chat context). After correcting those fixtures,
+  all 11 controls tests passed in 411.193 seconds during concurrent validation.
+  The final authority/discovery run passed 7 tests in 16.863 seconds; the integrated
+  completion/task-review consent scenario passed in 148.661 seconds. The cross-host
+  Resume/Not now case passed, including unchanged journals on decline/wrong branch,
+  preserved grants and original child provenance. Design/Propose reentry passed.
+  This is incremental validation, not one final all-green affected invocation.
+  Final syntax/Windows-risk checks and git diff --check passed. Actual Mac snapshot
+  acceptance and fresh invariant review remain outstanding.
 - Session-independent continuation follow-up: all controls and native authority tests,
   plus the retained legacy-finding/allowance regression, passed: 18 tests in 424.945
   seconds on Windows. This covers running-work takeover on both hosts, original child
@@ -162,7 +204,9 @@ Host smoke scenarios for the developer:
 
 1. In the same Mac project/OH data environment, inspect the saved interrupted Design
    run, install a Mac-built candidate and repeat `/oh-design agent-pipeline`. Verify
-   the same run/draft and remaining allowance, with no redundant resume question.
+   the same run/draft and remaining allowance. It must ask Resume / Not now before
+   continuing. Not now must preserve the draft without ownership or allowance changes.
+   Accepting Resume must recover the existing completed review without another round.
 2. Invoke a work command without a subject. It shows saved work and asks once;
    no agent starts before the answer. Repeat with a genuinely different subject.
 3. Resume a proposal at its latest preview and a quick fix after author interruption.

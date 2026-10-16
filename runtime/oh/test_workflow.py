@@ -174,6 +174,12 @@ class NativeFixture:
         self.turn+=1
         return {'host':'codex','session':'s','turn':str(self.turn),'prompt':prompt,**extra}
 
+    def resume_choice(self,*,run=None,**extra):
+        from . import native
+        state=load_run(self.root,run or native.resume(self.root)['run'])[1]
+        question='Resume '+native._saved_subject(state)+' on '+state['branch']+'?'
+        return self.human('Resume',question=question,**extra)
+
     def approve(self,tasks=None,**kwargs):
         from . import native
         prepared=native.prepare_scope(self.root,{'tasks':tasks or self.tasks[:1]},**kwargs)
@@ -471,7 +477,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(native.complete(self.root,review['id']),completed)
         self.assertEqual(native.resume(self.root)['status'],'checkpoint')
         saved=load_run(self.root)[1]
-        resumed=native.resume(self.root,self.human('/oh-deliver continue the same fix',session='fresh-parent'))
+        resumed=native.resume(self.root,self.resume_choice(session='fresh-parent'))
         self.assertEqual(resumed['status'],'checkpoint')
         self.assertEqual(resumed['granted'],saved['granted'])
         self.assertEqual(resumed['continuation']['pending_decision'],'task_window')
@@ -491,12 +497,20 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assess();self.implement(edit=lambda:(self.root/'second.txt').write_text('Task two is complete.',newline='\n'))
         second=self.reviewed();native.complete(self.root,second['id'])
         second_commit=self.git('rev-parse','HEAD');original_summaries=load_run(self.root)[1]['summaries']
-        native.review(self.root,['task','1']);native.verify(self.root)
+        records=load_run(self.root)[0].records()
+        requested=native.review(self.root,['task','1'],self.human('/oh-review task 1',session='task-review-parent'))
+        self.assertTrue(requested['resume_required'])
+        self.assertEqual(load_run(self.root)[0].records(),records)
+        native.review(self.root,['task','1'],self.resume_choice(session='task-review-parent'));native.verify(self.root)
         records=load_run(self.root)[0].records()
         self.assertEqual(native.review(self.root,['task','1'])['run'],load_run(self.root)[1]['id'])
         self.assertEqual(load_run(self.root)[0].records(),records)
         reentered=native.review(self.root,['task','1'],self.human('/oh-review task 1',session='review-parent'))
         self.assertEqual(reentered['run'],load_run(self.root)[1]['id'])
+        self.assertTrue(reentered['resume_required'])
+        self.assertEqual(load_run(self.root)[0].records(),records)
+        native.review(self.root,['task','1'],self.resume_choice(session='review-parent'))
+        self.assertEqual(load_run(self.root)[1]['human']['session'],'review-parent')
         self.assertEqual(load_run(self.root)[1]['extra_review']['task'],'1')
         self.git('remote','add','origin','https://github.com/example/product.git')
         publication_choice=lambda:native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/product?'))
@@ -564,7 +578,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         native.retain(self.root,attempt['id'],{})
         native.decision(self.root,'stop',self.human('stop'))
         with self.assertRaises(Refused):native.admit(self.root,'implementation')
-        native.resume(self.root,self.human('Resume the approved work.',session='new-session',host='claude'))
+        native.resume(self.root,self.resume_choice(session='new-session',host='claude'))
         after=load_run(self.root)[1]
         self.assertEqual(after['granted'],before['granted']);self.assertEqual(after['config'],before['config'])
         self.assertEqual(len(after['attempts']),len(before['attempts']))
@@ -651,7 +665,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         discovered=native.saved_work(self.root)['saved_work']
         self.assertEqual({item['run'] for item in discovered},{original['id'],standalone['run']})
         self.assertFalse(next(item for item in discovered if item['workflow']=='review')['resumable'])
-        resumed=native.resume(self.root,self.human('Resume the approved work.',session='delivery-parent'))
+        resumed=native.resume(self.root,self.resume_choice(session='delivery-parent'))
         self.assertEqual(resumed['run'],original['id'])
         self.assertEqual(resumed['granted'],original['granted'])
         self.assertEqual(load_run(self.root)[1]['attempts'],original['attempts'])
@@ -676,10 +690,10 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         original=legacy.records();before=reduce(original);result=read_json(Path(first['evidence'])/'result.json')
         self.assertEqual(before['status'],'running')
         with self.assertRaisesRegex(Refused,'predates'):
-            native.resume(self.root,self.human('resume',session='fresh-session',at=original[0]['at']))
+            native.resume(self.root,self.resume_choice(session='fresh-session',at=original[0]['at']))
         self.assertEqual(legacy.records(),original)
         self.assertNotIn('native_version',load_run(self.root)[1])
-        resumed=native.resume(self.root,self.human('/oh-deliver finish the same bounded work',session='fresh-session'))
+        resumed=native.resume(self.root,self.resume_choice(session='fresh-session'))
         self.assertEqual(resumed['granted'],state['granted'])
         self.assertEqual((resumed['reviews_used'],resumed['reviews_allowed']),(1,2))
         after=load_run(self.root)[1]
@@ -693,7 +707,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         provenance=Path(packet['original_scope_provenance']['path'])
         self.assertEqual(provenance,legacy.path/'000001.json')
         self.assertEqual(read_json(provenance),original[0])
-        with self.assertRaises(Refused):native.resume(self.root,self.human('resume',session='other-session'))
+        with self.assertRaises(Refused):native.resume(self.root,self.resume_choice(session='other-session'))
         self.assertEqual(load_run(self.root)[1]['attempts'][-1]['id'],live['id'])
 
     def test_publication_reuses_the_existing_pr_and_unknown_discovery_does_not_reopen_work(self):

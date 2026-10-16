@@ -69,7 +69,9 @@ that admission without treating an author summary as completion proof.
 
 Every workflow reads `status --saved` before preparing new work. It reads both checkout
 bindings without changing selection; `resume --run` reads a specified journal, while a
-verified human continuation can transfer ownership and select it. The review binding's
+verified answer to a Resume question naming the saved subject and branch can transfer
+ownership and select it. A matching workflow command alone grants no continuation.
+The review binding's
 optional `selected` flag preserves unfinished feedback when returning to the ordinary
 workflow; old bindings without that flag keep their existing selection behavior.
 Phase hints describe retained evidence and pending decisions; admission and completion

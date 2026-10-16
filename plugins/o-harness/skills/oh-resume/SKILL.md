@@ -5,8 +5,9 @@ disable-model-invocation: true
 ---
 Load `workflows/runtime.md` through OH's resource entry, then inspect `status --saved`
 and `resume --run ID` facts (Codex `status` with `saved`, `resume` with `run`).
-Discovery never changes the selected run. Select the requested saved work explicitly.
-Continue the saved task or decision with its original scope, settings, findings and
+Discovery never changes the selected run. Show the requested saved subject, branch,
+next step and remaining allowance. Always ask the shared Resume question once and
+wait; this invocation alone does not answer it. After acceptance, continue the saved task or decision with its original scope, settings, findings and
 remaining allowances. Confirm old native work is quiescent before a fresh agent starts;
 never reuse a completed reviewer or renew allowances to switch hosts. Preserve useful
 unfinished edits. Report the actual resumed work, not a new implementation introduction

@@ -15,8 +15,8 @@ use native cancellation, and launch no later phase.
 After retaining terminal cancellation/results, record `decision stop
 <native-locator.json>` (Codex `decision`, kind `stop`) from the person's actual request.
 
-A later explicit matching work command may continue the saved work in a new native
-conversation. This control is optional, never a prerequisite for that continuation;
+A later matching work command discovers the saved work in a new native conversation.
+Continue only after its actual human Resume answer. This control is optional, never a prerequisite for that continuation;
 discovery alone does not lift it.
 
 Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`

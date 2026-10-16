@@ -72,21 +72,25 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         request=self.human('/o-harness:oh-design auth',session='new-parent',host='claude',at=now())
         manifest={'tasks':[{'id':'replacement','title':'Do not restart','instructions':'This must not replace the saved scope.'}]}
         scopes=list((journal.path.parent.parent/'scopes').iterdir())
-        with self.assertRaisesRegex(Refused,'native attempt'):
-            native.prepare_scope(self.root,manifest,workflow='design',human=request)
+        discovered=native.prepare_scope(self.root,manifest,workflow='design',human=request)
+        self.assertTrue(discovered['resume_required'])
+        choice=self.resume_choice(session='new-parent',host='claude',at=now())
+        with self.assertRaisesRegex(Refused,'native attempt'):native.resume(self.root,choice,run=first['run'])
         # Host terminal evidence arrives after the valid human command. Keep that
         # command while settling the old author instead of asking for it again.
         self.native_results[admitted['id']]={'text':'{"summary":"Retained the interrupted draft."}','status':'completed'}
         native.retain(self.root,admitted['id'],{})
         before=load_run(self.root)[1]
-        resumed=native.prepare_scope(self.root,manifest,workflow='design',human=request)
+        self.assertTrue(native.prepare_scope(self.root,manifest,workflow='design',human=request)['resume_required'])
+        self.assertEqual(load_run(self.root)[1]['human'],before['human'])
+        resumed=native.resume(self.root,choice,run=first['run'])
         self.assertEqual(resumed['run'],first['run'])
         self.assertEqual(list((journal.path.parent.parent/'scopes').iterdir()),scopes)
         self.assertEqual(draft.read_text(),'Human-edited unfinished draft.\n')
         after=load_run(self.root)[1]
         for key in ('scope_id','tasks','config','granted','attempts'):self.assertEqual(after[key],before[key])
         records=journal.records()
-        self.assertEqual(native.prepare_scope(self.root,manifest,workflow='design',human=request)['run'],first['run'])
+        self.assertEqual(native.resume(self.root,choice,run=first['run'])['run'],first['run'])
         self.assertEqual(journal.records(),records)
         for prompt in ('/oh-design','/oh-design other'):
             with self.assertRaises(Refused):native.resume(self.root,self.human(prompt),run=first['run'])
@@ -100,7 +104,8 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         self.assertEqual(facts['phase'],'analysis_result')
         self.assertEqual(facts['pending_decision'],'proposal_approval')
         self.assertEqual(journal.records(),records)
-        native.resume(self.root,self.human('/oh-propose improve sign-in',session='new-parent'),run=before['id'])
+        with self.assertRaises(Refused):native.resume(self.root,self.human('/oh-propose improve sign-in',session='new-parent'),run=before['id'])
+        native.resume(self.root,self.resume_choice(session='new-parent'),run=before['id'])
         after=load_run(self.root)[1]
         for key in ('scope_id','tasks','config','granted','attempts'):self.assertEqual(after[key],before[key])
         self.assertFalse(after.get('proposal_answers'))

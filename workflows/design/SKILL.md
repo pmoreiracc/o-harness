@@ -3,8 +3,9 @@ name: design
 description: Draft and independently review one roadmap initiative's project plan and acceptance checks.
 ---
 Read `workflows/runtime.md` once through OH's resource entry and apply its saved-work
-entry before preparing scope or asking for an initiative. Resume a matching saved
-draft or decision. With no subject, show unfinished Design work and ask once; only
+entry before preparing scope or asking for an initiative. Always ask once whether to
+resume the selected saved draft or decision, including a named initiative. Bind the
+answer before continuing. With no subject, show unfinished Design work first; only
 when none exists ask which initiative to design. `plans list` may help.
 Read `plans path`, resolve an undecided repo/private location once and show its actual
 folder. Respect project policy; OH adds no mandatory ADR process.

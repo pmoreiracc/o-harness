@@ -188,10 +188,12 @@ The native parent-Stop limitation is tracked in [issue #81](https://github.com/p
 It does not block release. There is no OH process supervisor workaround.
 
 Every work entry checks saved work before preparing a new scope. For example, repeat
-`oh-design agent-pipeline` in the same checkout to continue its interrupted draft or
-pending decision. Propose and quick fixes compare the requested outcome with saved
-scope; you do not need to reproduce the original wording. With no subject, OH shows
-relevant unfinished work and asks once whether to resume it or choose different work.
+`oh-design agent-pipeline` in the same checkout to find its interrupted draft or
+pending decision. OH asks "Resume agent-pipeline on design/agent-pipeline?" with
+`Resume` and `Not now`, even when you named the initiative. Nothing continues before
+your answer. Propose and quick fixes compare the requested outcome with saved scope;
+you do not need to reproduce the original wording. With no subject, OH shows relevant
+unfinished work first. Declining leaves it intact.
 A clearly different request does not silently select an old task.
 
 `status --saved` lists both saved workflow and standalone review facts without changing
@@ -199,7 +201,8 @@ selection. `resume --run ID` reads one run; adding `--human` binds an actual nat
 continuation. Codex exposes the equivalent `status` (`saved`) and `resume` (`run`, `human`)
 inputs. These are focused helpers, not another agent runner.
 
-After native work is quiet, `oh-resume` continues the saved task or decision with its
+`oh-resume` asks the same one Resume question. After your answer and once native work
+is quiet, it continues the saved task or decision with its
 original scope, settings, findings and remaining allowances. A new session or host
 can continue even while the old conversation remains open; no prior Pause or Stop
 is needed when no attempt or check is executing. The new coordinator continues the
@@ -207,7 +210,7 @@ same work and the superseded coordinator launches nothing further. Existing atte
 keep their original native parents. If a check is still executing, OH waits for that
 step before retrying the valid continuation. A new session must not start another
 agent while an old child may still be running. Discovery alone does not lift a saved
-Pause or Stop; a later explicit matching continuation can. Resume does not
+Pause or Stop; a later human Resume answer can. Resume does not
 renew a spent review allowance, accept findings or widen scope. This uses the same
 checkout and OH data, not migration to another computer.
 

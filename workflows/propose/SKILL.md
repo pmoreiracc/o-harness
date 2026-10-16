@@ -3,10 +3,10 @@ name: propose
 description: Route one human idea to a project plan addition or bounded improvement with native approval and review.
 ---
 Read `workflows/runtime.md` once through OH's resource entry and apply its saved-work
-entry first. A matching idea resumes the saved analysis, latest preview, refinement,
-approved additions or review; do not recreate its scope or repeat a valid approval.
-With no idea, show unfinished proposal work and ask once whether to resume or choose
-a different idea. When none exists, ask what to propose; do not invent a waiting run.
+entry first. Always ask once whether to resume the selected saved work, including a
+matching supplied idea. After acceptance restore the saved analysis, latest preview,
+refinement, approved additions or review; do not recreate scope or repeat a valid approval.
+With no idea, show unfinished proposal work before asking that question. When none exists, ask what to propose; do not invent a waiting run.
 Read `plans path`, resolve an undecided repo/private location once and show its actual
 folder. Respect project policy; planning alone does not authorize product implementation.
 

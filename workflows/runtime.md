@@ -17,22 +17,32 @@ Before asking for missing arguments, choosing a branch or preparing any new scop
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
 workflow and standalone review without selecting either or registering a new checkout.
 Match the person's request to the saved scope and actual evidence, not recency alone.
-For a matching supplied request, report where the work stopped and continue without
-another resume question. Free-text proposals and quick fixes need not repeat the old
+For any unfinished saved work, always ask once before continuing, even when the command
+names its initiative, design or review subject. A matching request discovers work; it
+is not the resume answer. Free-text proposals and quick fixes need not repeat the old
 words: read their saved scope/report and judge whether this is the same work. Never
 build a similarity parser or silently absorb a changed scope.
 
-With no subject, show relevant unfinished work and ask once whether to resume it or
-choose different work, even if there is only one candidate. Multiple plausible matches
-need a selection. If no saved work matches, follow the workflow's normal new-work entry.
-The general selector itself grants no execution. A clearly different request does not
-select unrelated work; preserve it and resolve actual switching/branch conflicts.
+Show the selected subject, draft or latest result, next step and remaining review
+allowance. Use the returned saved subject and branch in the question itself:
+"Resume <subject> on <branch>?" Offer `Resume` and `Not now` through the native question
+tool. Wait for the actual answer before continuation, legacy adoption or retaining an
+old result. `Not now` preserves the work and starts nothing. If different work is wanted,
+resolve that request separately. With no subject, show relevant unfinished work first;
+multiple plausible matches need selection. One selection question can also confirm
+resume when it names the chosen saved subject and branch. Do not ask twice for that choice.
+If no saved work matches, follow the normal new-work entry. A clearly different request
+does not select unrelated work; preserve it and resolve actual switching/branch conflicts.
 
-Read selected facts with `resume --run ID` (Codex `resume` with `run`). Once prior native
-work is quiescent, bind continuation with `resume --run ID --human <locator.json>`
-(Codex `resume` with `run` and `human`). A matching nonempty native workflow invocation
-can authorize continuation; an empty invocation requires its actual selection answer.
-Plain conversational continuation uses the existing native Resume question/reply.
+Read selected facts with `resume --run ID` (Codex `resume` with `run`). After the Resume
+answer, inspect pending native attempts. Retain any already-terminal result through
+its original child locator before binding continuation; do not launch a replacement.
+If the host is still saving it, recover and retry using the same answer. Once prior
+native work is quiescent and settled, bind continuation with `resume --run ID --human <locator.json>`
+(Codex `resume` with `run` and `human`). Use the actual answer to the subject-and-branch
+Resume question, including when entering through `oh-resume`. A workflow invocation
+alone cannot authorize continuation. If native questions are unavailable, ask the same
+question in chat and bind its direct human reply.
 These helpers preserve the original scope, settings, findings, approvals and remaining
 allowances. Saved work belongs to the person across sessions: an old conversation can
 stay open, and its saved status need not say paused or stopped when no attempt or check
@@ -82,6 +92,11 @@ Manifest and locator JSON files belong in external writable scratch storage. Cod
 receive the equivalent JSON objects. A locator names actual host evidence: `host`,
 `session`, and available `turn`, `transcript_path`, `tool_use_id` or `child_session`.
 Copy identities from native events; do not invent a human message, child ID or result.
+For child binding/retention use the returned child identity and actual spawn call ID.
+Claude derives the child's transcript from its original parent's saved location; omit
+`transcript_path` rather than copying the parent's path into a child locator. A supplied
+known parent path is recovered automatically. Human locators still refer to the parent.
+Recover these locators from native evidence; do not ask the person for internal IDs.
 Helpers validate the original record. Prose claiming approval never substitutes for it.
 Do not hand-edit OH journals, snapshots, receipts, counters or configuration files.
 
@@ -132,7 +147,10 @@ is retained as failed binding, consumes its original allowance and grants no com
 If interruption prevented a profile from being saved, the actual profile remains unknown;
 provable launch attribution and a saved terminal outcome still permit settlement.
 Send only a short handoff and evidence paths into the coordinator.
-A summary is not the retained report. Never run two implementation agents together or
+Claude's acknowledged native `SubagentHandback` can carry the complete report. Retain
+its original child payload after the host confirms completion; do not rewrite it to
+match the parent's warning or indentation. A summary is not the retained report.
+Never run two implementation agents together or
 modify the subject while review is active. Completed reviewers are never resumed.
 
 Native agents inherit host permissions. Implementers may run needed commands, network
@@ -166,6 +184,8 @@ a change or unresolved failure. No edits follow passing verification without ano
 verification. Preserve actual command results and limits. Supplementary measurements
 can be attached with `evidence`; their hashes make them stable references, not approval.
 The coordinator retains candidate/check references and does not rerun passing final checks.
+Report what actually ran: planning document validation is not a pass of the consumer's
+registered checks. An empty `checks` list supports no claim that project checks passed.
 
 Admit a fresh reviewer only after the final candidate and checks are ready. Supply the
 immutable original scope, current candidate, complete findings and relevant evidence.
@@ -258,7 +278,15 @@ elapsed time, retries and restarts never create approval.
 
 Introduce the actual work once using implementation/planning/proposal agent and
 independent reviewer agent. Report meaningful native transitions and new findings;
-do not repeat unchanged status or accumulate raw command logs. On completion lead
+do not repeat unchanged status or accumulate raw command logs. Before discovery say
+"I'll look for saved work"; say "Resuming" only after the answer. Use short updates
+about the draft, checks or findings, not helper names, receipt paths or attempt IDs.
+For example: "Your draft has a completed review to recover, with one review round left."
+Then ask the Resume question. After acceptance: "I'll recover that review first."
+Repair routine host-save/locator failures within the accepted choice without another
+menu or asking the person to bypass OH. Report a genuine external blocker with the
+preserved artifact and one concrete recovery step; defer unrelated questions until it
+is resolved. Native tool cards remain host-owned. On completion lead
 with the recorded review outcome, attempts and findings, then the delivered behavior,
 actual checks, commit/artifact and next decision. Say no findings only when none exist.
 

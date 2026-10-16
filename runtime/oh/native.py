@@ -184,12 +184,16 @@ def _continuation(state):
             'latest_result':({k:history[-1].get(k) for k in ('id','role','outcome','evidence')} if history else None)}
 
 
+def _saved_subject(state):
+    return (state.get('standalone_subject',{}).get('description') or _initiative(state) or state['tasks'][0]['title'])[:240]
+
+
 def saved_work(root):
     result=[];runs=_saved_runs(root)
     for journal,state in runs:
         task=display_task(state)
         summary={k:state.get(k) for k in ('workflow','status','branch','design','track','published')}
-        summary.update(run=state['id'],subject=(state.get('standalone_subject',{}).get('description') or _initiative(state) or state['tasks'][0]['title'])[:240],
+        summary.update(run=state['id'],subject=_saved_subject(state),
                        task=task['id'],scope=str(journal.path/'scope'/'scope.json') if state.get('scope_id') else None,
                        journal=str(journal.path),report=str(journal.path/'report.md') if (journal.path/'report.md').is_file() else None,
                        reviews_used=sum(a['role']=='review' and a['task']==task['id'] for a in state['attempts']),reviews_allowed=review_limit(state,task['id']),
@@ -197,7 +201,7 @@ def saved_work(root):
                        **_continuation(state))
         summary['resumable']=not _finished(state)
         result.append(summary)
-    output={'saved_work':result,'next':'Match the request to saved scope. With no subject, ask once. Discovery grants no authority.'}
+    output={'saved_work':result,'next':'Ask once whether to resume the selected unfinished work. A matching command alone does not confirm continuation.'}
     from .storage import encode
     budget=min((state['config']['context']['result_chars'] for _,state in runs),default=1000)
     if len(encode(output))>budget:
@@ -208,25 +212,8 @@ def saved_work(root):
     return output
 
 
-def _workflow_resume(state,source):
-    request=_command(source)
-    if not request or not request[1]:return False
-    name,args=request
-    if name=='oh-review' and state['workflow']=='deliver':
-        import shlex
-        words=shlex.split(args)
-        return len(words)==2 and words[0]=='task' and words[1] in state['done']
-    if name!='oh-'+state['workflow']:return False
-    if state['workflow']=='design':return args==_initiative(state)
-    if state['workflow']=='deliver':
-        from .delivery import parse
-        selected=parse(args)
-        if state.get('design'):return (selected.get('kind'),selected.get('doc'),selected.get('track'))==('design',state['design'],state.get('track') or '')
-        return selected['kind']=='quick_fix'
-    if state['workflow']=='review':
-        import shlex
-        return shlex.split(args)==shlex.split(state.get('standalone_subject',{}).get('description',''))
-    return state['workflow']=='propose'
+def _resume_offer(root,state):
+    return select(root,state['id'])|{'resume_required':True,'next':'Ask whether to resume '+_saved_subject(state)+' on '+state['branch']+'; use its native answer with resume --run.'}
 
 
 def _matching_entry(root,source,workflow,design=None,track='',selected=None):
@@ -246,7 +233,7 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
         state=matches[0]
         key=digest({k:source[k] for k in ('host','session','turn','prompt')})
         if key==state.get('source') or state.get('published') or (state['status']=='completed' and state.get('plans',{}).get('location')=='private'):return select(root,state['id'])
-        return resume(root,source,state['id'])
+        return _resume_offer(root,state)
     if len(matches)>1:raise Refused('More than one saved run matches; inspect status --saved and select the intended run with resume --run')
 
 
@@ -814,7 +801,9 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             subject_path=Path(designs[0]) if len(designs)==1 else Path(reviewed['evidence'])/'result.json'
         source=authority.native_human(root,locator,subject=subject_path,latest=False)
         if state.get('published'):return select(root,state['id'])
-        if not (_affirmed(source['prompt'],kind,source.get('question','')) or (kind=='resume' and _workflow_resume(state,source))):raise Refused('The native human reply does not authorize this decision')
+        if kind=='resume' and (_saved_subject(state) not in source.get('question','') or state['branch'] not in source.get('question','')):
+            raise Refused('Ask whether to resume '+_saved_subject(state)+' on '+state['branch']+', then use the native answer; no continuation was started')
+        if not _affirmed(source['prompt'],kind,source.get('question','')):raise Refused('The native human reply does not authorize this decision')
         key=digest({k:source[k] for k in ('host','session','turn','prompt')})
         if kind=='resume':
             from .workflow import active_file
@@ -825,7 +814,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                                 (r['kind']=='transition' and any(e['kind']=='decision' for e in r['data'].get('events',[])))]
                     boundary=max(boundaries+[selected_journal.records()[0]['at']])
                     if not authority.newer(source.get('at'),boundary):
-                        raise Refused('This continuation was superseded by another work selection; use a new explicit matching work command')
+                        raise Refused('This continuation was superseded by another work selection; ask the Resume question for the intended saved work')
             _resume_binding(root,state)
         if key in state['decisions']:
             if kind not in ('accept-concerns','dismiss-scope','route-scope'):
@@ -834,7 +823,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                                 for r in journal.records() for e in (r['data'].get('events',[]) if r['kind']=='transition' else [{'kind':r['kind'],'data':r['data']}]))
                     if not resumed:raise Refused('This human input was already used for another decision; keep its saved result')
                     owner_key=digest({k:state['human'][k] for k in ('host','session','turn','prompt')})
-                    if key!=owner_key:raise Refused('This continuation was superseded; use the current explicit matching work command to continue')
+                    if key!=owner_key:raise Refused('This continuation was superseded; ask the current Resume question before continuing')
                     from .workflow import active_file
                     if read_json(active_file(root)).get('run')!=state['id']:
                         authority.native_human(root,locator)
@@ -1087,9 +1076,12 @@ def review(root,arguments,human=None):
             if saved['workflow']!='deliver' or words[1] not in saved['done'] or saved.get('published'):continue
             pending=saved.get('extra_review') or saved.get('correction')
             if pending and pending['task']==words[1]:
-                return resume(root,source,saved['id']) if source else select(root,saved['id'])
+                if source and not _command(source):return resume(root,source,saved['id'])
+                return _resume_offer(root,saved) if source else select(root,saved['id'])
             return_status=saved['status']
-            if source:resume(root,source,saved['id'])
+            if source:
+                if _command(source):return _resume_offer(root,saved)
+                decision(root,'resume',source,run=saved['id'])
         with _locked(root):
             journal,state=load_run(root);_owner(root,state);_idle(root)
             if state.get('published') or state['workflow']!='deliver' or state['status'] not in ('running','completed','checkpoint','stopped') or words[1] not in state['done']:

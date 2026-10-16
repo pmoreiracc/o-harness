@@ -3,9 +3,10 @@ name: review
 description: Independently inspect a specified subject and offer bounded repairs when requested.
 ---
 Read `workflows/runtime.md` once through OH's resource entry and inspect saved work
-before binding another review. Continue a matching unfinished review after settling
-its native attempt; do not replace its scope, findings or allowance. With no subject,
-show unfinished review work and ask once. Terminal feedback remains a completed report;
+before binding another review. Always ask once whether to resume selected unfinished
+review work, including a matching supplied subject. After acceptance settle its native
+attempt; do not replace its scope, findings or allowance. With no subject, show
+unfinished review work first. Terminal feedback remains a completed report;
 an explicit fresh-review request admits a new reviewer. Preserve underlying workflow
 work when selecting standalone review or returning from it. Resolve the person's
 subject with targeted reads; ask only when it is ambiguous. Selectors are `changes`,
@@ -42,7 +43,10 @@ cannot authorize completion. Existing task corrections preserve prior history an
 allowances; never rewrite an earlier receipt or relabel unreviewed work as OH-reviewed.
 
 For `task <id>`, retain the saved delivery scope, task coverage and remaining review
-allowance. Review the current exact candidate without a new task grant. A clean result
+allowance. If entry returns `resume_required`, ask once; after acceptance retry the
+same task-review request with that answer's human locator. Do not start a second
+review merely to move the existing review to a new session. Review the current exact
+candidate without a new task grant. A clean result
 returns to its previous decision without another commit. Blocking findings enter the
 same task's scoped repair/review cycle and complete as a correction commit; preserve
 earlier completion and publication history instead of rewriting the original receipt.
