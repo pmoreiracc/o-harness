@@ -470,6 +470,11 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(self.git('rev-parse','HEAD^{tree}'),review['git_tree'])
         self.assertEqual(native.complete(self.root,review['id']),completed)
         self.assertEqual(native.resume(self.root)['status'],'checkpoint')
+        saved=load_run(self.root)[1]
+        resumed=native.resume(self.root,self.human('/oh-deliver continue the same fix',session='fresh-parent'))
+        self.assertEqual(resumed['status'],'checkpoint')
+        self.assertEqual(resumed['granted'],saved['granted'])
+        self.assertEqual(resumed['continuation']['pending_decision'],'task_window')
         collect()
         with connect() as db:
             observations=analytics(db,{'from':'2000','to':'2100'})['summary']
@@ -487,6 +492,12 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         second=self.reviewed();native.complete(self.root,second['id'])
         second_commit=self.git('rev-parse','HEAD');original_summaries=load_run(self.root)[1]['summaries']
         native.review(self.root,['task','1']);native.verify(self.root)
+        records=load_run(self.root)[0].records()
+        self.assertEqual(native.review(self.root,['task','1'])['run'],load_run(self.root)[1]['id'])
+        self.assertEqual(load_run(self.root)[0].records(),records)
+        reentered=native.review(self.root,['task','1'],self.human('/oh-review task 1',session='review-parent'))
+        self.assertEqual(reentered['run'],load_run(self.root)[1]['id'])
+        self.assertEqual(load_run(self.root)[1]['extra_review']['task'],'1')
         self.git('remote','add','origin','https://github.com/example/product.git')
         publication_choice=lambda:native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/product?'))
         with self.assertRaisesRegex(Refused,'requested task review'):publication_choice()
@@ -633,6 +644,13 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(self.git('rev-parse','HEAD'),head)
         self.assertEqual(original['granted'],['1'])
         feedback=Journal(self.project_id,standalone['run']);feedback_records=feedback.records()
+        from .storage import checkout_file
+        pointer=checkout_file(self.root,'oh-active-review.json');binding=pointer.read_bytes()
+        self.assertEqual(native.resume(self.root)['run'],original['id'])
+        self.assertEqual(pointer.read_bytes(),binding)
+        discovered=native.saved_work(self.root)['saved_work']
+        self.assertEqual({item['run'] for item in discovered},{original['id'],standalone['run']})
+        self.assertFalse(next(item for item in discovered if item['workflow']=='review')['resumable'])
         resumed=native.resume(self.root,self.human('Resume the approved work.',session='delivery-parent'))
         self.assertEqual(resumed['run'],original['id'])
         self.assertEqual(resumed['granted'],original['granted'])

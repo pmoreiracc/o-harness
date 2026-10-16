@@ -13,18 +13,51 @@ the absolute plugin launcher, `<plugin>/scripts/oh --root <checkout> <command>`
 If the Codex connection is missing, explain the `/mcp` recovery step; do not bypass it
 with shell writes to OH state. Setup requires an explicit invocation, not discovery.
 
-Read `status` before selecting work. It returns facts about the scope, current task,
-completed work, profile, attempts, review allowance, candidate and publication. It does
-not execute an agent or issue a generated question. Match saved work to the person's
-current request; a new request does not silently select an unrelated old task.
-Use `resume` for the saved task or decision after prior native work is quiescent.
-A session or host change preserves scope, findings, configuration and consumed allowances.
-Never restart the task or renew a grant merely to transfer hosts. Preserve useful edits.
+Before asking for missing arguments, choosing a branch or preparing any new scope,
+read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
+workflow and standalone review without selecting either or registering a new checkout.
+Match the person's request to the saved scope and actual evidence, not recency alone.
+For a matching supplied request, report where the work stopped and continue without
+another resume question. Free-text proposals and quick fixes need not repeat the old
+words: read their saved scope/report and judge whether this is the same work. Never
+build a similarity parser or silently absorb a changed scope.
+
+With no subject, show relevant unfinished work and ask once whether to resume it or
+choose different work, even if there is only one candidate. Multiple plausible matches
+need a selection. If no saved work matches, follow the workflow's normal new-work entry.
+The general selector itself grants no execution. A clearly different request does not
+select unrelated work; preserve it and resolve actual switching/branch conflicts.
+
+Read selected facts with `resume --run ID` (Codex `resume` with `run`). Once prior native
+work is quiescent, bind continuation with `resume --run ID --human <locator.json>`
+(Codex `resume` with `run` and `human`). A matching nonempty native workflow invocation
+can authorize continuation; an empty invocation requires its actual selection answer.
+Plain conversational continuation uses the existing native Resume question/reply.
+These helpers preserve the original scope, settings, findings, approvals and remaining
+allowances. Do not reprepare free-text scope merely to transfer a session or host.
+
+Resume the actual phase: retain terminal child evidence, continue unfinished authoring,
+use valid completed author/check/review evidence, restore the latest proposal preview or
+human decision, or finish completion/publication. Read the referenced report and scope;
+phase labels are hints, not authority to bypass admission checks. A live child is awaited
+or cancelled through its host before replacement; another session or elapsed time is not
+proof of termination. Completed reviewers are never resumed. A changed candidate needs
+its existing verification/review path, while unchanged work does not need repeated analysis.
+A spent allowance, proposal approval, finding decision, private approval or publication
+still needs its existing human decision; continuation cannot supply it.
+
+Completed work presents its result or outstanding publication/handoff rather than
+restarting. An explicit new review after terminal feedback uses a fresh reviewer. For
+older scopes without a subject identifier, inspect the original native request and bound
+artifacts; ask for selection only if identity is genuinely ambiguous. Preserve useful
+and human-authored edits; no reset, stash or regeneration is a recovery shortcut.
 
 Use these focused operations, through their equivalent named OH tools in Codex:
 
 | Purpose | Claude command | Codex tool |
 | --- | --- | --- |
+| Discover saved work | `status --saved` | `status` with `saved: true` |
+| Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
 | Prepare bounded work | `scope prepare <manifest.json> [--workflow deliver\|design\|propose] [--human <locator.json>]` | `scope_prepare` |
 | Select approved design tasks | `scope prepare --doc NNNN [--track TRACK] --human <locator.json>` | `scope_prepare` |
 | Approve a quick-fix preview | `scope approve <scope-id> <locator.json>` | `scope_approve` |

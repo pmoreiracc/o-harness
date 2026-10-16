@@ -27,8 +27,8 @@ def tool(name, title, description, properties=None, required=(), read_only=False
 # These are focused record/validation operations. Native host tools own agents and questions.
 OBJECT = {'type': 'object'}
 TOOLS = [
-    tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; launches nothing.', read_only=True),
-    tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT}),
+    tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; saved lists both workflow and review without selection.', {'saved':{'type':'boolean'}}, read_only=True),
+    tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
     tool('admission', 'Read review admission', 'Read the immutable subject and review request for the admitted reviewer.', {'attempt_directory':TEXT}, ['attempt_directory'], read_only=True),
     tool('config', 'OH settings', 'Read project settings and configured checks.', read_only=True),
     tool('init', 'Register project', 'Register this checkout with OH.', {'name': TEXT}),
@@ -85,8 +85,11 @@ def command(name, arguments, root):
         if not isinstance(value,str) or not value.strip():raise Refused(f'`{key}` must be text')
         return value
     if name not in NAMES:raise Refused('Unknown tool')
-    if name in ('status','config','candidate'):return [name]
-    if name=='resume':return ['resume']+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
+    if name=='status':
+        if 'saved' in arguments and not isinstance(arguments['saved'],bool):raise Refused('saved must be boolean')
+        return ['status']+(['--saved'] if arguments.get('saved') else [])
+    if name in ('config','candidate'):return [name]
+    if name=='resume':return ['resume']+(['--run',text('run')] if text('run') else [])+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
     if name=='admission':return ['admission','--',text('attempt_directory',True)]
     if name=='init':return ['init']+([f'--name={text("name")}'] if text('name') else [])
     if name=='plans':

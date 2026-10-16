@@ -37,6 +37,9 @@ class ControlsTest(NativeFixture,unittest.TestCase):
             self.assertEqual(native.resume(self.root)['status'],'running')
             native.decision(self.root,'pause',direct('fresh-parent','/oh-pause'))
             native.resume(self.root,direct('fresh-parent','[$oh-resume](plugin://o-harness/skills/oh-resume/SKILL.md)'))
+            native.decision(self.root,'pause',direct('fresh-parent','/oh-pause'))
+            with self.assertRaises(Refused):native.resume(self.root,direct('fresh-parent','/oh-deliver'))
+            native.resume(self.root,direct('fresh-parent','/oh-deliver finish the same bounded change'),run=before['id'])
         after=load_run(self.root)[1]
         self.assertEqual(after['human']['session'],'fresh-parent')
         self.assertEqual(after['granted'],before['granted']);self.assertEqual(after['config'],before['config'])
@@ -81,3 +84,81 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         self.assertEqual((self.root/'output.txt').read_text(),'Retained authorized correction.')
         self.assertEqual(load_run(self.root)[1]['done'],[])
         self.assertEqual(native.resume(self.root)['reviews_used'],1)
+
+    def test_discovery_and_selected_reads_preserve_both_bindings_and_live_work(self):
+        from .storage import checkout_file
+        from .config import change
+        change(self.root,'review_rounds','1')
+        self.approve();journal,original=load_run(self.root)
+        request=self.human('/oh-review tree')
+        feedback=native.review(self.root,'tree',request)
+        feedback_journal,review_state=load_run(self.root)
+        before={name:checkout_file(self.root,name).read_bytes() for name in ('oh-active-run.json','oh-active-review.json')}
+        records=journal.records();review_records=feedback_journal.records()
+        self.assertEqual({x['run'] for x in native.saved_work(self.root)['saved_work']},{original['id'],feedback['run']})
+        self.assertEqual(native.resume(self.root,run=original['id'])['run'],original['id'])
+        self.assertEqual(native.review(self.root,'tree',request)['run'],feedback['run'])
+        self.assertEqual(journal.records(),records);self.assertEqual(feedback_journal.records(),review_records)
+        # A review binding must not let new scope overwrite the hidden workflow.
+        prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+        with self.assertRaisesRegex(Refused,'saved scope'):
+            native.approve_scope(self.root,prepared['scope_id'],self.human())
+        self.assertEqual({name:checkout_file(self.root,name).read_bytes() for name in before},before)
+        # Selecting the ordinary workflow retains the unfinished review for later.
+        native.resume(self.root,self.human('resume'),run=original['id'])
+        self.assertEqual(load_run(self.root)[1]['id'],original['id'])
+        self.assertEqual({x['run'] for x in native.saved_work(self.root)['saved_work']},{original['id'],feedback['run']})
+        native.resume(self.root,self.human('/oh-review tree'),run=feedback['run'])
+        self.assertEqual(load_run(self.root)[1]['id'],feedback['run'])
+        admitted=native.admit(self.root,'review')
+        records=journal.records()
+        with self.assertRaisesRegex(Refused,'native attempt'):
+            native.resume(self.root,self.human('resume'),run=original['id'])
+        self.assertEqual(journal.records(),records)
+        self.assertEqual(native.saved_work(self.root)['saved_work'][1]['pending_attempts'][0]['id'],admitted['id'])
+        native.bind(self.root,admitted['id'],{'child_session':'failed-reviewer'})
+        from .storage import now
+        retry=self.human('/oh-review tree',session='new-review-parent',at=now())
+        self.native_results[admitted['id']]={'text':'','status':'failed'}
+        native.retain(self.root,admitted['id'],{})
+        self.assertTrue(native.saved_work(self.root)['saved_work'][1]['resumable'])
+        continued=native.review(self.root,'tree',retry)
+        self.assertEqual(continued['run'],feedback['run'])
+        self.assertEqual(continued['reviews_used'],1)
+        with self.assertRaisesRegex(Refused,'allowance is spent'):native.admit(self.root,'review')
+        native.decision(self.root,'grant-review',self.human('grant review'))
+        self.assertEqual(native.select(self.root)['reviews_allowed'],2)
+
+    def test_unregistered_discovery_and_structured_selector_authority(self):
+        from .registry import index_path
+        from .storage import identifier
+        # A never-registered checkout is a factual empty result, not implicit init.
+        other=Path(self.temp.name)/'other';other.mkdir()
+        self.assertFalse(index_path(other).exists())
+        self.assertEqual(native.saved_work(other)['saved_work'],[])
+        self.assertFalse(index_path(other).exists())
+        state={'workflow':'deliver','design':'0001','track':'code'}
+        for prompt in ('/oh-deliver 0001 code','[$oh-deliver](plugin://o-harness/skills/oh-deliver/SKILL.md) 0001 code'):
+            self.assertTrue(native._workflow_resume(state,{'prompt':prompt}))
+        for prompt in ('/oh-deliver','/oh-deliver 0002 code','/oh-deliver 0001 docs','/oh-propose 0001 code'):
+            self.assertFalse(native._workflow_resume(state,{'prompt':prompt}))
+        legacy={'workflow':'design','design':None,'entry_human':{'prompt':'/oh-design auth'},'human':{'prompt':'resume'}}
+        self.assertTrue(native._workflow_resume(legacy,{'prompt':'/oh-design auth'}))
+        self.assertFalse(native._workflow_resume(legacy,{'prompt':'/oh-design other'}))
+        from .config import change
+        from .storage import encode
+        change(self.root,'context.result_chars','1000')
+        self.approve();journal,state=load_run(self.root);records=journal.records()
+        self.assertLessEqual(len(encode(native.saved_work(self.root))),state['config']['context']['result_chars'])
+        with self.assertRaises(Refused):native.resume(self.root,self.human('resume'),run=identifier())
+        self.assertEqual(journal.records(),records)
+
+    def test_continuation_hints_use_the_requested_review_task_not_the_next_task(self):
+        self.approve(self.tasks[:2])
+        _,state=load_run(self.root)
+        state.update(done=['1'],extra_review={'task':'1'},attempts=[{'id':'prior-review','task':'1','role':'review','finished':True,'outcome':'clean'}])
+        hints=native._continuation(state)
+        self.assertEqual(hints['phase'],'task_review')
+        self.assertEqual(hints['latest_result']['id'],'prior-review')
+        state['correction']={'task':'1'}
+        self.assertEqual(native._continuation(state)['phase'],'task_correction')

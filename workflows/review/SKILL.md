@@ -2,7 +2,12 @@
 name: review
 description: Independently inspect a specified subject and offer bounded repairs when requested.
 ---
-Read `workflows/runtime.md` once through OH's resource entry. Resolve the person's
+Read `workflows/runtime.md` once through OH's resource entry and inspect saved work
+before binding another review. Continue a matching unfinished review after settling
+its native attempt; do not replace its scope, findings or allowance. With no subject,
+show unfinished review work and ask once. Terminal feedback remains a completed report;
+an explicit fresh-review request admits a new reviewer. Preserve underlying workflow
+work when selecting standalone review or returning from it. Resolve the person's
 subject with targeted reads; ask only when it is ambiguous. Selectors are `changes`,
 `tree`, `paths <relative paths>`, `commit <ref>`, `range <base> <head>` or
 `task <id>` for completed unpublished delivery work. A design number is not a task

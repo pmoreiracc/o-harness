@@ -72,7 +72,9 @@ in ordinary conversation. It does not start an empty run or invent the selection
 
 ## Deliver code
 
-`oh-deliver` without arguments lists ready designs and explains unavailable work.
+`oh-deliver` without arguments first shows unfinished delivery work, when present,
+and asks once whether to resume it or choose different work. Otherwise it lists ready
+designs and explains unavailable work.
 `oh-deliver 0005` selects approved design 0005; add a track when needed. Tasks follow
 their dependencies, and blocked work stays pending. The number names a design, not an
 individual task. An empty ready list does not resume unrelated old work.
@@ -182,6 +184,18 @@ owned native work and preserves edits and evidence. Stopped is reported only aft
 native cancellation is confirmed; a parent interruption alone is not that proof.
 The native parent-Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81).
 It does not block release. There is no OH process supervisor workaround.
+
+Every work entry checks saved work before preparing a new scope. For example, repeat
+`oh-design agent-pipeline` in the same checkout to continue its interrupted draft or
+pending decision. Propose and quick fixes compare the requested outcome with saved
+scope; you do not need to reproduce the original wording. With no subject, OH shows
+relevant unfinished work and asks once whether to resume it or choose different work.
+A clearly different request does not silently select an old task.
+
+`status --saved` lists both saved workflow and standalone review facts without changing
+selection. `resume --run ID` reads one run; adding `--human` binds an actual native human
+continuation. Codex exposes the equivalent `status` (`saved`) and `resume` (`run`, `human`)
+inputs. These are focused helpers, not another agent runner.
 
 After native work is quiet, `oh-resume` continues the saved task or decision with its
 original scope, settings, findings and remaining allowances. A new session or host

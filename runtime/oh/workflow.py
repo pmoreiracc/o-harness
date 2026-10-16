@@ -44,16 +44,23 @@ def human_event(payload, host):
 
 def active_file(root):
     review=checkout_file(root, 'oh-active-review.json')
-    return review if review.exists() else checkout_file(root, 'oh-active-run.json')
+    return review if review.exists() and read_json(review).get('selected',True) else checkout_file(root, 'oh-active-run.json')
 
 
-def load_run(root):
-    if not active_file(root).exists():raise Refused(NO_RUN)
-    active=read_json(active_file(root))
+def load_run(root, run=None):
+    if run is None:
+        if not active_file(root).exists():raise Refused(NO_RUN)
+        active=read_json(active_file(root))
+    else:
+        active={'project':project(root)['id'],'checkout':checkout_id(root),'run':run}
     if active['checkout'] != checkout_id(root) or active['project'] != project(root)['id']:
         raise Refused('This run belongs to another checkout or project')
     journal=Journal(active['project'],active['run'])
-    return journal, reduce(journal.records())
+    records=journal.records();state=reduce(records)
+    state['entry_human']=records[0]['data'].get('human',{})
+    if state.get('project')!=active['project'] or state.get('checkout')!=active['checkout'] or state.get('id')!=active['run']:
+        raise Refused('Saved work belongs to another checkout or project')
+    return journal,state
 
 
 def reduce(records):

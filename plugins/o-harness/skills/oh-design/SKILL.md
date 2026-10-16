@@ -4,8 +4,9 @@ description: Turn one supplied roadmap initiative into an actionable plan throug
 argument-hint: "<roadmap-slug>"
 disable-model-invocation: true
 ---
-When no initiative was supplied, ask which roadmap initiative the person wants to
-design and wait for the answer. Do not select one on their behalf.
+Before asking for missing arguments, follow the shared workflow's saved-work entry.
+Show relevant unfinished work and ask once whether to resume it or select new work.
+A supplied matching request continues the saved phase without a redundant question.
 
 Load `workflows/design/SKILL.md` through OH's resource entry and follow it. Introduce
 the planning agent's draft and the independent reviewer agent's challenge against

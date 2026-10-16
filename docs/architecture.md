@@ -67,6 +67,15 @@ generated question. The journal retains each attempt before launch, including fa
 empty and interrupted launches. Native identity and result records bind the agent to
 that admission without treating an author summary as completion proof.
 
+Every workflow reads `status --saved` before preparing new work. It reads both checkout
+bindings without changing selection; `resume --run` reads a specified journal, while a
+verified human continuation can transfer ownership and select it. The review binding's
+optional `selected` flag preserves unfinished feedback when returning to the ordinary
+workflow; old bindings without that flag keep their existing selection behavior.
+Phase hints describe retained evidence and pending decisions; admission and completion
+remain authoritative. Recovery retention after a valid Resume command does not make
+that command stale or replenish its allowance.
+
 The implementer prepares provisional task/lifecycle changes and verifies the final
 candidate. A fresh independent reviewer examines that candidate against the immutable
 original scope, project contracts and prior findings. Provisional marks are content,

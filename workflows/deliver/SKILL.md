@@ -9,15 +9,18 @@ never select an unrelated active task merely because one exists.
 A number identifies a design, not a task. Name the actual task only after selection.
 Interpret the requested work as follows:
 
-- No arguments: use `plans list` and show ready designs, unavailable reasons and
-  configured limits. Ask which design or quick fix the person wants. An empty list
-  grants no authority to resume old work.
+- No arguments: first show relevant unfinished saved work and ask once whether to
+  resume it or choose different work. Otherwise use `plans list`, show ready designs,
+  unavailable reasons and limits, and ask which design or quick fix the person wants.
+  The empty invocation itself grants no continuation authority.
 - Approved design number and optional track: use `scope prepare --doc NNNN
   [--track TRACK] --human <native-locator.json>` (Codex `scope_prepare`). The helper
   validates approval and selects the parsed tasks. Do not rebuild them as an arbitrary
   manifest or ask for another trigger. Missing track/selection needs one ordinary
   question; preserve the answer.
-- A bounded change in prose: inspect the relevant code and correct base, then prepare
+- A bounded change in prose: first compare saved quick-fix scope and reports with
+  the requested outcome; resume the same work without requiring identical wording.
+  For genuinely new work, inspect the relevant code and correct base, then prepare
   an external manifest of ordered tasks with `id`, `title`, `instructions` and optional
   `needs`. Preserve included original unreviewed edits in one coherent task; do not
   split an existing dirty change across partially completed repair tasks. Call

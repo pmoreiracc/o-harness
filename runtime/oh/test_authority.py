@@ -74,14 +74,20 @@ class AuthorityTest(unittest.TestCase):
             for host in ('codex','claude'):
                 path=home/('.codex/sessions' if host=='codex' else '.claude/projects')/'s.jsonl'
                 path.parent.mkdir(parents=True)
-                for prompt in ('Please review the manual changes.', '/oh-review changed'):
+                for prompt in ('Please review the manual changes.', '/oh-review changed', '/oh-design auth', '/oh-propose improve sign-in', '/oh-deliver fix timeout'):
                     locator={'host':host,'session':'s','turn':'t','prompt':prompt,'transcript_path':str(path)}
                     rows=([{'type':'session_meta','payload':{'id':'s','cwd':str(root),'source':'cli'}},
                            {'type':'event_msg','payload':{'type':'user_message','turn_id':'t','message':prompt}}]
                           if host=='codex' else [{'type':'user','sessionId':'s','promptId':'t','cwd':str(root),
                                                  'message':{'role':'user','content':prompt}}])
                     path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
-                    self.assertEqual(native_human(root,locator)['prompt'],prompt)
+                    source=native_human(root,locator)
+                    self.assertEqual(source['prompt'],prompt)
+                    if prompt.startswith('/oh-'):
+                        from .native import _workflow_resume
+                        workflow=prompt.split()[0].removeprefix('/oh-')
+                        state={'workflow':workflow,'design':'auth' if workflow=='design' else None,'standalone_subject':{'description':'changed'}}
+                        self.assertTrue(_workflow_resume(state,source))
                     with self.assertRaises(Refused):native_human(root,locator|{'prompt':prompt+' and approve repairs'})
 
     def test_native_child_is_fresh_attributed_and_uses_the_admitted_profile(self):

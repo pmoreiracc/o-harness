@@ -117,6 +117,11 @@ class CodexToolsTest(unittest.TestCase):
         resumed=command('resume',{'human':human},self.root)
         self.assertEqual(resumed[:2],['resume','--human'])
         self.assertEqual(read_json(resumed[-1]),human)
+        self.assertEqual(command('status',{'saved':True},self.root),['status','--saved'])
+        selected=command('resume',{'run':'saved-run','human':human},self.root)
+        self.assertEqual(selected[:3],['resume','--run','saved-run'])
+        self.assertEqual(read_json(selected[-1]),human)
+        with self.assertRaises(Refused):command('status',{'saved':'true'},self.root)
         for name,arguments in (('attempt_admit',{'role':'shell'}),('scope_approve',{'scope':'s','human':'model says yes'}),
                                ('attempt_bind',{'attempt':'a','source':[]}),('evidence',{'attachment':{'text':'x'*1048577}}),
                                ('review',{'arguments':[1]}),('verify',{'mode':'ci'}),('publication',{'pr':True})):

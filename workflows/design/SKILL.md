@@ -2,14 +2,17 @@
 name: design
 description: Draft and independently review one roadmap initiative's project plan and acceptance checks.
 ---
-Read `workflows/runtime.md` once through OH's resource entry. Without an initiative,
-ask which one the person wants and wait; `plans list` may help but is not a prerequisite.
+Read `workflows/runtime.md` once through OH's resource entry and apply its saved-work
+entry before preparing scope or asking for an initiative. Resume a matching saved
+draft or decision. With no subject, show unfinished Design work and ask once; only
+when none exists ask which initiative to design. `plans list` may help.
 Read `plans path`, resolve an undecided repo/private location once and show its actual
 folder. Respect project policy; OH adds no mandatory ADR process.
 
 Prepare one bounded planning task for the requested initiative with `scope prepare
 <manifest.json> --workflow design --human <native-locator.json>` (Codex `scope_prepare`).
-The native request authorizes drafting directly; do not add a scope-approval question.
+Include `design: "<initiative-slug>"` in the manifest so the saved scope identifies
+its initiative. The native request authorizes drafting directly; do not add a scope-approval question.
 Keep project requirements, ordered tasks, dependencies and acceptance checks in the
 plan; keep difficulty/model/effort in external execution evidence.
 

@@ -40,8 +40,8 @@ def main(argv=None):
     evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
     complete=sub.add_parser('complete');complete.add_argument('attempt')
     decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator',type=Path);decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
-    resume=sub.add_parser('resume');resume.add_argument('--human',type=Path)
-    sub.add_parser('status')
+    resume=sub.add_parser('resume');resume.add_argument('--human',type=Path);resume.add_argument('--run')
+    status=sub.add_parser('status');status.add_argument('--saved',action='store_true')
     review=sub.add_parser('review');review.add_argument('arguments',nargs='*');review.add_argument('--human',type=Path)
     deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*');deliver.add_argument('--human',type=Path)
     prep=sub.add_parser('prepare');prep.add_argument('manifest',type=Path);prep.add_argument('--review');prep.add_argument('--pr',type=int)
@@ -80,10 +80,10 @@ def main(argv=None):
         elif args.command=='evidence':result=native.attach_evidence(root,read_json(args.attachment))
         elif args.command=='complete':result=native.complete(root,args.attempt)
         elif args.command=='decision':result=native.decision(root,args.kind,read_json(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
-        elif args.command=='resume':result=native.resume(root,read_json(args.human) if args.human else None)
+        elif args.command=='resume':result=native.resume(root,read_json(args.human) if args.human else None,args.run)
         elif args.command=='status':
             from .workflow import active_file
-            result=native.select(root) if active_file(root).exists() else {'status':'none','next':'Use /oh-propose <idea>, /oh-design <initiative>, or /oh-deliver <design or quick fix> (in Codex: $oh-propose, $oh-design, $oh-deliver).'}
+            result=(native.saved_work(root) if args.saved else native.select(root)) if args.saved or active_file(root).exists() else {'status':'none','next':'Use /oh-propose <idea>, /oh-design <initiative>, or /oh-deliver <design or quick fix> (in Codex: $oh-propose, $oh-design, $oh-deliver).'}
         elif args.command=='review':result=native.review(root,shlex.join(args.arguments),read_json(args.human) if args.human else None)
         elif args.command=='deliver':
             from .delivery import parse,listing
