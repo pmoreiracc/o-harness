@@ -389,9 +389,23 @@ actual checks, commit/artifact and next decision. Say no findings only when none
 
 Publication requires the human decision bound to reviewed HEAD and destination. Use
 `publication` to reconcile the existing PR before pushing or creating one. A failed
-lookup is not permission to create another. Generate `pr-summary` into an external
-file, push the authorized head/branch without force, and create or update only the
-matching PR with `--body-file`. Re-run publication reconciliation after an uncertain
+lookup is not permission to create another. Use `pr-summary` as verified facts for a
+human-readable PR body, rather than copying an audit dump. Per task, explain the
+completed behavior, review round count, final receipt identity and elapsed time,
+verification, final verdict, and concise findings with their actual dispositions.
+Read the complete final review receipt and summarize its evidence: anchors read,
+scope examined, concrete attacks and results, and limits. Keep that narrative fluid;
+no rigid receipt headings or prose parser are required. Summarize earlier rounds
+and recurring findings; do not paste full receipts, repeated findings, raw JSON,
+transcripts or local evidence paths. Do not move an audit dump into PR comments
+as a size workaround. Include why work stopped and the short task checkpoint history. Full original receipts, findings and decisions stay in OH's
+saved workflow history; a PR summary never replaces them or grants authority.
+Retain the single generated `oh-publication` comment unchanged so reconciliation
+can recognize an updated description independently of its prose. For a large batch,
+summarize and group the findings further; never split approved work or rerun reviews
+because of description length. Write the finished body to an external file, push
+the authorized head/branch without force, and create or update only the matching
+PR with `--body-file`. Re-run publication reconciliation after an uncertain
 response. Attach the PR in Codex with `attach_artifact` when available. Human merging
 remains separate; published cycles stay terminal.
 

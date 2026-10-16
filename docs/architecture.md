@@ -144,9 +144,15 @@ repositories and their Git directories.
 
 Publication permission binds the reviewed head and destination. Reconciliation reuses
 an existing PR and never treats failed discovery as authority to create a duplicate.
-`oh pr-summary` validates retained commit evidence and renders actual changes, checks,
-findings and decisions. Portable evidence belongs in hidden PR metadata; local reports
-retain original references. A successful push is not CI success, and the person merges.
+`oh pr-summary` validates retained commit evidence and renders a factual starting
+point for the native host's human-readable PR body: task summaries, verification,
+final review evidence and verdict, finding dispositions,
+and the stop boundary. Full receipts and commit-bound evidence remain in OH's
+external saved workflow history; no duplicate JSON journal is embedded in a PR.
+A compact publication identifier lets reconciliation recognize a description update
+while allowing the host to summarize its prose. That identifier grants no authority;
+local evidence and publication approval are still validated against the exact commits.
+A successful push is not CI success, and the person merges.
 
 Interrupted completion/publication uses retained evidence without inventing another
 grant or repeating already verified work. Historical receipts remain historical; a

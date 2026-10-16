@@ -809,7 +809,15 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(scope['pr_target']['review_base'],base)
         self.assertIn(manual,Path(selected['preview']).read_text())
         native.approve_scope(self.root,selected['scope_id'],self.human())
-        self.assess();self.implement();review=self.reviewed()
+        self.assess();self.implement()
+        # This report used to exceed the PR budget when OH copied its finding
+        # into both the readable history and the hidden machine packet.
+        claim='Concrete historical defect with extensive supporting detail. '*600
+        first=self.reviewed({'verdict':'blocking','summary':'Needs repair.',
+            'findings':[{'severity':'blocking','family':'large-report','description':claim}]})
+        self.implement()
+        review=self.reviewed({'verdict':'clean','summary':'Rechecked the repair.',
+            'findings':[],'evidence':EVIDENCE})
         packet=json.loads((Path(review['evidence'])/'task-context.json').read_text())
         self.assertEqual(packet['included_original_work']['covers'],[manual])
         native.complete(self.root,review['id'])
@@ -825,7 +833,36 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['publication'],grant)
         body=publication.render(self.root)
         self.assertIn(manual,body)
-        pr=pull_request(state)|{'body':body}
+        self.assertIn('## Task 1',body)
+        self.assertIn('Review rounds: **2**',body)
+        self.assertIn('Final receipt: `'+review['id']+'`',body)
+        self.assertIn('### Final evidence manifest',body)
+        self.assertIn('### Findings and dispositions',body)
+        self.assertIn('**fixed**',body)
+        self.assertIn('## Stop reason',body)
+        self.assertIn('After task 1: pr; permitted tasks: none;',body)
+        self.assertNotIn('(journal ',body)
+        self.assertEqual(body.count(claim.strip()),1)
+        self.assertNotIn('oh-review:start',body)
+        self.assertNotIn('```json',body)
+        self.assertEqual(json.loads((Path(first['evidence'])/'result.json').read_text())['findings'][0]['description'],claim)
+        # A host-written narrative may summarize long receipts without losing
+        # the exact publication identity. Missing/stale/duplicate IDs stay pending.
+        from copy import deepcopy
+        tampered=deepcopy(state)
+        tampered['commit_intents']['1']['publication']['title']='Unreviewed replacement title'
+        with patch('oh.publication.made',return_value=tampered),self.assertRaisesRegex(Refused,'differs from committed OH-Evidence'):
+            publication.render(self.root)
+        publication_key=publication.summary_identity(body)
+        identity='<!-- oh-publication:'+publication_key+' -->'
+        stale_key=('0' if publication_key[0]!='0' else '1')+publication_key[1:]
+        pr=pull_request(state)|{'body':'A concise narrative composed by the native host.\n'+identity}
+        with patch('oh.publication.github',return_value=pr):
+            for invalid in ('No publication identity.','<!-- oh-publication:'+stale_key+' -->',identity+'\n'+identity):
+                pr['body']=invalid
+                self.assertTrue(publication.discover(self.root,state)['pending_update'])
+            pr['body']='A concise narrative composed by the native host.\n'+identity
+            self.assertFalse(publication.discover(self.root,state)['pending_update'])
         def github(root,host,path,**kwargs):return [pr] if kwargs.get('pages') else pr
         with patch('oh.publication.github',side_effect=github):
             saved=publication.reconcile(self.root)
