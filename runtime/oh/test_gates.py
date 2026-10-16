@@ -38,7 +38,16 @@ class GateTest(unittest.TestCase):
         def read(rows,subject=None):
             path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
             return native_human(self.root,locator,subject=self.subject if subject is None else subject)
-        approved=read([initial,call,message(reply)])
+        # Submission acknowledgement and a quiet native wait leave the question
+        # unanswered. Ending the turn after posting is not a human choice either.
+        submitted={'type':'response_item','payload':{'type':'function_call_output',
+                   'call_id':'current','output':json.dumps({'accepted':True})}}
+        waiting={'type':'response_item','payload':{'type':'function_call','name':'clock.sleep',
+                 'call_id':'wait','arguments':json.dumps({'duration_ms':30000})}}
+        finished={'type':'event_msg','payload':{'type':'task_complete','last_agent_message':'Select a choice.'}}
+        for pending in ([submitted,waiting],[submitted,finished]):
+            with self.subTest(pending=pending[-1]['type']),self.assertRaises(Refused):read([initial,call,*pending])
+        approved=read([initial,call,submitted,waiting,message(reply)])
         self.assertEqual(approved['prompt'],'Proceed with the task')
         cancellation={'type':'event_msg','timestamp':'2026-10-15T12:00:03Z','payload':{
             'type':'user_message','turn_id':'cancel','message':'No. Cancel that scope; do not implement it.'}}

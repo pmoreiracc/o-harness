@@ -144,6 +144,33 @@ startup delay, Windows receipt path limits, background-tool completion evidence 
 broader host UX validation. The native Stop limitation remains #81. Existing #82–#89
 fixes stay in this branch; this follow-up does not close or approve them.
 
+## Codex pending-menu regression
+
+Fresh Mac Codex testing of e154264 found a lost interaction guarantee: the coordinator
+posted request_user_input_async, received accepted:true, then finalized 3.6 seconds
+later without a human answer or a wait. The user observed the menu disappear before
+selection. The refactor had removed the previously working keep-turn-open instruction.
+This is tracked separately in [regression #98](https://github.com/pmoreiracc/o-harness/issues/98).
+
+The shared native-decision guidance now explicitly keeps an asynchronous question open
+with an actually available native interruptible wait, until the person replies. It
+forbids a final response while pending and treats submission as acknowledgement only.
+Where that cannot be supported, use an available blocking question or one plain-chat
+question, rather than posting an async menu and immediately completing the turn.
+Reopen an unanswered missing menu without resetting work or requiring a repeated
+command. The isolated Config skill follows the same rule. No menu engine or runner
+state was introduced.
+
+The existing native gate scenario now checks that submission acknowledgement, waiting
+and task completion without a human answer grant no authority. The existing package
+scenario checks that both hosts receive the exact current shared guidance. These
+synthetic tests cannot prove model compliance or menu rendering: the developer must
+leave a fresh Codex menu unanswered beyond the previous disappearance interval, then
+answer it. Native tools and original authority validation remain responsible for the
+actual question/reply. The final focused run passed all three native gate/package
+cases in 10.967 seconds; syntax/Windows-risk checks and git diff --check passed.
+Live confirmation and fresh independent review remain pending.
+
 ## Local verification record
 
 Implementation and automated checks are complete. Live host acceptance, independent

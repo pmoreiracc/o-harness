@@ -17,5 +17,11 @@ Explain settings through their practical effect, for example “This project wil
 1. Map it to the keys in the list it names; one request may change several. If a part matches nothing in the list, say that OH has no such setting and leave it out; don't invent one. If it's ambiguous, ask which of the matching keys they mean.
 2. A change applies to this project unless the user says it's for every project; then add `--global`. Checks always belong to the project.
 3. Show each `key: current → new` with its meaning and project/global scope. If their request leaves a real choice, ask directly with Claude `AskUserQuestion` or Codex's available native question tool; use a direct text reply when unavailable. Do not use an OH confirmation tool or create a second approval for an explicit unambiguous request. Silence grants nothing.
+   For a Codex asynchronous question, submission is not an answer. Keep the turn open
+   with an available native interruptible wait such as `clock.sleep` (at most 60 seconds
+   per call) until the person replies; never send a final response while it is pending.
+   Without such a wait, use an available blocking question or ask once in plain chat
+   and wait for their next message. Restore a missing unanswered question without
+   making the person repeat their settings request.
 4. Apply the authorized values with `<plugin>/scripts/oh --root <project-root> config set <key> <value>` in the shell on either host (configuration writes use this command, not an OH tool), once per key (or `config unset <key>` to restore inheritance). `config set checks '<JSON list>'` replaces the whole list, so show and preserve the complete intended list.
 5. Report the command's result exactly, including its note. Never edit the settings file yourself: `oh config set` is the only writer, and it rejects unknown keys and invalid values.

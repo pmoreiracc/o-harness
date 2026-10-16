@@ -224,10 +224,32 @@ an earlier clean completion does not resolve a newer blocker.
 ## Native decisions
 
 Use Claude `AskUserQuestion` or Codex's available native question tool directly for real
-decisions. Keep choices short and explain their effects in chat. If the available tool
-cannot collect that decision or a native menu fails, show the question once and wait for
-a direct human reply. Preserve an existing valid answer; do not require exact wording,
-repeat a command, poll an OH menu or synthesize an approval in an agent message.
+decisions. Keep choices short and explain their effects in chat.
+
+In Codex, `request_user_input_async` posts a question and returns immediately. An
+`accepted: true` result only acknowledges submission; it is not the person's answer.
+Use it only when a native interruptible wait tool is also available. After posting,
+keep the turn open and wait quietly with `clock.sleep` (at most 60 seconds per call),
+or the host's equivalent interruptible wait, until the actual human reply arrives.
+Do not send a final response while the question is pending: completing the turn can
+dismiss its menu before the person clicks. Do not post a second question, start the
+selected work or infer a choice from silence, elapsed time or tool success. This
+applies to Resume and every other native decision, including scope, findings,
+allowances, document approval and publication.
+
+If the host has a blocking native question tool, its actual returned human answer
+can be used directly. If an asynchronous question cannot be kept open, use the
+blocking tool when available; otherwise ask once in plain chat and end with that
+question, then wait for the person's next message. Do not post an asynchronous menu
+and immediately end the turn with instructions to click it. Claude AskUserQuestion
+waits for its native answer; never supply an `answers` field on the person's behalf.
+
+If a menu disappears or is closed without an answer, preserve the unresolved decision
+and show that same question again through the available native surface, keeping an
+asynchronous question open as above. Fall back to plain chat when necessary. Never
+make the person restart the work or repeat their command to restore a missing menu.
+Preserve an existing valid answer; do not require exact wording, poll an OH menu or
+synthesize an approval in an agent message.
 
 Record consequential choices with `decision` and the actual native human locator:
 `continue`, `grant-review`, `accept-concerns`, `route-scope`, `dismiss-scope`, `publish`,
