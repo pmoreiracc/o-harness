@@ -17,7 +17,8 @@ def family_fields(value):
 
 def family_identity(finding):
     """Read historical inline metadata without changing its original evidence."""
-    return family_fields(finding.get('family') or finding['description'])['family']
+    family=finding.get('family')
+    return family_fields(family if isinstance(family,str) and family else finding['description'])['family']
 
 
 def report(attempt):

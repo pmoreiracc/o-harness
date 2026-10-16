@@ -397,25 +397,43 @@ def _report(text):
     for candidate in (text,text.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()):
         try:value=json.loads(candidate)
         except (ValueError,TypeError):continue
-        if isinstance(value,dict):return value
+        if isinstance(value,list):return {'summary':text,'findings':value}
+        if isinstance(value,dict):
+            if 'findings' not in value and 'severity' in value:return {'summary':text,'findings':[value]}
+            return value
     findings=[]
-    # Ignore fenced examples, while accepting a report wrapped in one outer fence.
-    readable=text.strip()
-    lines=readable.splitlines(keepends=True)
-    opening=re.match(r'^\s*(`{3,}|~{3,})',lines[0]) if lines else None
-    if opening and len(lines)>1 and re.fullmatch(r'\s*'+re.escape(opening[1])+r'\s*',lines[-1]) and not any(re.fullmatch(r'\s*'+re.escape(opening[1])+r'\s*',line) for line in lines[1:-1]):
+    # Interpret presentation once: examples cannot supply findings or a verdict.
+    from textwrap import dedent
+    lines=dedent(text).splitlines(keepends=True)
+    while lines and not lines[0].strip():lines.pop(0)
+    while lines and not lines[-1].strip():lines.pop()
+    opening=re.match(r'^[ \t]*(`{3,}|~{3,})',lines[0]) if lines else None
+    closing=r'[ \t]*'+re.escape(opening[1][0])+r'{'+str(len(opening[1]))+r',}[ \t]*' if opening else ''
+    if opening and len(lines)>1 and re.fullmatch(closing,lines[-1].rstrip('\r\n')) and not any(re.fullmatch(closing,line.rstrip('\r\n')) for line in lines[1:-1]):
         lines=lines[1:-1]
-    visible=[];fence=None
-    for line in lines:
-        marker=re.match(r'^\s*(`{3,}|~{3,})',line)
+    visible=[];fence=None;fence_start=None;code=None;lists=[]
+    for line_number,line in enumerate(lines):
+        expanded=line.expandtabs(4);indent=len(expanded)-len(expanded.lstrip(' '))
+        marker=re.match(r'^[ \t]*(`{3,}|~{3,})',line)
         if fence:
-            if marker and marker[1][0]==fence[0] and len(marker[1])>=len(fence):fence=None
-            visible.append('\n')
-        elif marker:fence=marker[1];visible.append('\n')
-        else:visible.append(line)
+            if marker and marker[1][0]==fence[0] and len(marker[1])>=len(fence) and not line[marker.end():].strip():fence=None
+            visible.append('\n');continue
+        if code is not None:
+            if not line.strip() or indent>=code:visible.append('\n');continue
+            code=None
+        if not line.strip():visible.append(line);continue
+        while lists and indent<lists[-1]:lists.pop()
+        threshold=(lists[-1] if lists else 0)+4
+        if indent>=threshold:code=threshold;visible.append('\n');continue
+        if marker:fence=marker[1];fence_start=line_number;visible.append('\n');continue
+        if expanded.lstrip().startswith('>'):visible.append('\n');continue
+        item=re.match(r'^[ ]*(?:[-+*]|\d+[.)])[ \t]+',expanded)
+        if item:lists.append(item.end())
+        visible.append(line)
     readable=''.join(visible)
-    # Unknown finding-like headings keep their positions as incomplete fragments.
-    starts=list(re.finditer(r'(?im)^\s*(?:[-*#]\s*)*(?:`?\[(BLOCKING|CONCERN|SCOPE|(?-i:[A-Z][A-Z_-]*))\](?!\()`?\s*:?|(BLOCKING|CONCERN|SCOPE)\s*:)\s*(.+)$',readable))
+    prefix=r'^[ \t]*(?:(?:[-+*#_]|\d+[.)])[ \t]*)*'
+    # Unknown bracketed severities remain fragments, including lowercase and P1.
+    starts=list(re.finditer(r'(?im)'+prefix+r'(?:`?\[([A-Z][A-Z0-9_-]+)\](?!\()`?[*_ \t]*:?|(BLOCKING|CONCERN|SCOPE)[*_` \t]*:)[ \t]*(.+)$',readable))
     labels={'anchor':'anchor','rule':'anchor','where':'path','location':'path','path':'path',
             'failure':'failure','why':'failure','fix':'fix','correction':'fix','smallest correction':'fix',
             'family':'family','defect family':'family','relation':'relation'}
@@ -431,9 +449,14 @@ def _report(text):
                     from .handoff import family_fields
                     finding.update(family_fields(finding[key]))
         finding.setdefault('family',finding['description']);findings.append(finding)
+    if fence:findings.append({'severity':'unknown','description':'Unterminated fenced section; inspect the original review.',
+                              'text':''.join(lines[fence_start:])})
     assessment=re.search(r'(?im)^\s*difficulty\s*:\s*(simple|standard|complex)\b',text)
     result={'summary':text,'findings':findings}
-    if re.search(r'(?im)^\s*(?:[*# ]*verdict\s*[:\u2014-]\s*)?(?:clean\b|no findings\b)',readable):result['verdict']='clean'
+    # Only unqualified conclusions count; imperative/failed-review prose does not.
+    conclusion=r'(?:clean|no (?:findings|defects|issues)(?: (?:were )?(?:found|identified|reported|observed))?|0 (?:blockers?|blocking(?: findings?)?|concerns?|scope(?: findings?)?|findings|defects|issues))'
+    plain=re.sub(r'[*_`]', '',readable)
+    if re.search(r'(?im)'+prefix+r'(?:verdict[ \t]*[:\u2013\u2014-][ \t]*)?'+conclusion+r'(?:[ \t]*[,.;:!|/\u2013\u2014()-][ \t]*'+conclusion+r')*[ \t]*[.!)]*[ \t]*$',plain):result['verdict']='clean'
     if assessment:result.update(difficulty=assessment[1].lower(),rationale=text)
     return result
 
@@ -452,9 +475,15 @@ def retain(root,attempt_id,locator):
         findings=[];positions=[];fragments=[]
         for position,finding in enumerate(raw_findings if isinstance(raw_findings,list) else [raw_findings],1):
             if isinstance(finding,dict) and finding.get('severity') in ('blocking','concern','scope') and isinstance(finding.get('description'),str):
-                findings.append(finding);positions.append(position)
+                projected=dict(finding)
+                invalid=[key for key in ('family','relation','path','anchor','failure','fix')
+                         if key in finding and not isinstance(finding[key],str)]
+                if invalid:
+                    fragments.append({'position':position,'finding':finding})
+                    for key in invalid:projected.pop(key)
+                findings.append(projected);positions.append(position)
             else:fragments.append({'position':position,'finding':finding})
-        malformed=not isinstance(raw_findings,list) or len(findings)!=len(raw_findings)
+        malformed=not isinstance(raw_findings,list) or bool(fragments)
         for finding in findings:
             finding.setdefault('family',finding['description']);finding.setdefault('path','')
         if source.get('status')!='completed':outcome=source.get('status','failed')
@@ -466,7 +495,7 @@ def retain(root,attempt_id,locator):
                 if any(f['severity']=='blocking' for f in findings):outcome='blocking'
                 elif malformed:outcome='review_incomplete'
                 elif findings:outcome='needs_resolution'
-                elif report.get('verdict')=='clean' or re.search(r'(?im)^\s*(?:[*# ]*verdict\s*[:—-]\s*)?(?:clean\b|no findings\b)',text):outcome='clean'
+                elif report.get('verdict')=='clean':outcome='clean'
                 else:outcome='review_incomplete'
             elif attempt['role']=='assessment':outcome='assessed' if report.get('difficulty') in ('simple','standard','complex') else 'unfinished'
             elif report.get('status') in ('blocked','unfinished'):outcome=report['status']
@@ -488,7 +517,7 @@ def retain(root,attempt_id,locator):
                       duration_ms=source.get('duration_ms'),native_source=source.get('record_hashes',[]))
         if malformed:
             result.update(finding_positions=positions,review_fragments=fragments,
-                          report_issues=['Some findings could not be classified; inspect the retained original positions and fragments.'])
+                          report_issues=['Some finding evidence or metadata could not be classified; inspect the retained original positions and fragments.'])
         if source.get('status')=='binding_failed':
             result['native_failure']={k:source.get(k) for k in ('native_id','tool_use_id','profile','admitted_profile','requested_profile','requested_context','binding_issues','terminal_status')}
         if attempt['role'] in ('implementation','analysis'):result.update(subject)

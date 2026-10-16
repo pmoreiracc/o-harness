@@ -417,11 +417,44 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
     def test_imperfect_report_preserves_every_recognizable_finding(self):
         from . import native
         self.approve();self.assess();self.implement()
-        headings=self.reviewed('Clean. No findings.\n\n## Scope examined\nThe changed route and its callers were inspected.')
-        self.assertEqual(headings['outcome'],'clean');self.assertEqual(headings['findings'],[])
+        examples=self.reviewed('Clean up the stale state before retrying.\nNo findings were established because the child failed.\n\nExample only:\n```text\nClean.\n```')
+        self.assertEqual(examples['outcome'],'review_incomplete');self.assertEqual(examples['findings'],[])
+        with self.assertRaises(Refused):native.complete(self.root,examples['id'])
+        for heading in ('[BLOCKING]', '1. [BLOCKING]', '1) [BLOCKING]', '+ [BLOCKING]',
+                        '## **[BLOCKING]**', '**BLOCKING**:'):
+            with self.subTest(heading=heading):
+                parsed=native._report(heading+' Accepted X loses output.\nVerdict: clean')
+                self.assertEqual([f['severity'] for f in parsed['findings']],['blocking'])
+        for severity in ('[UNKNOWN]', '[unknown]', '[P1]'):
+            with self.subTest(severity=severity):
+                parsed=native._report(severity+' Unclassified risk.\n[BLOCKING] Known failure.')
+                self.assertEqual(len(parsed['findings']),2)
+                self.assertNotIn(parsed['findings'][0]['severity'],('blocking','concern','scope'))
+        for prose in ('Clean up the stale state before retrying.',
+                      'No findings were established because the child failed.',
+                      'Example only:\n```text\nClean.\n```'):
+            with self.subTest(prose=prose):self.assertNotEqual(native._report(prose).get('verdict'),'clean')
+        for clean in ('Clean. No findings.', '**Verdict:** CLEAN - no defects found.',
+                      'Verdict: CLEAN (0 blockers, 0 concerns, 0 scope findings).',
+                      '```text\nClean.\n```',
+                      'No findings.\n\nExample:\n\n    [BLOCKING] Demonstration only.',
+                      'No findings.\n\n> [BLOCKING] Demonstration only.'):
+            with self.subTest(clean=clean):
+                parsed=native._report(clean)
+                self.assertEqual((parsed.get('verdict'),parsed['findings']),('clean',[]))
+        nested=native._report('- [BLOCKING] Actual defect.\n    Family: actual\n\n      [BLOCKING] Indented example.\n      Family: example\n')
+        self.assertEqual([f['family'] for f in nested['findings']],['actual'])
+        root_finding={'severity':'blocking','description':'Accepted X loses output.'}
+        for structured in (root_finding,[root_finding]):
+            with self.subTest(structured=structured):
+                self.assertEqual(native._report(json.dumps(structured))['findings'],[root_finding])
+        unfinished=native._report('No findings.\n\n```text\n[BLOCKING] Uncertain returned section.')
+        self.assertEqual(unfinished['findings'][0]['severity'],'unknown')
+        self.assertIn('[BLOCKING] Uncertain returned section.',unfinished['findings'][0]['text'])
         report={'verdict':'clean','summary':'Imperfect report.','findings':[
             {'severity':'unknown','description':'Unclassified neighboring risk.'},
-            {'severity':'blocking','description':'Concrete retained defect.','family':'retained','path':'output.txt'}]}
+            {'severity':'blocking','description':'Concrete retained defect.','family':'retained','path':'output.txt'},
+            {'severity':'concern','description':'Identifiable concern with imperfect metadata.','family':{'unclassified':'family'}}]}
         review=self.reviewed(report)
         self.assertEqual(review['findings'][0]['description'],'Concrete retained defect.')
         self.assertNotEqual(review['outcome'],'clean')
@@ -430,17 +463,25 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         from .handoff import finding_index
         index=finding_index(load_run(self.root)[1],'1')
         self.assertEqual(index['families'][0]['occurrences'][0]['id'],review['id']+'#2')
-        self.assertEqual(index['incomplete_reviews'][0]['fragments'],[{'position':1,'finding':report['findings'][0]}])
+        self.assertEqual(index['incomplete_reviews'][-1]['fragments'],[{'position':1,'finding':report['findings'][0]},
+            {'position':3,'finding':report['findings'][2]}])
+        self.assertEqual(index['families'][1]['occurrences'][0]['id'],review['id']+'#3')
+        from .handoff import family_identity
+        self.assertEqual(family_identity(report['findings'][2]),report['findings'][2]['description'])
         self.assertIn('Unclassified neighboring risk.',(Path(review['evidence'])/'review.md').read_text())
         with self.assertRaises(Refused):native.complete(self.root,review['id'])
-        readable='''[UNKNOWN] Unclassified neighboring risk.
+        readable='''Verdict: clean
+1. [unknown] Unclassified neighboring risk.
 Location: sibling.py:1
 Why: Accepted input X loses its output.
 
-**[BLOCKING] Concrete retained defect.**
+2. **[BLOCKING] Concrete retained defect.**
 - **Family:** retained
 - **Location:** output.txt
 - **Why:** The output is lost.
+
+[BLOCKING] Unnumbered sibling stays visible.
+Family: sibling
 
 ```text
 [BLOCKING] A fenced example is not another finding.
@@ -448,10 +489,10 @@ Family: example
 ```
 '''
         second=self.reviewed(readable)
-        self.assertEqual(len(second['findings']),1)
+        self.assertEqual(len(second['findings']),2)
         self.assertEqual(second['findings'][0]['family'],'retained')
         self.assertEqual(second['findings'][0]['failure'],'The output is lost.')
-        self.assertEqual(second['finding_positions'],[2])
+        self.assertEqual(second['finding_positions'],[2,3])
         self.assertEqual(second['review_fragments'][0]['finding']['severity'],'unknown')
         self.assertTrue(second['report_issues'])
         self.assertEqual(native._report('````text\n'+readable+'````')['findings'],native._report(readable)['findings'])
@@ -459,7 +500,7 @@ Family: example
         self.assertEqual(native._report('```text\nClean.\n```')['verdict'],'clean')
         index=finding_index(load_run(self.root)[1],'1')
         self.assertEqual(index['families'][0]['occurrences'][-1]['id'],second['id']+'#2')
-        self.assertEqual(len(index['incomplete_reviews']),2)
+        self.assertEqual(len(index['incomplete_reviews']),3)
         self.assertEqual(json.loads((Path(second['evidence'])/'native-result.json').read_text())['text'],readable)
         with self.assertRaises(Refused):native.complete(self.root,second['id'])
         repair=native.admit(self.root,'implementation')
