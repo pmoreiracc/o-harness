@@ -420,6 +420,12 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         from . import native
         from .handoff import finding_index
         from .review_report import PREFIX, check
+        from .hosts import REVIEW_SCHEMA
+        # Keep every supported legacy verdict, not a hand-picked subset of producers.
+        for verdict in REVIEW_SCHEMA['properties']['verdict']['enum']:
+            findings=[] if verdict=='clean' else [{'severity':verdict,'family':'legacy','description':'Legacy concrete claim.'}]
+            with self.subTest(legacy_verdict=verdict):
+                self.assertTrue(check(json.dumps({'verdict':verdict,'findings':findings}))['valid'])
         # Prose, including a count or an explicit failure, never grants clean authority.
         for prose in ('0 concerns.', 'No findings. INCOMPLETE: review failed.'):
             self.assertFalse(check(prose)['valid'])

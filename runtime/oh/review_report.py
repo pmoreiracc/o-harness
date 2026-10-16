@@ -33,7 +33,7 @@ def read(text):
     # Existing JSON producers expressed findings directly, without a separate verdict.
     if not structured and verdict is None and isinstance(findings, list) and findings:
         report['verdict'] = verdict = 'findings'
-    allowed = ('clean', 'findings', 'incomplete') + (() if structured else ('blocking', 'concern'))
+    allowed = ('clean', 'findings', 'incomplete') + (() if structured else SEVERITIES)
     if verdict not in allowed:issues.append('Decision verdict must be clean, findings or incomplete.')
     elif (verdict == 'clean' and findings) or (verdict == 'findings' and not findings):
         issues.append('Decision verdict and finding list disagree.')

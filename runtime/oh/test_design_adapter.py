@@ -36,7 +36,7 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['done'],[])
         native.verify(self.root)
         finding={'severity':'scope','description':'Logout cleanup belongs to a later task.','family':'logout','path':'logout.py'}
-        review=self.finish_attempt('review',{'verdict':'concern','summary':'Retain later work in the mutable design.','findings':[finding]})
+        review=self.finish_attempt('review',{'verdict':'scope','summary':'Retain later work in the mutable design.','findings':[finding]})
         before=load_run(self.root)[1]
         native.decision(self.root,'route-scope',self.human('route scope'),attempt=review['id'])
         routed=self.design.read_text()
