@@ -410,7 +410,10 @@ def _child(root,state,attempt,locator,*,binding):
                 if not newer(p.get('timestamp'),attempt['started_at']):raise Refused('The child predates this admission; launch a fresh agent')
                 meta=(r,data)
             if r.get('type')=='turn_context':profile={'model':p.get('model'),'effort':p.get('effort') or p.get('reasoning_effort')}
-        if not meta or not profile:raise Saving('Native child metadata/profile is not saved yet')
+        if not meta:raise Saving('Native child metadata is not saved yet')
+        if not profile:
+            if binding:raise Saving('Native child profile is not saved yet')
+            issues.append('Actual native model/effort is unknown; no profile was saved.')
         name=meta[1].get('agent_path','').rsplit('/',1)[-1]
         if name!='oh_'+attempt['id'].replace('-',''):raise Refused('Native task name does not identify this immutable admission')
         for r in _records(parent_path):
@@ -427,6 +430,7 @@ def _child(root,state,attempt,locator,*,binding):
                 spawn=r;spawn_use=p.get('call_id')
         if not spawn:raise Refused('No fresh native spawn is attributable to this child')
     else:
+        actual=None
         if path.parent.name!='subagents' or path.parent.parent.name!=parent:raise Refused('Child is not in this parent’s native subagents')
         for r in child_records:
             if r.get('agentId')!=child or r.get('sessionId')!=parent:continue
@@ -436,6 +440,7 @@ def _child(root,state,attempt,locator,*,binding):
                 if actual!=requested and not actual.startswith('claude-'+requested+'-'):mismatch('Native child model differs from admission')
                 if not newer(r.get('timestamp'),attempt['started_at']):raise Refused('The native child predates this admission')
                 meta=(r,{})
+            elif not meta and newer(r.get('timestamp'),attempt['started_at']):meta=(r,{})
         for r in _records(parent_path):
             for p in ((r.get('message') or {}).get('content') or []) if isinstance((r.get('message') or {}).get('content'),list) else []:
                 if p.get('type')!='tool_use' or p.get('name') not in ('Agent','Task') or p.get('id')!=locator.get('tool_use_id'):continue
@@ -445,8 +450,8 @@ def _child(root,state,attempt,locator,*,binding):
                 context={k:args.get(k) for k in ('subagent_type','fork_context','fork_turns')}
                 if requested_profile!=attempt['profile']:mismatch('Native spawn must explicitly record the admitted model and effort')
                 if args.get('subagent_type')=='fork' or args.get('fork_context') or args.get('fork_turns') not in (None,'none'):mismatch('The child must start without parent history')
-                spawn=r;profile={'model':actual,'effort':args.get('effort')} if meta else None
-                if meta and (actual==attempt['profile']['model'] or actual.startswith('claude-'+attempt['profile']['model']+'-')):profile['model']=attempt['profile']['model']
+                spawn=r;profile={'model':actual,'effort':args.get('effort')} if actual else None
+                if actual and (actual==attempt['profile']['model'] or actual.startswith('claude-'+attempt['profile']['model']+'-')):profile['model']=attempt['profile']['model']
         if not meta or not spawn:raise Saving('Native child identity or explicit spawn settings are not saved yet')
         linked=False
         for record in _records(parent_path):
@@ -454,7 +459,10 @@ def _child(root,state,attempt,locator,*,binding):
             parts=(record.get('message') or {}).get('content')
             if isinstance(result,dict) and result.get('agentId')==child and isinstance(parts,list) and any(isinstance(p,dict) and p.get('type')=='tool_result' and p.get('tool_use_id')==locator.get('tool_use_id') for p in parts):linked=True
         if not linked:raise Saving('The native spawn result has not attributed this child to its call yet')
-    if profile!=attempt['profile']:mismatch('Actual native model/effort differs from the immutable admission')
+    if profile is None:
+        if binding:raise Saving('Native child profile is not saved yet')
+        if not issues:issues.append('Actual native model/effort is unknown; no profile was saved.')
+    elif profile!=attempt['profile']:mismatch('Actual native model/effort differs from the immutable admission')
     value={'child_session':child,'parent_session':parent,'transcript_path':str(path),'profile':profile,
            'tool_use_id':spawn_use,'record_hashes':[digest(meta[0]),digest(spawn)]}
     if not binding:value.update(binding_issues=issues,requested_profile=requested_profile,requested_context=context)

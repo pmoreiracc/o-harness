@@ -399,16 +399,31 @@ def _report(text):
         except (ValueError,TypeError):continue
         if isinstance(value,dict):return value
     findings=[]
-    # Readable reports need no fixed heading layout. Retain each recognized finding and labels.
-    starts=list(re.finditer(r'(?im)^\s*(?:[-*#]\s*)*(?:`?\[(BLOCKING|CONCERN|SCOPE)\]`?\s*:?|(BLOCKING|CONCERN|SCOPE)\s*:)\s*(.+)$',text))
+    # Ignore fenced examples, while accepting a report wrapped in one outer fence.
+    readable=text.strip()
+    lines=readable.splitlines(keepends=True)
+    opening=re.match(r'^\s*(`{3,}|~{3,})',lines[0]) if lines else None
+    if opening and len(lines)>1 and re.fullmatch(r'\s*'+re.escape(opening[1])+r'\s*',lines[-1]) and not any(re.fullmatch(r'\s*'+re.escape(opening[1])+r'\s*',line) for line in lines[1:-1]):
+        lines=lines[1:-1]
+    visible=[];fence=None
+    for line in lines:
+        marker=re.match(r'^\s*(`{3,}|~{3,})',line)
+        if fence:
+            if marker and marker[1][0]==fence[0] and len(marker[1])>=len(fence):fence=None
+            visible.append('\n')
+        elif marker:fence=marker[1];visible.append('\n')
+        else:visible.append(line)
+    readable=''.join(visible)
+    # Unknown finding-like headings keep their positions as incomplete fragments.
+    starts=list(re.finditer(r'(?im)^\s*(?:[-*#]\s*)*(?:`?\[(BLOCKING|CONCERN|SCOPE|(?-i:[A-Z][A-Z_-]*))\](?!\()`?\s*:?|(BLOCKING|CONCERN|SCOPE)\s*:)\s*(.+)$',readable))
     labels={'anchor':'anchor','rule':'anchor','where':'path','location':'path','path':'path',
             'failure':'failure','why':'failure','fix':'fix','correction':'fix','smallest correction':'fix',
             'family':'family','defect family':'family','relation':'relation'}
     for number,match in enumerate(starts):
-        end=starts[number+1].start() if number+1<len(starts) else len(text)
-        body=text[match.end():end]
-        finding={'severity':(match[1] or match[2]).lower(),'description':match[3].strip(),'path':''}
-        for field in re.finditer(r'(?im)^\s*(?:[-*]\s*)?\*{0,2}([A-Za-z -]+)\*{0,2}\s*:\s*(.*)$',body):
+        end=starts[number+1].start() if number+1<len(starts) else len(readable)
+        body=readable[match.end():end]
+        finding={'severity':(match[1] or match[2]).lower(),'description':match[3].strip('* `'),'path':''}
+        for field in re.finditer(r'(?im)^\s*(?:[-*]\s*)?\*{0,2}([A-Za-z -]+)\*{0,2}\s*:\*{0,2}\s*(.*)$',body):
             key=labels.get(field[1].strip().casefold())
             if key:
                 finding[key]=field[2].strip('* ')
@@ -418,6 +433,7 @@ def _report(text):
         finding.setdefault('family',finding['description']);findings.append(finding)
     assessment=re.search(r'(?im)^\s*difficulty\s*:\s*(simple|standard|complex)\b',text)
     result={'summary':text,'findings':findings}
+    if re.search(r'(?im)^\s*(?:[*# ]*verdict\s*[:\u2014-]\s*)?(?:clean\b|no findings\b)',readable):result['verdict']='clean'
     if assessment:result.update(difficulty=assessment[1].lower(),rationale=text)
     return result
 

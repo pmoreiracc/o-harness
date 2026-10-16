@@ -191,6 +191,33 @@ class AuthorityTest(unittest.TestCase):
                 self.assertEqual(failed['native_id'],'child')
                 self.assertEqual(failed['tool_use_id'],'spawn')
                 with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                if host=='codex':
+                    # Cancellation can precede the first turn/profile record forever.
+                    save(pr=launched,ch=children[:1])
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                    aborted={'type':'event_msg','payload':{'type':'turn_aborted','reason':'Cancelled before first turn.'}}
+                    save(pr=launched,ch=children[:1]+[aborted])
+                    cancelled=native_result(root,state,attempt,locator)
+                    self.assertEqual((cancelled['status'],cancelled['terminal_status']),('binding_failed','interrupted'))
+                    self.assertIsNone(cancelled['profile'])
+                    self.assertEqual(cancelled['admitted_profile'],profile)
+                    self.assertEqual((cancelled['native_id'],cancelled['tool_use_id']),('child','spawn'))
+                    self.assertTrue(cancelled['binding_issues'])
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                else:
+                    # The child may save identity but no model-bearing assistant turn.
+                    identity=deepcopy(final)
+                    save(pr=launched,ch=[identity])
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                    save(pr=launched+[killed[-1]],ch=[identity])
+                    cancelled=native_result(root,state,attempt,locator)
+                    self.assertEqual((cancelled['status'],cancelled['terminal_status']),('binding_failed','interrupted'))
+                    self.assertIsNone(cancelled['profile'])
+                    self.assertEqual(cancelled['admitted_profile'],profile)
+                    self.assertEqual((cancelled['native_id'],cancelled['tool_use_id']),('child','spawn'))
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
                 unrelated=deepcopy(parents)
                 if host=='codex':
                     other_args=args|{'task_name':'unrelated_earlier_task'}

@@ -90,6 +90,8 @@ have finished; an intermediate assistant `end_turn` does not establish quiescenc
 If binding is rejected, use native cancellation or wait for that child to finish, then
 retain with both its child identity and spawn tool-call identity. The terminal launch
 is retained as failed binding, consumes its original allowance and grants no completion.
+If interruption prevented a profile from being saved, the actual profile remains unknown;
+provable launch attribution and a saved terminal outcome still permit settlement.
 Send only a short handoff and evidence paths into the coordinator.
 A summary is not the retained report. Never run two implementation agents together or
 modify the subject while review is active. Completed reviewers are never resumed.

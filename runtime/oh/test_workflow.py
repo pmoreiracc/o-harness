@@ -433,6 +433,35 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(index['incomplete_reviews'][0]['fragments'],[{'position':1,'finding':report['findings'][0]}])
         self.assertIn('Unclassified neighboring risk.',(Path(review['evidence'])/'review.md').read_text())
         with self.assertRaises(Refused):native.complete(self.root,review['id'])
+        readable='''[UNKNOWN] Unclassified neighboring risk.
+Location: sibling.py:1
+Why: Accepted input X loses its output.
+
+**[BLOCKING] Concrete retained defect.**
+- **Family:** retained
+- **Location:** output.txt
+- **Why:** The output is lost.
+
+```text
+[BLOCKING] A fenced example is not another finding.
+Family: example
+```
+'''
+        second=self.reviewed(readable)
+        self.assertEqual(len(second['findings']),1)
+        self.assertEqual(second['findings'][0]['family'],'retained')
+        self.assertEqual(second['findings'][0]['failure'],'The output is lost.')
+        self.assertEqual(second['finding_positions'],[2])
+        self.assertEqual(second['review_fragments'][0]['finding']['severity'],'unknown')
+        self.assertTrue(second['report_issues'])
+        self.assertEqual(native._report('````text\n'+readable+'````')['findings'],native._report(readable)['findings'])
+        self.assertNotEqual(native._report('Example only:\n```text\nClean.\n```').get('verdict'),'clean')
+        self.assertEqual(native._report('```text\nClean.\n```')['verdict'],'clean')
+        index=finding_index(load_run(self.root)[1],'1')
+        self.assertEqual(index['families'][0]['occurrences'][-1]['id'],second['id']+'#2')
+        self.assertEqual(len(index['incomplete_reviews']),2)
+        self.assertEqual(json.loads((Path(second['evidence'])/'native-result.json').read_text())['text'],readable)
+        with self.assertRaises(Refused):native.complete(self.root,second['id'])
         repair=native.admit(self.root,'implementation')
         packet=json.loads(Path(repair['task_context']['path']).read_text())
         self.assertEqual(json.loads(Path(packet['findings']['path']).read_text()),index)
