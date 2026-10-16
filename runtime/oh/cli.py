@@ -35,6 +35,7 @@ def main(argv=None):
     admit=attempts.add_parser('admit');admit.add_argument('role',choices=['assessment','implementation','analysis','review'])
     for action in ('bind','retain'):
         step=attempts.add_parser(action);step.add_argument('attempt');step.add_argument('locator',type=Path)
+    review_check=sub.add_parser('review-check');review_check.add_argument('report',type=Path,nargs='?')
     sub.add_parser('candidate')
     evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
     complete=sub.add_parser('complete');complete.add_argument('attempt')
@@ -72,6 +73,9 @@ def main(argv=None):
                     if args.action=='prepare' else native.approve_scope(root,args.scope_id,read_json(args.locator)))
         elif args.command=='attempt':
             result=native.admit(root,args.role) if args.action=='admit' else getattr(native,args.action)(root,args.attempt,read_json(args.locator))
+        elif args.command=='review-check':
+            from .review_report import check
+            result=check(read_json(args.report)['report'] if args.report else sys.stdin.read())
         elif args.command=='candidate':result=native.candidate(root)
         elif args.command=='evidence':result=native.attach_evidence(root,read_json(args.attachment))
         elif args.command=='complete':result=native.complete(root,args.attempt)
@@ -162,6 +166,7 @@ def main(argv=None):
             from .service import install,uninstall
             result=install() if args.command=='service-install' else uninstall()
         if result is not None:print(json.dumps(result,indent=2))
+        if args.command=='review-check' and not result['valid']:raise SystemExit(1)
         if args.command=='verify':
             from .verification import check_failed
             checks=result.get('checks',[]) if isinstance(result,dict) else result

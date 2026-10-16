@@ -128,6 +128,8 @@ def completed(directory, admission, result, record, state):
         import json
         lines.extend(['','## Unclassified findings','',*('    '+json.dumps(item,ensure_ascii=False) for item in record['review_fragments'])])
     value = result.get('structured') or {}
+    if isinstance(value,dict) and value.get('decision_format')==1:
+        lines.extend(['','## Full review receipt','',value['receipt']])
     if isinstance(value, dict) and isinstance(value.get('evidence'), dict):
         for key in ('anchors', 'lenses', 'attacks', 'limits'):
             lines.extend(['', '## '+key.capitalize(), ''])

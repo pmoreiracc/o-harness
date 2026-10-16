@@ -82,7 +82,7 @@ class CodexToolsTest(unittest.TestCase):
         names={tool['name'] for tool in TOOLS}
         self.assertEqual(names,{'status','resume','config','init','plans','resource','scope_prepare','scope_approve',
             'attempt_admit','attempt_bind','attempt_retain','candidate','verify','evidence','complete','decision',
-            'review','pr_summary','publication','admission'})
+            'review','pr_summary','publication','admission','review_check'})
         self.assertFalse(names & {'run','start','choose','confirm'})
         for tool in TOOLS:
             self.assertFalse(tool['inputSchema']['additionalProperties'])
@@ -110,6 +110,10 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual(command('resource',{'path':'$(touch sentinel)'},self.root),['resource','--','$(touch sentinel)'])
         self.assertEqual(command('admission',{'attempt_directory':'folder with spaces'},self.root),
                          ['admission','--','folder with spaces'])
+        checked=command('review_check',{'report':'OH-REVIEW-DECISION: {}\nFree text $(literal)'},self.root)
+        self.assertEqual(checked[:2],['review-check','--'])
+        self.assertFalse(Path(checked[-1]).is_relative_to(self.root))
+        self.assertEqual(read_json(checked[-1])['report'],'OH-REVIEW-DECISION: {}\nFree text $(literal)')
         resumed=command('resume',{'human':human},self.root)
         self.assertEqual(resumed[:2],['resume','--human'])
         self.assertEqual(read_json(resumed[-1]),human)

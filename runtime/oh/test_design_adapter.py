@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from . import test_workflow as fixtures
@@ -67,7 +68,7 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(read_json(packet['scope_snapshot']['path'])['base'],origin)
         self.assertEqual([task['id'] for task in packet['completed_tasks']],['1'])
         native.bind(self.root,admitted['id'],{})
-        self.native_results[admitted['id']]={'text':'Clean. No findings.','status':'completed'}
+        self.native_results[admitted['id']]={'text':json.dumps({'verdict':'clean','findings':[],'summary':'Clean. No findings.'}),'status':'completed'}
         native.retain(self.root,admitted['id'],{})
         native.complete(self.root,admitted['id'])
         self.assertEqual(self.git('show','HEAD:docs/design/0900-fixture.md'),final.strip())

@@ -45,6 +45,8 @@ TOOLS = [
          {'attempt':TEXT,'source':OBJECT}, ['attempt','source']),
     tool('attempt_retain', 'Retain native result', 'Retain the public native agent result against its admission and subject.',
          {'attempt':TEXT,'source':OBJECT}, ['attempt','source']),
+    tool('review_check', 'Check review decision', 'Check a draft decision and full receipt without admitting or finishing an attempt. Grants no authority.',
+         {'report':TEXT}, ['report'], read_only=True),
     tool('candidate', 'Prepare review candidate', 'Prepare provisional completion metadata for final checks and independent review; does not complete work.'),
     tool('verify', 'Record project checks', 'Execute configured project checks and retain results against the current candidate.',
          {'base':TEXT,'mode':{'type':'string','enum':['review','pre-push','ci']}}),
@@ -107,6 +109,7 @@ def command(name, arguments, root):
         return ['attempt','admit',role]
     if name in ('attempt_bind','attempt_retain'):
         return ['attempt',name.split('_',1)[1],'--',text('attempt',True),payload(root,arguments.get('source'))]
+    if name=='review_check':return ['review-check','--',payload(root,{'report':text('report',True)})]
     if name=='evidence':return ['evidence','--',payload(root,arguments.get('attachment'))]
     if name=='complete':return ['complete','--',text('attempt',True)]
     if name=='decision':

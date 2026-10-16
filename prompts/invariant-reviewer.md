@@ -184,11 +184,34 @@ If a lens genuinely does not apply, record that fact and why. Do not omit the le
 
 ## Output
 
-Return the complete original report as the final result. A short count, message to the
-coordinator or tool output does not replace it. Keep the report readable; no fixed
-JSON or heading layout is required. Preserve every finding, evidence and limit.
+Return one small structured decision line, then the complete original receipt in any
+readable format. The decision line is the only machine-readable control data:
 
-Start each finding with its severity and concrete claim:
+```text
+OH-REVIEW-DECISION: {"verdict":"findings","findings":[{"severity":"blocking","family":"stable-defect-id","description":"Concrete claim; see finding #1 below."}]}
+
+Full review receipt, with unrestricted prose and layout.
+```
+
+Use `clean` with an empty finding list, `findings` with every finding, or `incomplete`
+when the review could not conclude. Each finding needs `severity` (`blocking`,
+`concern` or `scope`), a concrete `description`, and a stable `family` identifier.
+Reuse that exact family identifier for the same defect across rounds; presentation
+in the receipt does not affect it. OH assigns durable finding IDs as attempt#position
+in this list. Refer to these positions in the receipt when useful. Descriptive
+metadata can stay in the receipt; it is not a required schema. Do not omit a finding
+from the decision because its explanation is in the receipt.
+
+Before finishing, use `review_check` with the complete draft report (Claude CLI:
+pipe the draft to `review-check`; an existing external JSON file containing
+`{"report":"complete draft text"}` may also be passed as its argument).
+Correct decision errors within this same reviewer turn. This is a local format
+check, grants no authority and starts no agent. Keep the full receipt in the final
+native result; a count, coordinator message or successful check does not replace it.
+Never edit the candidate to fix a report. The independent native identity, immutable
+admission, exact candidate and completed host result remain required.
+
+Describe each finding's severity and concrete claim in the receipt, using any readable layout:
 
 - `[BLOCKING]`: an invariant or release gate is violated, or a defect survives merge.
   Name the triggering inputs and wrong observable outcome.
@@ -204,8 +227,8 @@ Do not erase a finding with a declared count or clean verdict.
 
 Give concise evidence for anchors read, each of the seven coverage lenses, concrete
 attacks and observed outcomes, and remaining limits. State why a lens does not apply
-instead of omitting it. Finish with the actual verdict and finding counts; a clean
-verdict requires no findings and still needs evidence. Do not run product checks just
+instead of omitting it. Finish the receipt with the actual conclusion and finding
+counts consistent with the decision; a clean verdict requires no findings and still needs evidence. Do not run product checks just
 to obtain standalone feedback unless the project or requested subject requires them.
 
 Never edit files or mutate external state, HEAD, the index, worktree, stash or branches.

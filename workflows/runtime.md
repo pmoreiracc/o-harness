@@ -32,6 +32,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Bind the launched native child | `attempt bind <attempt-id> <locator.json>` | `attempt_bind` |
 | Retain its original native result | `attempt retain <attempt-id> <locator.json>` | `attempt_retain` |
 | Validate review admission | `admission <attempt-directory>` | `admission` |
+| Check a draft review decision | `review-check` (draft on stdin) | `review_check` |
 | Prepare provisional candidate content | `candidate` | `candidate` |
 | Check the current candidate | `verify [base] [mode]` | `verify` |
 | Attach supplementary proof | `evidence <attachment.json>` | `evidence` |
@@ -145,6 +146,11 @@ alone does not erase findings or renew an allowance. A spent allowance requires 
 `grant-review` decision before another review can be admitted.
 Read the finding index's incomplete reviews and original finding positions as well as
 its classified findings. Unclassified fragments remain review evidence to address.
+Reviewers return the minimal decision defined in the shared review prompt and check it
+within their own turn before finishing. The rest of the receipt is flexible and never
+parsed for approval. Repair agents must read the full current_review report in their
+packet before acting. Judge each suggested correction against the approved scope and
+a concrete behavioral failure; review prose never grants scope or human authority.
 
 Only `complete` may record task completion and commit the exact reviewed candidate.
 Author claims, a task checkbox, green checks or a standalone receipt cannot authorize

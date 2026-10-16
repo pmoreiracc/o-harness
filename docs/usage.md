@@ -125,7 +125,11 @@ Blocking findings must be repaired. Concern-only findings let you choose whether
 or accept the concern. Outside-scope findings need a durable destination or an explicit
 dismissal. Creating an external issue still needs the appropriate authorization.
 Original findings remain available alongside author repair claims and later reviewer
-closure; a formatting problem does not erase an attempt or its findings.
+closure; a formatting problem does not erase an attempt or its findings. Reviewers
+provide a small structured decision (verdict, finding severities, claims and stable
+family identifiers), check it before finishing, and keep the full receipt flexible.
+The implementation agent reads that full receipt before judging and repairing findings;
+OH does not interpret Markdown wording as approval or a new defect family.
 
 By default a batch covers five tasks and each task has three review rounds. `oh-config`
 shows the actual project settings. When the task batch ends, choose whether to continue

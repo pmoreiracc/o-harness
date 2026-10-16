@@ -17,6 +17,7 @@ def family_fields(value):
 
 def family_identity(finding):
     """Read historical inline metadata without changing its original evidence."""
+    if isinstance(finding.get('family_id'),str):return finding['family_id']
     family=finding.get('family')
     return family_fields(family if isinstance(family,str) and family else finding['description'])['family']
 
@@ -83,7 +84,7 @@ def finding_index(state, task):
             if finding['severity'] == 'scope':
                 if scope.get('action') in ('route', 'noted') or 'route scope' in choice:disposition = 'routed'
                 if scope.get('action') == 'dismiss' or 'dismiss scope' in choice:disposition = 'dismissed'
-            case = {k: v for k, v in finding.items() if k not in ('severity', 'family', 'relation')}
+            case = {k: v for k, v in finding.items() if k not in ('severity', 'family', 'family_id', 'relation')}
             case_id = digest(case)[:16]
             if not any(c['case_key'] == case_id for c in group['cases']):group['cases'].append({'case_key': case_id} | case)
             occurrence = {'id': f"{attempt['id']}#{number}", 'disposition': disposition,
@@ -142,7 +143,13 @@ def prepare(state, task, role, directory, admission, feedback=''):
         'standalone_subject':state.get('standalone_subject'),
         'standalone_artifact':state.get('standalone_artifact'),
         'history': str(directory.parent.parent),
-        'history_policy': 'Read the current packet and complete finding index. Consult original reports only for a specific unresolved question; do not replay prior author reports or transcripts.'}
+        'history_policy': 'Read the current packet, complete finding index and full current_review report before repairing findings. Consult older reports for unresolved questions; do not replay prior author reports or transcripts.'}
+    latest=next((a for a in reversed(state['attempts']) if a['task']==task['id'] and a['role']=='review' and a.get('finished') and a.get('evidence')),None)
+    if latest:
+        path=Path(latest['evidence'])/'result.json'
+        packet['current_review']={'attempt':latest['id'],'outcome':latest.get('outcome'),
+            'report':{'path':str(path),'hash':digest(read_json(path))},
+            'instruction':'Read the full receipt, including reasoning and limits, before deciding repairs. Judge claims against the approved scope and concrete behavior; do not implement suggestions blindly.'}
     if not state.get('standalone_subject'):
         approval=directory.parent.parent/'scope'/'approval.json'
         if approval.is_file():packet['human_scope_approval']={'path':str(approval)}
