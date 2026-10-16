@@ -488,7 +488,7 @@ def _child(root,state,attempt,locator,*,binding):
     return value
 
 
-def _claude_handback(root,attempt,bound,records,forwarded):
+def _claude_handback(root,attempt,bound,records,forwarded,completion=None):
     """An acknowledged terminal native handback is a result, never human authority."""
     pending={};background=False;unknown=False;final=None
     for record in records:
@@ -531,6 +531,21 @@ def _claude_handback(root,attempt,bound,records,forwarded):
                 notice=next((r for r in forwarded if isinstance(r['origin'].get('body'),str)
                              and (r['origin']['body']==text or r['origin']['body'].endswith(indented))
                              and newer(r.get('timestamp'),attempt['started_at']) and not newer(request.get('timestamp'),r.get('timestamp'))),None)
+                # Synchronous Agent results retain the report even when Claude absorbs
+                # its peer notification into the parent's current turn. Use that exact
+                # native call's payload, matched to the acknowledged child handback.
+                if not notice and completion:
+                    result=completion.get('toolUseResult') or {}
+                    report=result.get('handbackReport') if isinstance(result,dict) else None
+                    parts=(completion.get('message') or {}).get('content')
+                    if (completion.get('type')=='user' and completion.get('sessionId')==bound['parent_session']
+                            and not completion.get('isSidechain') and isinstance(result,dict) and result.get('status')=='completed'
+                            and result.get('agentId')==bound['child_session'] and isinstance(report,dict)
+                            and report.get('text')==text and isinstance(parts,list)
+                            and any(isinstance(p,dict) and p.get('type')=='tool_result'
+                                    and p.get('tool_use_id')==bound['tool_use_id'] and not p.get('is_error') for p in parts)
+                            and newer(completion.get('timestamp'),attempt['started_at'])
+                            and not newer(record.get('timestamp'),completion.get('timestamp'))):notice=completion
                 if notice:final={'text':text,'status':'completed','record_hashes':[digest(request),digest(record),digest(notice)]}
     return final if not pending and not background and not unknown else None
 
@@ -630,6 +645,8 @@ def native_result(root, state, attempt, locator):
             elif not final and r.get('type')=='event_msg' and p.get('type')=='turn_aborted':
                 final={'text':'\n\n'.join(public) or p.get('reason','Native child interrupted'),'status':'interrupted','record_hashes':public_hashes+[digest(r)]}
         elif r.get('type')=='assistant' and r.get('agentId')==bound['child_session']:
+            # Earlier progress text is not the final report after another child action.
+            final=None
             message=r.get('message') or {};parts=message.get('content')
             if isinstance(parts,list):
                 text='\n'.join(p['text'] for p in parts if isinstance(p,dict) and p.get('type')=='text')
@@ -642,6 +659,7 @@ def native_result(root, state, attempt, locator):
         final={'text':'\n\n'.join(public) or str(error or 'Native child '+terminal),
                'status':'interrupted' if terminal=='cancelled' else 'failed',
                'record_hashes':public_hashes+[digest(terminal_record)]}
-    if not final and state['host']=='claude':final=_claude_handback(root,attempt,bound,_records(path),forwarded)
-    if not final:raise Saving('The native child has not saved a terminal public result yet')
+    if not final and state['host']=='claude':
+        final=_claude_handback(root,attempt,bound,_records(path),forwarded,terminal_record if terminal=='completed' else None)
+    if not final:raise Saving("OH could not yet verify the native child's final report from saved host records")
     return final|{'profile':bound['profile'],'native_id':bound['child_session']}

@@ -191,6 +191,40 @@ class AuthorityTest(unittest.TestCase):
                     self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
                     save(pr=parents+[notice],ch=[call,acknowledgement])
                     self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator),handback)
+                    # A synchronous Agent may absorb the forwarded message mid-turn.
+                    # Its completed tool result already holds the exact handback report.
+                    synchronous=deepcopy(completion);synchronous['timestamp']='2026-10-15T12:00:07Z'
+                    synchronous['toolUseResult'].update(handback='send',handbackReport={'text':receipt})
+                    sync_parents=[parents[0],synchronous]
+                    early=progress|{'timestamp':'2026-10-15T12:00:03Z'}
+                    save(pr=sync_parents,ch=[call,acknowledgement])
+                    self.assertEqual(native_child(root,state,attempt,locator)['child_session'],'child')
+                    sync_result=native_result(root,state,attempt|{'native_child':bound},locator)
+                    self.assertEqual((sync_result['status'],sync_result['text']),('completed',receipt))
+                    self.assertEqual(len(sync_result['record_hashes']),3)
+                    save(pr=sync_parents,ch=[early,call,acknowledgement])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator),sync_result)
+                    self.assertEqual(native_result(root,{'host':'codex','human':{'session':'new-parent'}},
+                        attempt|{'host':'claude','parent':state['human'],'native_child':bound},locator),sync_result)
+                    # A report is model output, never a human decision.
+                    from .authority import native_human
+                    with self.assertRaises(Refused):native_human(root,{'host':'claude','session':'parent',
+                        'tool_use_id':'spawn','transcript_path':str(parent)})
+                    for label in ('different call','different child','different parent','sidechain','not completed',
+                                  'error result','different report','malformed report','before acknowledgement'):
+                        with self.subTest(synchronous=label):
+                            response=deepcopy(synchronous)
+                            if label=='different call':response['message']['content'][0]['tool_use_id']='other'
+                            elif label=='different child':response['toolUseResult']['agentId']='other'
+                            elif label=='different parent':response['sessionId']='other'
+                            elif label=='sidechain':response['isSidechain']=True
+                            elif label=='not completed':response['toolUseResult']['status']='async_launched'
+                            elif label=='error result':response['message']['content'][0]['is_error']=True
+                            elif label=='different report':response['toolUseResult']['handbackReport']['text']='Other report.'
+                            elif label=='malformed report':response['toolUseResult']['handbackReport']='invalid'
+                            elif label=='before acknowledgement':response['timestamp']='2026-10-15T12:00:05Z'
+                            save(pr=[parents[0],response],ch=[early,call,acknowledgement])
+                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                     # Native timestamps can share a millisecond; UUID/call links and record order still establish acknowledgement.
                     save(pr=parents+[notice|{'timestamp':call['timestamp']}],ch=[call,acknowledgement|{'timestamp':call['timestamp']}])
                     self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
@@ -249,6 +283,12 @@ class AuthorityTest(unittest.TestCase):
                                 'cwd':str(root),'message':{'content':'Child resumed after handback.'}})
                             save(pr=parent_rows,ch=child_rows)
                             with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                            if label in ('missing acknowledgement','wrong call','wrong parent UUID','wrong assistant UUID',
+                                         'not terminal','rejected','failed acknowledgement','permission denied','foreign child',
+                                         'foreign parent','ordinary tool','indirect call','malformed input','malformed caller',
+                                         'malformed permission','outstanding command','background command','later activity'):
+                                save(pr=sync_parents,ch=[early]+child_rows)
+                                with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                     # A completed ordinary call before handback establishes quiescence.
                     command=deepcopy(call);command['timestamp']='2026-10-15T12:00:02Z';command['uuid']='command'
                     command['message']['content']=[{'type':'tool_use','id':'command','name':'Read','input':{'file_path':'fixture'}}]

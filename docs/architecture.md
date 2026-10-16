@@ -39,6 +39,11 @@ reasoning effort. Claude uses packaged named non-fork agents with invocation-spe
 model and effort. No OH headless model runner, agent scheduler or permission broker
 executes the task.
 
+Claude child reports can arrive through a forwarded native handback or the completed
+Agent call's structured handback report. OH matches the original report to the child's
+acknowledged terminal handback, preserving its full text. Retention retries reuse the
+same completed attempt and do not repeat assessment or consume another allowance.
+
 The native host owns tool permissions, shell execution and cancellation. Reviewers
 follow a no-edit contract under inherited host permissions. Candidate mutation
 invalidates their receipt; this does not provide a separate filesystem sandbox and

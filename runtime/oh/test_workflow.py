@@ -299,7 +299,12 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         with self.assertRaises(Refused):native.admit(self.root,'review')
         native.bind(self.root,admission['id'],{'child_session':'first-child'})
         self.native_results[admission['id']]={'text':json.dumps({'difficulty':'standard','rationale':'Contained.'}),'status':'completed'}
-        native.retain(self.root,admission['id'],{})
+        retained=native.retain(self.root,admission['id'],{})
+        journal,settled=load_run(self.root);records=journal.records()
+        with patch('oh.authority.native_result',side_effect=AssertionError('Completed assessment must be reused')):
+            self.assertEqual(native.retain(self.root,admission['id'],{})['outcome'],retained['outcome'])
+        self.assertEqual(journal.records(),records)
+        self.assertEqual(len(settled['attempts']),1);self.assertEqual(settled['assessments']['1']['difficulty'],'standard')
         with self.assertRaises(Refused):native.bind(self.root,admission['id'],{'child_session':'first-child'})
         implement=native.admit(self.root,'implementation')
         with self.assertRaises(Refused):native.bind(self.root,implement['id'],{'child_session':'first-child'})
