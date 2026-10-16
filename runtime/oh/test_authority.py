@@ -163,6 +163,34 @@ class AuthorityTest(unittest.TestCase):
                     native_child(root,state,attempt|{'profile':profile|{'effort':'low'}},locator)
                 with self.assertRaises(Refused):
                     native_child(root,state,attempt|{'started_at':'2026-10-15T12:00:02+00:00'},locator)
+                # A rejected actual profile remains unusable, but its terminal launch can settle.
+                launched=deepcopy(parents)
+                for row in launched:
+                    row.setdefault('timestamp','2026-10-15T12:00:01Z')
+                    if host=='claude':row.setdefault('sessionId','parent')
+                wrong_profile=deepcopy(children)
+                if host=='codex':
+                    wrong_profile[1]['payload']['effort']='low'
+                    launched.append({'type':'response_item','timestamp':'2026-10-15T12:00:02Z',
+                        'payload':{'type':'function_call_output','call_id':'spawn','output':json.dumps({'agent_id':'child'})}})
+                    terminal_children=wrong_profile+[final]
+                    terminal_parents=launched
+                else:
+                    wrong_profile[0]['message']['model']='claude-opus-4-6'
+                    wrong_final=deepcopy(finished);wrong_final['message']['model']='claude-opus-4-6'
+                    terminal_children=wrong_profile+[wrong_final]
+                    terminal_parents=launched+[completion]
+                save(pr=launched,ch=wrong_profile)
+                with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                save(pr=terminal_parents,ch=terminal_children)
+                failed=native_result(root,state,attempt,locator)
+                self.assertEqual((failed['status'],failed['terminal_status']),('binding_failed','completed'))
+                self.assertEqual(failed['admitted_profile'],profile)
+                self.assertTrue(failed['binding_issues'])
+                self.assertEqual(failed['native_id'],'child')
+                self.assertEqual(failed['tool_use_id'],'spawn')
+                with self.assertRaises(Refused):native_child(root,state,attempt,locator)
                 unrelated=deepcopy(parents)
                 if host=='codex':
                     other_args=args|{'task_name':'unrelated_earlier_task'}
@@ -250,6 +278,11 @@ class AuthorityTest(unittest.TestCase):
                         with self.assertRaises(Expired):attest(host,payload,root)
                     save(later,{'type':'event_msg','payload':{'type':'user_message','message':'never mind'}})
                 with self.assertRaises(Expired):attest(host,payload,root)
+                from .authority import native_human
+                locator={'host':host,'session':'session','prompt':'continue','transcript_path':str(path)}
+                self.assertEqual(native_human(root,locator,latest=False)['prompt'],'continue')
+                self.assertEqual(native_human(root,locator|{'turn':'turn'},latest=False)['prompt'],'continue')
+                with self.assertRaises(Expired):native_human(root,locator)
                 save()
                 if host=='claude':  # the desktop app saves a typed turn as from a person, with its SDK marker
                     records[0]|={'origin':{'kind':'human'},'turnOrigin':'human','promptSource':'sdk','entrypoint':'claude-desktop'}

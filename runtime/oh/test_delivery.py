@@ -61,6 +61,64 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(len(delivery.listing(self.root)['ready']),1)
         self.assertEqual(registry.read_bytes(),before)
 
+    def test_original_manual_work_is_in_both_delivery_intakes_and_publication(self):
+        from . import native,publication
+        where,path=self.documents()
+        self.git('switch','-c','deliver/manual')
+        (self.root/'manual.txt').write_text('Original included work.\n',newline='\n')
+        self.git('add','.');self.git('commit','-qm','manual work');manual=self.git('rev-parse','HEAD')
+        for selection in ({'manifest':{'tasks':self.tasks[:1],'covers':[manual]}},{'doc':'0001'}):
+            prepared=native.prepare_scope(self.root,**selection)
+            snapshot=read_json(Path(prepared['preview']).with_name('scope.json'))
+            self.assertEqual(snapshot['covers'],[manual])
+            self.assertIn(manual,Path(prepared['preview']).read_text())
+        native.approve_scope(self.root,prepared['scope_id'],self.human())
+        self.assess();self.implement();review=self.reviewed()
+        packet=read_json(Path(review['evidence'])/'task-context.json')
+        self.assertEqual(packet['included_original_work']['covers'],[manual])
+        self.assertIn('Included original work',(Path(review['evidence'])/'request.md').read_text())
+        native.complete(self.root,review['id'])
+        state=load_run(self.root)[1]
+        self.assertEqual(state['commit_intents']['1']['publication']['covers'],[manual])
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        native.decision(self.root,'publish',self.human('publish',question='Publish deliver/manual to example/product?'))
+        self.assertIn(manual,publication.render(self.root))
+
+    def test_converged_tracks_finalize_through_native_check_review_and_completion(self):
+        from . import native
+        body='## Why\n\nComplete both parts.\n\n## Tasks\n\n### Core track\n\n- [ ] **1.** Core behavior.\n\nCore implementation notes.\n\n### UI track\n\n- [ ] **2.** UI behavior.\n'
+        where,path=self.documents(body=body)
+        plans.add_initiative(self.root,where,'M1','reports','Reports',['auth'])
+        downstream,_=plans.write_design(self.root,where,'reports','Reports',BODY,'approved')
+        plans.claim(self.root,where,'reports',downstream)
+        self.git('add','.');self.git('commit','-qm','dependent approved design')
+        self.git('update-ref','refs/remotes/origin/main','HEAD');base=self.git('rev-parse','HEAD')
+        with self.assertRaisesRegex(Refused,'unfinished auth'):delivery.selection(self.root,downstream)
+        for track in ('core','ui'):
+            self.git('switch','-c','deliver/'+track,base)
+            selected=native.prepare_scope(self.root,doc='0001',track=track)
+            native.approve_scope(self.root,selected['scope_id'],self.human())
+            self.assess();self.implement(edit=lambda:(self.root/(track+'.txt')).write_text(track,newline='\n'))
+            review=self.reviewed();native.complete(self.root,review['id'])
+            self.assertIn('status: approved',path.read_text())
+        self.git('switch','main')
+        for track in ('core','ui'):self.git('merge','--no-edit','deliver/'+track)
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        self.assertIn('status: approved',path.read_text());self.assertNotIn('- [ ]',path.read_text())
+        self.git('switch','-c','deliver/finalize')
+        selected=native.prepare_scope(self.root,doc='0001')
+        self.assertEqual([task['id'] for task in selected['tasks']],['finalize'])
+        native.approve_scope(self.root,selected['scope_id'],self.human())
+        self.assess();self.implement(edit=lambda:None)
+        candidate=native.candidate(self.root)
+        self.assertIn('status: frozen',path.read_text())
+        native.verify(self.root)
+        review=self.finish_attempt('review',{'verdict':'clean','findings':[]})
+        native.complete(self.root,review['id'])
+        self.assertEqual(self.git('rev-parse','HEAD^{tree}'),candidate['git_tree'])
+        self.assertEqual(load_run(self.root)[1]['done'],['finalize'])
+        self.assertEqual(len(delivery.selection(self.root,downstream)[0]['tasks']),2)
+
     def test_missing_remote_base_is_an_actionable_listing_result(self):
         self.documents();self.git('update-ref','-d','refs/remotes/origin/main')
         result=delivery.listing(self.root)

@@ -65,8 +65,8 @@ def request(directory, admission):
         lines.extend(['**Selected revision:** '+str(selected.get('revision') or selected.get('head') or 'Working changes'),
                       '**Selected Git tree:** '+str(selected.get('git_tree') or 'Not recorded'), ''])
     if original:=packet.get('included_original_work'):
-        lines.extend(['## Included original PR work','',original.get('url',''),
-                      'Review the original range `'+original['review_base']+'..'+original['head']+'` together with the repair candidate.',
+        lines.extend(['## Included original work','',original.get('url',''),
+                      'Review the original range `'+original['review_base']+'..'+original['head']+'` together with the task candidate.',
                       'Included original commits: '+', '.join(original.get('covers',[]))+'.',''])
     current = packet['current_work']
     lines.append(current['summary'] if current else 'No earlier author report for this task.')
@@ -113,6 +113,14 @@ def completed(directory, admission, result, record, state):
         lines.extend(['## Findings', ''])
         lines.extend(finding(f) for f in record.get('findings', []))
         if not record.get('findings'):lines.append('No findings.' if record['outcome'] == 'clean' else 'No completed verdict; inspect the retained result.')
+    if failure:=record.get('native_failure'):
+        actual=failure.get('profile') or {}
+        lines.extend(['','## Rejected native launch','',
+            'Actual child: '+str(failure.get('native_id') or 'Not recorded')+'.',
+            'Actual profile: '+str(actual.get('model'))+' / '+str(actual.get('effort'))+'.',
+            'Terminal host status: '+str(failure.get('terminal_status'))+'.',
+            *(failure.get('binding_issues') or []),
+            'This attempt consumed its original allowance and cannot authorize completion.'])
     lines.extend(['', '## Summary', '', record.get('human_summary') or record.get('summary') or 'Not recorded.'])
     if record.get('report_issues'):
         lines.extend(['','## Report limitations','',*('- '+item for item in record['report_issues'])])

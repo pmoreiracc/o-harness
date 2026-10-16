@@ -88,6 +88,9 @@ The scope includes any original manual edits or unreviewed commits that will be
 completed with the fix. An existing dirty change stays one coherent repair task;
 it is not split across partially completed tasks. Other people's edits are preserved.
 An explicit correction to an existing PR keeps that destination.
+The preview identifies included starting edits and original branch commits. If starting
+contents change before acceptance, OH preserves them and requires a current preview;
+replaying an already consumed approval grants no additional work.
 
 For each admitted task:
 
@@ -131,6 +134,9 @@ your grant before another review starts. Failed and interrupted launches are ret
 waiting, retries and restarts do not replenish an allowance. A repeated blocking family
 in two independent reviewer receipts triggers implementation escalation. A first blocker
 or a missing check tool does not.
+When separately delivered tracks converge with every task done, OH selects one bounded
+finalization task to check, review and freeze the complete design. It does not rerun the
+completed implementation tasks.
 
 Questions use the host's native controls, with a direct chat reply when needed. The
 agent explains the subject and effects; there is no separate OH menu engine, exact
@@ -161,6 +167,8 @@ scope and remaining review allowance. A clean result returns to the existing dec
 without another commit. Blockers enter its scoped repair/review cycle and produce a
 correction commit, preserving original completion and review history. Reviewing
 published work produces standalone feedback.
+Publication waits until the requested task review and any correction are complete;
+the earlier clean commit cannot override a newly discovered blocker.
 
 ## Pause, Stop and resume
 

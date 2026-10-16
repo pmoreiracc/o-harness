@@ -259,8 +259,8 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
             hint=locator.get('prompt')
             matching=[m for m in messages if not hint or m['prompt']==hint.strip() or saved_command(m['prompt']) is not None and saved_command(m['prompt'])==saved_command(hint)]
             if not matching:raise Saving('The native host has not saved this human input yet; retry the same operation')
-            latest=matching[-1]
-            locator=locator|{'turn':latest['turn'],'prompt':latest['prompt'],'transcript_path':str(path)}
+            selected=matching[-1]
+            locator=locator|{'turn':selected['turn'],'prompt':selected['prompt'],'transcript_path':str(path)}
         if not isinstance(locator.get('prompt'),str):
             path=_path(host,session,locator.get('transcript_path'))
             if host=='codex':messages=codex_history(path,session)[2]
@@ -385,6 +385,15 @@ def coordinator(root, state, locator=None):
 
 def native_child(root, state, attempt, locator):
     """Bind saved native spawn provenance and its real model/effort, without launching anything."""
+    return _child(root,state,attempt,locator,binding=True)
+
+
+def _child(root,state,attempt,locator,*,binding):
+    """Identification may retain a failed binding; only strict validation admits its work."""
+    issues=[];requested_profile=None;context={}
+    def mismatch(message):
+        if binding:raise Refused(message)
+        issues.append(message)
     host=state['host'];child=locator.get('child_session') or locator.get('session')
     path=_path(host,child,locator.get('transcript_path'),child=True)
     profile=None;meta=None;parent=state['human']['session'];spawn=None;spawn_use=locator.get('tool_use_id')
@@ -411,8 +420,10 @@ def native_child(root, state, attempt, locator):
             except ValueError:continue
             if args.get('task_name')==name:
                 if spawn_use and p.get('call_id')!=spawn_use:continue
-                if args.get('fork_turns')!='none':raise Refused('A fresh context requires fork_turns none')
-                if {'model':args.get('model'),'effort':args.get('reasoning_effort')}!=attempt['profile']:raise Refused('Native spawn did not explicitly use the admitted profile')
+                requested_profile={'model':args.get('model'),'effort':args.get('reasoning_effort')}
+                context={'fork_turns':args.get('fork_turns')}
+                if args.get('fork_turns')!='none':mismatch('A fresh context requires fork_turns none')
+                if requested_profile!=attempt['profile']:mismatch('Native spawn did not explicitly use the admitted profile')
                 spawn=r;spawn_use=p.get('call_id')
         if not spawn:raise Refused('No fresh native spawn is attributable to this child')
     else:
@@ -422,7 +433,7 @@ def native_child(root, state, attempt, locator):
             if not within(r.get('cwd'),root):raise Refused('Native child belongs to another checkout')
             if r.get('type')=='assistant' and (r.get('message') or {}).get('model'):
                 actual=r['message']['model'];requested=attempt['profile']['model']
-                if actual!=requested and not actual.startswith('claude-'+requested+'-'):raise Refused('Native child model differs from admission')
+                if actual!=requested and not actual.startswith('claude-'+requested+'-'):mismatch('Native child model differs from admission')
                 if not newer(r.get('timestamp'),attempt['started_at']):raise Refused('The native child predates this admission')
                 meta=(r,{})
         for r in _records(parent_path):
@@ -430,9 +441,12 @@ def native_child(root, state, attempt, locator):
                 if p.get('type')!='tool_use' or p.get('name') not in ('Agent','Task') or p.get('id')!=locator.get('tool_use_id'):continue
                 args=p.get('input') or {}
                 if attempt['id'] not in args.get('prompt',''):raise Refused('The native agent request does not identify its admission')
-                if args.get('model')!=attempt['profile']['model'] or args.get('effort')!=attempt['profile']['effort']:raise Refused('Native spawn must explicitly record the admitted model and effort')
-                if args.get('subagent_type')=='fork' or args.get('fork_context') or args.get('fork_turns') not in (None,'none'):raise Refused('The child must start without parent history')
-                spawn=r;profile=attempt['profile']
+                requested_profile={'model':args.get('model'),'effort':args.get('effort')}
+                context={k:args.get(k) for k in ('subagent_type','fork_context','fork_turns')}
+                if requested_profile!=attempt['profile']:mismatch('Native spawn must explicitly record the admitted model and effort')
+                if args.get('subagent_type')=='fork' or args.get('fork_context') or args.get('fork_turns') not in (None,'none'):mismatch('The child must start without parent history')
+                spawn=r;profile={'model':actual,'effort':args.get('effort')} if meta else None
+                if meta and (actual==attempt['profile']['model'] or actual.startswith('claude-'+attempt['profile']['model']+'-')):profile['model']=attempt['profile']['model']
         if not meta or not spawn:raise Saving('Native child identity or explicit spawn settings are not saved yet')
         linked=False
         for record in _records(parent_path):
@@ -440,9 +454,11 @@ def native_child(root, state, attempt, locator):
             parts=(record.get('message') or {}).get('content')
             if isinstance(result,dict) and result.get('agentId')==child and isinstance(parts,list) and any(isinstance(p,dict) and p.get('type')=='tool_result' and p.get('tool_use_id')==locator.get('tool_use_id') for p in parts):linked=True
         if not linked:raise Saving('The native spawn result has not attributed this child to its call yet')
-    if profile!=attempt['profile']:raise Refused('Actual native model/effort differs from the immutable admission')
-    return {'child_session':child,'parent_session':parent,'transcript_path':str(path),'profile':profile,
-            'tool_use_id':spawn_use,'record_hashes':[digest(meta[0]),digest(spawn)]}
+    if profile!=attempt['profile']:mismatch('Actual native model/effort differs from the immutable admission')
+    value={'child_session':child,'parent_session':parent,'transcript_path':str(path),'profile':profile,
+           'tool_use_id':spawn_use,'record_hashes':[digest(meta[0]),digest(spawn)]}
+    if not binding:value.update(binding_issues=issues,requested_profile=requested_profile,requested_context=context)
+    return value
 
 
 def native_result(root, state, attempt, locator):
@@ -485,6 +501,15 @@ def native_result(root, state, attempt, locator):
                         return {'text':str(item.get('content','Native launch failed')),'status':'failed','profile':None,
                                 'admitted_profile':attempt['profile'],'requested_profile':requested,
                                 'requested_context':context,'record_hashes':[digest(launch),digest(record)]}
+        if launch and (locator.get('child_session') or locator.get('session')):
+            identified=_child(root,state,attempt,locator,binding=False)
+            terminal=native_result(root,state,attempt|{'native_child':identified},locator)
+            return terminal|{'status':'binding_failed','terminal_status':terminal['status'],
+                'tool_use_id':identified['tool_use_id'],
+                'admitted_profile':attempt['profile'],'requested_profile':identified['requested_profile'],
+                'requested_context':identified['requested_context'],
+                'binding_issues':identified['binding_issues'] or ['Native launch was not successfully bound to its admission.'],
+                'record_hashes':identified['record_hashes']+terminal['record_hashes']}
         raise Saving('No attributed native launch failure or child result is saved yet')
     if locator.get('child_session',bound['child_session'])!=bound['child_session']:raise Refused('Result belongs to a different child')
     path=_path(state['host'],bound['child_session'],bound['transcript_path'],child=True)

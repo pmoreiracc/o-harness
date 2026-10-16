@@ -57,7 +57,11 @@ branch. Reuse the matching unmerged branch for interrupted work. For ordinary ne
 create a branch from the refreshed configured base; do not implement or commit on trunk.
 Preserve included original edits and explicit existing-PR corrections. If another
 person's dirty checkout conflicts, use a suitable native worktree rather than discarding
-their changes. Scope preparation binds the current branch/base; it does not switch them.
+their changes. Scope preparation binds the current branch/base and starting contents;
+it does not switch them. If those contents change before approval, preserve the edits
+and prepare the same tasks with a current preview. Never reuse the old acceptance for
+changed starting work. Include the recorded original commit range in the first task's
+implementation and review, together with its current candidate.
 
 ## Fresh native delegation
 
@@ -83,6 +87,9 @@ scope/evidence files rather than pasting the parent history or full worker trans
 Bind the returned native child identity immediately. Retain its complete original result
 by native locator only after its terminal native outcome is saved and its owned tools
 have finished; an intermediate assistant `end_turn` does not establish quiescence.
+If binding is rejected, use native cancellation or wait for that child to finish, then
+retain with both its child identity and spawn tool-call identity. The terminal launch
+is retained as failed binding, consumes its original allowance and grants no completion.
 Send only a short handoff and evidence paths into the coordinator.
 A summary is not the retained report. Never run two implementation agents together or
 modify the subject while review is active. Completed reviewers are never resumed.
@@ -134,6 +141,8 @@ a durable route or dismissal, never silent implementation. Combine related choic
 one native question when useful. Nonempty ambiguity needs a real decision; formatting
 alone does not erase findings or renew an allowance. A spent allowance requires a human
 `grant-review` decision before another review can be admitted.
+Read the finding index's incomplete reviews and original finding positions as well as
+its classified findings. Unclassified fragments remain review evidence to address.
 
 Only `complete` may record task completion and commit the exact reviewed candidate.
 Author claims, a task checkbox, green checks or a standalone receipt cannot authorize
@@ -141,6 +150,10 @@ it. A failed completion is repaired idempotently from retained evidence. Select 
 next task from external completion records, under the same finite task batch. At a batch
 boundary ask whether to continue the projected next batch, publish completed work or
 stop; silence grants no additional tasks.
+If all design tracks have converged with completed tasks but the design is still approved,
+select its bounded `finalize` task and use the same candidate/check/review/completion path.
+Finish any requested completed-task re-review and its correction before publication;
+an earlier clean completion does not resolve a newer blocker.
 
 ## Native decisions
 

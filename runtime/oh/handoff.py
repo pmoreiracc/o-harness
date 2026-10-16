@@ -6,12 +6,18 @@ READINESS_LISTS=('requirements','rules','surfaces','proof','self_review','family
 DISPOSITIONS=('fixed','routed','accepted','dismissed','still-open','disputed')
 
 
-def family_identity(finding):
-    """Read the shared readable Family/Relation line without changing original evidence."""
+def family_fields(value):
+    """Optional Markdown quoting does not change inline Family/Relation labels."""
     import re
-    value=finding.get('family') or finding['description']
-    inline=re.fullmatch(r'`([^`]+)`\.?\s+Relation:\s*`?([^`\n]+?)`?\.?',value,re.I)
-    return inline[1] if inline else value.strip('`')
+    parts=re.split(r'\s+(?:\*\*)?Relation(?:\*\*)?\s*:\s*',value,maxsplit=1,flags=re.I)
+    if len(parts)==1:return {'family':value.strip('`')}
+    def plain(text):return text.strip().rstrip('.;').strip('`').rstrip('.;')
+    return {'family':plain(parts[0]),'relation':plain(parts[1])}
+
+
+def family_identity(finding):
+    """Read historical inline metadata without changing its original evidence."""
+    return family_fields(finding.get('family') or finding['description'])['family']
 
 
 def report(attempt):
@@ -144,8 +150,8 @@ def prepare(state, task, role, directory, admission, feedback=''):
             if original.is_file():packet['original_scope_provenance']={'path':str(original),
                 'authority':'Original run provenance; not a newly accepted native scope.'}
     if state.get('repair_source'):packet['repair_source']=state['repair_source']
-    if state.get('pr_target') and not state['summaries']:
-        packet['included_original_work']={k:state['pr_target'][k] for k in ('url','head','review_base','covers') if k in state['pr_target']}
+    if (original:=state.get('pr_target') or state.get('original_work')) and not state['summaries']:
+        packet['included_original_work']={k:original[k] for k in ('url','head','review_base','covers') if k in original}
     if state.get('plans'):
         packet['planning'] = state['plans']
         packet['human_refinements'] = [{'source': a['source'], 'feedback': a['feedback']}

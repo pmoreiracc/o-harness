@@ -139,6 +139,7 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
         bound['initiatives']=[list(r) for r in initiatives(root,where)]
     value={'schema':2,'checkout':checkout_id(root),'project':project(root)['id'],'created_at':now(),
            'base':git(root,'rev-parse','HEAD'),'branch':git(root,'branch','--show-current'),
+           'starting_tree':tree(root),'starting_edits':sorted(changes(root)),
            'workflow':workflow,'tasks':tasks,'design':doc or manifest.get('design'),'track':track,
            'documents':documents,'project_checks':project_checks(root),**config,**extra,
            **{k:manifest[k] for k in ('repair_source','pr_target') if k in manifest}}
@@ -148,13 +149,27 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
         from .plans import private_inputs
         source_where={k:Path(v) if k!='location' else v for k,v in value['plans'].items()}
         if value['plans']['location']=='private':value['documents']={p:Path(p).read_text() for p in private_inputs(source_where)}
+    else:
+        from .branches import main_ref
+        from .delivery import unreviewed
+        base=main_ref(root,value['config'])
+        fork=git(root,'merge-base',base,value['base']) if base else value['base']
+        covers=unreviewed(root,fork,base) if base else []
+        requested=manifest.get('covers',[])
+        if not isinstance(requested,list) or any(c not in covers for c in requested):raise Refused('Included original commits must belong to this branch’s unreviewed work')
+        if covers:
+            value.update(covers=covers,original_work={'review_base':fork,'head':value['base'],'covers':covers})
     key=digest(value);folder=_home(root)/'scopes'/key
     _immutable(folder/'scope.json',value)
     from .prepared import limits
     preview='\n\n'.join([f"# {workflow.title()} scope",limits(len(tasks),value['config']),*[f"## {t['id']}. {t['title']}\n\n{t['instructions']}" for t in tasks]])+'\n'
+    if value['starting_edits']:
+        preview+='\n## Included starting edits\n\n'+', '.join('`'+name+'`' for name in value['starting_edits'])+'\n\nContents fingerprint: `'+value['starting_tree']+'`.\n'
     if target:=value.get('pr_target'):
         preview+=f"\n## Included original PR work\n\n{target['url']}\n\nReview the original range `{target['review_base']}..{target['head']}` together with the repair candidate.\n"
         if target.get('covers'):preview+='\nIncluded original commits: '+', '.join('`'+c+'`' for c in target['covers'])+'.\n'
+    elif original:=value.get('original_work'):
+        preview+=f"\n## Included original branch work\n\nReview `{original['review_base']}..{original['head']}` together with the task candidate.\n\nIncluded original commits: "+', '.join('`'+c+'`' for c in original['covers'])+'.\n'
     from .receipts import save
     save(folder/'scope.md',preview,immutable=True)
     result={'scope_id':key,'preview':str(folder/'scope.md'),'tasks':[{k:t[k] for k in ('id','title')} for t in tasks],'config':value['config'],'approved':False}
@@ -212,6 +227,8 @@ def _start(root,key,source):
             elif prior['status'] not in ('stopped','completed','pr'):raise Refused('Finish or stop the saved scope before admitting different work')
         if (git(root,'rev-parse','HEAD'),git(root,'branch','--show-current'))!=(scope['base'],scope['branch']):
             raise Refused('Prepared scope belongs to a different base/branch; prepare against the intended current work')
+        if scope.get('starting_tree')!=tree(root):
+            raise Refused('The included starting contents changed after scope preparation. Preserve the edits and prepare the same tasks again to show their current contents before approval.')
         from .branches import trunk
         if committed(scope) and scope['branch']==trunk(root,scope['config']):raise Refused('Create an execution branch from the selected base with native Git tools, then prepare scope on that branch')
         source_key=digest({k:source[k] for k in ('host','session','turn','prompt')})
@@ -225,7 +242,7 @@ def _start(root,key,source):
               **{k:scope[k] for k in ('config','config_hash','harness_version','project_checks')},
               **{k:scope[k] for k in ('delivery','plans') if k in scope}}
         if source.get('accepted_plan') is not None:data['accepted_scope']=source['accepted_plan']
-        data.update({k:scope[k] for k in ('repair_source','pr_target') if k in scope})
+        data.update({k:scope[k] for k in ('repair_source','pr_target','covers','original_work') if k in scope})
         journal=Journal(p['id'],run);journal.append('run.started',data)
         best_effort('run.started',p['id'],run,name=p['name'],work_kind=p['kind'],host=source['host'],version=data['harness_version'],config_hash=data['config_hash'])
         _immutable(journal.path/'scope'/'scope.json',scope)
@@ -396,8 +413,8 @@ def _report(text):
             if key:
                 finding[key]=field[2].strip('* ')
                 if key=='family':
-                    inline=re.fullmatch(r'`([^`]+)`\.?\s+Relation:\s*`?([^`\n]+?)`?\.?',finding[key],re.I)
-                    if inline:finding.update(family=inline[1],relation=inline[2].rstrip('.'))
+                    from .handoff import family_fields
+                    finding.update(family_fields(finding[key]))
         finding.setdefault('family',finding['description']);findings.append(finding)
     assessment=re.search(r'(?im)^\s*difficulty\s*:\s*(simple|standard|complex)\b',text)
     result={'summary':text,'findings':findings}
@@ -415,17 +432,21 @@ def retain(root,attempt_id,locator):
         directory=Path(attempt['evidence']);_immutable(directory/'native-result.json',source)
         text=source.get('text','');report=_report(text)
         _immutable(directory/'result.json',report)
-        raw_findings=report.get('findings') or []
-        findings=[f for f in raw_findings if isinstance(f,dict) and f.get('severity') in ('blocking','concern','scope') and isinstance(f.get('description'),str)] if isinstance(raw_findings,list) else []
+        raw_findings=report.get('findings',[])
+        findings=[];positions=[];fragments=[]
+        for position,finding in enumerate(raw_findings if isinstance(raw_findings,list) else [raw_findings],1):
+            if isinstance(finding,dict) and finding.get('severity') in ('blocking','concern','scope') and isinstance(finding.get('description'),str):
+                findings.append(finding);positions.append(position)
+            else:fragments.append({'position':position,'finding':finding})
         malformed=not isinstance(raw_findings,list) or len(findings)!=len(raw_findings)
         for finding in findings:
             finding.setdefault('family',finding['description']);finding.setdefault('path','')
-        if malformed and not findings:
+        if source.get('status')!='completed':outcome=source.get('status','failed')
+        elif malformed and not findings:
             outcome='review_incomplete' if attempt['role']=='review' else 'unfinished'
         else:
             outcome='implemented'
-            if source.get('status')!='completed':outcome=source.get('status','failed')
-            elif attempt['role']=='review':
+            if attempt['role']=='review':
                 if any(f['severity']=='blocking' for f in findings):outcome='blocking'
                 elif malformed:outcome='review_incomplete'
                 elif findings:outcome='needs_resolution'
@@ -449,6 +470,11 @@ def retain(root,attempt_id,locator):
         result={k:attempt[k] for k in ('id','task','role','profile','purpose','head','tree','git_tree','artifacts','evidence')}
         result.update(outcome=outcome,summary=str(report.get('summary') or text)[:state['config']['context']['result_chars']],findings=findings,
                       duration_ms=source.get('duration_ms'),native_source=source.get('record_hashes',[]))
+        if malformed:
+            result.update(finding_positions=positions,review_fragments=fragments,
+                          report_issues=['Some findings could not be classified; inspect the retained original positions and fragments.'])
+        if source.get('status')=='binding_failed':
+            result['native_failure']={k:source.get(k) for k in ('native_id','tool_use_id','profile','admitted_profile','requested_profile','requested_context','binding_issues','terminal_status')}
         if attempt['role'] in ('implementation','analysis'):result.update(subject)
         journal.append('attempt.finished',result)
         best_effort('attempt.finished',state['project'],state['id'],attempt['task'],attempt_id,outcome=outcome,duration_ms=source.get('duration_ms'),substantive=bool(text))
@@ -691,6 +717,8 @@ def decision(root,kind,locator,attempt=None,destination=None):
             if state.get('plans',{}).get('location')!='private' or review['outcome']!='clean' or any(review[k]!=subject[k] for k in ('head','tree','git_tree','artifacts')):raise Refused('Private approval requires the exact reviewed private artifact')
             add('native.private.approved',{'attempt':attempt,'source':source,'artifacts':subject['artifacts']})
         elif kind=='publish':
+            from .publication import settled
+            settled(state)
             if _active(state) or changes(root):raise Refused('Publication requires completed work on its clean reviewed head')
             from .publication import destination as publication_destination,commits,made
             from .branches import main_ref,trunk

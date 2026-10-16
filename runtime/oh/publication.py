@@ -35,6 +35,12 @@ def destination_state(root, state):
     return state|{'publication_changed':destination(root)!=expected}
 
 
+def settled(state):
+    """Original completion evidence cannot settle a newer task review or correction."""
+    if state.get('extra_review') or state.get('correction'):
+        raise Refused('Finish the requested task review and any reviewed correction before publication; original commits and evidence are retained.')
+
+
 def repository(grant):
     """Use the approved push destination, never the checkout's possibly changed remote."""
     from urllib.parse import urlsplit
@@ -264,7 +270,7 @@ def task_evidence(root,state,task,review,parent):
         correction_ancestor(root,value)
     # The first task a run commits was also reviewed with the commits OH didn't make before it: the person's own,
     # and merges of main resolved by hand.
-    if (covers:=(state.get('delivery') or {}).get('covers') or state.get('repair_source',{}).get('covers') or state.get('pr_target',{}).get('covers')) and not state['summaries']:value['covers']=covers
+    if (covers:=state.get('covers') or (state.get('delivery') or {}).get('covers') or state.get('repair_source',{}).get('covers') or state.get('pr_target',{}).get('covers')) and not state['summaries']:value['covers']=covers
     scope={k:{name:v for name,v in record.items() if name not in ('render','change')} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
     if scope:value['scope']=scope
     value=public_value(root,state,value)
@@ -309,6 +315,7 @@ def validate_evidence(value):
     history=value['attempts'];ids=[a['id'] for a in history]
     if len(set(ids))!=len(ids) or ids[-1]!=value['review']:raise Refused('Final review does not match retained history')
     final=history[-1]
+    if final.get('report_issues') or final.get('review_fragments'):raise Refused('The final review has unclassified evidence; obtain a complete review of the retained fragments before completion')
     if final['git_tree']!=value['git_tree'] or final['head']!=value['parent']:raise Refused('Review is not bound to this commit tree and parent')
     validate_scope(value)
     findings=final.get('findings') or []
@@ -404,6 +411,7 @@ def render(root,base=None):
     for commit in commits(root,base,reviewed=None):
         state=made(root,p['id'],commit)
         if not state:continue  # not OH's: it must be one a review covered, checked below
+        settled(state)
         run=state['id']
         if run not in states:
             from .delivery_verify import verify_run
