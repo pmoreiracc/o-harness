@@ -171,6 +171,28 @@ actual question/reply. The final focused run passed all three native gate/packag
 cases in 10.967 seconds; syntax/Windows-risk checks and git diff --check passed.
 Live confirmation and fresh independent review remain pending.
 
+## Second-menu visibility failure
+
+The next live Codex run accepted Resume and recovered the original review. Its second
+async question was submitted while review was still running, then remained unanswered
+through review retention and another approved repair. The parent kept its turn open.
+The person reported no visible menu. Native records and narrowly inspected Desktop
+logs establish neither rendering nor dismissal; the UI cause remains unresolved.
+The earlier keep-turn-open fix is insufficient evidence that every menu is usable.
+
+The shared guidance now presents the same question and choices in ordinary chat as
+well, accepting the existing native direct-reply path without another approval. It
+defers optional finding-disposition questions until the current approved work is
+settled and the decision is actually needed. A missing-menu report uses readable
+chat, rather than more waiting or another unverified popup. This is a recovery path,
+not a claim to repair undocumented Desktop rendering. Regression #98 remains open;
+actual second-question presentation and chat recovery still need live validation.
+No scope, review grant or recorded answer is invented by this recovery. The focused
+native gate and both-host package run passed all three cases in 7.241 seconds,
+including an actual direct human reply to the same artifact-bound question after
+menu submission. Syntax/Windows-risk and diff checks passed. This proves the existing
+chat authority path, not Desktop menu visibility or model compliance.
+
 ## Local verification record
 
 Implementation and automated checks are complete. Live host acceptance, independent

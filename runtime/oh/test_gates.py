@@ -49,6 +49,16 @@ class GateTest(unittest.TestCase):
             with self.subTest(pending=pending[-1]['type']),self.assertRaises(Refused):read([initial,call,*pending])
         approved=read([initial,call,submitted,waiting,message(reply)])
         self.assertEqual(approved['prompt'],'Proceed with the task')
+        # If the submitted menu is invisible, the same shown question can be
+        # answered directly in chat, still bound to its actual artifact context.
+        context={'type':'response_item','timestamp':'2026-10-15T12:00:02Z','payload':{
+            'type':'message','role':'assistant','content':[{'type':'output_text','text':question['title']+' Reply here if no menu is visible.'}]}}
+        typed={'type':'event_msg','timestamp':'2026-10-15T12:00:03Z','payload':{
+            'type':'user_message','turn_id':'typed','message':'Keep planning'}}
+        path.write_text(''.join(json.dumps(row)+'\n' for row in [initial,call,submitted,context,typed]),newline='\n')
+        fallback=native_human(self.root,{'host':'codex','session':'s','turn':'typed','transcript_path':str(path)},subject=self.subject)
+        self.assertEqual(fallback['prompt'],'Keep planning')
+        self.assertEqual(fallback['question'],context['payload']['content'][0]['text'])
         cancellation={'type':'event_msg','timestamp':'2026-10-15T12:00:03Z','payload':{
             'type':'user_message','turn_id':'cancel','message':'No. Cancel that scope; do not implement it.'}}
         with self.assertRaises(Refused):read([initial,call,message(reply),cancellation])

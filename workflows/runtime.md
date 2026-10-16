@@ -224,7 +224,16 @@ an earlier clean completion does not resolve a newer blocker.
 ## Native decisions
 
 Use Claude `AskUserQuestion` or Codex's available native question tool directly for real
-decisions. Keep choices short and explain their effects in chat.
+decisions. Keep choices short and explain their effects in chat. Ask each decision when
+it is actually needed. Defer finding-disposition questions until the current review
+and approved repairs are retained, rather than asking while that work is in progress.
+
+State the question and short choices in ordinary chat before posting its native menu,
+including the actual artifact reference where required. Say the person can also reply
+in chat. These are two presentations of one decision, never two approvals. Submission
+success establishes no menu visibility. If the person reports a missing menu, use the
+readable chat question and their direct reply; do not just repost a popup or keep
+sleeping on the assumption that it is visible. Preserve the same scope and allowance.
 
 In Codex, `request_user_input_async` posts a question and returns immediately. An
 `accepted: true` result only acknowledges submission; it is not the person's answer.

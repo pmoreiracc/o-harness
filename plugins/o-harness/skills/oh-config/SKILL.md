@@ -17,6 +17,8 @@ Explain settings through their practical effect, for example “This project wil
 1. Map it to the keys in the list it names; one request may change several. If a part matches nothing in the list, say that OH has no such setting and leave it out; don't invent one. If it's ambiguous, ask which of the matching keys they mean.
 2. A change applies to this project unless the user says it's for every project; then add `--global`. Checks always belong to the project.
 3. Show each `key: current → new` with its meaning and project/global scope. If their request leaves a real choice, ask directly with Claude `AskUserQuestion` or Codex's available native question tool; use a direct text reply when unavailable. Do not use an OH confirmation tool or create a second approval for an explicit unambiguous request. Silence grants nothing.
+   Show the question and short choices in ordinary chat too; the person may reply
+   there if no menu is visible. Treat that as the same decision, not another approval.
    For a Codex asynchronous question, submission is not an answer. Keep the turn open
    with an available native interruptible wait such as `clock.sleep` (at most 60 seconds
    per call) until the person replies; never send a final response while it is pending.
