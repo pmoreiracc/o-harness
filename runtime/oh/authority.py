@@ -490,9 +490,15 @@ def _child(root,state,attempt,locator,*,binding):
 
 def _claude_handback(root,attempt,bound,records,forwarded,completion=None):
     """An acknowledged terminal native handback is a result, never human authority."""
-    pending={};background=False;unknown=False;final=None
+    pending={};background=set();unknown=False;final=None
     for record in records:
         if (record.get('agentId'),record.get('sessionId'))!=(bound['child_session'],bound['parent_session']):continue
+        # A background command is quiescent once the child's own record carries its native
+        # terminal notification; a bare start acknowledgement is not that.
+        attached=record.get('attachment') if record.get('type')=='attachment' else None
+        if isinstance(attached,dict) and attached.get('type')=='queued_command' and isinstance(attached.get('prompt'),str):
+            done=re.search(r'<tool-use-id>([^<\s]+)</tool-use-id>\s*<output-file>[^<]*</output-file>\s*<status>(completed|failed|killed)</status>',attached['prompt'])
+            if done:background.discard(done[1])
         parts=(record.get('message') or {}).get('content')
         if record.get('type') not in ('assistant','user'):continue
         # Further child activity invalidates an earlier handback as quiescence.
@@ -506,7 +512,7 @@ def _claude_handback(root,attempt,bound,records,forwarded,completion=None):
                 pending[use]=(record,part)
                 payload=part.get('input')
                 if not isinstance(payload,dict):unknown=True;continue
-                if payload.get('run_in_background'):background=True
+                if payload.get('run_in_background'):background.add(use)
             elif record['type']=='user' and part.get('type')=='tool_result':
                 call=pending.pop(part.get('tool_use_id'),None)
                 if not call:continue

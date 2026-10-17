@@ -296,6 +296,13 @@ class AuthorityTest(unittest.TestCase):
                     result['message']['content']=[{'type':'tool_result','tool_use_id':'command','content':'Read completed.'}]
                     save(pr=parents+[notice],ch=[command,result,call,acknowledgement])
                     self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                    # A background command the child's own record reports finished no longer blocks quiescence.
+                    started=deepcopy(command);started['message']['content']=[{'type':'tool_use','id':'command','name':'Bash',
+                        'input':{'command':'fixture','run_in_background':True}}]
+                    bg_done={'type':'attachment','agentId':'child','sessionId':'parent','cwd':str(root),'timestamp':'2026-10-15T12:00:03Z',
+                        'attachment':{'type':'queued_command','prompt':'<task-notification>\n<task-id>x</task-id>\n<tool-use-id>command</tool-use-id>\n<output-file>/tmp/x</output-file>\n<status>completed</status>\n</task-notification>'}}
+                    save(pr=parents+[notice],ch=[started,result,bg_done,call,acknowledgement])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
                     forked=deepcopy(parents);forked[0]['message']['content'][0]['input']['subagent_type']='fork'
                     save(pr=forked)
                     with self.assertRaises(Refused):native_child(root,state,attempt,locator)
