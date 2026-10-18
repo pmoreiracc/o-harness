@@ -138,7 +138,7 @@ def selection(root,doc,track='',*,claim=True):
                 if record.get('path')!=str(dependency_path) or record.get('sha256')!=plans.digest_of(dependency_path):raise Refused(f'Completed dependency {dependency} changed since its approved delivery')
                 delivered_base(root,record,progressed=True);approvals[number]=record
             freeze_render(root,number,layout=where)
-    if len(tracks)>1 and not track:raise Refused('Choose one design track: '+', '.join(sorted(tracks)))
+    if len(tracks)>1 and not track and any(r[1]=='pending' for r in rows):raise Refused('Choose one design track: '+', '.join(sorted(tracks)))
     if track and track not in tracks:raise Refused('Unknown design track')
     # Working checkboxes cannot create completion authority. Only reviewed delivery records can.
     completed={n for n,row in contract.items() if row[1]=='done'}
@@ -160,7 +160,11 @@ def selection(root,doc,track='',*,claim=True):
         tasks.append({'id':task_id,'title':title,'instructions':match[0].strip(),'needs':sorted(deps-completed),
                       'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':task_id}})
         available.add(task_id)
-    if not tasks:raise Refused('No ready pending tasks in this design or track')
+    if not tasks:
+        if completed!=set(current):raise Refused('No ready pending tasks in this design or track')
+        tasks=[{'id':'finalize','title':'Finalize the completed design',
+                'instructions':'Verify the converged completed design and affected documentation. Prepare its frozen lifecycle candidate, run checks, and independently review it before completion.',
+                'needs':[],'design':str(path),'transition':{'profile':'delivery','doc':doc,'task':'finalize'}}]
     if completed|{t['id'] for t in tasks}==set(current):
         tasks[-1]['instructions']+='\nThis is the last pending task. Update documentation and delivery-status claims made stale by this delivery without changing approved scope.'
     return ({'workflow':'deliver','design':doc,'track':track,'tasks':tasks},

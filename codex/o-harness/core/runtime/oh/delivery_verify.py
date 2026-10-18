@@ -44,7 +44,8 @@ def transitions(before,after,task):
 
 def verify_run(root,state,*,current=False):
     if state.get('native_version'):
-        from .publication import verify_record
+        from .publication import verify_record,settled
+        settled(state)
         from .storage import digest
         from .native import _structure
         if digest(state['scope_snapshot'])!=state['scope_id']:raise Refused('Native scope snapshot changed')
