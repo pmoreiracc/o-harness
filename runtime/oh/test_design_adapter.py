@@ -54,7 +54,7 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         state=load_run(self.root)[1]
         self.assertEqual(state['granted'],before['granted'])
         self.assertEqual(state['scope_records'][review['id']]['findings'],[finding])
-        self.assertEqual(state['scope_records'][review['id']]['destination']['design'],str(self.design))
+        self.assertEqual(state['scope_records'][review['id']]['destination']['design'],str(self.design.resolve()))
         with self.assertRaises(fixtures.Refused):native.complete(self.root,review['id'])
         native.candidate(self.root);native.verify(self.root)
         review=self.finish_attempt('review',{'verdict':'clean','summary':'Checked the routed exact candidate.','findings':[]})
