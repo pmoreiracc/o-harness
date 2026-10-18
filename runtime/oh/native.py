@@ -3,6 +3,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import hashlib
 import json
+import os
 import re
 from . import authority
 from .config import snapshot, project_checks
@@ -159,6 +160,19 @@ def _finished(state):
     return bool(state.get('published') or (state['status']=='completed' and (feedback or state.get('plans',{}).get('location')=='private')))
 
 
+def _pending_attempt(state,attempt):
+    """Describe saved binding facts without inferring whether native work ran or ended."""
+    child=attempt.get('native_child') or {}
+    original=authority._attempt_parent(state,attempt)
+    parent={'host':original['host'],**{k:original['human'][k] for k in ('session','transcript_path') if k in original['human']}}
+    return {'id':attempt['id'],'role':attempt['role'],'native_child':child.get('child_session'),
+            'binding_status':'bound' if child else 'unbound','execution_status':'not_checked',
+            'parent':parent,'request':str(Path(attempt['evidence'])/'request.json') if attempt.get('evidence') else None,
+            'next':('Inspect this child’s latest native outcome; a saved binding does not mean it is still running. '
+                    if child else 'No child binding is saved; this does not mean it was never launched. Inspect the original parent’s native launch and result records using this admission. ')
+                   +'After Resume is confirmed, retain any terminal outcome with its original child/spawn locator before transferring ownership or replacing the attempt.'}
+
+
 def _continuation(state):
     """Compact evidence hints, not a second execution/admission state machine."""
     pending=[a for a in state['attempts'] if not a.get('finished')]
@@ -181,7 +195,7 @@ def _continuation(state):
                 if latest.get('outcome')=='needs_resolution' and any(f['severity']=='concern' and not resolution.get('concerns_accepted') for f in latest.get('findings',[])):decision='review_findings'
                 elif state['workflow']=='design' and latest.get('outcome') in ('clean','needs_resolution') and state.get('plans',{}).get('location')=='private' and state.get('private_native_approval',{}).get('attempt')!=latest['id']:decision='private_approval'
     from .scope import followups
-    return {'phase':phase,'pending_decision':decision,'pending_attempts':[{'id':a['id'],'role':a['role'],'native_child':a.get('native_child',{}).get('child_session')} for a in pending],
+    return {'phase':phase,'pending_decision':decision,'pending_attempts':[_pending_attempt(state,a) for a in pending],
             'followup_count':sum(len(item['findings']) for item in followups(state)),
             'latest_result':({k:history[-1].get(k) for k in ('id','role','outcome','evidence')} if history else None)}
 
@@ -346,6 +360,7 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
 
 def approve_scope(root, scope_id, locator):
     scope=_scope(root,scope_id)
+    locator=_presented(root,locator)
     from .workflow import active_file
     if active_file(root).exists():
         _,current=load_run(root)
@@ -457,7 +472,8 @@ def select(root,run=None):
 
 def _repeated_family(state,task):
     from .handoff import family_identity
-    reviews=[a for a in state['attempts'] if a['task']==task and a['role']=='review' and a.get('finished')]
+    reviews=[a for a in state['attempts'] if a['task']==task and a['role']=='review'
+             and a.get('finished') and a.get('outcome')=='blocking']
     seen=set()
     for attempt in reviews:
         families={family_identity(f) for f in attempt.get('findings',[]) if f['severity']=='blocking'}
@@ -743,11 +759,40 @@ def _affirmed(text,kind,question=''):
     return prompt in labels.get(expected,()) or expected in combined.get(prompt,set())
 
 
+def _presented(root,locator,state=None):
+    """Find the native question that showed a prepared decision, so the coordinator can
+    pass its conversation locator without copying tool-call identities. Authority still
+    comes only from the saved native answer, validated by the ordinary helpers."""
+    key=locator.get('decision') if isinstance(locator,dict) else None
+    if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key) or locator.get('tool_use_id'):return locator
+    if locator.get('turn') and not locator.get('transcript_path'):return locator
+    try:prepared=read_json(_home(root)/'decisions'/(key+'.json'));question=prepared['question']
+    except (OSError,ValueError,KeyError,TypeError):return locator
+    env=os.environ.get('CODEX_THREAD_ID') or os.environ.get('OH_NATIVE_SESSION_ID')
+    host=locator.get('host') or ('codex' if os.environ.get('CODEX_THREAD_ID') else (state or {}).get('host'))
+    session=locator.get('session') or env or ((state or {}).get('human') or {}).get('session')
+    if not host or not session:return locator
+    options=prepared['menu_options'] if prepared.get('presentation')=='checkpoint-menu' else None
+    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options)
+    except Refused:return locator
+    consumed=(state or {}).get('decisions',{})
+    for call in reversed(calls):
+        candidate={'host':host,'session':session,'transcript_path':str(path),'tool_use_id':call,'decision':key}
+        try:
+            source=authority.native_human(root,candidate,latest=False)
+            # Replay keeps a consumed answer; new authority still needs the latest input.
+            if digest({k:source[k] for k in ('host','session','turn','prompt')}) not in consumed:authority.native_human(root,candidate)
+        except Refused:continue
+        return candidate
+    return locator
+
+
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
     allowed={'continue','grant-review','accept-concerns','dismiss-scope','route-scope','publish','pause','stop','resume','approve-private','approve-proposal'}
     if kind not in allowed:raise Refused('Unknown consequential decision')
     with _locked(root):
         journal,state=load_run(root,run)
+        locator=_presented(root,locator,state)
         since=journal.records()[0]['at']
         if attempt:since=_attempt(state,attempt).get('finished_at') or since
         elif kind=='resume':
@@ -899,10 +944,16 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .publication import destination as publication_destination,commits,made
             from .branches import main_ref,trunk
             dest=publication_destination(root,required=True)|{'base_branch':trunk(root,state['config'])}
-            context=source.get('question','')+' '+source['prompt']
-            destination_name=dest['destination'].removesuffix('.git').rsplit('/',2)[-2:]
-            if state['branch'] not in context or '/'.join(destination_name) not in context:
-                raise Refused('The publication decision must identify this branch and repository destination')
+            if prepared and prepared.get('presentation')=='checkpoint-menu':
+                # The verified native menu binds this destination and the exact
+                # work boundary. Its concise heading need not repeat those facts.
+                if prepared['publication_destination']!=dest:
+                    raise Refused('The publication destination changed; present the current destination before publishing')
+            else:
+                context=source.get('question','')+' '+source['prompt']
+                destination_name=dest['destination'].removesuffix('.git').rsplit('/',2)[-2:]
+                if state['branch'] not in context or '/'.join(destination_name) not in context:
+                    raise Refused('The publication decision must identify this branch and repository destination')
             if source.get('question_at') and not authority.newer(source['question_at'],since):raise Refused('The publication question predates the current completed review')
             if destination and destination!=dest:raise Refused('The supplied publication destination differs from the project')
             base=main_ref(root,state['config'])
@@ -918,7 +969,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             add('run.status',{'status':'stopped'})
         elif kind=='pause':add('run.status',{'status':'paused','head':subject['head'],'tree':subject['tree']})
         elif kind=='resume':
-            if _active(state):raise Refused('A native attempt still owns this work; retain its terminal result before transfer')
+            if _active(state):raise Refused('A native attempt has no retained terminal result; read resume --run recovery details, inspect its original host records, and retain the outcome before transfer')
             add('run.owner',{'human':source})
             status=state['status']
             if status=='completed' and state['workflow']=='review' and not _finished(state):status='running'

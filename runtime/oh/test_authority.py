@@ -110,7 +110,8 @@ class AuthorityTest(unittest.TestCase):
                     final={'type':'event_msg','payload':{'type':'task_complete','last_agent_message':'Complete public report.'}}
                 else:
                     args={'prompt':'Execute admission admission.','model':profile['model'],'effort':'high','fork_context':False}
-                    parents=[{'type':'assistant','message':{'content':[{'type':'tool_use','id':'spawn','name':'Agent','input':args}]}},
+                    parents=[{'type':'assistant','sessionId':'parent','timestamp':'2026-10-15T12:00:01Z',
+                              'message':{'content':[{'type':'tool_use','id':'spawn','name':'Agent','input':args}]}},
                              {'type':'user','sessionId':'parent','cwd':str(root),'timestamp':'2026-10-15T12:00:01+00:00',
                               'toolUseResult':{'isAsync':True,'status':'async_launched','agentId':'child','resolvedModel':'claude-sonnet-4-6'},
                               'message':{'content':[{'type':'tool_result','tool_use_id':'spawn','content':'Native agent launched.'}]}}]
@@ -150,7 +151,12 @@ class AuthorityTest(unittest.TestCase):
                     save(pr=killed,ch=children+[progress,final])
                 else:save(ch=children+[final])
                 result=native_result(root,state,attempt|{'native_child':bound},locator)
-                if host=='codex':self.assertEqual((result['text'],result['status']),('Complete public report.','completed'))
+                if host=='codex':
+                    self.assertEqual((result['text'],result['status']),('Complete public report.','completed'))
+                    for empty in ('',None):
+                        save(ch=children+[final|{'payload':final['payload']|{'last_agent_message':empty}}])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
+                    save(ch=children+[final])
                 else:
                     self.assertEqual(result['status'],'interrupted')
                     self.assertIn('The background task is still working.',result['text'])
@@ -160,6 +166,8 @@ class AuthorityTest(unittest.TestCase):
                     finished={'type':'assistant','agentId':'child','sessionId':'parent','cwd':str(root),
                         'timestamp':'2026-10-15T12:00:02Z','message':{'model':'claude-sonnet-4-6',
                         'content':[{'type':'text','text':'Complete public report.'}]}}
+                    save(pr=parents+[completion],ch=children)
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
                     save(pr=parents+[completion,killed[-1]],ch=children+[finished])
                     completed=native_result(root,state,attempt|{'native_child':bound},locator)
                     self.assertEqual((completed['status'],completed['text']),('completed','Complete public report.'))
@@ -186,6 +194,95 @@ class AuthorityTest(unittest.TestCase):
                     self.assertGreater(len(receipt),12563)
                     self.assertEqual((handback['status'],handback['text']),('completed',receipt))
                     self.assertEqual(len(handback['record_hashes']),3)
+                    # Background task envelopes survive even when Claude absorbs
+                    # the peer handback into an already running parent turn.
+                    def notification(status='completed',use='spawn',at='2026-10-15T12:00:07Z'):
+                        text=('<task-notification>\n<task-id>child</task-id>\n<tool-use-id>'+use+'</tool-use-id>\n'
+                              '<output-file>/unused</output-file>\n<status>'+status+'</status>\n'
+                              '<summary>Native task ended.</summary>\n</task-notification>')
+                        return {'type':'queue-operation','operation':'enqueue','sessionId':'parent','timestamp':at,'content':text}
+                    ended=notification()
+                    attachment={'type':'attachment','sessionId':'parent','timestamp':ended['timestamp'],
+                        'attachment':{'type':'queued_command','commandMode':'task-notification',
+                            'origin':{'kind':'task-notification','producer':'session-task'},
+                            'timestamp':ended['timestamp'],'prompt':ended['content']}}
+                    for envelope in (ended,attachment):
+                        save(pr=parents+[envelope],ch=[call,acknowledgement])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                        wrong_admission=attempt|{'profile':{'model':'opus','effort':'high'}}
+                        failed=native_result(root,state,wrong_admission,locator)
+                        self.assertEqual((failed['status'],failed['terminal_status']),('binding_failed','completed'))
+                        self.assertEqual(failed['text'],receipt)
+                    for label in ('wrong child','wrong call','wrong parent','sidechain','ordinary prose','removed queue','old event','foreign producer'):
+                        with self.subTest(notification=label):
+                            event=deepcopy(ended)
+                            if label=='wrong child':event['content']=event['content'].replace('<task-id>child','<task-id>foreign')
+                            elif label=='wrong call':event['content']=event['content'].replace('<tool-use-id>spawn','<tool-use-id>foreign')
+                            elif label=='wrong parent':event['sessionId']='foreign'
+                            elif label=='sidechain':event['isSidechain']=True
+                            elif label=='ordinary prose':event={'type':'user','sessionId':'parent','message':{'content':ended['content']}}
+                            elif label=='removed queue':event['operation']='remove'
+                            elif label=='old event':event['timestamp']=attempt['started_at']
+                            elif label=='foreign producer':
+                                event=deepcopy(attachment);event['attachment']['origin']['producer']='model'
+                            save(pr=parents+[event],ch=[call,acknowledgement])
+                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # A successful native stop needs no model-authored final report.
+                    stop={'type':'assistant','sessionId':'parent','timestamp':'2026-10-15T12:00:02Z',
+                        'message':{'content':[{'type':'tool_use','id':'stop','name':'TaskStop','input':{'task_id':'child'}}]}}
+                    stopped={'type':'user','sessionId':'parent','timestamp':'2026-10-15T12:00:03Z',
+                        'toolUseResult':{'task_id':'child','task_type':'local_agent','message':'Successfully stopped task'},
+                        'message':{'content':[{'type':'tool_result','tool_use_id':'stop','content':'Native stop acknowledged.'}]}}
+                    interrupted={'type':'user','agentId':'child','sessionId':'parent','cwd':str(root),'timestamp':'2026-10-15T12:00:03.001Z',
+                        'message':{'content':[{'type':'text','text':'[Request interrupted by user]'}]}}
+                    for evidence in ([stop,stopped],[notification('killed',at='2026-10-15T12:00:03.002Z')]):
+                        save(pr=parents+evidence,ch=children+[interrupted])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'interrupted')
+                        failed=native_result(root,state,wrong_admission,locator)
+                        self.assertEqual((failed['status'],failed['terminal_status']),('binding_failed','interrupted'))
+                    cleanup=interrupted|{'message':{'content':[{'type':'tool_result','tool_use_id':'cancelled-command',
+                                                              'is_error':True,'content':'Command cancelled.'}]}}
+                    save(pr=parents+[stop,stopped],ch=children+[cleanup])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    save(pr=parents+[stop,stopped,notification('killed',at='2026-10-15T12:00:03.002Z')],ch=children+[cleanup])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'interrupted')
+                    for label in ('no acknowledgement','wrong call','wrong child','shell task','failed stop','foreign parent','sidechain','model claim','missing time'):
+                        with self.subTest(stop=label):
+                            event=deepcopy(stopped);events=[stop,event]
+                            if label=='no acknowledgement':events=[stop]
+                            elif label=='wrong call':event['message']['content'][0]['tool_use_id']='foreign'
+                            elif label=='wrong child':event['toolUseResult']['task_id']='foreign'
+                            elif label=='shell task':event['toolUseResult']['task_type']='local_bash'
+                            elif label=='failed stop':event['message']['content'][0]['is_error']=True
+                            elif label=='foreign parent':event['sessionId']='foreign'
+                            elif label=='sidechain':event['isSidechain']=True
+                            elif label=='model claim':event['type']='assistant'
+                            elif label=='missing time':event.pop('timestamp')
+                            save(pr=parents+events,ch=children)
+                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # Reproduce the incident: stop, resume to hand back, then a
+                    # completion notification referring to SendMessage, not Agent.
+                    resume={'type':'assistant','sessionId':'parent','timestamp':'2026-10-15T12:00:03.500Z',
+                        'message':{'content':[{'type':'tool_use','id':'resume','name':'SendMessage',
+                            'input':{'to':'child','message':'Hand back.'}}]}}
+                    resumed={'type':'user','sessionId':'parent','timestamp':'2026-10-15T12:00:03.600Z',
+                        'toolUseResult':{'success':True,'resumedAgentId':'child'},
+                        'message':{'content':[{'type':'tool_result','tool_use_id':'resume','content':'Resuming agent'}]}}
+                    history=parents+[stop,stopped,resume,resumed]
+                    save(pr=history,ch=children+[interrupted])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    rejected=deepcopy(resumed);rejected['message']['content'][0]['is_error']=True
+                    save(pr=parents+[stop,stopped,resume,rejected],ch=children+[interrupted])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'interrupted')
+                    save(pr=history+[ended],ch=[call,acknowledgement])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    save(pr=history+[notification(use='resume')],ch=[call,acknowledgement])
+                    recovered=native_result(root,state,wrong_admission,locator)
+                    self.assertEqual((recovered['status'],recovered['terminal_status'],recovered['text']),('binding_failed','completed',receipt))
+                    # Child activity also invalidates terminal evidence when the
+                    # parent's corresponding resume record has not flushed yet.
+                    save(pr=parents+[stop,stopped],ch=[call,acknowledgement])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                     raw=notice|{'origin':notice['origin']|{'body':receipt}}
                     save(pr=parents+[raw],ch=[call,acknowledgement])
                     self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
@@ -361,6 +458,11 @@ class AuthorityTest(unittest.TestCase):
                     self.assertEqual((cancelled['native_id'],cancelled['tool_use_id']),('child','spawn'))
                     self.assertTrue(cancelled['binding_issues'])
                     with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    # A later turn cannot be settled using an earlier terminal event.
+                    save(pr=launched,ch=children+[final,{'type':'event_msg','payload':{'type':'task_started'}}])
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                    save(pr=launched,ch=children+[final,{'type':'event_msg','payload':{'type':'task_started'}},aborted])
+                    self.assertEqual(native_result(root,state,attempt,locator)['terminal_status'],'interrupted')
                 else:
                     # The child may save identity but no model-bearing assistant turn.
                     identity=deepcopy(final)
@@ -374,6 +476,13 @@ class AuthorityTest(unittest.TestCase):
                     self.assertEqual(cancelled['admitted_profile'],profile)
                     self.assertEqual((cancelled['native_id'],cancelled['tool_use_id']),('child','spawn'))
                     with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    # A launch may be cancelled before any child file is written.
+                    child.unlink()
+                    cancelled=native_result(root,state,attempt,locator)
+                    self.assertEqual((cancelled['status'],cancelled['terminal_status']),('binding_failed','interrupted'))
+                    self.assertIsNone(cancelled['profile'])
+                    save(pr=launched,ch=[])
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
                 unrelated=deepcopy(parents)
                 if host=='codex':
                     other_args=args|{'task_name':'unrelated_earlier_task'}
@@ -415,6 +524,10 @@ class AuthorityTest(unittest.TestCase):
                 self.assertEqual(result['admitted_profile'],attempt['profile'])
                 self.assertNotIn('native_id',result)
                 self.assertEqual(len(result['record_hashes']),2)
+                save([request])
+                with patch('oh.authority.sleep',side_effect=lambda delay:save([request,failure])) as wait:
+                    self.assertEqual(native_result(root,state,attempt,{'tool_use_id':'launch'}),result)
+                    self.assertEqual(wait.call_count,1)
                 with self.assertRaises(Refused):native_result(root,state,attempt,{'tool_use_id':'foreign'})
                 with self.assertRaises(Refused):native_result(root,state,attempt|{'started_at':'2026-10-15T12:00:03Z'},{'tool_use_id':'launch'})
                 wrong_profile=json.loads(json.dumps(request))

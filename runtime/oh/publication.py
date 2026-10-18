@@ -233,6 +233,108 @@ def reconcile(root,number=None):
         return result|{'publication_status':'not published'}
 
 
+CI_NEXT={
+    'pass':'CI passed on the published reviewed head. Report it; merging stays with the person.',
+    'fail':'Read the failed checks\' logs (gh run view --log-failed), report a short diagnosis, then follow the CI failure choices in workflows/publication.md. Publication authority makes no code changes.',
+    'pending':'Checks are still running on the published head. Call ci-wait again for the same PR; this needs no new approval.',
+    'no_checks':'No checks registered on the published head. Report that this is not a pass and keep the resumable handoff.',
+    'skipped':'Every check was skipped. Report that this is not a pass and keep the resumable handoff.',
+    'head_changed':'The PR head is no longer the published reviewed head. Report it and reconcile publication before treating any CI result as this work\'s.',
+    'closed':'The PR was closed. Report its state; OH reopens or recreates nothing.',
+    'merged':'The PR was merged. Report its final CI state.',
+    'unavailable':'GitHub could not be read. Report it and call ci-wait again later; the publication and its PR are preserved.'}
+
+
+def _ci_check(item,kind):
+    if kind=='status':
+        state=str(item.get('state') or '').lower()
+        bucket='pending' if state in ('pending','expected','') else 'pass' if state=='success' else 'fail'
+        return {'name':item.get('context') or 'status','bucket':bucket,'link':item.get('target_url')}
+    if item.get('status')!='completed':bucket='pending'
+    else:
+        conclusion=str(item.get('conclusion') or '').lower()
+        bucket=('pass' if conclusion=='success' else 'skip' if conclusion in ('skipped','neutral')
+                else 'cancel' if conclusion=='cancelled' else 'fail')
+    return {'name':item.get('name') or 'check','bucket':bucket,'link':item.get('html_url')}
+
+
+def _ci_results(root,host,endpoint,key,read):
+    """Read a complete CI collection; changing or truncated pages require a retry."""
+    items=[];total=None;page=1;aggregate=None;seen=set()
+    while total is None or len(items)<total:
+        value=read(root,host,endpoint+f'?per_page=100&page={page}')
+        count=value['total_count'];part=value[key]
+        if type(count) is not int or count<0 or not isinstance(part,list):
+            raise Refused('GitHub returned an incomplete CI collection; retry ci-wait.')
+        if total is None:total=count;aggregate=value.get('state')
+        if count!=total or len(part)!=min(100,total-len(items)) or value.get('state')!=aggregate:
+            raise Refused('GitHub CI results changed or were truncated during pagination; retry ci-wait.')
+        for item in part:
+            identity=item.get('id')
+            if type(identity) is not int or identity in seen:
+                raise Refused('GitHub CI pages contain missing or repeated identities; retry ci-wait.')
+            seen.add(identity)
+        items.extend(part);page+=1
+    if key=='statuses':
+        states={item.get('state') for item in items}
+        expected='failure' if states&{'failure','error'} else 'pending' if not items or 'pending' in states else 'success'
+        if aggregate!=expected:
+            raise Refused('GitHub combined status disagrees with its CI results; retry ci-wait.')
+    return items
+
+
+def ci_wait(root,number=None,timeout=1500,*,interval=30,grace=180,read=None,sleep=None,clock=None):
+    """Follow the published PR's reviewed head until CI reaches a meaningful result.
+    Reads only; an empty, pending, skipped, failed or cancelled set is never a pass."""
+    import subprocess
+    import time
+    from .workflow import load_run
+    from datetime import datetime
+    read=read or github;sleep=sleep or time.sleep;clock=clock or time.time
+    _,state=load_run(root)
+    published=state.get('published') or {}
+    if not published.get('number'):raise Refused('This run has no verified published PR. Reconcile it with publication first; ci-wait creates nothing.')
+    if number is not None and number!=published['number']:raise Refused(f'This run published PR #{published["number"]}; ci-wait follows only that PR.')
+    number=published['number'];repo=published['repository'];host=published.get('host','github.com')
+    head=published['approved_head']
+    started=clock();failures=0;checks=[];observed=head;outcome=None;detail=None
+    # Checks register some time after the push; bounded repeated calls share one grace window.
+    try:registered=datetime.fromisoformat(published['verified_at'].replace('Z','+00:00')).timestamp()
+    except (KeyError,AttributeError,ValueError):registered=started
+    while outcome is None:
+        try:
+            pr=read(root,host,f'repos/{repo}/pulls/{number}')
+            observed=pr['head']['sha']
+            if observed!=head:
+                outcome='head_changed'
+                break
+            runs=_ci_results(root,host,f'repos/{repo}/commits/{head}/check-runs','check_runs',read)
+            statuses=_ci_results(root,host,f'repos/{repo}/commits/{head}/status','statuses',read)
+            failures=0
+        except (Refused,KeyError,TypeError,AttributeError) as exc:
+            failures+=1;detail=str(exc)[:300]
+            if failures>=3:outcome='unavailable'
+        else:
+            checks=[_ci_check(i,'run') for i in runs]+[_ci_check(i,'status') for i in statuses]
+            buckets={c['bucket'] for c in checks}
+            if checks and 'pending' not in buckets:
+                outcome='fail' if buckets&{'fail','cancel'} else 'pass' if 'pass' in buckets else 'skipped'
+            elif pr.get('merged_at') or pr.get('state')=='closed':outcome='merged' if pr.get('merged_at') else 'closed'
+            elif not checks and clock()-registered>=grace:outcome='no_checks'
+        if outcome is None:
+            if clock()-started>=timeout:outcome='pending'
+            else:sleep(max(1,min(interval,timeout-(clock()-started))))
+    result={'pr':number,'url':published.get('url'),'head':head,'outcome':outcome,'checks':checks,
+            'not_passed':[c['name'] for c in checks if c['bucket'] not in ('pass','skip')],'next':CI_NEXT[outcome]}
+    if outcome=='head_changed':result['observed_head']=observed
+    if outcome=='unavailable':result['detail']=detail
+    if outcome in ('pass','fail'):
+        from .observability import observe_ci
+        try:observe_ci(root)  # best-effort analytics; the result above is the handoff
+        except (Refused,OSError,ValueError,KeyError,subprocess.SubprocessError):pass
+    return result
+
+
 def public_value(root,state,value):
     """Prepare public text before sealing evidence; local journals keep original paths and reports."""
     from .storage import state_home

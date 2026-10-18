@@ -10,8 +10,11 @@ consumer repositories and keep raw worker transcripts out of the coordinator's c
 In Codex use the connected OH tools with the checkout's absolute `root`. In Claude use
 the absolute plugin launcher, `<plugin>/scripts/oh --root <checkout> <command>`
 (`scripts\oh.cmd` on native Windows). Load resources through the same resource entry.
-If the Codex connection is missing, explain the `/mcp` recovery step; do not bypass it
-with shell writes to OH state. Setup requires an explicit invocation, not discovery.
+If a connected OH tool fails, retry that same operation once before asking the person
+to intervene. If the connection remains unavailable, report the actual error and a
+host-supported recovery step; do not assume `/mcp` exists in the desktop app or bypass
+the connection with shell writes to OH state. Setup requires an explicit invocation,
+not discovery.
 
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
@@ -23,55 +26,38 @@ is not the resume answer. Free-text proposals and quick fixes need not repeat th
 words: read their saved scope/report and judge whether this is the same work. Never
 build a similarity parser or silently absorb a changed scope.
 
-Show the selected subject, draft or latest result, next step and remaining review
-allowance. Use the returned saved subject and branch in the question itself:
-"Resume <subject> on <branch>?" Offer `Resume` and `Not now` through the native question
-tool. Wait for the actual answer before continuation, legacy adoption or retaining an
-old result. `Not now` preserves the work and starts nothing. If different work is wanted,
-resolve that request separately. With no subject, show relevant unfinished work first;
-multiple plausible matches need selection. One selection question can also confirm
-resume when it names the chosen saved subject and branch. Do not ask twice for that choice.
-If no saved work matches, follow the normal new-work entry. A clearly different request
-does not select unrelated work; preserve it and resolve actual switching/branch conflicts.
+For a matching saved run, read `workflows/recovery.md` and `workflows/decisions.md`
+before the first Resume question. Settle prior native work, then bind the same answer;
+continue its actual phase without new scope, repeated questions or renewed allowances.
+For new work, follow the selected workflow's ordered steps below the shared protocol.
 
-Read selected facts with `resume --run ID` (Codex `resume` with `run`). After the Resume
-answer, inspect pending native attempts. Retain any already-terminal result through
-its original child locator before binding continuation; do not launch a replacement.
-If the host is still saving it, recover and retry using the same answer. Once prior
-native work is quiescent and settled, bind continuation with `resume --run ID --human <locator.json>`
-(Codex `resume` with `run` and `human`). Use the actual answer to the subject-and-branch
-Resume question, including when entering through `oh-resume`. A workflow invocation
-alone cannot authorize continuation. If native questions are unavailable, ask the same
-question in chat and bind its direct human reply.
-These helpers preserve the original scope, settings, findings, approvals and remaining
-allowances. Saved work belongs to the person across sessions: an old conversation can
-stay open, and its saved status need not say paused or stopped when no attempt or check
-is executing. Do not ask for Stop or Pause before continuation. The accepted continuation
-selects the current coordinator; a superseded coordinator must launch no further OH
-operations on this work. Attempts retain their actual original host and native parent.
-Do not reprepare free-text scope merely to transfer a session or host.
+## Read only the procedure needed now
 
-Resume the actual phase: retain terminal child evidence, continue unfinished authoring,
-use valid completed author/check/review evidence, restore the latest proposal preview or
-human decision, or finish completion/publication. Read the referenced report and scope;
-phase labels are hints, not authority to bypass admission checks. A live child is awaited
-or cancelled through its host before replacement; another session or elapsed time is not
-proof of termination. Completed reviewers are never resumed. A changed candidate needs
-its existing verification/review path, while unchanged work does not need repeated analysis.
-A spent allowance, proposal approval, concern acceptance, private approval or publication
-still needs its existing human decision; continuation cannot supply it.
+Load these through the same OH `resource` entry; paths are relative to the packaged OH root.
+Do not load every reference at entry. If a tool truncates a required resource, read the
+remaining content from its saved output before acting on it.
 
-Completed work presents its result or outstanding publication/handoff rather than
-restarting. An explicit new review after terminal feedback uses a fresh reviewer. For
-older scopes without a subject identifier, inspect the original native request and bound
-artifacts; ask for selection only if identity is genuinely ambiguous. Preserve useful
-and human-authored edits; no reset, stash or regeneration is a recovery shortcut.
+| Situation | Required reference |
+| --- | --- |
+| Any human question that grants scope, continuation, allowance, acceptance or publication | `workflows/decisions.md`, before preparing or displaying the question |
+| Resume, missing child binding, rejected launch, interrupted work, Pause or Stop | `workflows/recovery.md` |
+| Outside-scope findings or requested tracking | `workflows/findings.md` |
+| Publish, reconcile an existing PR, or inspect its CI | `workflows/publication.md` |
+
+## Operations and evidence
+
+Call dependent state-changing helpers separately and inspect each returned outcome
+before the next step. Do not pipe admissions or failures through `head`, `grep` or a
+success-only formatter that hides the actual result. Keep complete output externally
+when large; read the needed fields and referenced artifacts rather than guessing them.
 
 Use these focused operations, through their equivalent named OH tools in Codex:
 
 | Purpose | Claude command | Codex tool |
 | --- | --- | --- |
 | Discover saved work | `status --saved` | `status` with `saved: true` |
+| Read a workflow or role contract | `resource <path>` | `resource` with `path` |
+| Locate, validate or list plans | `plans path\|check\|list` | `plans` with `action` |
 | Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
 | Prepare bounded work | `scope prepare <manifest.json> [--workflow deliver\|design\|propose] [--human <locator.json>]` | `scope_prepare` |
 | Select approved design tasks | `scope prepare --doc NNNN [--track TRACK] --human <locator.json>` | `scope_prepare` |
@@ -89,11 +75,20 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Track retained outside-scope findings | `finding-track ID [--destination FILE]` | `finding_track` |
 | Record a consequential human decision | `decision <kind> <locator.json> [--attempt ID] [--destination FILE]` | `decision` |
 | Prepare standalone feedback | `review -- <selector...>` | `review` |
+| Reconcile the approved PR | `publication [--pr N]` | `publication` |
+| Read publication evidence | `pr-summary [base]` | `pr_summary` |
+| Follow the published PR's CI | `ci-wait [--pr N] [--timeout SECONDS]` | `ci_wait` |
 
-Manifest and locator JSON files belong in external writable scratch storage. Codex tools
-receive the equivalent JSON objects. A locator names actual host evidence: `host`,
+Manifest JSON files belong in external writable scratch storage. Pass a locator either
+as one inline JSON argument or as such a file; never edit locator text with shell tools.
+Codex tools receive the equivalent JSON objects. A locator names actual host evidence: `host`,
 `session`, and available `turn`, `transcript_path`, `tool_use_id` or `child_session`.
 Copy identities from native events; do not invent a human message, child ID or result.
+For an answer to a prepared decision, pass the current conversation locator (Claude: the
+one in OH's hook context; Codex: `host` and `session`) with its `decision` identity. OH
+finds the native question by its prepared text or complete completed-task menu and
+validates its saved answer against the same decision;
+add `tool_use_id` only when you already have it.
 For child binding/retention use the returned child identity and actual spawn call ID.
 Claude derives the child's transcript from its original parent's saved location; omit
 `transcript_path` rather than copying the parent's path into a child locator. A supplied
@@ -119,7 +114,44 @@ and prepare the same tasks with a current preview. Never reuse the old acceptanc
 changed starting work. Include the recorded original commit range in the first task's
 implementation and review, together with its current candidate.
 
+## Execute one phase at a time
+
+1. **Establish authority.** Discover saved work, select its actual phase, and obtain only
+   the approval that phase requires. Prepare consequential questions before displaying them.
+2. **Admit, then launch.** Call `attempt admit <role>`, read the returned profile and
+   packet, and launch exactly that fresh native agent. Do not copy settings from an earlier attempt.
+3. **Bind immediately.** Save the returned child identity with its actual spawn call ID.
+   A rejected binding enters recovery; it does not authorize another launch.
+4. **Await, then retain.** Keep the coordinator available for progress and human controls.
+   Retain the terminal native result before interpreting its outcome or starting another agent.
+5. **Take the outcome's next step.** Authors produce the final candidate and checks;
+   the invariant reviewer agent independently reviews that exact candidate. Repair scoped
+   blockers, resolve real decisions and repeat review within the remaining allowance.
+6. **Complete, then advance.** Use `complete` only with valid check/review evidence and
+   required approval. Continue within the finite task batch or present the actual next boundary.
+   Standalone review ends with feedback, not `complete` or implementation.
+
+The coordinator owns scope, native launch/bind/retain, questions, progress, completion
+and publication. Each author owns its assigned artifact, self-review, `candidate` and
+`verify`; the invariant reviewer agent owns independent inspection and its full report.
+Do not have the coordinator rerun passing author checks or implement alongside a child.
+
 ## Fresh native delegation
+
+Use these stable names in chat; native admission roles and tool identifiers stay unchanged.
+
+| Work | Chat name | Admission role | Shared contract supplied to the child |
+| --- | --- | --- | --- |
+| Task difficulty | assessment agent | `assessment` | `prompts/assessment.md` |
+| Proposal analysis or approved additions | proposal agent | `analysis` | `prompts/analysis.md`, `prompts/propose.md`, `prompts/proposal-routing.md` |
+| Design drafting or repair | design agent | `analysis` | `prompts/analysis.md`, `prompts/design.md` |
+| Code implementation or repair | implementation agent | `implementation` | `prompts/implementation.md` |
+| Independent review in any workflow | invariant reviewer agent | `review` | `prompts/invariant-reviewer.md` |
+
+Load the relevant contract through OH's resource entry and include its resource path
+in the child's bounded prompt. Codex default agents do not inherit Claude's named-agent
+files. Include `prompts/progress.md` for author/assessment progress. Review updates
+describe coverage underway, never an interim verdict.
 
 Admit before attempting any launch. The helper snapshots the current task, role,
 profile, bounded packet and allowance. Read that admission; do not select a different
@@ -140,18 +172,35 @@ scope/evidence files rather than pasting the parent history or full worker trans
   Use the host's native child result/notification and cancellation tools. Do not use
   the `fork` type or send a new review to a completed agent.
 
+OH's launch guard checks each native agent launch against the admission it names. When
+the model, effort or fresh context differs, the host refuses the launch before any child
+starts and names the required settings. Launch that same admission again with exactly
+those settings; nothing ran, so there is no attempt to retain or recover.
+
+Prefer a native background/asynchronous launch when supported so the coordinator can
+bind promptly, handle human controls and report progress. Await through native host tools;
+do not block on a foreground launch and leave a long-running child unable to use its
+binding-dependent helpers. If a child reaches `candidate`, `verify` or `admission` before
+the binding is saved, bind promptly and retry that same operation after the short host-save
+delay. This is not a new attempt, model selection or approval.
+
 Bind the returned native child identity immediately. Retain its complete original result
 by native locator only after its terminal native outcome is saved and its owned tools
 have finished; an intermediate assistant `end_turn` does not establish quiescence.
-If binding is rejected, use native cancellation or wait for that child to finish, then
-retain with both its child identity and spawn tool-call identity. The terminal launch
-is retained as failed binding, consumes its original allowance and grants no completion.
+If binding is rejected, read `workflows/recovery.md`: cancel or await the child, retain
+its actual terminal outcome with the original child and spawn identities, then recover
+within existing scope and remaining allowance. A cancelled child needs no final report;
+never resume it to manufacture one. A completion without a report is unfinished.
+Read every new admission's profile, including repairs; escalation can change it.
 If interruption prevented a profile from being saved, the actual profile remains unknown;
 provable launch attribution and a saved terminal outcome still permit settlement.
 Send only a short handoff and evidence paths into the coordinator.
 Claude's acknowledged native `SubagentHandback` can carry the complete report. Retain
 its original child payload after the host confirms completion; do not rewrite it to
 match the parent's warning or indentation. A summary is not the retained report.
+Native task notifications can establish completion even when the parent absorbs the
+handback message mid-turn. Keep the original spawn locator after a native continuation;
+OH follows its attributed latest outcome and refuses stale completion/cancellation.
 Never run two implementation agents together or
 modify the subject while review is active. Completed reviewers are never resumed.
 
@@ -166,7 +215,8 @@ never silently substitute a profile or API authentication for subscription execu
 
 ## Implementation, checks and review
 
-Assess a newly selected task with a fresh assessment agent using the configured profile.
+For Deliver, assess each newly selected task with a fresh assessment agent using the configured profile.
+Propose and Design use their analysis role directly; do not insert a delivery assessment.
 Keep difficulty in external task evidence, not the project design. Use the resulting
 admitted implementation profile. Only a repeated blocking family in two independent
 reviewer receipts triggers implementation escalation; an author claim or first blocker
@@ -188,6 +238,10 @@ can be attached with `evidence`; their hashes make them stable references, not a
 The coordinator retains candidate/check references and does not rerun passing final checks.
 Report what actually ran: planning document validation is not a pass of the consumer's
 registered checks. An empty `checks` list supports no claim that project checks passed.
+If an author finishes without the required candidate or passing verification, retain its
+terminal result, then admit a fresh author for that remaining work within the existing
+scope. Preserve its draft/implementation. Do not give missing checks to the coordinator,
+reuse the completed admission, or launch the invariant reviewer agent prematurely.
 
 Admit a fresh reviewer only after the final candidate and checks are ready. Supply the
 immutable original scope, current candidate, complete findings and relevant evidence.
@@ -204,9 +258,15 @@ are automatically preserved in the existing review history and the run index's F
 work section. They do not require a disposition to complete otherwise valid scoped work.
 Never silently implement them, call them fixed, or treat tracking as scope approval.
 Nonempty ambiguity needs a real decision; formatting alone does not erase findings or
-renew an allowance. A spent allowance requires a human `grant-review` decision before
-another reviewer can be admitted. Ask for exactly the count the person intends; a request
-for one round must never grant the configured larger window.
+renew an allowance. A spent allowance requires a human `grant-review` decision before another reviewer can
+be admitted. Normally renew the run's snapshotted review window: call `decision-request
+grant-review` without `--rounds` (Codex: omit `rounds`). Do not choose one round because
+only one more review seems necessary. Override the count only when the person explicitly
+requests a different count; never enlarge a one-round request to the configured window.
+Read `workflows/decisions.md` before presenting that question.
+When the last available review leaves findings needing another round, obtain that renewal
+before starting the next repair/review cycle. Retain an already-running step before asking;
+an allowance question neither cancels that step nor authorizes out-of-scope repairs.
 Read the finding index's incomplete reviews and original finding positions as well as
 its classified findings. Unclassified fragments remain review evidence to address.
 Reviewers return the minimal decision defined in the shared review prompt and check it
@@ -220,197 +280,75 @@ Author claims, a task checkbox, green checks or a standalone receipt cannot auth
 it. A failed completion is repaired idempotently from retained evidence. Select the
 next task from external completion records, under the same finite task batch. At a batch
 boundary ask whether to continue the projected next batch, publish completed work or
-stop; silence grants no additional tasks.
+stop through the completed-task checkpoint in `workflows/decisions.md`. Present every
+returned option and bind the chosen action from that same question; silence grants nothing.
 If all design tracks have converged with completed tasks but the design is still approved,
 select its bounded `finalize` task and use the same candidate/check/review/completion path.
 Finish any requested completed-task re-review and its correction before publication;
 an earlier clean completion does not resolve a newer blocker.
 
-## Outside-scope follow-ups
+## Keep the person oriented
 
-Apply this policy consistently to Deliver, Design, Propose and standalone Review.
-Retaining the reviewer result already saves every finding durably. Show the open
-follow-ups and their actual destinations in the final report and on continuation;
-use the existing run index, not a new backlog database or only a PR footnote.
+Use the chat names in the role table consistently. Keep native agent IDs, tool-call IDs,
+receipt paths and helper names out of routine updates; use artifact names and observable
+behavior. Model/effort details belong in a compatibility notice or diagnosis when relevant.
+Use the same full role name in launch, progress, repair and completion messages. Repairs
+remain the implementation agent's work (or the proposal/design agent's work for planning),
+not a newly named “repair agent.” Use “invariant reviewer agent” rather than switching
+between “reviewer,” “round-7 reviewer” and “independent agent.” Native tool IDs stay unchanged.
 
-Use ordinary conversation and native tools for tracking instructions. If a decision
-is useful, offer context-appropriate choices such as Add a follow-up to this design,
-Create or link a GitHub issue, or Keep in saved follow-ups. There is no mandatory
-routing menu. Report retained follow-ups without posting an optional question that
-would keep ready work waiting. Ask only when a requested tracking action needs a real
-decision or missing authority. Honor an existing explicit preference without asking again. GitHub
-tracking may find an appropriate existing issue or create one under explicit or standing
-human authority; do not require the person to predict an existing issue URL. Record the
-resulting URL with `finding-track --destination` (`finding_track`) without another
-routing approval. Recording a URL grants no permission to create an issue or fix it.
+At selection, say what work is selected, the next phase and what follows it. During
+discovery say “I’ll check the saved work”; say “Resuming” only after the answer is bound.
+After a launch is confirmed, name the active agent and its assignment. Do not describe
+an admission as a running child, a missing binding as an unlaunched attempt, a repair
+claim as a closed finding, or a passing check as reviewed completion.
+Address the person in chat; do not expose self-instructions such as “Clean review. Retain
+it and complete the task.” Retain first, inspect the actual outcome and findings, then
+report the result and next step. For example: “The invariant reviewer agent found no
+in-scope blockers. One outside-scope follow-up remains. I’ll record task completion next.”
 
-For Deliver with a mutable repo or private design, related future work can be quoted
-in its `## Open review scope` section using `finding-track`. This is a follow-up note,
-not a new approved task. If the work belongs to an existing future task, identify that
-relationship instead of duplicating it. Adding executable tasks or expanding requirements
-goes through Design/Propose and the appropriate approval; it cannot alter the admitted
-task list, grant more tasks, or silently reopen a frozen design.
+During Propose, Design and Deliver, report meaningful transitions promptly: authoring
+started, checks running or completed, findings retained, repairs underway, independent
+review started, completion recorded, or a real decision needed. While an agent is working,
+aim for an update about every two to three minutes when useful information is available.
+Use a compact native progress/status summary or the child's nonterminal update, never
+its full transcript or private reasoning. Relay the current concrete subtask, why it
+matters and the next step in one or two sentences. For example:
 
-During scoped blocker repair, the default tracking helper can append notes to the
-mutable delivery design before the next candidate/check/review. An already successful
-exact-candidate review is preserved: the default retains the follow-up externally
-instead of editing its reviewed design. If the person chooses an actual document edit,
-include that changed document in checks and a fresh review before completion. Explain
-that effect before making the choice. Never spend another review merely to file a note
-when keeping it in saved follow-ups satisfies the person's request.
+- “The proposal agent is checking existing roadmap entries so this addition fits without duplicating work. Next I’ll show the proposed route.”
+- “The design agent is defining the retry acceptance checks so implementation has a testable boundary. Independent review follows the draft checks.”
+- “The implementation agent is fixing cancellation cleanup so interrupted requests release their resources. It will then run the affected checks.”
+- “The invariant reviewer agent is checking failure and recovery paths against the approved scope. I’ll report its findings when the review finishes.”
 
-Design and approved Propose additions can use a mutable design in their configured
-repo/private designs folder for informational notes, within the current initiative.
-Material additions still need the existing refinement/approval process. Frozen designs,
-correction runs, quick fixes without a design and standalone reviews keep findings in
-saved follow-ups or an authorized issue; offer a separate Design/Propose follow-up when
-appropriate. No destination decision blocks an otherwise ready scoped task.
+These are examples, not a fixed message template. Use them only when the activity is
+observed. If the host provides no useful detail, stay quiet or send a brief generic update
+such as “The implementation agent is still working.” Do not explain internal visibility
+limitations, invent a subtask, repeat a stale detailed update, estimate a percentage or
+promise an ETA without evidence. A time interval alone is not a reason to manufacture news.
 
-## Native decisions
+Keep the coordinator available while native work is active. Use native wait/status tools
+with bounded waits (normally at most 60 seconds per call when supported), respecting
+host notifications and human interruptions. Continue automatically on completion within
+existing authority. If the host requires yielding to receive a completion notification,
+use that native mechanism; do not create a scheduler or promise updates it cannot deliver.
+Do not repeatedly message children for progress, read raw transcripts to fill silence,
+or resume a completed agent. Routine progress is separate from approval questions.
 
-Use Claude `AskUserQuestion` or Codex's available native question tool directly for real
-decisions. Keep choices short and explain their effects in chat. Ask each decision when
-it is actually needed. Defer finding-disposition questions until the current review
-and approved repairs are retained, rather than asking while that work is in progress.
+For recoverable failures, briefly explain the observed problem and the repair/retry
+underway when that helps the person understand a delay. For a real blocker, give the
+evidence, preserved work, concrete remedy and next action; do not ask the person to debug
+internal IDs. A consequential question states the current result, decision, recommended
+option and effects, then follows `workflows/decisions.md` without a second confirmation.
 
-State the question and short choices in ordinary chat before posting its native menu,
-including the actual artifact preview when approving contents. Say the person can also reply
-in chat. These are two presentations of one decision, never two approvals. Submission
-success establishes no menu visibility. If the person reports a missing menu, use the
-readable chat question and their direct reply; do not just repost a popup or keep
-sleeping on the assumption that it is visible. Preserve the same scope and allowance.
-
-In Codex, `request_user_input_async` posts a question and returns immediately. An
-`accepted: true` result only acknowledges submission; it is not the person's answer.
-Use it only when a native interruptible wait tool is also available. After posting,
-keep the turn open and wait quietly with `clock.sleep` (at most 60 seconds per call),
-or the host's equivalent interruptible wait, until the actual human reply arrives.
-Do not send a final response while the question is pending: completing the turn can
-dismiss its menu before the person clicks. Do not post a second question, start the
-selected work or infer a choice from silence, elapsed time or tool success. This
-applies to Resume and every other native decision, including scope, findings,
-allowances, document approval and publication.
-
-If the host has a blocking native question tool, its actual returned human answer
-can be used directly. If an asynchronous question cannot be kept open, use the
-blocking tool when available; otherwise ask once in plain chat and end with that
-question, then wait for the person's next message. Do not post an asynchronous menu
-and immediately end the turn with instructions to click it. Claude AskUserQuestion
-waits for its native answer; never supply an `answers` field on the person's behalf.
-
-If a menu disappears or is closed without an answer, preserve the unresolved decision
-and show that same question again through the available native surface, keeping an
-asynchronous question open as above. Fall back to plain chat when necessary. Never
-make the person restart the work or repeat their command to restore a missing menu.
-Preserve an existing valid answer; do not require exact wording, poll an OH menu or
-synthesize an approval in an agent message.
-
-Before a consequential question, call `decision-request` (`decision_request`) for its
-kind and concerned attempt, plus `--rounds N` for an exact additional review count.
-When combining this with a routine action such as creating an issue, `--also TEXT`
-includes that instruction in the same presented choice. The runtime grants only the
-bound consequential effect; the host carries out the accompanying authorized action.
-It binds the current subject and effect without granting anything. Present its returned
-question and positive choice through the native host, unchanged; keep the returned
-refine/cancel alternatives where relevant, or offer other non-granting alternatives; explanations and full previews
-belong in the surrounding conversation. Include its `decision` identity in the actual
-human locator when calling `decision` (or `resume`). A direct Yes about this same shown
-question also works when a menu is unavailable. Preserve the prepared identity and actual
-answer across recoverable failures; do not regenerate the question after it was answered.
-If the person changes the requested scope/count, prepare that actual effect and ask only
-for the changed boundary. Do not infer grants from a model's paraphrase of free text.
-
-Consequential kinds are `continue`, `grant-review`, `accept-concerns`, `publish`, `pause`,
-`stop`, `resume`, `approve-proposal` and `approve-private`. Scope preparation returns its
-own `approval` question for native quick-fix acceptance. Claude plan-viewer acceptance
-continues to bind the actual full plan directly, without an extra decision request.
-Native Pause/Stop commands remain immediately usable. Older already-presented canonical
-choices remain readable for recovery; do not build new wording around that compatibility.
-Routine clarification, issue tracking and follow-up bookkeeping need no durable grant.
-An instruction to create an issue and allow another review needs only the review allowance
-recorded as a grant; recording the authorized issue URL does not consume the human answer
-or require a second confirmation. The person controls publication, scope and allowances.
-
-Claude quick fixes use the native plan viewer's single Accept. Put the complete bounded
-scope preview in the plan file designated by `EnterPlanMode`, then call `ExitPlanMode` without an
-extra `AskUserQuestion`. Bind that actual acceptance with `scope approve`. This display
-copy is not a consumer design. An edited preview needs refreshed scope and approval;
-rejection or interruption grants nothing. If native plan tools are unavailable, show
-the preview and obtain a direct human approval in chat. Codex uses a native question
-or direct human reply about the same complete scope. Never ask twice for one approval.
-
-For documents, show the actual complete artifact or preview before its bound question.
-Use readable artifact names and explain their relevant scope; internal result.json paths
-are not part of the person's approval vocabulary.
-Native file display is optional; a failed display falls back to readable chat and a direct
-reply. Do not ask someone to create a project or restart their session just to read it.
-Repository design approval is human merge; private approval is bound to reviewed contents.
-
-## Interruption and recovery
-
-Stop means cancel owned native work before any later phase. Use native cancellation
-for known active children/commands and confirm their outcome; interrupting the parent
-alone is not proof. Do not claim cancellation until confirmed or start another worker
-while old work may run. If the host cannot confirm cancellation, explain the specific
-remaining native task and next action. Saved stopped status records the instruction to
-launch nothing further; it alone does not prove native cancellation. While a known
-check is still executing, report Stop requested; cancellation pending, and use its
-native host cancellation. Retaining its eventual check evidence starts no later phase.
-Do not build a replacement process supervisor.
-Pause lets the current step finish and retains its result before waiting. A bound author
-can finish its provisional candidate and checks after Pause; no later agent starts.
-Pause and Stop are optional controls, never prerequisites for a future matching work
-command. Discovery alone lifts neither. If continuation meets a running check, await
-that native step and retry the same still-valid command within existing authority;
-do not ask for another confirmation or make the person retype it. A later human
-Pause/Stop or other decision must still be respected.
-
-After interruption, inspect status and native work before resuming. Preserve attempts,
-findings, settings, scope and spent allowances. Recover a routine helper failure and
-retry the valid operation within existing authority. Never discard, stash or commit
-another person's edits by assumption. An unavoidable blocker names a concrete remedy;
-elapsed time, retries and restarts never create approval.
-
-## Visibility and publication
-
-Introduce the actual work once using implementation/planning/proposal agent and
-independent reviewer agent. Report meaningful native transitions and new findings;
-do not repeat unchanged status or accumulate raw command logs. Before discovery say
-"I'll look for saved work"; say "Resuming" only after the answer. Use short updates
-about the draft, checks or findings, not helper names, receipt paths or attempt IDs.
-For example: "Your draft has a completed review to recover, with one review round left."
-Then ask the Resume question. After acceptance: "I'll recover that review first."
-Repair routine host-save/locator failures within the accepted choice without another
-menu or asking the person to bypass OH. Report a genuine external blocker with the
-preserved artifact and one concrete recovery step; defer unrelated questions until it
-is resolved. Native tool cards remain host-owned. On completion lead
-with the recorded review outcome, attempts and findings, then the delivered behavior,
-actual checks, commit/artifact and next decision. Say no findings only when none exist.
-
-Publication requires the human decision bound to reviewed HEAD and destination. Use
-`publication` to reconcile the existing PR before pushing or creating one. A failed
-lookup is not permission to create another. Use `pr-summary` as verified facts for a
-human-readable PR body, rather than copying an audit dump. Per task, explain the
-completed behavior, review round count, final receipt identity and elapsed time,
-verification, final verdict, and concise findings with their actual dispositions.
-Read the complete final review receipt and summarize its evidence: anchors read,
-scope examined, concrete attacks and results, and limits. Keep that narrative fluid;
-no rigid receipt headings or prose parser are required. Summarize earlier rounds
-and recurring findings; do not paste full receipts, repeated findings, raw JSON,
-transcripts or local evidence paths. Do not move an audit dump into PR comments
-as a size workaround. Include why work stopped and the short task checkpoint history. Full original receipts, findings and decisions stay in OH's
-saved workflow history; a PR summary never replaces them or grants authority.
-Retain the single generated `oh-publication` comment unchanged so reconciliation
-can recognize an updated description independently of its prose. For a large batch,
-summarize and group the findings further; never split approved work or rerun reviews
-because of description length. Write the finished body to an external file, push
-the authorized head/branch without force, and create or update only the matching
-PR with `--body-file`. Re-run publication reconciliation after an uncertain
-response. Attach the PR in Codex with `attach_artifact` when available. Human merging
-remains separate; published cycles stay terminal.
-
-Inspect CI for that PR's actual head. Report meaningful check changes and diagnose
-failures from relevant logs. An empty, pending, failed, cancelled or skipped check set
-is not success. Do not make code changes under publication-only authority: corrections
-need bounded implementation, verification and fresh review. A resumed publication
-reuses its grant and PR; it never reruns implementation just to recover publication.
+At handoff, state what was delivered or remains pending, actual checks and review outcome,
+review rounds used/allowed, unresolved findings or follow-ups with their destinations,
+the artifact/commit/PR and what happens next. Distinguish author completion, reviewed
+completion and publication. Do not end with “done” while an agent or required check is
+still active, or call a renewed allowance the “final round” unless that is the actual limit.
+Use “clean review” or “no findings” only when the retained review is complete and has no
+findings. With only scope findings, say “no in-scope blockers; N outside-scope follow-ups
+remain.” With accepted concerns, name them as accepted and still unfixed. An incomplete
+review has no successful verdict even if its classified findings list is empty. A task
+can be ready while a follow-up remains; report both facts without implying that the
+follow-up was fixed. Before the final checkpoint, give this short completion summary,
+the completed task(s), next task(s) and each available choice's effect.

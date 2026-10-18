@@ -281,8 +281,23 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         with self.assertRaisesRegex(Refused,'native attempt'):
             native.resume(self.root,self.resume_choice(run=original['id']),run=original['id'])
         self.assertEqual(journal.records(),records)
-        self.assertEqual(native.saved_work(self.root)['saved_work'][1]['pending_attempts'][0]['id'],admitted['id'])
+        pending=native.saved_work(self.root)['saved_work'][1]['pending_attempts'][0]
+        self.assertEqual(pending['id'],admitted['id'])
+        self.assertEqual((pending['binding_status'],pending['execution_status']),('unbound','not_checked'))
+        self.assertIn('does not mean it was never launched',pending['next'])
+        self.assertEqual(pending['request'],admitted['request'])
+        attempt=load_run(self.root)[1]['attempts'][-1]
+        self.assertEqual(pending['parent'],attempt['parent'])
+        self.assertEqual(native.select(self.root)['continuation']['pending_attempts'][0],pending)
+        self.assertEqual(journal.records(),records)
         native.bind(self.root,admitted['id'],{'child_session':'failed-reviewer'})
+        bound=native.select(self.root)['continuation']['pending_attempts'][0]
+        self.assertEqual((bound['native_child'],bound['binding_status'],bound['execution_status']),('failed-reviewer','bound','not_checked'))
+        self.assertIn('does not mean it is still running',bound['next'])
+        # A different current coordinator must not replace the admitted parent in hints.
+        _,state=load_run(self.root)
+        moved=state|{'host':'claude','human':{'session':'another-parent'}}
+        self.assertEqual(native._continuation(moved)['pending_attempts'][0]['parent'],pending['parent'])
         from .storage import now
         retry=self.human('/oh-review tree',session='new-review-parent',at=now())
         self.native_results[admitted['id']]={'text':'','status':'failed'}

@@ -49,6 +49,12 @@ class GateTest(unittest.TestCase):
             with self.subTest(pending=pending[-1]['type']),self.assertRaises(Refused):read([initial,call,*pending])
         approved=read([initial,call,submitted,waiting,message(reply)])
         self.assertEqual(approved['prompt'],'Proceed with the task')
+        self.assertEqual(approved['question_options'],question['options'])
+        for invalid in ({'questions':[question,question]},
+                        {'questions':[question|{'multiSelect':True}]},
+                        {'questions':[question|{'options':[question['options'][0]]*2}]}):
+            altered=deepcopy(call);altered['payload']['arguments']=json.dumps(invalid)
+            self.assertIsNone(read([initial,altered,message(reply)])['question_options'])
         # If the submitted menu is invisible, the same shown question can be
         # answered directly in chat, still bound to its actual artifact context.
         context={'type':'response_item','timestamp':'2026-10-15T12:00:02Z','payload':{
@@ -104,6 +110,10 @@ class GateTest(unittest.TestCase):
             return native_human(self.root,locator,subject=self.subject if subject is None else subject)
         approved=read(rows)
         self.assertEqual(approved['prompt'],'Accept these concerns')
+        self.assertEqual(approved['question_options'],['Accept these concerns','Repair them'])
+        multiple=deepcopy(rows)
+        multiple[0]['message']['content'][0]['input']['questions'][0]['multiSelect']=True
+        self.assertIsNone(read(multiple)['question_options'])
         cancellation=common|{'type':'user','promptId':'cancel','entrypoint':'cli','timestamp':'2026-10-15T12:00:03Z',
                             'message':{'role':'user','content':'No. Cancel that decision; repair the concerns.'}}
         with self.assertRaises(Refused):read(rows+[cancellation])

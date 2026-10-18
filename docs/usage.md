@@ -236,10 +236,13 @@ one; a failed lookup does not authorize a duplicate. A correction updates its ex
 PR. Your merge remains separate from the agent's work.
 
 The result should explain what changed, actual checks, review rounds and findings,
-then link the commit, document or PR. CI is checked for that PR's actual head. Pending,
-missing, failed, cancelled or skipped checks are not a pass. Publication permission
-alone does not authorize further code edits; corrections need scoped implementation,
-checks and fresh review.
+then link the commit, document or PR. After publishing, the agent keeps following CI on
+that PR's reviewed head until it has a result, instead of asking you to check later.
+Pending, missing, failed, cancelled or skipped checks are not a pass. When CI fails,
+the agent reports a short diagnosis and asks whether to prepare a fix for the same PR,
+re-run the failed jobs or leave it. Publication permission alone does not authorize
+further code edits; a fix needs its own scope approval, implementation, checks and
+fresh review.
 
 You can still code, commit and open PRs without OH.
 

@@ -10,7 +10,7 @@ on other host surfaces; see [the migration plan](plans/native-workflows.md).
 | Path | Contents |
 |---|---|
 | `runtime/oh/` | Scope, journals, native provenance, checks, review, completion, publication and analytics |
-| `plugins/o-harness/` | Host plugin skills, Claude agent definitions, passive prompt hook and launchers |
+| `plugins/o-harness/` | Host plugin skills, Claude agent definitions, passive prompt hook, agent launch guard and launchers |
 | `workflows/` | Shared native workflow and workflow-specific instructions |
 | `prompts/` | Authoring and independent-review contracts |
 | `config/` | Defaults and OH's invariants |
@@ -49,7 +49,9 @@ follow a no-edit contract under inherited host permissions. Candidate mutation
 invalidates their receipt; this does not provide a separate filesystem sandbox and
 cannot detect an edit subsequently reverted.
 
-The prompt hook exposes only a native source locator. It neither classifies replies,
+The agent launch guard refuses a native agent launch whose model, effort or fresh context
+differs from the admission it names, before the child starts; it grants and launches
+nothing, and binding still validates every launched child. The prompt hook exposes only a native source locator. It neither classifies replies,
 grants work, starts a workflow nor writes a waiting record. Consequential helpers read
 the actual native human message or question/plan acceptance and bind its scope,
 subject and consumption identity. Agent text, sidechain input, elapsed time, retries
@@ -64,6 +66,11 @@ against that record, including the exact additional review count; it does not cl
 arbitrary prose as a grant. Native tools render the question. Ordinary conversation and
 tracking instructions stay with the host agent. Older canonical choices remain supported
 for recovery, without extending their phrase vocabulary.
+At a completed-task checkpoint, the complete native single-select menu and exact chosen
+action bind to the prepared work boundary. Introductory question wording is presentation,
+as in the golden reference's Claude task checkpoint. Changed work, allowances or destination
+still invalidate the decision; incomplete menus and arbitrary Yes replies grant nothing.
+Other consequential questions and older prepared records retain their exact context checks.
 Claude quick fixes use the native plan viewer's single Accept, bound to the actual
 accepted scope. Drafting a design needs no extra scope question. Repository design
 approval remains human merge; private design approval binds the reviewed contents.

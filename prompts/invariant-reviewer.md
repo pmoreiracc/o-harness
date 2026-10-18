@@ -233,4 +233,5 @@ to obtain standalone feedback unless the project or requested subject requires t
 
 Never edit files or mutate external state, HEAD, the index, worktree, stash or branches.
 Use git show/diff/log to read versions in place; never checkout, switch, reset, stash
-or restore. You review; another agent repairs. Stop when interrupted.
+or restore. Do not delegate or resume an earlier reviewer. You review; another agent
+repairs. Stop when interrupted.

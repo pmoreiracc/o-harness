@@ -21,6 +21,13 @@ class Tolerant:
     def __getattr__(self,name):return getattr(self.stream,name)
 
 
+def _locator(value):
+    """A native locator is inline JSON or a JSON file; neither needs platform text editing."""
+    if value is None:return None
+    located=json.loads(value) if value.lstrip().startswith('{') else read_json(Path(value))
+    if not isinstance(located,dict):raise ValueError('A native locator must be a JSON object')
+    return located
+
 
 def main(argv=None):
     for name in ('stdout','stderr'):
@@ -29,28 +36,29 @@ def main(argv=None):
     parser.add_argument('--root',type=Path)
     sub=parser.add_subparsers(dest='command',required=True)
     scope=sub.add_parser('scope');actions=scope.add_subparsers(dest='action',required=True)
-    prep=actions.add_parser('prepare');prep.add_argument('manifest',type=Path,nargs='?');prep.add_argument('--doc');prep.add_argument('--track',default='');prep.add_argument('--workflow',default='deliver',choices=['deliver','design','propose']);prep.add_argument('--human',type=Path)
-    approve=actions.add_parser('approve');approve.add_argument('scope_id');approve.add_argument('locator',type=Path)
+    prep=actions.add_parser('prepare');prep.add_argument('manifest',type=Path,nargs='?');prep.add_argument('--doc');prep.add_argument('--track',default='');prep.add_argument('--workflow',default='deliver',choices=['deliver','design','propose']);prep.add_argument('--human')
+    approve=actions.add_parser('approve');approve.add_argument('scope_id');approve.add_argument('locator')
     attempt=sub.add_parser('attempt');attempts=attempt.add_subparsers(dest='action',required=True)
     admit=attempts.add_parser('admit');admit.add_argument('role',choices=['assessment','implementation','analysis','review'])
     for action in ('bind','retain'):
-        step=attempts.add_parser(action);step.add_argument('attempt');step.add_argument('locator',type=Path)
+        step=attempts.add_parser(action);step.add_argument('attempt');step.add_argument('locator')
     review_check=sub.add_parser('review-check');review_check.add_argument('report',type=Path,nargs='?')
     sub.add_parser('candidate')
     evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
     complete=sub.add_parser('complete');complete.add_argument('attempt')
-    decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator',type=Path);decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
-    request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int);request.add_argument('--run');request.add_argument('--also')
+    decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator');decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
+    request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int,help='Override the configured review window only when the person explicitly requests a different count; otherwise omit');request.add_argument('--run');request.add_argument('--also')
     track=sub.add_parser('finding-track');track.add_argument('attempt');track.add_argument('--destination',type=Path)
-    resume=sub.add_parser('resume');resume.add_argument('--human',type=Path);resume.add_argument('--run')
+    resume=sub.add_parser('resume');resume.add_argument('--human');resume.add_argument('--run')
     status=sub.add_parser('status');status.add_argument('--saved',action='store_true')
-    review=sub.add_parser('review');review.add_argument('arguments',nargs='*');review.add_argument('--human',type=Path)
-    deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*');deliver.add_argument('--human',type=Path)
+    review=sub.add_parser('review');review.add_argument('arguments',nargs='*');review.add_argument('--human')
+    deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*');deliver.add_argument('--human')
     prep=sub.add_parser('prepare');prep.add_argument('manifest',type=Path);prep.add_argument('--review');prep.add_argument('--pr',type=int)
     pd=sub.add_parser('prepare-design');pd.add_argument('doc');pd.add_argument('track',nargs='?',default='')
     verify=sub.add_parser('verify');verify.add_argument('base',nargs='?');verify.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
     admission=sub.add_parser('admission');admission.add_argument('directory',type=Path)
     pub=sub.add_parser('publication');pub.add_argument('--pr',type=int)
+    ci=sub.add_parser('ci-wait');ci.add_argument('--pr',type=int);ci.add_argument('--timeout',type=int,default=1500)
     summary=sub.add_parser('pr-summary');summary.add_argument('base',nargs='?')
     plans=sub.add_parser('plans');plans.add_argument('action',choices=['path','check','list'])
     resource=sub.add_parser('resource');resource.add_argument('path')
@@ -71,33 +79,33 @@ def main(argv=None):
     try:
         from . import native
         if args.command=='scope':
-            result=(native.prepare_scope(root,read_json(args.manifest) if args.manifest else None,args.doc,args.track,args.workflow,read_json(args.human) if args.human else None)
-                    if args.action=='prepare' else native.approve_scope(root,args.scope_id,read_json(args.locator)))
+            result=(native.prepare_scope(root,read_json(args.manifest) if args.manifest else None,args.doc,args.track,args.workflow,_locator(args.human))
+                    if args.action=='prepare' else native.approve_scope(root,args.scope_id,_locator(args.locator)))
         elif args.command=='attempt':
-            result=native.admit(root,args.role) if args.action=='admit' else getattr(native,args.action)(root,args.attempt,read_json(args.locator))
+            result=native.admit(root,args.role) if args.action=='admit' else getattr(native,args.action)(root,args.attempt,_locator(args.locator))
         elif args.command=='review-check':
             from .review_report import check
             result=check(read_json(args.report)['report'] if args.report else sys.stdin.read())
         elif args.command=='candidate':result=native.candidate(root)
         elif args.command=='evidence':result=native.attach_evidence(root,read_json(args.attachment))
         elif args.command=='complete':result=native.complete(root,args.attempt)
-        elif args.command=='decision':result=native.decision(root,args.kind,read_json(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
+        elif args.command=='decision':result=native.decision(root,args.kind,_locator(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
         elif args.command=='decision-request':
             from .decisions import prepare
             result=prepare(root,args.kind,args.attempt,args.rounds,args.run,args.also)
         elif args.command=='finding-track':
             from .scope import track
             result=track(root,args.attempt,read_json(args.destination) if args.destination else None)
-        elif args.command=='resume':result=native.resume(root,read_json(args.human) if args.human else None,args.run)
+        elif args.command=='resume':result=native.resume(root,_locator(args.human),args.run)
         elif args.command=='status':
             from .workflow import active_file
             result=(native.saved_work(root) if args.saved else native.select(root)) if args.saved or active_file(root).exists() else {'status':'none','next':'Use /oh-propose <idea>, /oh-design <initiative>, or /oh-deliver <design or quick fix> (in Codex: $oh-propose, $oh-design, $oh-deliver).'}
-        elif args.command=='review':result=native.review(root,shlex.join(args.arguments),read_json(args.human) if args.human else None)
+        elif args.command=='review':result=native.review(root,shlex.join(args.arguments),_locator(args.human))
         elif args.command=='deliver':
             from .delivery import parse,listing
             selected=parse(' '.join(args.arguments))
             if selected['kind']=='list':result=listing(root)
-            elif selected['kind']=='design':result=native.prepare_scope(root,doc=selected['doc'],track=selected['track'],human=read_json(args.human) if args.human else None)
+            elif selected['kind']=='design':result=native.prepare_scope(root,doc=selected['doc'],track=selected['track'],human=_locator(args.human))
             else:result=selected
         elif args.command in ('prepare','prepare-design'):
             from .prepared import prepare
@@ -114,6 +122,9 @@ def main(argv=None):
         elif args.command=='publication':
             from .publication import reconcile
             result=reconcile(root,args.pr)
+        elif args.command=='ci-wait':
+            from .publication import ci_wait
+            result=ci_wait(root,args.pr,max(1,args.timeout))
         elif args.command=='pr-summary':
             from .publication import reference,render
             print(render(root,args.base or reference(root)));return

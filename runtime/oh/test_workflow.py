@@ -361,12 +361,18 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         rejected=native.admit(self.root,'review')
         self.native_results[rejected['id']]={'text':'Terminal child used a different actual profile.','status':'binding_failed',
             'profile':{'model':'actual-other','effort':'low'},'native_id':'rejected-child','admitted_profile':rejected['profile'],
-            'terminal_status':'completed','binding_issues':['Actual profile differs from admission.']}
+            'terminal_status':'interrupted','binding_issues':['Actual profile differs from admission.']}
         retained=native.retain(self.root,rejected['id'],{'tool_use_id':'successful-rejected-spawn','child_session':'rejected-child'})
         self.assertEqual(retained['outcome'],'binding_failed')
+        self.assertEqual(retained['native_failure']['terminal_status'],'interrupted')
         self.assertEqual(retained['native_failure']['profile'],{'model':'actual-other','effort':'low'})
         self.assertIn('actual-other / low',(Path(retained['evidence'])/'review.md').read_text())
         self.assertEqual(native.resume(self.root)['reviews_used'],2)
+        before=load_run(self.root)[1]
+        native.retain(self.root,rejected['id'],{'tool_use_id':'successful-rejected-spawn','child_session':'rejected-child'})
+        after=load_run(self.root)[1]
+        for key in ('attempts','config','scope_id','granted','decisions'):
+            self.assertEqual(after[key],before[key])
         with self.assertRaises(Refused):native.complete(self.root,rejected['id'])
         review=self.finish_attempt('review',{'verdict':'clean','summary':'Checked.','findings':[]})
         (self.root/'output.txt').write_text('changed after review',newline='\n')
@@ -398,9 +404,42 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(repaired['profile'],load_run(self.root)[1]['config']['models']['codex']['standard'])
         second=self.reviewed('OH-REVIEW-DECISION: '+json.dumps({'verdict':'findings','findings':[dict(finding,relation=None)]})+'\nDifferent receipt layout and optional null metadata; same independently observed session leak.')
         self.assertNotIn('report_issues',second)
+        # Failed bindings and non-concluding attempts retain findings for audit, but
+        # neither two invalid reports nor one valid plus one invalid report can escalate.
+        for outcome in ('binding_failed','failed','interrupted','review_incomplete'):
+            invalid=second|{'finished':True,'outcome':outcome}
+            with self.subTest(outcome=outcome):
+                self.assertFalse(native._repeated_family({'attempts':[first|{'finished':True},invalid]},'1'))
+                self.assertFalse(native._repeated_family({'attempts':[invalid,invalid|{'id':'another-attempt'}]},'1'))
         repair=native.admit(self.root,'implementation')
         state=load_run(self.root)[1]
         self.assertEqual(repair['profile'],state['config']['models']['codex']['complex'])
+        # The launch guard refuses the copied earlier profile before any child starts, on
+        # either host, and lets the escalated admission through unchanged.
+        from .config import HOME
+        guard=HOME/'plugins/o-harness/scripts/agent-launch.py'
+        def launch(host,profile,reference=None,**extra):
+            prompt=f'Repair OH attempt {repair["id"]}. Request: {reference or repair["request"]}'
+            arguments=({'task_name':repair['native_task_name'],'fork_turns':'none','message':prompt,
+                        'model':profile['model'],'reasoning_effort':profile['effort']} if host=='codex' else
+                       {'subagent_type':'o-harness:implementation','prompt':prompt,'model':profile['model'],'effort':profile['effort']})
+            said=subprocess.run([sys.executable,'-I',str(guard),host],input=json.dumps({'tool_name':'Agent','tool_input':arguments|extra}),
+                                capture_output=True,text=True,check=True).stdout
+            return json.loads(said)['hookSpecificOutput'] if said else None
+        for host in ('codex','claude'):
+            refused=launch(host,repaired['profile'])
+            self.assertEqual(refused['permissionDecision'],'deny')
+            self.assertIn(repair['profile']['model'],refused['permissionDecisionReason'])
+            self.assertIsNone(launch(host,repair['profile']))
+        spaced=Path(self.temp.name)/'native requests with spaces'/'attempts'/repair['id']/'request.json'
+        spaced.parent.mkdir(parents=True)
+        spaced.write_bytes(Path(repair['request']).read_bytes())
+        for host in ('codex','claude'):
+            for reference in (str(spaced),f'"{spaced}"',f'`{spaced}`'):
+                with self.subTest(host=host,reference=reference):
+                    self.assertEqual(launch(host,repaired['profile'],reference)['permissionDecision'],'deny')
+                    self.assertIsNone(launch(host,repair['profile'],reference))
+        self.assertEqual(launch('codex',repair['profile'],fork_turns='all')['permissionDecision'],'deny')
         historical={'attempts':[dict(a,findings=[dict({k:v for k,v in f.items() if k!='family_id'},family='session-leak. Relation: '+str(f.get('relation') or 'original')+'.') for f in a.get('findings',[])]) for a in state['attempts']]}
         self.assertTrue(native._repeated_family(historical,'1'))
         native.bind(self.root,repair['id'],{})
@@ -413,37 +452,50 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
             with self.assertRaises(Refused):native.decision(self.root,'grant-review',self.human(text))
         from .decisions import prepare as decision_request,verify as verify_decision
         from .storage import now
+        # Renewal uses the run's snapshot, not a later project setting or an
+        # agent's prediction that one more round will suffice. Explicit one-round
+        # requests still bind exactly one, on either host.
+        configure(self.root,review_rounds=9)
+        default_offer=decision_request(self.root,'grant-review')
+        self.assertEqual(native.resume(self.root)['reviews_allowed'],2)
         offer=decision_request(self.root,'grant-review',rounds=1,also='create an issue for the retained follow-up')
         home=Path(self.temp.name)/'native-home'
         # Exercise the same effect binding through actual saved Claude and Codex answers.
         # Host provenance is real here; only author/reviewer execution is synthetic.
         with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex')}):
-            for host in ('claude','codex'):
-                call_at=now();answer_at=now();question=offer['question'];label=offer['options'][0]
-                if host=='claude':
-                    path=home/'.claude/projects/s.jsonl'
-                    common={'sessionId':'s','cwd':str(self.root)}
-                    rows=[common|{'type':'assistant','timestamp':call_at,'message':{'content':[{'type':'tool_use','id':'grant','name':'AskUserQuestion','input':{'questions':[{'question':question,'options':[{'label':label},{'label':'Not now'}]}]}}]}},
-                          common|{'type':'user','timestamp':answer_at,'toolUseResult':{'answers':{question:label}},'message':{'content':[{'type':'tool_result','tool_use_id':'grant','content':'The user answered.'}]}}]
-                else:
-                    path=home/'.codex/sessions/s.jsonl'
-                    reply='<send_user_message_question_reply>'+json.dumps([{'questionItemId':json.dumps(['request_user_input_async','grant',0]),'answer':label}])+'</send_user_message_question_reply>'
-                    rows=[{'type':'session_meta','payload':{'id':'s','cwd':str(self.root),'source':'vscode'}},
-                          {'type':'response_item','timestamp':call_at,'payload':{'type':'function_call','name':'request_user_input_async','call_id':'grant','arguments':json.dumps({'questions':[{'title':question,'options':offer['options']}]})}},
-                          {'type':'event_msg','timestamp':answer_at,'payload':{'type':'user_message','thread_id':'s','turn_id':'grant-reply','message':reply}}]
-                path.parent.mkdir(parents=True,exist_ok=True)
-                path.write_text(''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8',newline='\n')
-                locator={'host':host,'session':'s','tool_use_id':'grant','transcript_path':str(path),'decision':offer['decision']}
-                source=self.native_human_original(self.root,locator)
-                self.assertNotIn('result.json',source['question'])
-                self.assertEqual(verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source)['rounds'],1)
-                for invalid in ('Not now','Do not allow another review.'):
-                    with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'prompt':invalid})
-                with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'question_at':'2000-01-01T00:00:00Z'})
+            for count,offered in ((2,default_offer),(1,offer)):
+                for host in ('claude','codex'):
+                    call_at=now();answer_at=now();question=offered['question'];label=offered['options'][0]
+                    if host=='claude':
+                        path=home/'.claude/projects/s.jsonl'
+                        common={'sessionId':'s','cwd':str(self.root)}
+                        rows=[common|{'type':'assistant','timestamp':call_at,'message':{'content':[{'type':'tool_use','id':'grant','name':'AskUserQuestion','input':{'questions':[{'question':question,'options':[{'label':label},{'label':'Not now'}]}]}}]}},
+                              common|{'type':'user','timestamp':answer_at,'toolUseResult':{'answers':{question:label}},'message':{'content':[{'type':'tool_result','tool_use_id':'grant','content':'The user answered.'}]}}]
+                    else:
+                        path=home/'.codex/sessions/s.jsonl'
+                        reply='<send_user_message_question_reply>'+json.dumps([{'questionItemId':json.dumps(['request_user_input_async','grant',0]),'answer':label}])+'</send_user_message_question_reply>'
+                        rows=[{'type':'session_meta','payload':{'id':'s','cwd':str(self.root),'source':'vscode'}},
+                              {'type':'response_item','timestamp':call_at,'payload':{'type':'function_call','name':'request_user_input_async','call_id':'grant','arguments':json.dumps({'questions':[{'title':question,'options':offered['options']}]})}},
+                              {'type':'event_msg','timestamp':answer_at,'payload':{'type':'user_message','thread_id':'s','turn_id':'grant-reply','message':reply}}]
+                    path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_text(''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8',newline='\n')
+                    locator={'host':host,'session':'s','tool_use_id':'grant','transcript_path':str(path),'decision':offered['decision']}
+                    source=self.native_human_original(self.root,locator)
+                    self.assertNotIn('result.json',source['question'])
+                    self.assertEqual(verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source)['rounds'],count)
+                    for invalid in ('Not now','Do not allow another review.'):
+                        with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'prompt':invalid})
+                    with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'question_at':'2000-01-01T00:00:00Z'})
+                    if host=='claude':
+                        hooked={'host':host,'session':'s','turn':'unsaved-hook-turn','transcript_path':str(path),'decision':offered['decision']}
+                        self.assertEqual(native._presented(self.root,hooked,load_run(self.root)[1])['tool_use_id'],'grant')
+            # The hook's conversation locator plus the decision identity is enough: OH finds
+            # the question that showed it, even when the copied turn was never saved.
+            hook={'host':'codex','session':'s','turn':'unsaved-hook-turn','transcript_path':str(path),'decision':offer['decision']}
             with patch('oh.authority.native_human',side_effect=self.native_human_original):
                 with self.assertRaises(Refused):native.decision(self.root,'continue',locator)
-                native.decision(self.root,'grant-review',locator)
-                native.decision(self.root,'grant-review',locator)
+                native.decision(self.root,'grant-review',hook)
+                native.decision(self.root,'grant-review',hook)
         self.assertEqual(native.resume(self.root)['reviews_allowed'],3)
         journal,state=load_run(self.root)
         grant=state['review_grants'][-1]
@@ -532,7 +584,84 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertIsNone(observations['input'])
         self.assertIsNone(observations['output'])
         with self.assertRaises(Refused):native.admit(self.root,'assessment')
-        locator=self.human('Continue with the next task window.')
+        from .decisions import prepare as decision_request,verify as verify_decision
+        from .storage import now
+        # Missing publication configuration must not hide Continue or Stop.
+        unavailable=decision_request(self.root,'continue')
+        self.assertEqual(set(unavailable['actions'].values()),{'continue','stop'})
+        self.assertIn('PR unavailable',unavailable['question'])
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        offer=decision_request(self.root,'continue')
+        self.assertEqual(offer['options'],['Continue with the next task batch','Open PR with completed tasks','Stop and take over'])
+        self.assertIn('Continue authorizes tasks: 2',offer['question'])
+        self.assertIn(self.git('rev-parse','HEAD'),offer['question'])
+        history=load_run(self.root)[0].records()
+        # The same native question supports all three effects on both hosts.
+        home=Path(self.temp.name)/'checkpoint-host'
+        with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex')}):
+            for host in ('claude','codex'):
+                journal,original=load_run(self.root)
+                state=original|{'human':original['human']|{'host':host,'session':'checkpoint'}}
+                with patch('oh.decisions.load_run',return_value=(journal,state)):
+                    menu_offer=decision_request(self.root,'continue')
+                for label,kind in menu_offer['actions'].items():
+                    asked=now();answered=now()
+                    question='Task 1 is complete on work; continue with task 2, publish the reviewed work, or take over?'
+                    if host=='claude':
+                        path=home/'.claude/projects/checkpoint.jsonl'
+                        common={'sessionId':'checkpoint','cwd':str(self.root)}
+                        rows=[common|{'type':'assistant','timestamp':asked,'message':{'content':[{'type':'tool_use','id':'menu','name':'AskUserQuestion',
+                            'input':{'questions':[{'question':question,'multiSelect':False,'options':[{'label':x} for x in menu_offer['options']]}]}}]}},
+                              common|{'type':'user','timestamp':answered,'toolUseResult':{'answers':{question:label}},
+                                      'message':{'content':[{'type':'tool_result','tool_use_id':'menu','content':'Answered.'}]}}]
+                    else:
+                        path=home/'.codex/sessions/checkpoint.jsonl'
+                        reply='<send_user_message_question_reply>'+json.dumps([{'questionItemId':json.dumps(['request_user_input_async','menu',0]),'answer':label}])+'</send_user_message_question_reply>'
+                        rows=[{'type':'session_meta','payload':{'id':'checkpoint','cwd':str(self.root),'source':'vscode'}},
+                              {'type':'response_item','timestamp':asked,'payload':{'type':'function_call','name':'request_user_input_async',
+                               'call_id':'menu','arguments':json.dumps({'questions':[{'title':question,'options':menu_offer['options']}]})}},
+                              {'type':'event_msg','timestamp':answered,'payload':{'type':'user_message','turn_id':'answer','message':reply}}]
+                    path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_text(''.join(json.dumps(r)+'\n' for r in rows),encoding='utf-8',newline='\n')
+                    locator={'host':host,'session':'checkpoint','tool_use_id':'menu','transcript_path':str(path),'decision':menu_offer['decision']}
+                    source=self.native_human_original(self.root,locator)
+                    self.assertEqual(verify_decision(self.root,state,kind,locator,source)['kind'],kind)
+                    # A paraphrased heading locates the same complete native menu; no
+                    # second human answer or natural-language interpretation is needed.
+                    hook={k:v for k,v in locator.items() if k!='tool_use_id'}
+                    with patch('oh.authority.native_human',side_effect=self.native_human_original):
+                        self.assertEqual(native._presented(self.root,hook,state)['tool_use_id'],'menu')
+                    for labels in (None,menu_offer['options'][:1],menu_offer['options']+['Other action'],
+                                   menu_offer['options'][:-1]+[menu_offer['options'][0]]):
+                        with self.subTest(host=host,labels=labels),self.assertRaisesRegex(Refused,'complete single-select'):
+                            verify_decision(self.root,state,kind,locator,source|{'question_options':labels})
+                    with self.assertRaises(Refused):
+                        verify_decision(self.root,state,kind,locator,source|{'question_at':'2000-01-01T00:00:00Z'})
+                    with self.assertRaisesRegex(Refused,'coordinator'):
+                        verify_decision(self.root,state,kind,locator,source|{'session':'another-parent'})
+                    with self.assertRaisesRegex(Refused,'coordinator changed'):
+                        verify_decision(self.root,state|{'human':state['human']|{'session':'new-owner'}},kind,locator,source)
+                    for other in {'continue','publish','stop'}-{kind}:
+                        with self.assertRaises(Refused):verify_decision(self.root,state,other,locator,source)
+                    for invalid in ('Yes','Not now','Continue with the next task batch, Open PR with completed tasks'):
+                        with self.assertRaises(Refused):verify_decision(self.root,state,kind,locator,source|{'prompt':invalid})
+        self.assertEqual(load_run(self.root)[0].records(),history)
+        publish=self.human('Open PR with completed tasks',session='fresh-parent',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        self.git('remote','set-url','origin','https://github.com/example/elsewhere.git')
+        with self.assertRaisesRegex(Refused,'destination changed'):native.decision(self.root,'publish',publish)
+        self.git('remote','set-url','origin','https://github.com/example/product.git')
+        (self.root/'new-edit.txt').write_text('Preserve this later edit.',newline='\n')
+        with self.assertRaisesRegex(Refused,'subject changed'):native.decision(self.root,'publish',publish)
+        (self.root/'new-edit.txt').unlink()
+        stop=self.human('Stop and take over',session='fresh-parent',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        native.decision(self.root,'stop',stop);native.decision(self.root,'stop',stop)
+        self.assertEqual(native.resume(self.root)['status'],'stopped')
+        self.assertIsNone(load_run(self.root)[1].get('publication'))
+        self.assertEqual(load_run(self.root)[1]['done'],['1'])
+        with self.assertRaisesRegex(Refused,'checkpoint changed'):native.decision(self.root,'publish',publish)
+        native.resume(self.root,self.resume_choice())
+        offer=decision_request(self.root,'continue')
+        locator=self.human('Continue with the next task batch',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
         native.decision(self.root,'continue',locator)
         native.decision(self.root,'continue',locator)
         state=load_run(self.root)[1]
@@ -540,6 +669,14 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(native.resume(self.root)['task']['id'],'2')
         self.assess();self.implement(edit=lambda:(self.root/'second.txt').write_text('Task two is complete.',newline='\n'))
         second=self.reviewed();native.complete(self.root,second['id'])
+        final=decision_request(self.root,'publish')
+        self.assertEqual(final['options'],['Open PR with completed tasks','Stop and take over'])
+        self.git('remote','remove','origin')
+        final=decision_request(self.root,'publish')
+        self.assertEqual(final['options'],['Stop and take over','Not now'])
+        self.assertIn('PR unavailable',final['question'])
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        self.git('update-ref','refs/remotes/origin/main',head)
         second_commit=self.git('rev-parse','HEAD');original_summaries=load_run(self.root)[1]['summaries']
         records=load_run(self.root)[0].records()
         requested=native.review(self.root,['task','1'],self.human('/oh-review task 1',session='task-review-parent'))
@@ -556,7 +693,6 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         native.review(self.root,['task','1'],self.resume_choice(session='review-parent'))
         self.assertEqual(load_run(self.root)[1]['human']['session'],'review-parent')
         self.assertEqual(load_run(self.root)[1]['extra_review']['task'],'1')
-        self.git('remote','add','origin','https://github.com/example/product.git')
         publication_choice=lambda:native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/product?'))
         with self.assertRaisesRegex(Refused,'requested task review'):publication_choice()
         blocker=self.finish_attempt('review',{'verdict':'blocking','summary':'Task one needs a scoped correction.','findings':[
@@ -831,7 +967,18 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         question='Publish the reviewed work branch to example/product?'
         with self.assertRaises(Refused):
             native.decision(self.root,'publish',self.human('publish',question=question,question_at='2000-01-01T00:00:00+00:00'))
-        native.decision(self.root,'publish',self.human('publish',question=question))
+        short_question='The completed tasks are committed and reviewed clean. Open a PR or preserve local work?'
+        with self.assertRaisesRegex(Refused,'branch and repository destination'):
+            native.decision(self.root,'publish',self.human('publish',question=short_question))
+        from .decisions import prepare as decision_request
+        from .storage import now
+        offer=decision_request(self.root,'publish')
+        self.assertEqual(offer['options'],['Open PR with completed tasks','Stop and take over'])
+        # Exercise the publication transition and reconciliation, not only the
+        # prepared-decision validator: native checkpoint prose may be concise.
+        choice=self.human('Open PR with completed tasks',question=short_question,question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        native.decision(self.root,'publish',choice)
+        native.decision(self.root,'publish',choice)
         journal,state=load_run(self.root);grant=state['publication'];attempts=state['attempts']
         with patch('oh.publication.github',side_effect=Refused('GitHub temporarily unavailable.')):
             with self.assertRaises(Refused):publication.reconcile(self.root)
@@ -875,6 +1022,72 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(saved['published']['number'],144)
         self.assertEqual(repeated['published']['number'],144)
         self.assertEqual(load_run(self.root)[1]['attempts'],attempts)
+        # CI is followed on the published reviewed head until a meaningful result; an empty,
+        # pending, skipped, failed or cancelled set never reads as a pass.
+        import time
+        published=load_run(self.root)[1]['published'];history=journal.records()
+        def done(conclusion,name='verify'):return {'name':name,'status':'completed','conclusion':conclusion}
+        def follow(steps,timeout=3600):
+            from urllib.parse import urlsplit,parse_qs
+            polls=iter(steps);current={};now=[time.time()]
+            def read(root,host,endpoint):
+                if '/pulls/' in endpoint:
+                    step=next(polls,steps[-1])
+                    if isinstance(step,Exception):raise step
+                    current.clear();current.update(step)
+                    return pull_request(state,head=current.get('head',published['observed_head']))
+                url=urlsplit(endpoint);page=int(parse_qs(url.query).get('page',['1'])[0])
+                status=url.path.endswith('/status');key='statuses' if status else 'check_runs'
+                items=[dict(item,id=i) for i,item in enumerate(current.get('statuses' if status else 'runs',[]))]
+                values=items[(page-1)*100:page*100]
+                if page>1 and current.get('truncated'):values=[]
+                result={key:values,'total_count':len(items)}
+                if status:
+                    states={x['state'] for x in items}
+                    result['state']=current.get('combined_state') or ('failure' if states&{'failure','error'} else 'pending' if not items or 'pending' in states else 'success')
+                return result
+            def sleep(seconds):now[0]+=seconds
+            with patch('oh.observability.observe_ci'):
+                return publication.ci_wait(self.root,None,timeout,read=read,sleep=sleep,clock=lambda:now[0])
+        registering=[{},{'runs':[{'name':'verify','status':'in_progress'}],'statuses':[{'context':'legacy','state':'pending'}]},
+                     {'runs':[done('success'),done('skipped','optional')],'statuses':[{'context':'legacy','state':'success'}]}]
+        for steps,outcome in ((registering,'pass'),([{'runs':[done('success'),done('failure','lint')]}],'fail'),
+                              ([{'runs':[done('cancelled')]}],'fail'),([{'runs':[done('skipped')]}],'skipped'),
+                              ([{}],'no_checks'),([{'head':'f'*40}],'head_changed'),
+                              ([Refused('GitHub temporarily unavailable.')],'unavailable')):
+            with self.subTest(outcome=outcome,steps=len(steps)):
+                result=follow(steps)
+                self.assertEqual((result['outcome'],result['pr'],result['head']),(outcome,144,published['observed_head']))
+        self.assertEqual(follow([{'runs':[done('success'),done('failure','lint')]}])['not_passed'],['lint'])
+        self.assertEqual(follow([{'runs':[{'name':'verify','status':'queued'}]}],timeout=60)['outcome'],'pending')
+        # A successful first page never hides failed or pending checks on later
+        # pages, for either GitHub result source. Incomplete reads cannot pass.
+        for kind in ('runs','statuses'):
+            success=done('success') if kind=='runs' else {'context':'legacy','state':'success'}
+            for ending,outcome in (('failure','fail'),('pending','pending'),('success','pass')):
+                last=({'name':'last','status':'queued'} if ending=='pending' else done(ending,'last')) if kind=='runs' else {'context':'last','state':ending}
+                with self.subTest(kind=kind,ending=ending):
+                    result=follow([{kind:[success]*100+[last]}],timeout=60)
+                    self.assertEqual(result['outcome'],outcome)
+                    self.assertEqual(len(result['checks']),101)
+            self.assertEqual(follow([{kind:[success]*101,'truncated':True}])['outcome'],'unavailable')
+        self.assertEqual(follow([{'statuses':[{'context':'legacy','state':'success'}],'combined_state':'failure'}])['outcome'],'unavailable')
+        # Discovery may legitimately recover a PR already advanced beyond the approved
+        # commit. That observed head never becomes the reviewed CI subject, including
+        # when reading an older publication record with those differing identities.
+        advanced=published|{'observed_head':'f'*40}
+        requests=[]
+        def changed_head(root,host,endpoint):
+            requests.append(endpoint)
+            if '/pulls/' in endpoint:return pull_request(state,head=advanced['observed_head'])
+            return {'check_runs':[done('success')]}
+        with patch('oh.workflow.load_run',return_value=(journal,state|{'published':advanced})):
+            result=publication.ci_wait(self.root,read=changed_head)
+        self.assertEqual((result['outcome'],result['head'],result['observed_head']),
+                         ('head_changed',published['approved_head'],advanced['observed_head']))
+        self.assertEqual(requests,[f'repos/{published["repository"]}/pulls/{published["number"]}'])
+        with self.assertRaisesRegex(Refused,'only that PR'):publication.ci_wait(self.root,145)
+        self.assertEqual(journal.records(),history)
         with self.assertRaises(Refused):native.admit(self.root,'implementation')
         history=journal.records()
         self.approve([self.tasks[0]|{'instructions':'A separate bounded follow-up.'}])
