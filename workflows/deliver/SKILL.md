@@ -12,8 +12,9 @@ If the subject is missing, discover relevant saved work before asking for it.
 A number identifies a design, not a task. Name the actual task only after selection.
 Interpret the requested work as follows:
 
-- No arguments: first show relevant unfinished saved work and ask once whether to
-  resume it or choose different work. Otherwise use `plans list`, show ready designs,
+- No arguments: first show relevant unfinished saved work. For matching work, read
+  the recovery and decision references and prepare its Resume question before asking;
+  never add a preliminary Resume question. Otherwise use `plans list`, show ready designs,
   unavailable reasons and limits, and ask which design or quick fix the person wants.
   The empty invocation itself grants no continuation authority.
 - Approved design number and optional track: use `scope prepare --doc NNNN

@@ -43,6 +43,15 @@ Claude child reports can arrive through a forwarded native handback or the compl
 Agent call's structured handback report. OH matches the original report to the child's
 acknowledged terminal handback, preserving its full text. Retention retries reuse the
 same completed attempt and do not repeat assessment or consume another allowance.
+Native final notices may omit the spawn-call ID; OH still requires the bound parent
+and child, current lifecycle and settled owned tools. Interim background-wait notices
+cannot finish the attempt. Native system-marked background completions are tool evidence,
+never human approval, including when Claude delivers them as user-role messages.
+Claude Desktop Stop may leave only the child's native interruption record and
+spawn-linked `stoppedByUser` metadata. Together they establish interruption when
+no later lifecycle or child activity supersedes them; no parent completion is required.
+An omitted Claude spawn-call ID is recovered only from a unique native async launch
+result, then checked against the immutable admission as usual.
 
 The native host owns tool permissions, shell execution and cancellation. Reviewers
 follow a no-edit contract under inherited host permissions. Candidate mutation

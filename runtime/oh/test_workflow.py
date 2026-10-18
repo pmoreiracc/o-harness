@@ -807,6 +807,12 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         from .decisions import prepare as decision_request
         from .storage import now
         offer=decision_request(self.root,'accept-concerns',attempt=review['id'])
+        self.assertEqual(offer['options'],['Accept these concerns','Fix concerns'])
+        before=load_run(self.root)[1]
+        for answer in ('Fix concerns','Not now'):
+            with self.assertRaises(Refused):
+                native.decision(self.root,'accept-concerns',self.human(answer,question=offer['question'],question_at=now(),decision=offer['decision'],via='question'),attempt=review['id'])
+        self.assertEqual(load_run(self.root)[1],before)
         native.decision(self.root,'accept-concerns',self.human(offer['options'][0],question=offer['question'],question_at=now(),decision=offer['decision'],via='question'),attempt=review['id'])
         state=load_run(self.root)[1]
         from .publication import task_evidence
