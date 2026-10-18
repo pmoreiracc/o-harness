@@ -38,8 +38,33 @@ class GateTest(unittest.TestCase):
         def read(rows,subject=None):
             path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
             return native_human(self.root,locator,subject=self.subject if subject is None else subject)
-        approved=read([initial,call,message(reply)])
+        # Submission acknowledgement and a quiet native wait leave the question
+        # unanswered. Ending the turn after posting is not a human choice either.
+        submitted={'type':'response_item','payload':{'type':'function_call_output',
+                   'call_id':'current','output':json.dumps({'accepted':True})}}
+        waiting={'type':'response_item','payload':{'type':'function_call','name':'clock.sleep',
+                 'call_id':'wait','arguments':json.dumps({'duration_ms':30000})}}
+        finished={'type':'event_msg','payload':{'type':'task_complete','last_agent_message':'Select a choice.'}}
+        for pending in ([submitted,waiting],[submitted,finished]):
+            with self.subTest(pending=pending[-1]['type']),self.assertRaises(Refused):read([initial,call,*pending])
+        approved=read([initial,call,submitted,waiting,message(reply)])
         self.assertEqual(approved['prompt'],'Proceed with the task')
+        self.assertEqual(approved['question_options'],question['options'])
+        for invalid in ({'questions':[question,question]},
+                        {'questions':[question|{'multiSelect':True}]},
+                        {'questions':[question|{'options':[question['options'][0]]*2}]}):
+            altered=deepcopy(call);altered['payload']['arguments']=json.dumps(invalid)
+            self.assertIsNone(read([initial,altered,message(reply)])['question_options'])
+        # If the submitted menu is invisible, the same shown question can be
+        # answered directly in chat, still bound to its actual artifact context.
+        context={'type':'response_item','timestamp':'2026-10-15T12:00:02Z','payload':{
+            'type':'message','role':'assistant','content':[{'type':'output_text','text':question['title']+' Reply here if no menu is visible.'}]}}
+        typed={'type':'event_msg','timestamp':'2026-10-15T12:00:03Z','payload':{
+            'type':'user_message','turn_id':'typed','message':'Keep planning'}}
+        path.write_text(''.join(json.dumps(row)+'\n' for row in [initial,call,submitted,context,typed]),newline='\n')
+        fallback=native_human(self.root,{'host':'codex','session':'s','turn':'typed','transcript_path':str(path)},subject=self.subject)
+        self.assertEqual(fallback['prompt'],'Keep planning')
+        self.assertEqual(fallback['question'],context['payload']['content'][0]['text'])
         cancellation={'type':'event_msg','timestamp':'2026-10-15T12:00:03Z','payload':{
             'type':'user_message','turn_id':'cancel','message':'No. Cancel that scope; do not implement it.'}}
         with self.assertRaises(Refused):read([initial,call,message(reply),cancellation])
@@ -85,6 +110,10 @@ class GateTest(unittest.TestCase):
             return native_human(self.root,locator,subject=self.subject if subject is None else subject)
         approved=read(rows)
         self.assertEqual(approved['prompt'],'Accept these concerns')
+        self.assertEqual(approved['question_options'],['Accept these concerns','Repair them'])
+        multiple=deepcopy(rows)
+        multiple[0]['message']['content'][0]['input']['questions'][0]['multiSelect']=True
+        self.assertIsNone(read(multiple)['question_options'])
         cancellation=common|{'type':'user','promptId':'cancel','entrypoint':'cli','timestamp':'2026-10-15T12:00:03Z',
                             'message':{'role':'user','content':'No. Cancel that decision; repair the concerns.'}}
         with self.assertRaises(Refused):read(rows+[cancellation])

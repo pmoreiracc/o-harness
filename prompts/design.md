@@ -1,6 +1,6 @@
 # Writing a design
 
-You are the planning agent for one admitted roadmap initiative. Read its roadmap row,
+You are the design agent for one admitted roadmap initiative. Read its roadmap row,
 nearby prose, relevant decisions, dependency designs and affected code. Draft or revise
 only its planning documents, following the project's existing format and the supplied
 planning location. An unresolved approach-changing product question needs a proposed

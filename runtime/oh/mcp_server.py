@@ -27,8 +27,8 @@ def tool(name, title, description, properties=None, required=(), read_only=False
 # These are focused record/validation operations. Native host tools own agents and questions.
 OBJECT = {'type': 'object'}
 TOOLS = [
-    tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; launches nothing.', read_only=True),
-    tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT}),
+    tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; saved lists both workflow and review without selection.', {'saved':{'type':'boolean'}}, read_only=True),
+    tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
     tool('admission', 'Read review admission', 'Read the immutable subject and review request for the admitted reviewer.', {'attempt_directory':TEXT}, ['attempt_directory'], read_only=True),
     tool('config', 'OH settings', 'Read project settings and configured checks.', read_only=True),
     tool('init', 'Register project', 'Register this checkout with OH.', {'name': TEXT}),
@@ -45,6 +45,8 @@ TOOLS = [
          {'attempt':TEXT,'source':OBJECT}, ['attempt','source']),
     tool('attempt_retain', 'Retain native result', 'Retain the public native agent result against its admission and subject.',
          {'attempt':TEXT,'source':OBJECT}, ['attempt','source']),
+    tool('review_check', 'Check review decision', 'Check a draft decision and full receipt without admitting or finishing an attempt. Grants no authority.',
+         {'report':TEXT}, ['report'], read_only=True),
     tool('candidate', 'Prepare review candidate', 'Prepare provisional completion metadata for final checks and independent review; does not complete work.'),
     tool('verify', 'Record project checks', 'Execute configured project checks and retain results against the current candidate.',
          {'base':TEXT,'mode':{'type':'string','enum':['review','pre-push','ci']}}),
@@ -52,6 +54,11 @@ TOOLS = [
          {'attachment':OBJECT}, ['attachment']),
     tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate.',
          {'attempt':TEXT}, ['attempt']),
+    tool('decision_request', 'Bind decision effect', 'Prepare native human choices. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions; bind the selected action from the same answer. Displays no menu and grants nothing.',
+         {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1,
+          'description':'Omit to renew the run’s configured review window. Supply only when the person explicitly requests a different number of additional rounds.'},'run':TEXT,'also':TEXT}, ['kind']),
+    tool('finding_track', 'Track outside-scope findings', 'Record a saved follow-up, design note or an issue URL. Grants no implementation or issue-creation authority.',
+         {'attempt':TEXT,'destination':OBJECT}, ['attempt']),
     tool('decision', 'Record human decision', 'Verify a native human decision about task/review allowance, findings or publication. Displays no menu.',
          {'kind':TEXT,'human':OBJECT,'attempt':TEXT,'destination':OBJECT}, ['kind','human']),
     tool('review', 'Prepare independent review', 'Bind changes, tree, paths, commit, range or task for fresh native read-only review. Grants no repairs.',
@@ -59,6 +66,8 @@ TOOLS = [
     tool('pr_summary', 'PR summary', 'Render retained change, verification and review evidence for publication.', {'base':TEXT}),
     tool('publication', 'Reconcile publication', 'Reconcile the approved PR destination with retained publication evidence.',
          {'pr':{'type':'integer','minimum':1}}),
+    tool('ci_wait', 'Follow PR checks', 'Wait, up to timeout seconds, for CI on the published PR\'s reviewed head; returns pass, fail, pending, no_checks, skipped, head_changed, merged, closed or unavailable with its next step. Reads only.',
+         {'pr':{'type':'integer','minimum':1},'timeout':{'type':'integer','minimum':1,'maximum':21600}}, read_only=True),
 ]
 NAMES = {t['name'] for t in TOOLS}
 
@@ -83,8 +92,11 @@ def command(name, arguments, root):
         if not isinstance(value,str) or not value.strip():raise Refused(f'`{key}` must be text')
         return value
     if name not in NAMES:raise Refused('Unknown tool')
-    if name in ('status','config','candidate'):return [name]
-    if name=='resume':return ['resume']+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
+    if name=='status':
+        if 'saved' in arguments and not isinstance(arguments['saved'],bool):raise Refused('saved must be boolean')
+        return ['status']+(['--saved'] if arguments.get('saved') else [])
+    if name in ('config','candidate'):return [name]
+    if name=='resume':return ['resume']+(['--run',text('run')] if text('run') else [])+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
     if name=='admission':return ['admission','--',text('attempt_directory',True)]
     if name=='init':return ['init']+([f'--name={text("name")}'] if text('name') else [])
     if name=='plans':
@@ -107,8 +119,19 @@ def command(name, arguments, root):
         return ['attempt','admit',role]
     if name in ('attempt_bind','attempt_retain'):
         return ['attempt',name.split('_',1)[1],'--',text('attempt',True),payload(root,arguments.get('source'))]
+    if name=='review_check':return ['review-check','--',payload(root,{'report':text('report',True)})]
     if name=='evidence':return ['evidence','--',payload(root,arguments.get('attachment'))]
     if name=='complete':return ['complete','--',text('attempt',True)]
+    if name=='decision_request':
+        args=['decision-request']
+        for key in ('attempt','run','also'):
+            if text(key):args+=['--'+key,text(key)]
+        if 'rounds' in arguments:
+            if type(arguments['rounds']) is not int or arguments['rounds']<1:raise Refused('rounds must be a positive whole number')
+            args+=['--rounds',str(arguments['rounds'])]
+        return args+['--',text('kind',True)]
+    if name=='finding_track':
+        return ['finding-track']+(['--destination',payload(root,arguments['destination'])] if arguments.get('destination') is not None else [])+['--',text('attempt',True)]
     if name=='decision':
         args=['decision']
         if text('attempt'):args+=['--attempt',text('attempt')]
@@ -126,6 +149,14 @@ def command(name, arguments, root):
             return ['verify']
         return ['verify','--',text('base'),mode]
     if name=='pr_summary':return ['pr-summary']+(['--',text('base')] if text('base') else [])
+    if name=='ci_wait':
+        argv=['ci-wait']
+        for key in ('pr','timeout'):
+            value=arguments.get(key)
+            if value is None:continue
+            if type(value) is not int or value<=0:raise Refused(f'`{key}` must be a positive whole number')
+            argv+=['--'+key,str(value)]
+        return argv
     if name=='publication':
         number=arguments.get('pr')
         if number is not None and (type(number) is not int or number<=0):raise Refused('The PR number must be positive')

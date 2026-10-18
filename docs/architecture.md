@@ -10,7 +10,7 @@ on other host surfaces; see [the migration plan](plans/native-workflows.md).
 | Path | Contents |
 |---|---|
 | `runtime/oh/` | Scope, journals, native provenance, checks, review, completion, publication and analytics |
-| `plugins/o-harness/` | Host plugin skills, Claude agent definitions, passive prompt hook and launchers |
+| `plugins/o-harness/` | Host plugin skills, Claude agent definitions, passive prompt hook, agent launch guard and launchers |
 | `workflows/` | Shared native workflow and workflow-specific instructions |
 | `prompts/` | Authoring and independent-review contracts |
 | `config/` | Defaults and OH's invariants |
@@ -39,12 +39,19 @@ reasoning effort. Claude uses packaged named non-fork agents with invocation-spe
 model and effort. No OH headless model runner, agent scheduler or permission broker
 executes the task.
 
+Claude child reports can arrive through a forwarded native handback or the completed
+Agent call's structured handback report. OH matches the original report to the child's
+acknowledged terminal handback, preserving its full text. Retention retries reuse the
+same completed attempt and do not repeat assessment or consume another allowance.
+
 The native host owns tool permissions, shell execution and cancellation. Reviewers
 follow a no-edit contract under inherited host permissions. Candidate mutation
 invalidates their receipt; this does not provide a separate filesystem sandbox and
 cannot detect an edit subsequently reverted.
 
-The prompt hook exposes only a native source locator. It neither classifies replies,
+The agent launch guard refuses a native agent launch whose model, effort or fresh context
+differs from the admission it names, before the child starts; it grants and launches
+nothing, and binding still validates every launched child. The prompt hook exposes only a native source locator. It neither classifies replies,
 grants work, starts a workflow nor writes a waiting record. Consequential helpers read
 the actual native human message or question/plan acceptance and bind its scope,
 subject and consumption identity. Agent text, sidechain input, elapsed time, retries
@@ -53,10 +60,26 @@ permissions; custom host software can imitate such records, an explicit limitati
 in `config/invariants.json`.
 
 Skills ask real questions directly through native tools or ordinary chat when those
-tools are unavailable. There is no OH menu engine or exact reply-command protocol.
+tools are unavailable. `decision-request` binds the precise presented effect and current
+subject before a consequential native question. `decision` verifies the actual answer
+against that record, including the exact additional review count; it does not classify
+arbitrary prose as a grant. Native tools render the question. Ordinary conversation and
+tracking instructions stay with the host agent. Older canonical choices remain supported
+for recovery, without extending their phrase vocabulary.
+At a completed-task checkpoint, the complete native single-select menu and exact chosen
+action bind to the prepared work boundary. Introductory question wording is presentation,
+as in the golden reference's Claude task checkpoint. Changed work, allowances or destination
+still invalidate the decision; incomplete menus and arbitrary Yes replies grant nothing.
+Other consequential questions and older prepared records retain their exact context checks.
 Claude quick fixes use the native plan viewer's single Accept, bound to the actual
 accepted scope. Drafting a design needs no extra scope question. Repository design
 approval remains human merge; private design approval binds the reviewed contents.
+
+Outside-scope observations are durable follow-ups in retained reviews and the run index,
+not mandatory completion gates. Optional tracking records a real issue URL or a mutable
+design note. Notes never extend approved tasks, and changing a reviewed document requires
+checks and fresh review. Repo and private plans use the same policy; frozen designs and
+work without a design retain follow-ups without forcing an issue destination.
 
 ## Focused helpers
 
@@ -66,6 +89,17 @@ completion and standalone feedback. `status` returns facts, not an agent dispatc
 generated question. The journal retains each attempt before launch, including failed,
 empty and interrupted launches. Native identity and result records bind the agent to
 that admission without treating an author summary as completion proof.
+
+Every workflow reads `status --saved` before preparing new work. It reads both checkout
+bindings without changing selection; `resume --run` reads a specified journal, while a
+verified answer to a Resume question naming the saved subject and branch can transfer
+ownership and select it. A matching workflow command alone grants no continuation.
+The review binding's
+optional `selected` flag preserves unfinished feedback when returning to the ordinary
+workflow; old bindings without that flag keep their existing selection behavior.
+Phase hints describe retained evidence and pending decisions; admission and completion
+remain authoritative. Recovery retention after a valid Resume command does not make
+that command stale or replenish its allowance.
 
 The implementer prepares provisional task/lifecycle changes and verifies the final
 candidate. A fresh independent reviewer examines that candidate against the immutable
@@ -122,9 +156,15 @@ repositories and their Git directories.
 
 Publication permission binds the reviewed head and destination. Reconciliation reuses
 an existing PR and never treats failed discovery as authority to create a duplicate.
-`oh pr-summary` validates retained commit evidence and renders actual changes, checks,
-findings and decisions. Portable evidence belongs in hidden PR metadata; local reports
-retain original references. A successful push is not CI success, and the person merges.
+`oh pr-summary` validates retained commit evidence and renders a factual starting
+point for the native host's human-readable PR body: task summaries, verification,
+final review evidence and verdict, finding dispositions,
+and the stop boundary. Full receipts and commit-bound evidence remain in OH's
+external saved workflow history; no duplicate JSON journal is embedded in a PR.
+A compact publication identifier lets reconciliation recognize a description update
+while allowing the host to summarize its prose. That identifier grants no authority;
+local evidence and publication approval are still validated against the exact commits.
+A successful push is not CI success, and the person merges.
 
 Interrupted completion/publication uses retained evidence without inventing another
 grant or repeating already verified work. Historical receipts remain historical; a

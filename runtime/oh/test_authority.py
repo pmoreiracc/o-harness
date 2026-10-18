@@ -74,14 +74,15 @@ class AuthorityTest(unittest.TestCase):
             for host in ('codex','claude'):
                 path=home/('.codex/sessions' if host=='codex' else '.claude/projects')/'s.jsonl'
                 path.parent.mkdir(parents=True)
-                for prompt in ('Please review the manual changes.', '/oh-review changed'):
+                for prompt in ('Please review the manual changes.', '/oh-review changed', '/oh-design auth', '/oh-propose improve sign-in', '/oh-deliver fix timeout'):
                     locator={'host':host,'session':'s','turn':'t','prompt':prompt,'transcript_path':str(path)}
                     rows=([{'type':'session_meta','payload':{'id':'s','cwd':str(root),'source':'cli'}},
                            {'type':'event_msg','payload':{'type':'user_message','turn_id':'t','message':prompt}}]
                           if host=='codex' else [{'type':'user','sessionId':'s','promptId':'t','cwd':str(root),
                                                  'message':{'role':'user','content':prompt}}])
                     path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
-                    self.assertEqual(native_human(root,locator)['prompt'],prompt)
+                    source=native_human(root,locator)
+                    self.assertEqual(source['prompt'],prompt)
                     with self.assertRaises(Refused):native_human(root,locator|{'prompt':prompt+' and approve repairs'})
 
     def test_native_child_is_fresh_attributed_and_uses_the_admitted_profile(self):
@@ -109,7 +110,8 @@ class AuthorityTest(unittest.TestCase):
                     final={'type':'event_msg','payload':{'type':'task_complete','last_agent_message':'Complete public report.'}}
                 else:
                     args={'prompt':'Execute admission admission.','model':profile['model'],'effort':'high','fork_context':False}
-                    parents=[{'type':'assistant','message':{'content':[{'type':'tool_use','id':'spawn','name':'Agent','input':args}]}},
+                    parents=[{'type':'assistant','sessionId':'parent','timestamp':'2026-10-15T12:00:01Z',
+                              'message':{'content':[{'type':'tool_use','id':'spawn','name':'Agent','input':args}]}},
                              {'type':'user','sessionId':'parent','cwd':str(root),'timestamp':'2026-10-15T12:00:01+00:00',
                               'toolUseResult':{'isAsync':True,'status':'async_launched','agentId':'child','resolvedModel':'claude-sonnet-4-6'},
                               'message':{'content':[{'type':'tool_result','tool_use_id':'spawn','content':'Native agent launched.'}]}}]
@@ -128,6 +130,14 @@ class AuthorityTest(unittest.TestCase):
                 self.assertEqual(bound['child_session'],'child')
                 with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                 if host=='claude':
+                    # Native Agent exposes a parent path alongside the child identity.
+                    # Resolve only that known hint or the exact derived child path.
+                    self.assertEqual(native_child(root,state,attempt,locator|{'transcript_path':str(parent)}),bound)
+                    self.assertEqual(native_child(root,state,attempt,{k:v for k,v in locator.items() if k!='transcript_path'}),bound)
+                    foreign=child.with_name('agent-foreign.jsonl');foreign.write_bytes(child.read_bytes())
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator|{'transcript_path':str(foreign)})
+                    foreign_parent=parent.with_name('foreign.jsonl');foreign_parent.write_bytes(parent.read_bytes())
+                    with self.assertRaises(Refused):native_child(root,state|{'human':state['human']|{'transcript_path':str(foreign_parent)}},attempt,locator)
                     progress={'type':'assistant','agentId':'child','sessionId':'parent','cwd':str(root),
                               'message':{'model':'claude-sonnet-4-6','stop_reason':'end_turn',
                                          'content':[{'type':'text','text':'The background task is still working.'}]}}
@@ -141,7 +151,12 @@ class AuthorityTest(unittest.TestCase):
                     save(pr=killed,ch=children+[progress,final])
                 else:save(ch=children+[final])
                 result=native_result(root,state,attempt|{'native_child':bound},locator)
-                if host=='codex':self.assertEqual((result['text'],result['status']),('Complete public report.','completed'))
+                if host=='codex':
+                    self.assertEqual((result['text'],result['status']),('Complete public report.','completed'))
+                    for empty in ('',None):
+                        save(ch=children+[final|{'payload':final['payload']|{'last_agent_message':empty}}])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
+                    save(ch=children+[final])
                 else:
                     self.assertEqual(result['status'],'interrupted')
                     self.assertIn('The background task is still working.',result['text'])
@@ -151,18 +166,323 @@ class AuthorityTest(unittest.TestCase):
                     finished={'type':'assistant','agentId':'child','sessionId':'parent','cwd':str(root),
                         'timestamp':'2026-10-15T12:00:02Z','message':{'model':'claude-sonnet-4-6',
                         'content':[{'type':'text','text':'Complete public report.'}]}}
+                    save(pr=parents+[completion],ch=children)
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
                     save(pr=parents+[completion,killed[-1]],ch=children+[finished])
                     completed=native_result(root,state,attempt|{'native_child':bound},locator)
                     self.assertEqual((completed['status'],completed['text']),('completed','Complete public report.'))
+                    # Claude 2.1.296 ends a background child with an acknowledged
+                    # SubagentHandback and an attributed peer message in the parent.
+                    receipt='## Complete flexible receipt\n'+('Evidence remains exact: α, findings and limits.\n'*350)
+                    call={'type':'assistant','isSidechain':True,'agentId':'child','sessionId':'parent','cwd':str(root),
+                        'uuid':'handback-assistant','timestamp':'2026-10-15T12:00:04Z',
+                        'message':{'model':'claude-sonnet-4-6','content':[{'type':'tool_use','id':'handback',
+                            'name':'SubagentHandback','input':{'message':receipt},'caller':{'type':'direct'}}]}}
+                    acknowledgement={'type':'user','isSidechain':True,'agentId':'child','sessionId':'parent','cwd':str(root),
+                        'parentUuid':'handback-assistant','sourceToolAssistantUUID':'handback-assistant',
+                        'timestamp':'2026-10-15T12:00:06Z','toolEndsTurn':True,
+                        'permissionDecision':{'decision':'accept','source':'config','reasonType':'classifier'},
+                        'message':{'content':[{'type':'tool_result','tool_use_id':'handback','content':[
+                            {'type':'text','text':json.dumps({'success':True,'message':'Report delivered to your caller.'})}]}]}}
+                    decorated='Native envelope text may change; report follows:\n'+'\n'.join('  '+line for line in receipt.split('\n'))
+                    notice={'type':'user','sessionId':'parent','isSidechain':False,'isMeta':True,
+                        'timestamp':'2026-10-15T12:00:05Z','promptSource':'system','turnOrigin':'peer',
+                        'origin':{'kind':'peer','from':'child','senderTaskId':'child','name':'o-harness:reviewer','body':decorated,'handback':True},
+                        'message':{'content':'Another Claude session sent a message: [Subagent hand-back] '+receipt}}
+                    save(pr=parents+[notice],ch=[call,acknowledgement])
+                    handback=native_result(root,state,attempt|{'native_child':bound},locator)
+                    self.assertGreater(len(receipt),12563)
+                    self.assertEqual((handback['status'],handback['text']),('completed',receipt))
+                    self.assertEqual(len(handback['record_hashes']),3)
+                    # Background task envelopes survive even when Claude absorbs
+                    # the peer handback into an already running parent turn.
+                    def notification(status='completed',use='spawn',at='2026-10-15T12:00:07Z'):
+                        text=('<task-notification>\n<task-id>child</task-id>\n<tool-use-id>'+use+'</tool-use-id>\n'
+                              '<output-file>/unused</output-file>\n<status>'+status+'</status>\n'
+                              '<summary>Native task ended.</summary>\n</task-notification>')
+                        return {'type':'queue-operation','operation':'enqueue','sessionId':'parent','timestamp':at,'content':text}
+                    ended=notification()
+                    attachment={'type':'attachment','sessionId':'parent','timestamp':ended['timestamp'],
+                        'attachment':{'type':'queued_command','commandMode':'task-notification',
+                            'origin':{'kind':'task-notification','producer':'session-task'},
+                            'timestamp':ended['timestamp'],'prompt':ended['content']}}
+                    for envelope in (ended,attachment):
+                        save(pr=parents+[envelope],ch=[call,acknowledgement])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                        wrong_admission=attempt|{'profile':{'model':'opus','effort':'high'}}
+                        failed=native_result(root,state,wrong_admission,locator)
+                        self.assertEqual((failed['status'],failed['terminal_status']),('binding_failed','completed'))
+                        self.assertEqual(failed['text'],receipt)
+                    for label in ('wrong child','wrong call','wrong parent','sidechain','ordinary prose','removed queue','old event','foreign producer'):
+                        with self.subTest(notification=label):
+                            event=deepcopy(ended)
+                            if label=='wrong child':event['content']=event['content'].replace('<task-id>child','<task-id>foreign')
+                            elif label=='wrong call':event['content']=event['content'].replace('<tool-use-id>spawn','<tool-use-id>foreign')
+                            elif label=='wrong parent':event['sessionId']='foreign'
+                            elif label=='sidechain':event['isSidechain']=True
+                            elif label=='ordinary prose':event={'type':'user','sessionId':'parent','message':{'content':ended['content']}}
+                            elif label=='removed queue':event['operation']='remove'
+                            elif label=='old event':event['timestamp']=attempt['started_at']
+                            elif label=='foreign producer':
+                                event=deepcopy(attachment);event['attachment']['origin']['producer']='model'
+                            save(pr=parents+[event],ch=[call,acknowledgement])
+                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # A successful native stop needs no model-authored final report.
+                    stop={'type':'assistant','sessionId':'parent','timestamp':'2026-10-15T12:00:02Z',
+                        'message':{'content':[{'type':'tool_use','id':'stop','name':'TaskStop','input':{'task_id':'child'}}]}}
+                    stopped={'type':'user','sessionId':'parent','timestamp':'2026-10-15T12:00:03Z',
+                        'toolUseResult':{'task_id':'child','task_type':'local_agent','message':'Successfully stopped task'},
+                        'message':{'content':[{'type':'tool_result','tool_use_id':'stop','content':'Native stop acknowledged.'}]}}
+                    interrupted={'type':'user','agentId':'child','sessionId':'parent','cwd':str(root),'timestamp':'2026-10-15T12:00:03.001Z',
+                        'message':{'content':[{'type':'text','text':'[Request interrupted by user]'}]}}
+                    for evidence in ([stop,stopped],[notification('killed',at='2026-10-15T12:00:03.002Z')]):
+                        save(pr=parents+evidence,ch=children+[interrupted])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'interrupted')
+                        failed=native_result(root,state,wrong_admission,locator)
+                        self.assertEqual((failed['status'],failed['terminal_status']),('binding_failed','interrupted'))
+                    cleanup=interrupted|{'message':{'content':[{'type':'tool_result','tool_use_id':'cancelled-command',
+                                                              'is_error':True,'content':'Command cancelled.'}]}}
+                    save(pr=parents+[stop,stopped],ch=children+[cleanup])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    save(pr=parents+[stop,stopped,notification('killed',at='2026-10-15T12:00:03.002Z')],ch=children+[cleanup])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'interrupted')
+                    for label in ('no acknowledgement','wrong call','wrong child','shell task','failed stop','foreign parent','sidechain','model claim','missing time'):
+                        with self.subTest(stop=label):
+                            event=deepcopy(stopped);events=[stop,event]
+                            if label=='no acknowledgement':events=[stop]
+                            elif label=='wrong call':event['message']['content'][0]['tool_use_id']='foreign'
+                            elif label=='wrong child':event['toolUseResult']['task_id']='foreign'
+                            elif label=='shell task':event['toolUseResult']['task_type']='local_bash'
+                            elif label=='failed stop':event['message']['content'][0]['is_error']=True
+                            elif label=='foreign parent':event['sessionId']='foreign'
+                            elif label=='sidechain':event['isSidechain']=True
+                            elif label=='model claim':event['type']='assistant'
+                            elif label=='missing time':event.pop('timestamp')
+                            save(pr=parents+events,ch=children)
+                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # Reproduce the incident: stop, resume to hand back, then a
+                    # completion notification referring to SendMessage, not Agent.
+                    resume={'type':'assistant','sessionId':'parent','timestamp':'2026-10-15T12:00:03.500Z',
+                        'message':{'content':[{'type':'tool_use','id':'resume','name':'SendMessage',
+                            'input':{'to':'child','message':'Hand back.'}}]}}
+                    resumed={'type':'user','sessionId':'parent','timestamp':'2026-10-15T12:00:03.600Z',
+                        'toolUseResult':{'success':True,'resumedAgentId':'child'},
+                        'message':{'content':[{'type':'tool_result','tool_use_id':'resume','content':'Resuming agent'}]}}
+                    history=parents+[stop,stopped,resume,resumed]
+                    save(pr=history,ch=children+[interrupted])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    rejected=deepcopy(resumed);rejected['message']['content'][0]['is_error']=True
+                    save(pr=parents+[stop,stopped,resume,rejected],ch=children+[interrupted])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'interrupted')
+                    save(pr=history+[ended],ch=[call,acknowledgement])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    save(pr=history+[notification(use='resume')],ch=[call,acknowledgement])
+                    recovered=native_result(root,state,wrong_admission,locator)
+                    self.assertEqual((recovered['status'],recovered['terminal_status'],recovered['text']),('binding_failed','completed',receipt))
+                    # Child activity also invalidates terminal evidence when the
+                    # parent's corresponding resume record has not flushed yet.
+                    save(pr=parents+[stop,stopped],ch=[call,acknowledgement])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    raw=notice|{'origin':notice['origin']|{'body':receipt}}
+                    save(pr=parents+[raw],ch=[call,acknowledgement])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                    save(pr=parents+[notice],ch=[call,acknowledgement])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator),handback)
+                    # A synchronous Agent may absorb the forwarded message mid-turn.
+                    # Its completed tool result already holds the exact handback report.
+                    synchronous=deepcopy(completion);synchronous['timestamp']='2026-10-15T12:00:07Z'
+                    synchronous['toolUseResult'].update(handback='send',handbackReport={'text':receipt})
+                    sync_parents=[parents[0],synchronous]
+                    early=progress|{'timestamp':'2026-10-15T12:00:03Z'}
+                    save(pr=sync_parents,ch=[call,acknowledgement])
+                    self.assertEqual(native_child(root,state,attempt,locator)['child_session'],'child')
+                    sync_result=native_result(root,state,attempt|{'native_child':bound},locator)
+                    self.assertEqual((sync_result['status'],sync_result['text']),('completed',receipt))
+                    self.assertEqual(len(sync_result['record_hashes']),3)
+                    save(pr=sync_parents,ch=[early,call,acknowledgement])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator),sync_result)
+                    self.assertEqual(native_result(root,{'host':'codex','human':{'session':'new-parent'}},
+                        attempt|{'host':'claude','parent':state['human'],'native_child':bound},locator),sync_result)
+                    # A report is model output, never a human decision.
+                    from .authority import native_human
+                    with self.assertRaises(Refused):native_human(root,{'host':'claude','session':'parent',
+                        'tool_use_id':'spawn','transcript_path':str(parent)})
+                    for label in ('different call','different child','different parent','sidechain','not completed',
+                                  'error result','different report','malformed report','before acknowledgement'):
+                        with self.subTest(synchronous=label):
+                            response=deepcopy(synchronous)
+                            if label=='different call':response['message']['content'][0]['tool_use_id']='other'
+                            elif label=='different child':response['toolUseResult']['agentId']='other'
+                            elif label=='different parent':response['sessionId']='other'
+                            elif label=='sidechain':response['isSidechain']=True
+                            elif label=='not completed':response['toolUseResult']['status']='async_launched'
+                            elif label=='error result':response['message']['content'][0]['is_error']=True
+                            elif label=='different report':response['toolUseResult']['handbackReport']['text']='Other report.'
+                            elif label=='malformed report':response['toolUseResult']['handbackReport']='invalid'
+                            elif label=='before acknowledgement':response['timestamp']='2026-10-15T12:00:05Z'
+                            save(pr=[parents[0],response],ch=[early,call,acknowledgement])
+                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # Native timestamps can share a millisecond; UUID/call links and record order still establish acknowledgement.
+                    save(pr=parents+[notice|{'timestamp':call['timestamp']}],ch=[call,acknowledgement|{'timestamp':call['timestamp']}])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                    save(pr=parents+[notice],ch=[call,acknowledgement])
+                    old_attempt=attempt|{'host':'claude','parent':{'host':'claude',**state['human']},'native_child':bound}
+                    transferred={'host':'codex','human':{'session':'different-parent','transcript_path':str(home/'elsewhere.jsonl')}}
+                    self.assertEqual(native_result(root,transferred,old_attempt,locator),handback)
+                    from .authority import human, prompted, claude_history
+                    peer=notice|{'promptId':'peer-message'}
+                    self.assertFalse(human(peer));self.assertFalse(prompted(peer,'parent'))
+                    save(pr=parents+[peer],ch=[call,acknowledgement])
+                    self.assertEqual(claude_history(parent,'parent'),[])
+                    with self.assertRaises(Refused):attest('claude',{'hook_event_name':'UserPromptSubmit','session_id':'parent',
+                        'turn_id':'peer-message','prompt':peer['message']['content'],'transcript_path':str(parent)},root)
+                    for label in ('missing acknowledgement','wrong call','wrong parent UUID','wrong assistant UUID','not terminal',
+                                  'rejected','failed acknowledgement','permission denied','foreign child','foreign parent',
+                                  'ordinary tool','indirect call','missing forwarding','foreign sender','foreign task',
+                                  'not peer','not handback','different body','changed indentation','trimmed body','malformed input','malformed caller','malformed permission','malformed origin',
+                                  'outstanding command','background command','later activity'):
+                        with self.subTest(handback=label):
+                            request=deepcopy(call);reply=deepcopy(acknowledgement);forwarded=deepcopy(notice)
+                            child_rows=[request,reply];parent_rows=parents+[forwarded]
+                            if label=='missing acknowledgement':child_rows.pop()
+                            elif label=='wrong call':reply['message']['content'][0]['tool_use_id']='other-call'
+                            elif label=='wrong parent UUID':reply['parentUuid']='other-assistant'
+                            elif label=='wrong assistant UUID':reply['sourceToolAssistantUUID']='other-assistant'
+                            elif label=='not terminal':reply.pop('toolEndsTurn')
+                            elif label=='rejected':reply['message']['content'][0]['is_error']=True
+                            elif label=='failed acknowledgement':reply['message']['content'][0]['content'][0]['text']='{"success":false}'
+                            elif label=='permission denied':reply['permissionDecision']['decision']='deny'
+                            elif label=='foreign child':reply['agentId']='foreign'
+                            elif label=='foreign parent':reply['sessionId']='foreign'
+                            elif label=='ordinary tool':request['message']['content'][0]['name']='SendMessage'
+                            elif label=='indirect call':request['message']['content'][0]['caller']['type']='indirect'
+                            elif label=='missing forwarding':parent_rows=parents
+                            elif label=='foreign sender':forwarded['origin']['from']='foreign'
+                            elif label=='foreign task':forwarded['origin']['senderTaskId']='foreign'
+                            elif label=='not peer':forwarded['origin']['kind']='human'
+                            elif label=='not handback':forwarded['origin']['handback']=False
+                            elif label=='different body':forwarded['origin']['body']=decorated+'changed'
+                            elif label=='changed indentation':forwarded['origin']['body']=decorated.replace('\n  ','\n ')
+                            elif label=='trimmed body':forwarded['origin']['body']=decorated.rstrip()
+                            elif label=='malformed input':request['message']['content'][0]['input']='invalid native input'
+                            elif label=='malformed caller':request['message']['content'][0]['caller']='invalid native caller'
+                            elif label=='malformed permission':reply['permissionDecision']='invalid native permission'
+                            elif label=='malformed origin':forwarded['origin']='invalid native origin'
+                            elif label in ('outstanding command','background command'):
+                                command=deepcopy(call);command['timestamp']='2026-10-15T12:00:03Z';command['uuid']='command'
+                                command['message']['content']=[{'type':'tool_use','id':'command','name':'Bash',
+                                    'input':{'command':'fixture','run_in_background':label=='background command'}}]
+                                child_rows.insert(0,command)
+                                if label=='background command':
+                                    result=deepcopy(reply);result['message']['content'][0]['tool_use_id']='command'
+                                    child_rows.insert(1,result)
+                            elif label=='later activity':child_rows.append({'type':'assistant','agentId':'child','sessionId':'parent',
+                                'cwd':str(root),'message':{'content':'Child resumed after handback.'}})
+                            save(pr=parent_rows,ch=child_rows)
+                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                            if label in ('missing acknowledgement','wrong call','wrong parent UUID','wrong assistant UUID',
+                                         'not terminal','rejected','failed acknowledgement','permission denied','foreign child',
+                                         'foreign parent','ordinary tool','indirect call','malformed input','malformed caller',
+                                         'malformed permission','outstanding command','background command','later activity'):
+                                save(pr=sync_parents,ch=[early]+child_rows)
+                                with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # A completed ordinary call before handback establishes quiescence.
+                    command=deepcopy(call);command['timestamp']='2026-10-15T12:00:02Z';command['uuid']='command'
+                    command['message']['content']=[{'type':'tool_use','id':'command','name':'Read','input':{'file_path':'fixture'}}]
+                    result=deepcopy(acknowledgement);result['timestamp']='2026-10-15T12:00:03Z'
+                    result['message']['content']=[{'type':'tool_result','tool_use_id':'command','content':'Read completed.'}]
+                    save(pr=parents+[notice],ch=[command,result,call,acknowledgement])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                    # A background command the child's own record reports finished no longer blocks quiescence.
+                    started=deepcopy(command);started['message']['content']=[{'type':'tool_use','id':'command','name':'Bash',
+                        'input':{'command':'fixture','run_in_background':True}}]
+                    bg_done={'type':'attachment','agentId':'child','sessionId':'parent','cwd':str(root),'timestamp':'2026-10-15T12:00:03Z',
+                        'attachment':{'type':'queued_command','prompt':'<task-notification>\n<task-id>x</task-id>\n<tool-use-id>command</tool-use-id>\n<output-file>/tmp/x</output-file>\n<status>completed</status>\n</task-notification>'}}
+                    save(pr=parents+[notice],ch=[started,result,bg_done,call,acknowledgement])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
                     forked=deepcopy(parents);forked[0]['message']['content'][0]['input']['subagent_type']='fork'
                     save(pr=forked)
                     with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                # Transfer changes the current host/parent, never this attempt's provenance.
+                original=attempt|{'host':host,'parent':{'host':host,**state['human']},'native_child':bound}
+                transferred={'host':'claude' if host=='codex' else 'codex',
+                             'human':{'session':'new-parent','transcript_path':str(home/'unrelated.jsonl')}}
+                if host=='claude':save(pr=parents+[completion],ch=children+[finished])
+                expected=native_result(root,state,original,locator)
+                self.assertEqual(native_result(root,transferred,original,locator),expected)
                 with self.assertRaises(Refused):
                     native_result(root,state,attempt|{'native_child':bound},locator|{'child_session':'foreign'})
                 with self.assertRaises(Refused):
                     native_child(root,state,attempt|{'profile':profile|{'effort':'low'}},locator)
                 with self.assertRaises(Refused):
                     native_child(root,state,attempt|{'started_at':'2026-10-15T12:00:02+00:00'},locator)
+                # A rejected actual profile remains unusable, but its terminal launch can settle.
+                launched=deepcopy(parents)
+                for row in launched:
+                    row.setdefault('timestamp','2026-10-15T12:00:01Z')
+                    if host=='claude':row.setdefault('sessionId','parent')
+                wrong_profile=deepcopy(children)
+                if host=='codex':
+                    wrong_profile[1]['payload']['effort']='low'
+                    launched.append({'type':'response_item','timestamp':'2026-10-15T12:00:02Z',
+                        'payload':{'type':'function_call_output','call_id':'spawn','output':json.dumps({'agent_id':'child'})}})
+                    terminal_children=wrong_profile+[final]
+                    terminal_parents=launched
+                else:
+                    wrong_profile[0]['message']['model']='claude-opus-4-6'
+                    wrong_final=deepcopy(finished);wrong_final['message']['model']='claude-opus-4-6'
+                    terminal_children=wrong_profile+[wrong_final]
+                    terminal_parents=launched+[completion]
+                save(pr=launched,ch=wrong_profile)
+                with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                save(pr=terminal_parents,ch=terminal_children)
+                failed=native_result(root,state,attempt,locator)
+                self.assertEqual((failed['status'],failed['terminal_status']),('binding_failed','completed'))
+                self.assertEqual(failed['admitted_profile'],profile)
+                self.assertTrue(failed['binding_issues'])
+                self.assertEqual(failed['native_id'],'child')
+                self.assertEqual(failed['tool_use_id'],'spawn')
+                with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                if host=='codex':
+                    # Cancellation can precede the first turn/profile record forever.
+                    save(pr=launched,ch=children[:1])
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                    aborted={'type':'event_msg','payload':{'type':'turn_aborted','reason':'Cancelled before first turn.'}}
+                    save(pr=launched,ch=children[:1]+[aborted])
+                    cancelled=native_result(root,state,attempt,locator)
+                    self.assertEqual((cancelled['status'],cancelled['terminal_status']),('binding_failed','interrupted'))
+                    self.assertIsNone(cancelled['profile'])
+                    self.assertEqual(cancelled['admitted_profile'],profile)
+                    self.assertEqual((cancelled['native_id'],cancelled['tool_use_id']),('child','spawn'))
+                    self.assertTrue(cancelled['binding_issues'])
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    # A later turn cannot be settled using an earlier terminal event.
+                    save(pr=launched,ch=children+[final,{'type':'event_msg','payload':{'type':'task_started'}}])
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                    save(pr=launched,ch=children+[final,{'type':'event_msg','payload':{'type':'task_started'}},aborted])
+                    self.assertEqual(native_result(root,state,attempt,locator)['terminal_status'],'interrupted')
+                else:
+                    # The child may save identity but no model-bearing assistant turn.
+                    identity=deepcopy(final)
+                    save(pr=launched,ch=[identity])
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
+                    save(pr=launched+[killed[-1]],ch=[identity])
+                    cancelled=native_result(root,state,attempt,locator)
+                    self.assertEqual((cancelled['status'],cancelled['terminal_status']),('binding_failed','interrupted'))
+                    self.assertIsNone(cancelled['profile'])
+                    self.assertEqual(cancelled['admitted_profile'],profile)
+                    self.assertEqual((cancelled['native_id'],cancelled['tool_use_id']),('child','spawn'))
+                    with self.assertRaises(Refused):native_child(root,state,attempt,locator)
+                    # A launch may be cancelled before any child file is written.
+                    child.unlink()
+                    cancelled=native_result(root,state,attempt,locator)
+                    self.assertEqual((cancelled['status'],cancelled['terminal_status']),('binding_failed','interrupted'))
+                    self.assertIsNone(cancelled['profile'])
+                    save(pr=launched,ch=[])
+                    with self.assertRaises(Refused):native_result(root,state,attempt,locator)
                 unrelated=deepcopy(parents)
                 if host=='codex':
                     other_args=args|{'task_name':'unrelated_earlier_task'}
@@ -204,6 +524,10 @@ class AuthorityTest(unittest.TestCase):
                 self.assertEqual(result['admitted_profile'],attempt['profile'])
                 self.assertNotIn('native_id',result)
                 self.assertEqual(len(result['record_hashes']),2)
+                save([request])
+                with patch('oh.authority.sleep',side_effect=lambda delay:save([request,failure])) as wait:
+                    self.assertEqual(native_result(root,state,attempt,{'tool_use_id':'launch'}),result)
+                    self.assertEqual(wait.call_count,1)
                 with self.assertRaises(Refused):native_result(root,state,attempt,{'tool_use_id':'foreign'})
                 with self.assertRaises(Refused):native_result(root,state,attempt|{'started_at':'2026-10-15T12:00:03Z'},{'tool_use_id':'launch'})
                 wrong_profile=json.loads(json.dumps(request))
@@ -250,6 +574,11 @@ class AuthorityTest(unittest.TestCase):
                         with self.assertRaises(Expired):attest(host,payload,root)
                     save(later,{'type':'event_msg','payload':{'type':'user_message','message':'never mind'}})
                 with self.assertRaises(Expired):attest(host,payload,root)
+                from .authority import native_human
+                locator={'host':host,'session':'session','prompt':'continue','transcript_path':str(path)}
+                self.assertEqual(native_human(root,locator,latest=False)['prompt'],'continue')
+                self.assertEqual(native_human(root,locator|{'turn':'turn'},latest=False)['prompt'],'continue')
+                with self.assertRaises(Expired):native_human(root,locator)
                 save()
                 if host=='claude':  # the desktop app saves a typed turn as from a person, with its SDK marker
                     records[0]|={'origin':{'kind':'human'},'turnOrigin':'human','promptSource':'sdk','entrypoint':'claude-desktop'}

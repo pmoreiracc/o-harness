@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from . import test_workflow as fixtures
@@ -35,9 +36,17 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['done'],[])
         native.verify(self.root)
         finding={'severity':'scope','description':'Logout cleanup belongs to a later task.','family':'logout','path':'logout.py'}
-        review=self.finish_attempt('review',{'verdict':'concern','summary':'Retain later work in the mutable design.','findings':[finding]})
+        review=self.finish_attempt('review',{'verdict':'scope','summary':'Retain later work in the mutable design.','findings':[finding]})
         before=load_run(self.root)[1]
-        native.decision(self.root,'route-scope',self.human('route scope'),attempt=review['id'])
+        from .scope import track
+        retained=track(self.root,review['id'])
+        self.assertEqual(retained['destination'],{'saved':True})
+        self.assertEqual(self.design.read_text(),first)
+        self.assertIsNone(native.select(self.root)['continuation']['pending_decision'])
+        # Explicitly choosing a design note changes the candidate and must be reviewed.
+        routed_record=track(self.root,review['id'],{'design':str(self.design)})
+        self.assertTrue(routed_record['requires_review'])
+        self.assertFalse(track(self.root,review['id'],{'design':str(self.design)})['candidate_changed'])
         routed=self.design.read_text()
         self.assertIn('## Open review scope',routed)
         self.assertIn('> '+finding['description'],routed)
@@ -45,7 +54,7 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         state=load_run(self.root)[1]
         self.assertEqual(state['granted'],before['granted'])
         self.assertEqual(state['scope_records'][review['id']]['findings'],[finding])
-        self.assertEqual(state['scope_records'][review['id']]['destination']['design'],str(self.design))
+        self.assertEqual(state['scope_records'][review['id']]['destination']['design'],str(self.design.resolve()))
         with self.assertRaises(fixtures.Refused):native.complete(self.root,review['id'])
         native.candidate(self.root);native.verify(self.root)
         review=self.finish_attempt('review',{'verdict':'clean','summary':'Checked the routed exact candidate.','findings':[]})
@@ -67,7 +76,7 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(read_json(packet['scope_snapshot']['path'])['base'],origin)
         self.assertEqual([task['id'] for task in packet['completed_tasks']],['1'])
         native.bind(self.root,admitted['id'],{})
-        self.native_results[admitted['id']]={'text':'Clean. No findings.','status':'completed'}
+        self.native_results[admitted['id']]={'text':json.dumps({'verdict':'clean','findings':[],'summary':'Clean. No findings.'}),'status':'completed'}
         native.retain(self.root,admitted['id'],{})
         native.complete(self.root,admitted['id'])
         self.assertEqual(self.git('show','HEAD:docs/design/0900-fixture.md'),final.strip())

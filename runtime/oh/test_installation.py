@@ -491,6 +491,13 @@ class InstallationTest(unittest.TestCase):
             a=build(first,'codex');b=build(second,'claude')
             for plugin in (first, second):self.assert_plugin_branding(plugin)
             self.assertEqual(a['revision'],b['revision'])
+            # Both hosts must receive the current shared interaction contract,
+            # including the pending-question lifecycle, through the same resource.
+            from .config import HOME
+            resources=[p.relative_to(HOME) for folder in ('workflows','prompts') for p in (HOME/folder).rglob('*.md')]
+            for plugin in (first,second):
+                for resource in resources:
+                    self.assertEqual((plugin/'core'/resource).read_bytes(),(HOME/resource).read_bytes())
             self.assertNotIn('disable-model-invocation: true',(first/'skills/oh-deliver/SKILL.md').read_text())
             self.assertIn('allow_implicit_invocation: false',(first/'skills/oh-deliver/agents/openai.yaml').read_text())
             self.assertIn('disable-model-invocation: true',(second/'skills/oh-deliver/SKILL.md').read_text())

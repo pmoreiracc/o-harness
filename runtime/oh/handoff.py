@@ -6,12 +6,20 @@ READINESS_LISTS=('requirements','rules','surfaces','proof','self_review','family
 DISPOSITIONS=('fixed','routed','accepted','dismissed','still-open','disputed')
 
 
-def family_identity(finding):
-    """Read the shared readable Family/Relation line without changing original evidence."""
+def family_fields(value):
+    """Optional Markdown quoting does not change inline Family/Relation labels."""
     import re
-    value=finding.get('family') or finding['description']
-    inline=re.fullmatch(r'`([^`]+)`\.?\s+Relation:\s*`?([^`\n]+?)`?\.?',value,re.I)
-    return inline[1] if inline else value.strip('`')
+    parts=re.split(r'\s+(?:\*\*)?Relation(?:\*\*)?\s*:\s*',value,maxsplit=1,flags=re.I)
+    if len(parts)==1:return {'family':value.strip('`')}
+    def plain(text):return text.strip().rstrip('.;').strip('`').rstrip('.;')
+    return {'family':plain(parts[0]),'relation':plain(parts[1])}
+
+
+def family_identity(finding):
+    """Read historical inline metadata without changing its original evidence."""
+    if isinstance(finding.get('family_id'),str):return finding['family_id']
+    family=finding.get('family')
+    return family_fields(family if isinstance(family,str) and family else finding['description'])['family']
 
 
 def report(attempt):
@@ -38,7 +46,7 @@ def confirms_repairs(state, attempt):
     try:
         validate_evidence({'schema':1,'attempts':[attempt],'review':attempt['id'],
             'git_tree':attempt.get('git_tree'),'parent':attempt.get('head'),
-            'resolutions':state.get('resolutions',{})})
+            'resolutions':state.get('resolutions',{}),'scope':state.get('scope_records',{}),'scope_policy':'retained-followups'})
     except Refused:return False
     return True
 
@@ -76,7 +84,7 @@ def finding_index(state, task):
             if finding['severity'] == 'scope':
                 if scope.get('action') in ('route', 'noted') or 'route scope' in choice:disposition = 'routed'
                 if scope.get('action') == 'dismiss' or 'dismiss scope' in choice:disposition = 'dismissed'
-            case = {k: v for k, v in finding.items() if k not in ('severity', 'family', 'relation')}
+            case = {k: v for k, v in finding.items() if k not in ('severity', 'family', 'family_id', 'relation')}
             case_id = digest(case)[:16]
             if not any(c['case_key'] == case_id for c in group['cases']):group['cases'].append({'case_key': case_id} | case)
             occurrence = {'id': f"{attempt['id']}#{number}", 'disposition': disposition,
@@ -135,7 +143,13 @@ def prepare(state, task, role, directory, admission, feedback=''):
         'standalone_subject':state.get('standalone_subject'),
         'standalone_artifact':state.get('standalone_artifact'),
         'history': str(directory.parent.parent),
-        'history_policy': 'Read the current packet and complete finding index. Consult original reports only for a specific unresolved question; do not replay prior author reports or transcripts.'}
+        'history_policy': 'Read the current packet, complete finding index and full current_review report before repairing findings. Consult older reports for unresolved questions; do not replay prior author reports or transcripts.'}
+    latest=next((a for a in reversed(state['attempts']) if a['task']==task['id'] and a['role']=='review' and a.get('finished') and a.get('evidence')),None)
+    if latest:
+        path=Path(latest['evidence'])/'result.json'
+        packet['current_review']={'attempt':latest['id'],'outcome':latest.get('outcome'),
+            'report':{'path':str(path),'hash':digest(read_json(path))},
+            'instruction':'Read the full receipt, including reasoning and limits, before deciding repairs. Judge claims against the approved scope and concrete behavior; do not implement suggestions blindly.'}
     if not state.get('standalone_subject'):
         approval=directory.parent.parent/'scope'/'approval.json'
         if approval.is_file():packet['human_scope_approval']={'path':str(approval)}
@@ -144,8 +158,8 @@ def prepare(state, task, role, directory, admission, feedback=''):
             if original.is_file():packet['original_scope_provenance']={'path':str(original),
                 'authority':'Original run provenance; not a newly accepted native scope.'}
     if state.get('repair_source'):packet['repair_source']=state['repair_source']
-    if state.get('pr_target') and not state['summaries']:
-        packet['included_original_work']={k:state['pr_target'][k] for k in ('url','head','review_base','covers') if k in state['pr_target']}
+    if (original:=state.get('pr_target') or state.get('original_work')) and not state['summaries']:
+        packet['included_original_work']={k:original[k] for k in ('url','head','review_base','covers') if k in original}
     if state.get('plans'):
         packet['planning'] = state['plans']
         packet['human_refinements'] = [{'source': a['source'], 'feedback': a['feedback']}

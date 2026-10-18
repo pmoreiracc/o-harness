@@ -7,7 +7,7 @@ Resolve the `scripts/oh` command at the plugin root, two levels above this skill
 
 Read the settings: in Codex, call the o-harness `config` tool with the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> config`. It returns every setting that exists, with its value, default, source, allowed values and meaning, this project's `checks`, and the settings `file`. That list is the only source of truth: never mention, suggest or write a setting that isn't in it.
 
-If Codex lists no o-harness tools, OH's tool server did not start: tell the person to type `/mcp` to see why, then start a new Codex session; don't run these OH commands from Codex's shell instead.
+If Codex lists no OH tools, report that the connection is unavailable and use a host-supported recovery step; do not assume `/mcp` exists in the desktop app. If a connected tool fails, retry that same operation once before asking the person to intervene. Do not run these OH commands from Codex's shell instead.
 
 **No request:** show a short list of the settings (key, value, meaning) and the checks, give the `file` path, say that `oh config open` opens it and that editors explain each key through its `$schema`, and report any `note`.
 
@@ -17,5 +17,13 @@ Explain settings through their practical effect, for example “This project wil
 1. Map it to the keys in the list it names; one request may change several. If a part matches nothing in the list, say that OH has no such setting and leave it out; don't invent one. If it's ambiguous, ask which of the matching keys they mean.
 2. A change applies to this project unless the user says it's for every project; then add `--global`. Checks always belong to the project.
 3. Show each `key: current → new` with its meaning and project/global scope. If their request leaves a real choice, ask directly with Claude `AskUserQuestion` or Codex's available native question tool; use a direct text reply when unavailable. Do not use an OH confirmation tool or create a second approval for an explicit unambiguous request. Silence grants nothing.
+   Show the question and short choices in ordinary chat too; the person may reply
+   there if no menu is visible. Treat that as the same decision, not another approval.
+   For a Codex asynchronous question, submission is not an answer. Keep the turn open
+   with an available native interruptible wait such as `clock.sleep` (at most 60 seconds
+   per call) until the person replies; never send a final response while it is pending.
+   Without such a wait, use an available blocking question or ask once in plain chat
+   and wait for their next message. Restore a missing unanswered question without
+   making the person repeat their settings request.
 4. Apply the authorized values with `<plugin>/scripts/oh --root <project-root> config set <key> <value>` in the shell on either host (configuration writes use this command, not an OH tool), once per key (or `config unset <key>` to restore inheritance). `config set checks '<JSON list>'` replaces the whole list, so show and preserve the complete intended list.
 5. Report the command's result exactly, including its note. Never edit the settings file yourself: `oh config set` is the only writer, and it rejects unknown keys and invalid values.

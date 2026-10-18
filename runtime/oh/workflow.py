@@ -44,16 +44,23 @@ def human_event(payload, host):
 
 def active_file(root):
     review=checkout_file(root, 'oh-active-review.json')
-    return review if review.exists() else checkout_file(root, 'oh-active-run.json')
+    return review if review.exists() and read_json(review).get('selected',True) else checkout_file(root, 'oh-active-run.json')
 
 
-def load_run(root):
-    if not active_file(root).exists():raise Refused(NO_RUN)
-    active=read_json(active_file(root))
+def load_run(root, run=None):
+    if run is None:
+        if not active_file(root).exists():raise Refused(NO_RUN)
+        active=read_json(active_file(root))
+    else:
+        active={'project':project(root)['id'],'checkout':checkout_id(root),'run':run}
     if active['checkout'] != checkout_id(root) or active['project'] != project(root)['id']:
         raise Refused('This run belongs to another checkout or project')
     journal=Journal(active['project'],active['run'])
-    return journal, reduce(journal.records())
+    records=journal.records();state=reduce(records)
+    state['entry_human']=records[0]['data'].get('human',{})
+    if state.get('project')!=active['project'] or state.get('checkout')!=active['checkout'] or state.get('id')!=active['run']:
+        raise Refused('Saved work belongs to another checkout or project')
+    return journal,state
 
 
 def reduce(records):
@@ -82,7 +89,9 @@ def reduce(records):
                 raise Refused('Publication receipt does not match this run\'s approval')
             if state.get('published') and state['published']!=d:raise Refused('Publication receipt cannot be replaced')
             state['published']=d
-        elif kind=='attempt.started':state['attempts'].append({'host':state['host']} | d | {'finished':False,'started_at':record['at']})
+        elif kind=='attempt.started':
+            parent={k:state['human'][k] for k in ('host','session','transcript_path') if k in state['human']}
+            state['attempts'].append({'host':state['host'],'parent':parent} | d | {'finished':False,'started_at':record['at']})
         elif kind=='attempt.admitted':
             admitted=next(a for a in state['attempts'] if a['id']==d['id'])
             admitted['request_hash']=d['hash']
@@ -105,8 +114,12 @@ def reduce(records):
             author=next(a for a in state['attempts'] if a['id']==d['id'])
             author.update(original_outcome=author['outcome'],outcome='implemented',normalized_report=d['report'])
         elif kind=='run.status':
+            previous=state['status']
+            if d['status'] in ('paused','stopped'):
+                state['control_return_status']=d.get('return_status') or (state.get('control_return_status') if previous in ('paused','stopped') else state.get('pause_return_status') if previous=='pausing' else previous)
+            elif d['status']!='pausing':state.pop('control_return_status',None)
             state['status']=d['status']
-            if d['status'] not in ('approval_checkpoint','prepared_checkpoint'):state.pop('refinement',None)
+            if d['status'] not in ('approval_checkpoint','prepared_checkpoint','paused','stopped','pausing'):state.pop('refinement',None)
             state.setdefault('status_history',[]).append(d|{'at':record['at']})
             if d['status']=='pausing':state['pause_return_status']=d['return_status']
             if d['status']=='paused':state['pause_snapshot']={'tree':d['tree'],'head':d['head']}

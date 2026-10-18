@@ -38,7 +38,8 @@ phase. Comparisons only use difficulty levels with at least ten completed tasks 
 periods. They show what changed, not why.
 
 Click a task to see its attempts, checks and timeline. CI results appear when the agent
-runs `oh observe-ci` after the PR checks finish.
+follows the published PR's checks to a pass or failure (`oh ci-wait`), or runs
+`oh observe-ci` after they finish.
 
 ## Suggestions
 

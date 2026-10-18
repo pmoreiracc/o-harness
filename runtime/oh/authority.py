@@ -60,7 +60,7 @@ def codex_history(path,session):
 
 
 def owner_transcript(human):
-    """The saved transcript of the Claude conversation that owns the run."""
+    """The saved transcript of the coordinating Claude conversation."""
     allowed=(Path.home()/'.claude/projects').resolve()
     if human.get('transcript_path'):paths=[Path(human['transcript_path']).expanduser().resolve()]
     else:paths=[p.resolve() for p in allowed.glob('*/'+human['session']+'.jsonl')] if re.fullmatch(r'[a-zA-Z0-9_-]+',human['session']) else []
@@ -259,8 +259,8 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
             hint=locator.get('prompt')
             matching=[m for m in messages if not hint or m['prompt']==hint.strip() or saved_command(m['prompt']) is not None and saved_command(m['prompt'])==saved_command(hint)]
             if not matching:raise Saving('The native host has not saved this human input yet; retry the same operation')
-            latest=matching[-1]
-            locator=locator|{'turn':latest['turn'],'prompt':latest['prompt'],'transcript_path':str(path)}
+            selected=matching[-1]
+            locator=locator|{'turn':selected['turn'],'prompt':selected['prompt'],'transcript_path':str(path)}
         if not isinstance(locator.get('prompt'),str):
             path=_path(host,session,locator.get('transcript_path'))
             if host=='codex':messages=codex_history(path,session)[2]
@@ -361,10 +361,51 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
         except ValueError:request={}
     questions=request.get('questions',[]) if isinstance(request,dict) else []
     answer['question']=(questions[0].get('question') or questions[0].get('title') or '') if questions and isinstance(questions[0],dict) else ''
+    answer['question_options']=question_options(request)
     answer['question_at']=call[0].get('timestamp')
     if subject and answer.get('via')!='plan' and str(subject) not in answer['question']:
         raise Refused('This native question does not identify the reviewed artifact; ask about its actual path')
     return answer
+
+
+def question_options(request):
+    """Return a complete single-select native menu, never inferred prose choices."""
+    questions=request.get('questions') if isinstance(request,dict) else None
+    if not isinstance(questions,list) or len(questions)!=1 or not isinstance(questions[0],dict):return None
+    question=questions[0]
+    if question.get('multiSelect',False) is not False:return None
+    options=question.get('options')
+    if not isinstance(options,list) or not options:return None
+    labels=[option.get('label') if isinstance(option,dict) else option for option in options]
+    if any(not isinstance(label,str) or not label for label in labels) or len(set(labels))!=len(labels):return None
+    return labels
+
+
+def question_calls(root, host, session, question, supplied=None, *, options=None):
+    """List native calls showing this prepared text or its complete checkpoint menu.
+    Locating a call grants nothing; native_human still validates its saved answer."""
+    path=_path(host,session,supplied);calls=[]
+    def matches(arguments):
+        if options is not None:
+            shown=question_options(arguments)
+            return shown is not None and set(shown)==set(options)
+        questions=arguments.get('questions') if isinstance(arguments,dict) else None
+        return isinstance(questions,list) and questions and isinstance(questions[0],dict) and (questions[0].get('question') or questions[0].get('title'))==question
+    for record in _records(path):
+        if host=='claude':
+            if record.get('type')!='assistant' or record.get('sessionId')!=session or record.get('isSidechain') or not within(record.get('cwd'),root):continue
+            content=(record.get('message') or {}).get('content')
+            for part in content if isinstance(content,list) else []:
+                if isinstance(part,dict) and part.get('type')=='tool_use' and part.get('name')=='AskUserQuestion':
+                    if matches(part.get('input')):calls.append(part.get('id'))
+        else:
+            payload=record.get('payload') or {}
+            if record.get('type')!='response_item' or payload.get('type')!='function_call':continue
+            if payload.get('name','').split('.')[-1] not in ('request_user_input','request_user_input_async','send_user_message'):continue
+            try:arguments=json.loads(payload.get('arguments','{}'))
+            except ValueError:continue
+            if matches(arguments):calls.append(payload.get('call_id'))
+    return path,[call for call in calls if isinstance(call,str) and call]
 
 
 def coordinator(root, state, locator=None):
@@ -375,7 +416,7 @@ def coordinator(root, state, locator=None):
         if session and session!=source['session']:raise Refused('The native caller cannot use another session’s human grant')
         return source
     if session and session!=state['human']['session']:
-        raise Refused('Completion and decisions belong to the native owning parent session')
+        raise Refused('This coordinator was superseded; continue from the current native parent or use a new explicit matching work command')
     session=session or state['human']['session']
     path=_path(state['host'],session,state['human'].get('transcript_path'))
     if state['host']=='codex':codex_history(path,session)
@@ -385,11 +426,40 @@ def coordinator(root, state, locator=None):
 
 def native_child(root, state, attempt, locator):
     """Bind saved native spawn provenance and its real model/effort, without launching anything."""
+    return saved(lambda: _child(root,state,attempt,locator,binding=True))
+
+
+def _attempt_parent(state,attempt):
+    # Historical attempts keep the host/parent in effect at admission, even after
+    # another native conversation continues the durable work.
+    return state|{'host':attempt.get('host',state['host']),'human':attempt.get('parent',state['human'])}
+
+
+def _child(root,state,attempt,locator,*,binding):
+    """Identification may retain a failed binding; only strict validation admits its work."""
+    state=_attempt_parent(state,attempt)
+    issues=[];requested_profile=None;context={}
+    def mismatch(message):
+        if binding:raise Refused(message+'; cancel or await this child, then retain its terminal result with the original child and spawn identities before launching the admitted profile')
+        if message not in issues:issues.append(message)
     host=state['host'];child=locator.get('child_session') or locator.get('session')
-    path=_path(host,child,locator.get('transcript_path'),child=True)
+    if not isinstance(child,str) or not re.fullmatch(r'[A-Za-z0-9_-]+',child):raise Refused('A native child identity is required')
     profile=None;meta=None;parent=state['human']['session'];spawn=None;spawn_use=locator.get('tool_use_id')
     parent_path=_path(host,parent,state['human'].get('transcript_path'))
-    child_records=list(_records(path))
+    supplied=locator.get('transcript_path')
+    if host=='claude':
+        if parent_path.stem!=parent:raise Refused('The saved parent transcript does not match its native session identity')
+        expected=(parent_path.parent/parent/'subagents'/('agent-'+str(child)+'.jsonl')).resolve()
+        if supplied and Path(supplied).expanduser().resolve() not in (parent_path,expected):
+            raise Refused('The supplied child transcript is neither this native child nor its known parent')
+        # Native Agent results identify the child. A parent-transcript hint is a
+        # routine locator mistake, not a reason to launch or charge another agent.
+        supplied=str(expected)
+    # Claude can stop an attributed background launch before creating its file.
+    # The parent call/result can identify that failed attempt, never its profile.
+    missing=host=='claude' and not binding and not expected.exists()
+    path=expected if missing else _path(host,child,supplied,child=True)
+    child_records=[] if missing else list(_records(path))
     if host=='codex':
         for r in child_records:
             p=r.get('payload') or {}
@@ -401,7 +471,10 @@ def native_child(root, state, attempt, locator):
                 if not newer(p.get('timestamp'),attempt['started_at']):raise Refused('The child predates this admission; launch a fresh agent')
                 meta=(r,data)
             if r.get('type')=='turn_context':profile={'model':p.get('model'),'effort':p.get('effort') or p.get('reasoning_effort')}
-        if not meta or not profile:raise Saving('Native child metadata/profile is not saved yet')
+        if not meta:raise Saving('Native child metadata is not saved yet')
+        if not profile:
+            if binding:raise Saving('Native child profile is not saved yet')
+            issues.append('Actual native model/effort is unknown; no profile was saved.')
         name=meta[1].get('agent_path','').rsplit('/',1)[-1]
         if name!='oh_'+attempt['id'].replace('-',''):raise Refused('Native task name does not identify this immutable admission')
         for r in _records(parent_path):
@@ -411,41 +484,214 @@ def native_child(root, state, attempt, locator):
             except ValueError:continue
             if args.get('task_name')==name:
                 if spawn_use and p.get('call_id')!=spawn_use:continue
-                if args.get('fork_turns')!='none':raise Refused('A fresh context requires fork_turns none')
-                if {'model':args.get('model'),'effort':args.get('reasoning_effort')}!=attempt['profile']:raise Refused('Native spawn did not explicitly use the admitted profile')
+                requested_profile={'model':args.get('model'),'effort':args.get('reasoning_effort')}
+                context={'fork_turns':args.get('fork_turns')}
+                if args.get('fork_turns')!='none':mismatch('A fresh context requires fork_turns none')
+                if requested_profile!=attempt['profile']:mismatch('Native spawn did not explicitly use the admitted profile')
                 spawn=r;spawn_use=p.get('call_id')
         if not spawn:raise Refused('No fresh native spawn is attributable to this child')
     else:
+        actual=None
         if path.parent.name!='subagents' or path.parent.parent.name!=parent:raise Refused('Child is not in this parent’s native subagents')
         for r in child_records:
             if r.get('agentId')!=child or r.get('sessionId')!=parent:continue
             if not within(r.get('cwd'),root):raise Refused('Native child belongs to another checkout')
             if r.get('type')=='assistant' and (r.get('message') or {}).get('model'):
                 actual=r['message']['model'];requested=attempt['profile']['model']
-                if actual!=requested and not actual.startswith('claude-'+requested+'-'):raise Refused('Native child model differs from admission')
+                if actual!=requested and not actual.startswith('claude-'+requested+'-'):mismatch('Native child model differs from admission')
                 if not newer(r.get('timestamp'),attempt['started_at']):raise Refused('The native child predates this admission')
                 meta=(r,{})
+            elif not meta and newer(r.get('timestamp'),attempt['started_at']):meta=(r,{})
         for r in _records(parent_path):
+            if r.get('sessionId') not in (None,parent) or r.get('isSidechain'):continue
             for p in ((r.get('message') or {}).get('content') or []) if isinstance((r.get('message') or {}).get('content'),list) else []:
                 if p.get('type')!='tool_use' or p.get('name') not in ('Agent','Task') or p.get('id')!=locator.get('tool_use_id'):continue
-                args=p.get('input') or {}
+                args=p.get('input')
+                if not isinstance(args,dict):raise Refused('The native spawn settings are not an input object')
                 if attempt['id'] not in args.get('prompt',''):raise Refused('The native agent request does not identify its admission')
-                if args.get('model')!=attempt['profile']['model'] or args.get('effort')!=attempt['profile']['effort']:raise Refused('Native spawn must explicitly record the admitted model and effort')
-                if args.get('subagent_type')=='fork' or args.get('fork_context') or args.get('fork_turns') not in (None,'none'):raise Refused('The child must start without parent history')
-                spawn=r;profile=attempt['profile']
-        if not meta or not spawn:raise Saving('Native child identity or explicit spawn settings are not saved yet')
+                requested_profile={'model':args.get('model'),'effort':args.get('effort')}
+                context={k:args.get(k) for k in ('subagent_type','fork_context','fork_turns')}
+                if requested_profile!=attempt['profile']:mismatch('Native spawn must explicitly record the admitted model and effort')
+                if args.get('subagent_type')=='fork' or args.get('fork_context') or args.get('fork_turns') not in (None,'none'):mismatch('The child must start without parent history')
+                spawn=r;profile={'model':actual,'effort':args.get('effort')} if actual else None
+                if actual and (actual==attempt['profile']['model'] or actual.startswith('claude-'+attempt['profile']['model']+'-')):profile['model']=attempt['profile']['model']
+        if not spawn:raise Saving('Native child identity or explicit spawn settings are not saved yet')
         linked=False
         for record in _records(parent_path):
+            if record.get('sessionId') not in (None,parent) or record.get('isSidechain'):continue
             result=record.get('toolUseResult')
             parts=(record.get('message') or {}).get('content')
-            if isinstance(result,dict) and result.get('agentId')==child and isinstance(parts,list) and any(isinstance(p,dict) and p.get('type')=='tool_result' and p.get('tool_use_id')==locator.get('tool_use_id') for p in parts):linked=True
+            if (record.get('type')=='user' and isinstance(result,dict) and result.get('agentId')==child and isinstance(parts,list)
+                    and any(isinstance(p,dict) and p.get('type')=='tool_result' and p.get('tool_use_id')==locator.get('tool_use_id') and not p.get('is_error') for p in parts)):
+                linked=True
+                if not meta and not binding and newer(record.get('timestamp'),attempt['started_at']):meta=(record,{})
         if not linked:raise Saving('The native spawn result has not attributed this child to its call yet')
-    if profile!=attempt['profile']:raise Refused('Actual native model/effort differs from the immutable admission')
-    return {'child_session':child,'parent_session':parent,'transcript_path':str(path),'profile':profile,
-            'tool_use_id':spawn_use,'record_hashes':[digest(meta[0]),digest(spawn)]}
+        if not meta:raise Saving('Native child identity is not saved yet')
+    if profile is None:
+        if binding:raise Saving('Native child profile is not saved yet')
+        if not issues:issues.append('Actual native model/effort is unknown; no profile was saved.')
+    elif profile!=attempt['profile']:mismatch('Actual native model/effort differs from the immutable admission')
+    value={'child_session':child,'parent_session':parent,'transcript_path':str(path),'profile':profile,
+           'tool_use_id':spawn_use,'record_hashes':[digest(meta[0]),digest(spawn)]}
+    if not binding:value.update(binding_issues=issues,requested_profile=requested_profile,requested_context=context)
+    return value
+
+
+def _claude_handback(root,attempt,bound,records,forwarded,completion=None):
+    """An acknowledged terminal native handback is a result, never human authority."""
+    pending={};background=set();unknown=False;final=None
+    for record in records:
+        if (record.get('agentId'),record.get('sessionId'))!=(bound['child_session'],bound['parent_session']):continue
+        # A background command is quiescent once the child's own record carries its native
+        # terminal notification; a bare start acknowledgement is not that.
+        attached=record.get('attachment') if record.get('type')=='attachment' else None
+        if isinstance(attached,dict) and attached.get('type')=='queued_command' and isinstance(attached.get('prompt'),str):
+            done=re.search(r'<tool-use-id>([^<\s]+)</tool-use-id>\s*<output-file>[^<]*</output-file>\s*<status>(completed|failed|killed)</status>',attached['prompt'])
+            if done:background.discard(done[1])
+        parts=(record.get('message') or {}).get('content')
+        if record.get('type') not in ('assistant','user'):continue
+        # Further child activity invalidates an earlier handback as quiescence.
+        final=None
+        if not isinstance(parts,list):continue
+        for part in parts:
+            if not isinstance(part,dict):continue
+            if record['type']=='assistant' and part.get('type')=='tool_use':
+                use=part.get('id')
+                if not isinstance(use,str) or not use or use in pending:unknown=True;continue
+                pending[use]=(record,part)
+                payload=part.get('input')
+                if not isinstance(payload,dict):unknown=True;continue
+                if payload.get('run_in_background'):background.add(use)
+            elif record['type']=='user' and part.get('type')=='tool_result':
+                call=pending.pop(part.get('tool_use_id'),None)
+                if not call:continue
+                request,tool=call;payload=tool.get('input');caller=tool.get('caller')
+                if not isinstance(payload,dict) or not isinstance(caller,dict):continue
+                text=payload.get('message')
+                if tool.get('name')!='SubagentHandback' or caller.get('type')!='direct' or not isinstance(text,str) or not text:continue
+                if pending or background or unknown or record.get('toolEndsTurn') is not True or part.get('is_error'):continue
+                if not request.get('uuid') or record.get('parentUuid')!=request['uuid'] or record.get('sourceToolAssistantUUID')!=request['uuid']:continue
+                if not within(request.get('cwd'),root) or not within(record.get('cwd'),root):continue
+                if not newer(request.get('timestamp'),attempt['started_at']) or not newer(record.get('timestamp'),attempt['started_at']) or newer(request.get('timestamp'),record.get('timestamp')):continue
+                permission=record.get('permissionDecision')
+                if permission is not None and (not isinstance(permission,dict) or permission.get('decision') not in (None,'accept')):continue
+                content=part.get('content')
+                if not isinstance(content,list) or any(not isinstance(p,dict) or p.get('type')!='text' or not isinstance(p.get('text'),str) for p in content):continue
+                try:ack=json.loads(''.join(p['text'] for p in content))
+                except ValueError:continue
+                if not isinstance(ack,dict) or ack.get('success') is not True:continue
+                # Claude may prefix a native warning and indent every report line.
+                # Match only that lossless envelope; never parse its warning prose.
+                indented='\n'+'\n'.join('  '+line for line in text.split('\n'))
+                notice=next((r for r in forwarded if isinstance(r['origin'].get('body'),str)
+                             and (r['origin']['body']==text or r['origin']['body'].endswith(indented))
+                             and newer(r.get('timestamp'),attempt['started_at']) and not newer(request.get('timestamp'),r.get('timestamp'))),None)
+                # Synchronous Agent results retain the report even when Claude absorbs
+                # its peer notification into the parent's current turn. Use that exact
+                # native call's payload, matched to the acknowledged child handback.
+                if not notice and completion:
+                    result=completion.get('toolUseResult') or {}
+                    report=result.get('handbackReport') if isinstance(result,dict) else None
+                    parts=(completion.get('message') or {}).get('content')
+                    if (completion.get('type')=='user' and completion.get('sessionId')==bound['parent_session']
+                            and not completion.get('isSidechain') and isinstance(result,dict) and result.get('status')=='completed'
+                            and result.get('agentId')==bound['child_session'] and isinstance(report,dict)
+                            and report.get('text')==text and isinstance(parts,list)
+                            and any(isinstance(p,dict) and p.get('type')=='tool_result'
+                                    and p.get('tool_use_id')==bound['tool_use_id'] and not p.get('is_error') for p in parts)
+                            and newer(completion.get('timestamp'),attempt['started_at'])
+                            and not newer(record.get('timestamp'),completion.get('timestamp'))):notice=completion
+                    # Background completion may be absorbed into a native task
+                    # notification instead of forwarding the report to the parent.
+                    notification=_claude_notification(completion)
+                    if (notification and notification['status']=='completed'
+                            and not newer(record.get('timestamp'),notification['at'])):notice=completion
+                if notice:final={'text':text,'status':'completed','record_hashes':[digest(request),digest(record),digest(notice)]}
+    return final if not pending and not background and not unknown else None
+
+
+def _claude_notification(record):
+    """Read only native task envelopes, never task-looking model or user prose."""
+    text=None;at=record.get('timestamp')
+    if record.get('type')=='queue-operation' and record.get('operation')=='enqueue':
+        text=record.get('content')
+    elif record.get('type')=='attachment':
+        attachment=record.get('attachment')
+        if (isinstance(attachment,dict) and attachment.get('type')=='queued_command'
+                and attachment.get('commandMode')=='task-notification'
+                and attachment.get('origin')=={'kind':'task-notification','producer':'session-task'}):
+            text=attachment.get('prompt');at=attachment.get('timestamp')
+    if not isinstance(text,str):return None
+    # Only the leading native fields are identities. Reports/summaries may contain tags.
+    match=re.match(r'\A<task-notification>\s*<task-id>([^<>]+)</task-id>\s*'
+                   r'<tool-use-id>([^<>]+)</tool-use-id>\s*'
+                   r'(?:<output-file>[^<>]*</output-file>\s*)?'
+                   r'<status>(completed|killed|cancelled|failed)</status>',text)
+    if not match:return None
+    return {'child':match[1],'use':match[2],'status':'cancelled' if match[3]=='killed' else match[3],'at':at}
+
+
+def _claude_terminal(attempt,bound,records):
+    """Follow the attributed child's latest lifecycle, including native stop and resume."""
+    terminal=None;status=None;forwarded=[];calls={};resumes={};active_use=bound['tool_use_id'];active_at=attempt['started_at']
+    for record in records:
+        if record.get('sessionId') not in (None,bound['parent_session']) or record.get('isSidechain'):continue
+        parts=(record.get('message') or {}).get('content');result=record.get('toolUseResult')
+        origin=record.get('origin')
+        if (record.get('type')=='user' and record.get('sessionId')==bound['parent_session'] and record.get('isMeta') is True
+                and record.get('promptSource')=='system' and record.get('turnOrigin')=='peer' and isinstance(origin,dict)
+                and origin.get('kind')=='peer' and origin.get('from')==bound['child_session']
+                and origin.get('senderTaskId')==bound['child_session'] and origin.get('handback') is True):forwarded.append(record)
+        for part in parts if isinstance(parts,list) else []:
+            if not isinstance(part,dict):continue
+            args=part.get('input')
+            if record.get('type')=='assistant' and part.get('type')=='tool_use' and isinstance(args,dict):
+                calls[part.get('id')]=(record,part)
+                resume=(part.get('name') in ('Agent','Task') and args.get('resume')==bound['child_session'] or
+                        part.get('name')=='SendMessage' and (args.get('to') or args.get('recipient'))==bound['child_session'])
+                if resume:
+                    resumes[part.get('id')]=(status,terminal,forwarded,active_at,active_use)
+                    terminal=None;status=None;forwarded=[];active_at=record.get('timestamp');active_use=part.get('id')
+            if (record.get('type')!='user' or record.get('sessionId')!=bound['parent_session']
+                    or part.get('type')!='tool_result'):continue
+            use=part.get('tool_use_id');call=calls.get(use)
+            if part.get('is_error') or isinstance(result,dict) and (result.get('success') is False or result.get('error')):
+                if use==active_use and use in resumes:status,terminal,forwarded,active_at,active_use=resumes[use]
+                continue
+            if not isinstance(result,dict):continue
+            if call:
+                request,tool=call;args=tool['input']
+                if (tool.get('name')=='TaskStop' and args.get('task_id')==bound['child_session']
+                        and result.get('task_id')==bound['child_session'] and result.get('task_type')=='local_agent'
+                        and not result.get('error') and result.get('success') is not False
+                        and newer(request.get('timestamp'),attempt['started_at'])
+                        and newer(record.get('timestamp'),attempt['started_at'])
+                        and not newer(active_at,request.get('timestamp'))
+                        and not newer(request.get('timestamp'),record.get('timestamp'))):
+                    status='cancelled';terminal=record
+            if (use==active_use and result.get('agentId')==bound['child_session'] and result.get('status') in ('completed','cancelled','failed')
+                    and newer(record.get('timestamp'),attempt['started_at']) and not newer(active_at,record.get('timestamp'))):
+                if status!=result['status']:status=result['status'];terminal=record
+        if (not terminal and record.get('type')=='system' and record.get('subtype')=='agents_killed'
+                and record.get('sessionId')==bound['parent_session'] and newer(record.get('timestamp'),active_at)):
+            status='cancelled';terminal=record
+        if not isinstance(parts,list) and isinstance(result,dict) and result.get('agentId')==bound['child_session'] and result.get('status') in ('completed','cancelled','failed'):
+            if newer(record.get('timestamp'),active_at) and status!=result['status']:status=result['status'];terminal=record
+        notification=_claude_notification(record)
+        if (record.get('sessionId')==bound['parent_session'] and notification and notification['child']==bound['child_session']
+                and notification['use']==active_use and newer(notification['at'],active_at)
+                and (not terminal or not newer(terminal.get('timestamp'),notification['at']))):
+            if status!=notification['status'] or newer(notification['at'],terminal.get('timestamp')):
+                status=notification['status'];terminal=record
+    return status,terminal,forwarded,active_at
 
 
 def native_result(root, state, attempt, locator):
+    return saved(lambda: _native_result(root,state,attempt,locator))
+
+
+def _native_result(root, state, attempt, locator):
+    state=_attempt_parent(state,attempt)
     bound=attempt.get('native_child')
     if not bound:
         parent=_path(state['host'],state['human']['session'],state['human'].get('transcript_path'))
@@ -485,51 +731,55 @@ def native_result(root, state, attempt, locator):
                         return {'text':str(item.get('content','Native launch failed')),'status':'failed','profile':None,
                                 'admitted_profile':attempt['profile'],'requested_profile':requested,
                                 'requested_context':context,'record_hashes':[digest(launch),digest(record)]}
+        if launch and (locator.get('child_session') or locator.get('session')):
+            identified=_child(root,state,attempt,locator,binding=False)
+            terminal=_native_result(root,state,attempt|{'native_child':identified},locator)
+            return terminal|{'status':'binding_failed','terminal_status':terminal['status'],
+                'tool_use_id':identified['tool_use_id'],
+                'admitted_profile':attempt['profile'],'requested_profile':identified['requested_profile'],
+                'requested_context':identified['requested_context'],
+                'binding_issues':identified['binding_issues'] or ['Native launch was not successfully bound to its admission.'],
+                'record_hashes':identified['record_hashes']+terminal['record_hashes']}
         raise Saving('No attributed native launch failure or child result is saved yet')
     if locator.get('child_session',bound['child_session'])!=bound['child_session']:raise Refused('Result belongs to a different child')
-    path=_path(state['host'],bound['child_session'],bound['transcript_path'],child=True)
-    final=None;terminal=None;terminal_record=None
+    missing=state['host']=='claude' and bound['profile'] is None and not Path(bound['transcript_path']).exists()
+    path=Path(bound['transcript_path']) if missing else _path(state['host'],bound['child_session'],bound['transcript_path'],child=True)
+    final=None;terminal=None;terminal_record=None;forwarded=[];active_at=attempt['started_at']
     if state['host']=='claude':
         parent=_path('claude',bound['parent_session'],state['human'].get('transcript_path'))
-        active=False
-        for record in _records(parent):
-            if record.get('sessionId') not in (None,bound['parent_session']) or record.get('isSidechain'):continue
-            parts=(record.get('message') or {}).get('content')
-            if isinstance(parts,list):
-                for part in parts:
-                    if not isinstance(part,dict):continue
-                    if part.get('type')=='tool_use' and part.get('id')==bound.get('tool_use_id') and part.get('name') in ('Agent','Task'):
-                        active=True
-                    if part.get('type')=='tool_result' and part.get('tool_use_id')==bound.get('tool_use_id'):
-                        result=record.get('toolUseResult') or {}
-                        if not terminal and isinstance(result,dict) and result.get('agentId')==bound['child_session'] and result.get('status') in ('completed','cancelled','failed'):
-                            terminal=result['status'];terminal_record=record
-            if not terminal and active and record.get('type')=='system' and record.get('subtype')=='agents_killed' and record.get('sessionId')==bound['parent_session'] and newer(record.get('timestamp'),attempt['started_at']):
-                terminal='cancelled';terminal_record=record
-            result=record.get('toolUseResult')
-            # Native child notifications can have no tool-result content. A result for another
-            # call, even with a claimed child id, is not this delegate's terminal event.
-            if not terminal and not isinstance(parts,list) and isinstance(result,dict) and result.get('agentId')==bound['child_session'] and result.get('status') in ('completed','cancelled','failed'):
-                terminal=result['status'];terminal_record=record
-    public=[];public_hashes=[]
-    for r in _records(path):
-        if terminal_record and r.get('timestamp') and terminal_record.get('timestamp') and newer(r['timestamp'],terminal_record['timestamp']):continue
+        terminal,terminal_record,forwarded,active_at=_claude_terminal(attempt,bound,_records(parent))
+    public=[];public_hashes=[];child_records=[] if missing else list(_records(path))
+    for r in child_records:
+        if state['host']=='claude' and (r.get('agentId'),r.get('sessionId'))!=(bound['child_session'],bound['parent_session']):continue
+        if terminal_record and newer(r.get('timestamp'),terminal_record.get('timestamp')) and r.get('type') in ('assistant','user'):
+            # TaskStop can save its acknowledgement just before the child's
+            # interruption marker. Any actual later work invalidates that stop.
+            parts=(r.get('message') or {}).get('content')
+            if r.get('type')=='user' and parts==[{'type':'text','text':'[Request interrupted by user]'}]:continue
+            raise Saving('The native child has later activity; await or cancel it, then retry retention with its original locator')
         if state['host']=='codex':
             p=r.get('payload') or {}
+            if (r.get('type')=='turn_context' or r.get('type')=='event_msg' and p.get('type') in ('task_started','user_message')
+                    or r.get('type')=='response_item' and p.get('type') in ('message','function_call','custom_tool_call')):final=None
             if r.get('type')=='response_item' and p.get('type')=='message' and p.get('role')=='assistant':
                 text='\n'.join(part.get('text','') for part in p.get('content',[]) if isinstance(part,dict) and part.get('type') in ('text','output_text'))
                 if text and text not in public:public.append(text);public_hashes.append(digest(r))
-            if not final and r.get('type')=='event_msg' and p.get('type') in ('task_complete','task_completed'):
+            if r.get('type')=='event_msg' and p.get('type') in ('task_complete','task_completed'):
                 text=p.get('last_agent_message')
-                if isinstance(text,str):final={'text':text,'status':'completed','duration_ms':p.get('duration_ms'),'record_hashes':[digest(r)]}
-            elif not final and r.get('type')=='event_msg' and p.get('type')=='turn_aborted':
+                final={'text':text if isinstance(text,str) and text.strip() else '\n\n'.join(public),
+                       'status':'completed' if isinstance(text,str) and text.strip() else 'unfinished',
+                       'duration_ms':p.get('duration_ms'),'record_hashes':public_hashes+[digest(r)]}
+            elif r.get('type')=='event_msg' and p.get('type')=='turn_aborted':
                 final={'text':'\n\n'.join(public) or p.get('reason','Native child interrupted'),'status':'interrupted','record_hashes':public_hashes+[digest(r)]}
         elif r.get('type')=='assistant' and r.get('agentId')==bound['child_session']:
+            # Earlier progress text is not the final report after another child action.
+            final=None
             message=r.get('message') or {};parts=message.get('content')
             if isinstance(parts,list):
                 text='\n'.join(p['text'] for p in parts if isinstance(p,dict) and p.get('type')=='text')
                 if text and text not in public:public.append(text);public_hashes.append(digest(r))
-                if text and terminal=='completed' and not any(p.get('type')=='tool_use' for p in parts if isinstance(p,dict)):
+                if (text and terminal=='completed' and not newer(active_at,r.get('timestamp'))
+                        and not any(p.get('type')=='tool_use' for p in parts if isinstance(p,dict))):
                     final={'text':text,'status':'completed','record_hashes':[digest(r),digest(terminal_record)]}
     if terminal in ('cancelled','failed'):
         error=(terminal_record.get('toolUseResult') or {})
@@ -537,5 +787,12 @@ def native_result(root, state, attempt, locator):
         final={'text':'\n\n'.join(public) or str(error or 'Native child '+terminal),
                'status':'interrupted' if terminal=='cancelled' else 'failed',
                'record_hashes':public_hashes+[digest(terminal_record)]}
-    if not final:raise Saving('The native child has not saved a terminal public result yet')
+    if not final and state['host']=='claude':
+        final=_claude_handback(root,attempt|{'started_at':active_at},bound,child_records,forwarded,terminal_record if terminal=='completed' else None)
+        handback=any(p.get('name')=='SubagentHandback' for r in child_records
+                     for p in ((r.get('message') or {}).get('content') or []) if isinstance(p,dict))
+        result=(terminal_record or {}).get('toolUseResult')
+        if not final and terminal=='completed' and not handback and not (isinstance(result,dict) and result.get('handbackReport')):
+            final={'text':'\n\n'.join(public),'status':'unfinished','record_hashes':public_hashes+[digest(terminal_record)]}
+    if not final:raise Saving("OH could not yet verify the native child's terminal result; await or cancel the child through its host, then retry retention with the original child and spawn identities")
     return final|{'profile':bound['profile'],'native_id':bound['child_session']}

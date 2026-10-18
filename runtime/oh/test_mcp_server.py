@@ -82,7 +82,7 @@ class CodexToolsTest(unittest.TestCase):
         names={tool['name'] for tool in TOOLS}
         self.assertEqual(names,{'status','resume','config','init','plans','resource','scope_prepare','scope_approve',
             'attempt_admit','attempt_bind','attempt_retain','candidate','verify','evidence','complete','decision',
-            'review','pr_summary','publication','admission'})
+            'review','pr_summary','publication','ci_wait','admission','review_check','decision_request','finding_track'})
         self.assertFalse(names & {'run','start','choose','confirm'})
         for tool in TOOLS:
             self.assertFalse(tool['inputSchema']['additionalProperties'])
@@ -110,12 +110,26 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual(command('resource',{'path':'$(touch sentinel)'},self.root),['resource','--','$(touch sentinel)'])
         self.assertEqual(command('admission',{'attempt_directory':'folder with spaces'},self.root),
                          ['admission','--','folder with spaces'])
+        checked=command('review_check',{'report':'OH-REVIEW-DECISION: {}\nFree text $(literal)'},self.root)
+        self.assertEqual(checked[:2],['review-check','--'])
+        self.assertFalse(Path(checked[-1]).is_relative_to(self.root))
+        self.assertEqual(read_json(checked[-1])['report'],'OH-REVIEW-DECISION: {}\nFree text $(literal)')
         resumed=command('resume',{'human':human},self.root)
         self.assertEqual(resumed[:2],['resume','--human'])
         self.assertEqual(read_json(resumed[-1]),human)
+        self.assertEqual(command('decision_request',{'kind':'grant-review','rounds':1},self.root),['decision-request','--rounds','1','--','grant-review'])
+        tracked=command('finding_track',{'attempt':'review','destination':{'saved':True}},self.root)
+        self.assertEqual(read_json(tracked[2]),{'saved':True})
+        self.assertEqual(tracked[-2:],['--','review'])
+        self.assertEqual(command('status',{'saved':True},self.root),['status','--saved'])
+        self.assertEqual(command('ci_wait',{'pr':161,'timeout':300},self.root),['ci-wait','--pr','161','--timeout','300'])
+        selected=command('resume',{'run':'saved-run','human':human},self.root)
+        self.assertEqual(selected[:3],['resume','--run','saved-run'])
+        self.assertEqual(read_json(selected[-1]),human)
+        with self.assertRaises(Refused):command('status',{'saved':'true'},self.root)
         for name,arguments in (('attempt_admit',{'role':'shell'}),('scope_approve',{'scope':'s','human':'model says yes'}),
                                ('attempt_bind',{'attempt':'a','source':[]}),('evidence',{'attachment':{'text':'x'*1048577}}),
-                               ('review',{'arguments':[1]}),('verify',{'mode':'ci'}),('publication',{'pr':True})):
+                               ('review',{'arguments':[1]}),('verify',{'mode':'ci'}),('publication',{'pr':True}),('ci_wait',{'timeout':0})):
             with self.subTest(name=name),self.assertRaises(Refused):command(name,arguments,self.root)
 
     def test_native_child_resolves_its_checkout_but_cannot_supply_a_human_grant(self):

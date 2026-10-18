@@ -72,7 +72,9 @@ in ordinary conversation. It does not start an empty run or invent the selection
 
 ## Deliver code
 
-`oh-deliver` without arguments lists ready designs and explains unavailable work.
+`oh-deliver` without arguments first shows unfinished delivery work, when present,
+and asks once whether to resume it or choose different work. Otherwise it lists ready
+designs and explains unavailable work.
 `oh-deliver 0005` selects approved design 0005; add a track when needed. Tasks follow
 their dependencies, and blocked work stays pending. The number names a design, not an
 individual task. An empty ready list does not resume unrelated old work.
@@ -88,6 +90,9 @@ The scope includes any original manual edits or unreviewed commits that will be
 completed with the fix. An existing dirty change stays one coherent repair task;
 it is not split across partially completed tasks. Other people's edits are preserved.
 An explicit correction to an existing PR keeps that destination.
+The preview identifies included starting edits and original branch commits. If starting
+contents change before acceptance, OH preserves them and requires a current preview;
+replaying an already consumed approval grants no additional work.
 
 For each admitted task:
 
@@ -119,10 +124,24 @@ The approved scope stays fixed. For example, fixing a login timeout may reveal a
 problem; that observation does not authorize building a second feature.
 
 Blocking findings must be repaired. Concern-only findings let you choose whether to fix
-or accept the concern. Outside-scope findings need a durable destination or an explicit
-dismissal. Creating an external issue still needs the appropriate authorization.
+or accept the concern. Outside-scope findings stay in saved workflow follow-ups without
+blocking otherwise ready work for a filing decision. Creating an external issue still
+needs explicit or standing human authorization.
 Original findings remain available alongside author repair claims and later reviewer
-closure; a formatting problem does not erase an attempt or its findings.
+closure; a formatting problem does not erase an attempt or its findings. Reviewers
+provide a small structured decision (verdict, finding severities, claims and stable
+family identifiers), check it before finishing, and keep the full receipt flexible.
+The implementation agent reads that full receipt before judging and repairing findings;
+OH does not interpret Markdown wording as approval or a new defect family.
+
+OH keeps unrelated review findings in the saved workflow's follow-up section and shows
+them when reporting or continuing the work. They do not block completion merely because
+a filing destination is undecided, and retaining them never authorizes their implementation.
+You can ask the agent to create or link a GitHub issue, keep the saved follow-up, or add
+a note to a related mutable design. A design note is future work, not an approved new task.
+Repo and private designs behave alike. Frozen designs stay frozen. Editing a document
+after a successful review requires checks and another review; keeping a saved follow-up
+does not. An additional review allowance grants the exact count presented in its question.
 
 By default a batch covers five tasks and each task has three review rounds. `oh-config`
 shows the actual project settings. When the task batch ends, choose whether to continue
@@ -131,6 +150,9 @@ your grant before another review starts. Failed and interrupted launches are ret
 waiting, retries and restarts do not replenish an allowance. A repeated blocking family
 in two independent reviewer receipts triggers implementation escalation. A first blocker
 or a missing check tool does not.
+When separately delivered tracks converge with every task done, OH selects one bounded
+finalization task to check, review and freeze the complete design. It does not rerun the
+completed implementation tasks.
 
 Questions use the host's native controls, with a direct chat reply when needed. The
 agent explains the subject and effects; there is no separate OH menu engine, exact
@@ -161,19 +183,44 @@ scope and remaining review allowance. A clean result returns to the existing dec
 without another commit. Blockers enter its scoped repair/review cycle and produce a
 correction commit, preserving original completion and review history. Reviewing
 published work produces standalone feedback.
+Publication waits until the requested task review and any correction are complete;
+the earlier clean commit cannot override a newly discovered blocker.
 
 ## Pause, Stop and resume
 
 `oh-pause` requests a cooperative pause: the current native step finishes and its
 result is retained before another phase starts. `oh-stop` requests cancellation of
 owned native work and preserves edits and evidence. Stopped is reported only after
-native cancellation is confirmed; a parent interruption alone is not that proof.
+native cancellation is confirmed; a parent interruption or saved stopped status
+alone is not that proof. If a known native check remains live, OH reports Stop
+requested; cancellation pending, cancels it through the host and starts no later phase.
 The native parent-Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81).
 It does not block release. There is no OH process supervisor workaround.
 
-After native work is quiet, `oh-resume` continues the saved task or decision with its
+Every work entry checks saved work before preparing a new scope. For example, repeat
+`oh-design agent-pipeline` in the same checkout to find its interrupted draft or
+pending decision. OH asks "Resume agent-pipeline on design/agent-pipeline?" with
+`Resume` and `Not now`, even when you named the initiative. Nothing continues before
+your answer. Propose and quick fixes compare the requested outcome with saved scope;
+you do not need to reproduce the original wording. With no subject, OH shows relevant
+unfinished work first. Declining leaves it intact.
+A clearly different request does not silently select an old task.
+
+`status --saved` lists both saved workflow and standalone review facts without changing
+selection. `resume --run ID` reads one run; adding `--human` binds an actual native human
+continuation. Codex exposes the equivalent `status` (`saved`) and `resume` (`run`, `human`)
+inputs. These are focused helpers, not another agent runner.
+
+`oh-resume` asks the same one Resume question. After your answer and once native work
+is quiet, it continues the saved task or decision with its
 original scope, settings, findings and remaining allowances. A new session or host
-must not start another agent while an old child may still be running. Resume does not
+can continue even while the old conversation remains open; no prior Pause or Stop
+is needed when no attempt or check is executing. The new coordinator continues the
+same work and the superseded coordinator launches nothing further. Existing attempts
+keep their original native parents. If a check is still executing, OH waits for that
+step before retrying the valid continuation. A new session must not start another
+agent while an old child may still be running. Discovery alone does not lift a saved
+Pause or Stop; a later human Resume answer can. Resume does not
 renew a spent review allowance, accept findings or widen scope. This uses the same
 checkout and OH data, not migration to another computer.
 
@@ -189,10 +236,13 @@ one; a failed lookup does not authorize a duplicate. A correction updates its ex
 PR. Your merge remains separate from the agent's work.
 
 The result should explain what changed, actual checks, review rounds and findings,
-then link the commit, document or PR. CI is checked for that PR's actual head. Pending,
-missing, failed, cancelled or skipped checks are not a pass. Publication permission
-alone does not authorize further code edits; corrections need scoped implementation,
-checks and fresh review.
+then link the commit, document or PR. After publishing, the agent keeps following CI on
+that PR's reviewed head until it has a result, instead of asking you to check later.
+Pending, missing, failed, cancelled or skipped checks are not a pass. When CI fails,
+the agent reports a short diagnosis and asks whether to prepare a fix for the same PR,
+re-run the failed jobs or leave it. Publication permission alone does not authorize
+further code edits; a fix needs its own scope approval, implementation, checks and
+fresh review.
 
 You can still code, commit and open PRs without OH.
 
