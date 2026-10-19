@@ -131,8 +131,11 @@ def codex_package():
                 if name.startswith('OpenAI.Codex_') and name.endswith('__2p2nqsd0c76g0'):
                     with winreg.OpenKey(packages,name) as package:roots.append(Path(winreg.QueryValueEx(package,'PackageRootFolder')[0]))
     except OSError:return None
-    store=Path(os.environ.get('ProgramFiles') or r'C:\Program Files')/'WindowsApps'
-    return roots[0]/'app'/'resources' if len(roots)==1 and roots[0].is_relative_to(store) else None
+    if len(roots)!=1:return None
+    # Windows installs packages in Program Files\WindowsApps, or in <volume>\WindowsApps on another drive.
+    programs=os.environ.get('ProgramW6432') or os.environ.get('ProgramFiles') or r'C:\Program Files'
+    stores=(Path(programs)/'WindowsApps',Path(roots[0].anchor)/'WindowsApps')
+    return roots[0]/'app'/'resources' if any(roots[0].parent==store for store in stores) else None
 
 
 def codex_app():
@@ -143,8 +146,16 @@ def codex_app():
     if len(copies)<2:return copies[0] if copies else None
     # A copy still running survives the app's cleanup; the registered package names the current one.
     try:current=(resources:=codex_package()) and codex_app_folder(resources)
-    except OSError:return None
-    return next((copy for copy in copies if copy.parent.name==current),None)
+    except OSError:current=None
+    found=next((copy for copy in copies if copy.parent.name==current),None)
+    if not found:raise Refused(f'The Codex app left several command-line copies in {codex_app_bin()} and its registered '
+        'package does not name the current one. Close running Codex sessions, reopen the Codex app and retry, '
+        'or name its native binary with: oh trust-host codex <absolute-path>')
+    return found
+
+
+def vanished(host,path):
+    return Refused(f'{path} was removed while {host} updated itself. Retry the command.')
 
 
 def installed(host):
@@ -163,7 +174,11 @@ def locate(host,root=None):
         ('. Open the Codex app once so it installs its command-line binary' if host=='codex' and WINDOWS else '. Install it')+
         f', or name its native binary with: oh trust-host {host} <absolute-path>')
     path=Path(found).resolve()
-    with path.open('rb') as stream:wrapper=script(stream)
+    try:
+        with path.open('rb') as stream:wrapper=script(stream)
+    except FileNotFoundError:
+        if not WINDOWS:raise
+        raise vanished(host,path) from None
     if wrapper and host=='codex':
         # npm installs a Node wrapper (on Windows, a .cmd shim beside node_modules); its native binary is vendored.
         package=path.parent/'node_modules/@openai/codex' if WINDOWS else path.parent.parent
@@ -201,14 +216,23 @@ def executable(host,root=None):
             # A record from before automatic trust keeps working where PATH has no usable host.
             if not legacy:raise
             path=saved['path'];pinned=True
+    # On Windows the Codex app can remove a found copy between lookup and use.
+    racing=WINDOWS and not pinned
     try:same=saved and binary_identity(path,root)=={'path':saved['path'],'sha256':saved['sha256']}
-    except FileNotFoundError:raise Refused(f'The {host} binary you pinned is gone: {path}. Run: oh trust-host {host}') from None
+    except FileNotFoundError:
+        if racing:raise vanished(host,path) from None
+        raise Refused(f'The {host} binary you pinned is gone: {path}. Run: oh trust-host {host}') from None
     if same:
         if legacy:atomic_json(record,saved|{'pinned':pinned})
         return saved['path']
-    current=trust(host,path,root,pinned=pinned)
+    try:current=trust(host,path,root,pinned=pinned)
+    except FileNotFoundError:
+        if not racing:raise
+        raise vanished(host,path) from None
     if legacy and current['path']!=saved['path']:
-        print(f'OH: {host} now follows your PATH: {current["path"]}. To keep using {saved["path"]}, '
+        if WINDOWS and not Path(saved['path']).is_file():
+            print(f'OH: {host} now uses {current["path"]}; {saved["path"]} is gone.',file=sys.stderr)
+        else:print(f'OH: {host} now follows your PATH: {current["path"]}. To keep using {saved["path"]}, '
               f'run: oh trust-host {host} {saved["path"]}',file=sys.stderr)
     elif saved:print(f'OH: {host} changed; now using {current["path"]}',file=sys.stderr)
     return current['path']

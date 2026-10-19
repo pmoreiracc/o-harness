@@ -40,6 +40,19 @@ def installed(host, command):
     return None
 
 
+def remembered(name, path, root):
+    """Revalidate OH's known binary for a host whose CLI this session's PATH omits."""
+    known = Path(path)
+    if not hosts.WINDOWS or (known.is_file() and not known.is_relative_to(hosts.codex_app_bin())):
+        return hosts.trust(name, path, root, pinned=False)['path']
+    # The Windows Codex app replaces its CLI folder on update, so its copy is found again, not remembered.
+    try:return hosts.executable(name, root)
+    except Refused as refused:
+        if known.is_file():return hosts.trust(name, path, root, pinned=False)['path']
+        raise Refused(f'The {name} executable OH remembered is gone: {path}. {refused} '
+                      f'You can also run oh-update from a {name} session.') from None
+
+
 def update(root, host=None):
     failed = changed = found = False
     environment = hosts.subscription_env(root)
@@ -48,12 +61,9 @@ def update(root, host=None):
             record = state_home() / 'hosts' / (name + '.json')
             saved = read_json(record) if record.is_file() else None
             available = shutil.which(name, path=environment['PATH'])
-            # The Codex app replaces its CLI folder on update, so its copy is found again, not remembered.
-            remembered = (saved and not saved.get('pinned') and Path(saved['path']).is_file()
-                          and not Path(saved['path']).is_relative_to(hosts.codex_app_bin()))
-            if not available and remembered:
+            if not available and saved and not saved.get('pinned'):
                 # Another host's session may omit this CLI from PATH. Revalidate OH's known binary.
-                program = hosts.trust(name, saved['path'], root, pinned=False)['path']
+                program = remembered(name, saved['path'], root)
             elif not host and not available and not saved and not hosts.installed(name):
                 print(f'{name}: not found on PATH and no known OH host executable (skipped).', flush=True)
                 continue

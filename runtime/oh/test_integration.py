@@ -40,6 +40,7 @@ class IntegrationTest(unittest.TestCase):
     def test_path_spoof_cannot_select_host_executable(self):
         from .hosts import executable,trust
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp,'PATH':tmp,'LOCALAPPDATA':tmp}):
+            os.environ.pop('CODEX_CLI_PATH',None)
             fake=Path(tmp)/'codex';fake.write_text('#!/bin/sh\necho codex-cli fake\n');fake.chmod(0o755)
             with self.assertRaises(Refused):executable('codex')
             with self.assertRaises(Refused):trust('codex',fake)
@@ -84,7 +85,7 @@ class IntegrationTest(unittest.TestCase):
         from . import hosts
         with tempfile.TemporaryDirectory() as tmp,patch.object(hosts,'WINDOWS',True):
             tmp=Path(tmp);(tmp/'empty').mkdir();bin_dir=tmp/'OpenAI/Codex/bin'
-            with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp),'PATH':str(tmp/'empty'),'ProgramFiles':str(tmp/'pf')}):
+            with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp),'PATH':str(tmp/'empty'),'ProgramW6432':str(tmp/'pf')}):
                 os.environ.pop('CODEX_CLI_PATH',None)
                 with self.assertRaisesRegex(Refused,'Open the Codex app once'):hosts.locate('codex')
                 def copy(folder,names=hosts.CODEX_APP_FILES):
@@ -110,19 +111,27 @@ class IntegrationTest(unittest.TestCase):
                 winreg=SimpleNamespace(HKEY_CURRENT_USER='HKCU',OpenKey=lambda parent,name:Key(name),EnumKey=enum,
                                        QueryValueEx=lambda key,name:(str(registered[key]),1))
                 with patch.dict(sys.modules,{'winreg':winreg}):
-                    with self.assertRaises(Refused):hosts.locate('codex')
+                    undecided='several command-line copies'
+                    with self.assertRaisesRegex(Refused,undecided):hosts.locate('codex')
                     registered['Other.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=package
                     registered['OpenAI.Codex_26.1.0.0_x64__otherpublisher']=package
                     registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=tmp/'elsewhere'
-                    with self.assertRaises(Refused):hosts.locate('codex')
+                    with self.assertRaisesRegex(Refused,undecided):hosts.locate('codex')
                     registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=package
                     self.assertEqual(hosts.locate('codex'),current.resolve())
+                    # The app's own override names its CLI; a missing one leaves the app's copies in use.
+                    with patch.dict(os.environ,{'CODEX_CLI_PATH':str(old)}):self.assertEqual(hosts.locate('codex'),old.resolve())
+                    with patch.dict(os.environ,{'CODEX_CLI_PATH':str(tmp/'gone.exe')}):
+                        self.assertEqual(hosts.locate('codex'),current.resolve())
                     registered['OpenAI.Codex_26.2.0.0_x64__2p2nqsd0c76g0']=package
-                    with self.assertRaises(Refused):hosts.locate('codex')
-                # The app's own override names its CLI; a missing one leaves the app's copy in use.
-                with patch.dict(os.environ,{'CODEX_CLI_PATH':str(old)}):self.assertEqual(hosts.locate('codex'),old.resolve())
-                with patch.dict(os.environ,{'CODEX_CLI_PATH':str(tmp/'gone.exe')}):
-                    with self.assertRaises(Refused):hosts.locate('codex')
+                    with self.assertRaisesRegex(Refused,undecided):hosts.locate('codex')
+                    # A package moved to another drive is registered under that volume's WindowsApps.
+                    registered.clear();moved=Path(tmp.anchor)/'WindowsApps/OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0'
+                    registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=moved
+                    self.assertEqual(hosts.codex_package(),moved/'app/resources')
+                # A copy the app removes between lookup and use asks for a retry, not an OS error.
+                with patch.object(hosts,'installed',return_value=bin_dir/'fedcba9876543210/codex.exe'):
+                    with self.assertRaisesRegex(Refused,'Retry the command'):hosts.locate('codex')
 
     def test_host_binary_is_trusted_automatically_and_followed_across_updates(self):
         from . import hosts
@@ -170,9 +179,16 @@ class IntegrationTest(unittest.TestCase):
             self.assertTrue(read_json(record)['pinned'])
             atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
             # PATH has another codex: OH follows it and says how to keep the old one.
-            with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err:
+            with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err,\
+                 patch.object(hosts,'WINDOWS',False):
                 self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
             self.assertIn('oh trust-host codex /opt/native/codex',''.join(c.args[0] for c in err.write.call_args_list))
+            # On Windows a removed old binary, such as a replaced Codex app copy, is not offered as a pin.
+            atomic_json(record,{'path':str(Path(tmp)/'removed/codex.exe'),'sha256':'same'})
+            with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err,\
+                 patch.object(hosts,'WINDOWS',True):
+                self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
+            self.assertNotIn('oh trust-host',''.join(c.args[0] for c in err.write.call_args_list))
 
 
 class GitSubjectTest(unittest.TestCase):
