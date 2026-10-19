@@ -137,6 +137,9 @@ class IntegrationTest(unittest.TestCase):
                 # A copy the app removes between lookup and use asks for a retry, not an OS error.
                 with patch.object(hosts,'installed',return_value=bin_dir/'fedcba9876543210/codex.exe'):
                     with self.assertRaisesRegex(Refused,'Retry the command'):hosts.locate('codex')
+                # Claude's binary removed when it is opened keeps main's raw error.
+                with patch('shutil.which',return_value=str(tmp/'missing/claude.exe')):
+                    with self.assertRaises(FileNotFoundError):hosts.locate('claude')
                 # So does one removed at any later identity check: after lookup, against the record, or while trusting.
                 probe=subprocess.CompletedProcess([],0,'codex-cli 0.154.0','')
                 with patch.dict(os.environ,{'OH_DATA_HOME':str(tmp/'state')}),patch.object(hosts,'locate',return_value=current),\
@@ -155,16 +158,31 @@ class IntegrationTest(unittest.TestCase):
                     # Claude has no app that replaces its binary, so it keeps main's behavior.
                     with patch.object(hosts,'binary_identity',side_effect=FileNotFoundError('gone')):
                         with self.assertRaises(FileNotFoundError):hosts.executable('claude')
-                    # A copy removed during the Windows permission check, including through trust-host, is a retry too;
-                    # a named binary, Claude, or a component that still exists keeps the permission refusal.
+                    # A Codex copy removed during the real permission check is a retry at each check: after lookup,
+                    # against the record and while trusting. A named binary, Claude, or a component that still
+                    # exists keeps the permission refusal.
                     found=Path(sys.executable).resolve();unreadable='cannot read who may change'
-                    with patch.object(hosts,'locate',return_value=found),patch('oh.system.untrusted',side_effect=FileNotFoundError(2,'gone')):
+                    (tmp/'state/hosts/claude.json').write_text(json.dumps({'path':str(found),'sha256':'old','pinned':False}))
+                    checks=[0]
+                    def untrusted(component,kind):
+                        if component==found:
+                            checks[0]+=1
+                            if checks[0]==failing:raise FileNotFoundError(2,'gone')
+                    with patch.object(hosts,'locate',return_value=found),patch('oh.system.untrusted',side_effect=untrusted):
+                        failing=1
                         with self.assertRaisesRegex(Refused,unreadable):hosts.executable('codex')
-                        with patch.object(type(found),'exists',return_value=False):
-                            with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
-                            with self.assertRaisesRegex(Refused,'Retry the command'):hosts.trust('codex')
-                            with self.assertRaisesRegex(Refused,unreadable):hosts.trust('codex',found)
-                            with self.assertRaisesRegex(Refused,unreadable):hosts.executable('claude')
+                        with patch.object(type(found),'exists',autospec=True,side_effect=lambda path:path!=found):
+                            for failing in (1,2,3):
+                                checks[0]=0
+                                with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
+                                checks[0]=0
+                                with self.assertRaisesRegex(Refused,unreadable):hosts.executable('claude')
+                            failing=1
+                            for host,named,options,expected in (('codex',None,{},'Retry the command'),
+                                                                 ('codex',found,{'removable':True},'Retry the command'),
+                                                                 ('codex',found,{},unreadable),('claude',None,{},unreadable)):
+                                checks[0]=0
+                                with self.assertRaisesRegex(Refused,expected):hosts.trust(host,named,**options)
                     # A copy removed just after its path is resolved is reported as removed, not as not executable.
                     with patch.object(type(found),'exists',return_value=False),patch.object(type(found),'is_file',return_value=False):
                         with self.assertRaises(FileNotFoundError):hosts.binary_identity(found,removable=True)

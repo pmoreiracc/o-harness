@@ -70,6 +70,12 @@ def script(stream):
     return head!=b'MZ' if WINDOWS else head==b'#!'
 
 
+def removed(path):
+    """Whether a path really no longer exists; an unreadable one is not reported as removed."""
+    try:return not path.exists()
+    except OSError:return False
+
+
 def binary_identity(path,root=None,*,removable=False):
     """`removable`: the Windows Codex app may remove this copy while it is checked; a removal is then
     raised as FileNotFoundError, which callers report as a retry."""
@@ -78,7 +84,7 @@ def binary_identity(path,root=None,*,removable=False):
     import tempfile
     path=Path(path).expanduser().resolve(strict=True)
     if not path.is_file() or not os.access(path,os.X_OK):
-        if removable and not path.exists():raise FileNotFoundError(2,'Host binary was removed',str(path))
+        if removable and removed(path):raise FileNotFoundError(2,'Host binary was removed',str(path))
         raise Refused('Host binary is not executable')
     unsafe=[Path('/tmp').resolve(),Path('/private/var/folders'),Path('/var/tmp').resolve()]
     if WINDOWS:unsafe.append(Path(tempfile.gettempdir()).resolve())
@@ -91,7 +97,7 @@ def binary_identity(path,root=None,*,removable=False):
         for component,kind in [(path,'file'),(path.parent,'folder'),*((p,'above') for p in path.parent.parents)]:
             try:reason=untrusted(component,kind)
             except OSError as exc:
-                if removable and isinstance(exc,FileNotFoundError) and not component.exists():raise
+                if removable and isinstance(exc,FileNotFoundError) and removed(component):raise
                 raise Refused(f'OH cannot read who may change {component} ({exc}); install the host where you can read its permissions') from None
             if reason:raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
     for component in [] if WINDOWS else [path,*path.parents]:
