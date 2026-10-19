@@ -187,6 +187,9 @@ class IntegrationTest(unittest.TestCase):
                                 with self.assertRaisesRegex(Refused,expected):hosts.trust(host,named,**options)
                         # A named path that is missing keeps its own error on every host.
                         with self.assertRaises(FileNotFoundError):hosts.trust('codex',tmp/'missing.exe')
+                        # Only a not-found error can mean removal; any other unreadable permission is refused.
+                        with patch('oh.system.untrusted',side_effect=PermissionError(13,'denied')),patch.object(hosts,'removed',return_value=True):
+                            with self.assertRaisesRegex(Refused,unreadable):hosts.executable('codex')
                     # A copy removed just after its path is resolved is reported as removed; an existing file
                     # that cannot run is still not executable.
                     with patch.object(type(found),'is_file',return_value=False):
@@ -196,7 +199,9 @@ class IntegrationTest(unittest.TestCase):
                         with self.assertRaisesRegex(Refused,'not executable'):hosts.binary_identity(found,removable=True)
                     # Only a path that is really gone counts as removed; one that cannot be read does not.
                     self.assertTrue(hosts.removed(tmp/'missing.exe'));self.assertFalse(hosts.removed(found))
-                    with patch.object(type(found),'stat',side_effect=PermissionError(13,'denied')):
+                    # Python 3.14's Path.exists() reports an unreadable path as missing, so it is not relied on.
+                    with patch.object(type(found),'stat',side_effect=PermissionError(13,'denied')),\
+                         patch.object(type(found),'exists',return_value=False):
                         self.assertFalse(hosts.removed(found))
             # A profile behind a junction or symlink still recognizes the app's copies once paths are resolved.
             real=tmp/'profile';(real/'OpenAI/Codex/bin/0123456789abcdef').mkdir(parents=True)
