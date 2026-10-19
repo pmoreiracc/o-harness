@@ -1,4 +1,6 @@
 from .registry import register
+import contextlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -39,7 +41,8 @@ class IntegrationTest(unittest.TestCase):
 
     def test_path_spoof_cannot_select_host_executable(self):
         from .hosts import executable,trust
-        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp,'PATH':tmp}):
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp,'PATH':tmp,'LOCALAPPDATA':tmp}):
+            os.environ.pop('CODEX_CLI_PATH',None)
             fake=Path(tmp)/'codex';fake.write_text('#!/bin/sh\necho codex-cli fake\n');fake.chmod(0o755)
             with self.assertRaises(Refused):executable('codex')
             with self.assertRaises(Refused):trust('codex',fake)
@@ -78,11 +81,143 @@ class IntegrationTest(unittest.TestCase):
             with patch.dict(os.environ,{'PATH':str(npm)}):
                 self.assertEqual(locate('codex',Path(tmp)/'elsewhere'),native.resolve())
 
+    def test_codex_is_found_through_its_windows_app_across_app_updates(self):
+        import sys
+        from types import SimpleNamespace
+        from . import hosts
+        with tempfile.TemporaryDirectory() as tmp,patch.object(hosts,'WINDOWS',True):
+            tmp=Path(tmp);(tmp/'empty').mkdir();bin_dir=tmp/'OpenAI/Codex/bin'
+            with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp),'PATH':str(tmp/'empty'),'ProgramW6432':str(tmp/'pf')}):
+                os.environ.pop('CODEX_CLI_PATH',None)
+                # Not found is its own refusal: the updater gives it remedies instead of repeating install advice.
+                with self.assertRaisesRegex(hosts.NotFound,'Install it or open the Codex app once'):hosts.locate('codex')
+                def copy(folder,names=hosts.CODEX_APP_FILES):
+                    for name in names:(bin_dir/folder).mkdir(parents=True,exist_ok=True);(bin_dir/folder/name).write_bytes(b'MZ'+name.encode())
+                    return bin_dir/folder/'codex.exe'
+                # The app's staging folders and other tools' copies are not CLI copies.
+                for folder in ('.staging-2d3d1264c27dcfe3-x','not-a-hash-folder'):copy(folder)
+                copy('0000000000000001',('rg.exe',))
+                old=copy('0123456789abcdef')
+                self.assertEqual(hosts.locate('codex'),old.resolve())
+                # A copy still in use survives the app's cleanup; the registered package names the current one.
+                package=tmp/'pf/WindowsApps/OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0';resources=package/'app/resources'
+                resources.mkdir(parents=True)
+                for name in hosts.CODEX_APP_FILES:(resources/name).write_bytes(b'MZ'+name.encode())
+                current=copy('2d3d1264c27dcfe3')
+                registered={}
+                class Key(str):
+                    def __enter__(self):return self
+                    def __exit__(self,*args):pass
+                def enum(key,index):
+                    if index>=len(registered):raise OSError('no more keys')
+                    return list(registered)[index]
+                winreg=SimpleNamespace(HKEY_CURRENT_USER='HKCU',OpenKey=lambda parent,name:Key(name),EnumKey=enum,
+                                       QueryValueEx=lambda key,name:(str(registered[key]),1))
+                with patch.dict(sys.modules,{'winreg':winreg}):
+                    undecided='several command-line copies'
+                    with self.assertRaisesRegex(Refused,undecided):hosts.locate('codex')
+                    registered['Other.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=package
+                    registered['OpenAI.Codex_26.1.0.0_x64__otherpublisher']=package
+                    registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=tmp/'elsewhere'
+                    with self.assertRaisesRegex(Refused,undecided):hosts.locate('codex')
+                    registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=package
+                    self.assertEqual(hosts.locate('codex'),current.resolve())
+                    # The app's own override names its CLI; a missing one leaves the app's copies in use.
+                    with patch.dict(os.environ,{'CODEX_CLI_PATH':str(old)}):self.assertEqual(hosts.locate('codex'),old.resolve())
+                    with patch.dict(os.environ,{'CODEX_CLI_PATH':str(tmp/'gone.exe')}):
+                        self.assertEqual(hosts.locate('codex'),current.resolve())
+                    with contextlib.chdir(tmp),patch.dict(os.environ,{'CODEX_CLI_PATH':str(old.relative_to(tmp))}):
+                        self.assertEqual(hosts.locate('codex'),current.resolve())
+                    registered['OpenAI.Codex_26.2.0.0_x64__2p2nqsd0c76g0']=package
+                    with self.assertRaisesRegex(Refused,undecided):hosts.locate('codex')
+                    # A package moved to another drive is registered under that volume's WindowsApps.
+                    registered.clear();moved=Path(tmp.anchor)/'WindowsApps/OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0'
+                    registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=moved
+                    self.assertEqual(hosts.codex_package(),moved/'app/resources')
+                # A copy the app removes between lookup and use asks for a retry, not an OS error.
+                with patch.object(hosts,'installed',return_value=bin_dir/'fedcba9876543210/codex.exe'):
+                    with self.assertRaisesRegex(Refused,'Retry the command'):hosts.locate('codex')
+                # Claude's binary removed when it is opened keeps main's raw error.
+                with patch('shutil.which',return_value=str(tmp/'missing/claude.exe')):
+                    with self.assertRaises(FileNotFoundError):hosts.locate('claude')
+                # So does one removed at any later identity check: after lookup, against the record, or while trusting.
+                probe=subprocess.CompletedProcess([],0,'codex-cli 0.154.0','')
+                with patch.dict(os.environ,{'OH_DATA_HOME':str(tmp/'state')}),patch.object(hosts,'locate',return_value=current),\
+                     patch.object(hosts.subprocess,'run',return_value=probe):
+                    (tmp/'state/hosts').mkdir(parents=True)
+                    (tmp/'state/hosts/codex.json').write_text(json.dumps({'path':str(old),'sha256':'old','pinned':False}))
+                    for failing in (1,2,3):
+                        checked=[]
+                        def identity(path,root=None,**options):
+                            checked.append(path)
+                            if len(checked)==failing:raise FileNotFoundError(path)
+                            return {'path':str(path),'sha256':'new'}
+                        with patch.object(hosts,'binary_identity',side_effect=identity):
+                            with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
+                        self.assertEqual(len(checked),failing)
+                    # Claude has no app that replaces its binary, so it keeps main's behavior.
+                    with patch.object(hosts,'binary_identity',side_effect=FileNotFoundError('gone')):
+                        with self.assertRaises(FileNotFoundError):hosts.executable('claude')
+                    # A Codex copy removed during the real permission check is a retry at each check: after lookup,
+                    # against the record and while trusting. A named binary, Claude, or a component that still
+                    # exists keeps the permission refusal.
+                    found=Path(sys.executable).resolve();unreadable='cannot read who may change'
+                    (tmp/'state/hosts/claude.json').write_text(json.dumps({'path':str(found),'sha256':'old','pinned':False}))
+                    checks=[0]
+                    def untrusted(component,kind):
+                        if component==found:
+                            checks[0]+=1
+                            if checks[0]==failing:raise FileNotFoundError(2,'gone')
+                    # This interpreter stands in for the native binary on every OS, so its format is not checked here.
+                    with patch.object(hosts,'locate',return_value=found),patch('oh.system.untrusted',side_effect=untrusted),\
+                         patch.object(hosts,'script',return_value=False):
+                        failing=1
+                        with self.assertRaisesRegex(Refused,unreadable):hosts.executable('codex')
+                        with patch.object(hosts,'removed',side_effect=lambda path:path==found):
+                            for failing in (1,2,3):
+                                checks[0]=0
+                                with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
+                                checks[0]=0
+                                with self.assertRaisesRegex(Refused,unreadable):hosts.executable('claude')
+                            failing=1
+                            for host,named,options,expected in (('codex',None,{},'Retry the command'),
+                                                                 ('codex',found,{'removable':True},'Retry the command'),
+                                                                 ('codex',found,{},unreadable),('claude',None,{},unreadable)):
+                                checks[0]=0
+                                with self.assertRaisesRegex(Refused,expected):hosts.trust(host,named,**options)
+                        # A named path that is missing keeps its own error on every host.
+                        with self.assertRaises(FileNotFoundError):hosts.trust('codex',tmp/'missing.exe')
+                        # Only a not-found error can mean removal; any other unreadable permission is refused.
+                        with patch('oh.system.untrusted',side_effect=PermissionError(13,'denied')),patch.object(hosts,'removed',return_value=True):
+                            with self.assertRaisesRegex(Refused,unreadable):hosts.executable('codex')
+                    # A copy removed just after its path is resolved is reported as removed; an existing file
+                    # that cannot run is still not executable.
+                    with patch.object(type(found),'is_file',return_value=False):
+                        with patch.object(hosts,'removed',return_value=True):
+                            with self.assertRaises(FileNotFoundError):hosts.binary_identity(found,removable=True)
+                            with self.assertRaisesRegex(Refused,'not executable'):hosts.binary_identity(found)
+                        with self.assertRaisesRegex(Refused,'not executable'):hosts.binary_identity(found,removable=True)
+                    # Only a path that is really gone counts as removed; one that cannot be read does not.
+                    self.assertTrue(hosts.removed(tmp/'missing.exe'));self.assertFalse(hosts.removed(found))
+                    # Python 3.14's Path.exists() reports an unreadable path as missing, so it is not relied on.
+                    with patch.object(type(found),'stat',side_effect=PermissionError(13,'denied')),\
+                         patch.object(type(found),'exists',return_value=False):
+                        self.assertFalse(hosts.removed(found))
+            # A profile behind a junction or symlink still recognizes the app's copies once paths are resolved.
+            real=tmp/'profile';(real/'OpenAI/Codex/bin/0123456789abcdef').mkdir(parents=True)
+            if os.name=='nt':
+                import _winapi
+                _winapi.CreateJunction(str(real),str(tmp/'linked'))
+            else:(tmp/'linked').symlink_to(real)  # windows-ok: Windows uses a junction above
+            with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp/'linked')}):
+                self.assertTrue(hosts.in_codex_app((real/'OpenAI/Codex/bin/0123456789abcdef/codex.exe').resolve()))
+                self.assertFalse(hosts.in_codex_app(real/'npm/codex.exe'))
+
     def test_host_binary_is_trusted_automatically_and_followed_across_updates(self):
         from . import hosts
         from .storage import read_json
         binaries={'claude':'v1'}
-        def identity(path,root=None):
+        def identity(path,root=None,**options):
             if Path(path).name=='gone':raise FileNotFoundError(path)
             return {'path':str(path),'sha256':binaries.get(Path(path).name,'pinned')}
         probe=subprocess.CompletedProcess([],0,'2.1.0 (Claude Code)','')
@@ -107,26 +242,60 @@ class IntegrationTest(unittest.TestCase):
             hosts.trust('claude',Path('/custom/pinned'))
             self.assertEqual(hosts.executable('claude'),pinned)
             (record).write_text('{"path":"/custom/gone","sha256":"x","pinned":true}')
-            with self.assertRaises(Refused):hosts.executable('claude')
+            with self.assertRaisesRegex(hosts.NotFound,'you pinned is gone'):hosts.executable('claude')
 
     def test_trust_records_from_before_automatic_trust_keep_working(self):
         from . import hosts
         from .storage import atomic_json,read_json
-        identity=lambda path,root=None:{'path':str(path),'sha256':'same'}
+        identity=lambda path,root=None,**options:{'path':str(path),'sha256':'same'}
         probe=subprocess.CompletedProcess([],0,'codex-cli 0.154.0','')
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp}),\
              patch.object(hosts,'binary_identity',side_effect=identity),patch.object(hosts.subprocess,'run',return_value=probe):
             record=Path(tmp)/'hosts/codex.json'
             atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
             # PATH has no usable codex: the old record stays in use, now as a pin.
-            with patch.object(hosts,'locate',side_effect=Refused('not found')):
+            with patch.object(hosts,'locate',side_effect=Refused('not found')),patch.object(hosts,'WINDOWS',False):
                 self.assertEqual(hosts.executable('codex'),'/opt/native/codex')
             self.assertTrue(read_json(record)['pinned'])
             atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
             # PATH has another codex: OH follows it and says how to keep the old one.
-            with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err:
+            with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err,\
+                 patch.object(hosts,'WINDOWS',False):
                 self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
             self.assertIn('oh trust-host codex /opt/native/codex',''.join(c.args[0] for c in err.write.call_args_list))
+            # On Windows neither a removed old binary nor a Codex app copy the app will replace is offered as a pin.
+            app_copy=Path(tmp)/'OpenAI/Codex/bin/0123456789abcdef/codex.exe';app_copy.parent.mkdir(parents=True);app_copy.write_text('')
+            with patch.object(hosts,'WINDOWS',True),patch.dict(os.environ,{'LOCALAPPDATA':tmp}):
+                for old in (Path(tmp)/'removed/codex.exe',app_copy):
+                    atomic_json(record,{'path':str(old),'sha256':'same'})
+                    with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err:
+                        self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
+                    self.assertNotIn('oh trust-host',''.join(c.args[0] for c in err.write.call_args_list))
+                # Without another usable copy, an existing app copy keeps working but stays unpinned.
+                atomic_json(record,{'path':str(app_copy),'sha256':'same'})
+                with patch.object(hosts,'locate',side_effect=Refused('not found')):
+                    self.assertEqual(hosts.executable('codex'),str(app_copy))
+                self.assertFalse(read_json(record)['pinned'])
+                # A removed app copy keeps the lookup's own explanation rather than becoming a pin or a retry.
+                atomic_json(record,{'path':str(app_copy.parent.parent/'fedcba9876543210/codex.exe'),'sha256':'same'})
+                with patch.object(hosts,'locate',side_effect=Refused('not found')):
+                    with self.assertRaisesRegex(Refused,'^not found$'):hosts.executable('codex')
+                self.assertNotIn('pinned',read_json(record))
+                # Elsewhere an existing old binary still becomes a pin; a removed one keeps the lookup's reason.
+                native=Path(tmp)/'npm/codex.exe';native.parent.mkdir();native.write_text('')
+                for old,expected in ((native,None),(Path(tmp)/'npm/removed.exe','several copies')):
+                    atomic_json(record,{'path':str(old),'sha256':'same'})
+                    with patch.object(hosts,'locate',side_effect=hosts.Undecided('several copies')):
+                        if expected is None:self.assertEqual(hosts.executable('codex'),str(old))
+                        else:
+                            with self.assertRaisesRegex(hosts.Undecided,expected):hosts.executable('codex')
+                    self.assertEqual(read_json(record).get('pinned'),True if expected is None else None)
+                # Claude has no replacing app, so its legacy records keep main's messages on Windows too.
+                claude=Path(tmp)/'hosts/claude.json';atomic_json(claude,{'path':str(Path(tmp)/'removed/claude.exe'),'sha256':'same'})
+                with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/claude')),patch('sys.stderr') as err,\
+                     patch.object(hosts.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'2.1.0 (Claude Code)','')):
+                    hosts.executable('claude')
+                self.assertIn('To keep using',''.join(c.args[0] for c in err.write.call_args_list))
 
 
 class GitSubjectTest(unittest.TestCase):

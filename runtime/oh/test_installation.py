@@ -22,25 +22,53 @@ class InstallationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OH_DATA_HOME': tmp}), \
                 patch.object(updater.hosts, 'executable') as executable, \
                 patch.object(updater.hosts, 'trust', return_value={'path': 'codex'}) as trust, \
+                patch.object(updater.hosts, 'installed') as installed, \
+                patch.object(updater.hosts, 'codex_app_bin', return_value=Path(tmp) / 'app-bin'), \
                 patch.object(updater.shutil, 'which') as which:
+            native = Path(tmp) / 'native-codex';native.write_text('')
+            app_copy = Path(tmp) / 'app-bin/0123456789abcdef/codex.exe';app_copy.parent.mkdir(parents=True);app_copy.write_text('')
+            removed = Path(tmp) / 'removed/codex.exe'
+            # On Windows a remembered path the Codex app removed or will replace is found again through the app;
+            # elsewhere the remembered path is revalidated as before.
+            saved_paths = {'missing_path': native, 'revalidation_timeout': native, 'posix_removed': removed,
+                           'stale_app_path': Path(tmp) / 'app-bin/fedcba9876543210/codex.exe', 'app_copy': app_copy,
+                           'undecided_app': app_copy, 'removed': removed, 'undecided_removed': removed, 'windows_native': native,
+                           'refused_removed': removed, 'vanished_removed': removed, 'vanishing_app': app_copy}
+            # A removed remembered binary is reported with remedies or the real refusal; a copy removed mid-check is a retry.
+            gone = {'removed': 'Open the Codex app once so it installs its command-line binary, or name its native binary with: '
+                               'oh trust-host codex <absolute-path>.',
+                    'undecided_removed': 'Several app copies; reopen the app and retry.',
+                    'refused_removed': 'Unrecognized host version'}
+            retry = ('vanished_removed', 'vanishing_app')
+            # Claude on Windows revalidates its remembered binary exactly as before, without Codex app advice.
+            saved_paths['claude_removed'] = removed
+            windows = ('stale_app_path', 'app_copy', 'app_only', 'undecided_app', 'windows_native', 'claude_removed', *gone, *retry)
             for outcome in ('updated', 'missing_path', 'unavailable', 'current', 'failed', 'absent', 'invalid', 'downgrade',
-                            'resolution_timeout', 'revalidation_timeout'):
+                            'resolution_timeout', 'revalidation_timeout', *windows, 'posix_removed'):
                 with self.subTest(outcome=outcome):
                     calls = []
+                    trust.reset_mock();executable.reset_mock()
+                    installed.side_effect = lambda name: app_copy if outcome == 'app_only' else None
                     versions = dict.fromkeys(updater.HOSTS, '0.5.0')
                     def resolve(name, root):
                         if name == 'codex' and outcome == 'resolution_timeout':raise subprocess.TimeoutExpired('codex --version', 10)
+                        if name == 'codex' and outcome in ('undecided_app', 'undecided_removed', 'vanishing_app'):raise updater.hosts.Undecided('Several app copies; reopen the app and retry.')
+                        if name == 'codex' and outcome == 'removed':raise updater.hosts.NotFound('codex was not found on PATH. Install it or open the Codex app once.')
+                        if name == 'codex' and outcome == 'refused_removed':raise Refused('Unrecognized host version')
+                        if name == 'codex' and outcome == 'vanished_removed':raise updater.hosts.vanished('codex', app_copy)
                         return name
                     def revalidate(name, path, root, **kwargs):
                         if outcome == 'revalidation_timeout':raise subprocess.TimeoutExpired('codex --version', 10)
+                        if outcome == 'vanishing_app':raise FileNotFoundError(2, 'gone', path)
                         return {'path': name}
                     executable.side_effect = resolve
                     trust.side_effect = revalidate
-                    which.side_effect = lambda name, **kw: None if outcome in ('missing_path', 'unavailable', 'revalidation_timeout') and name == 'codex' else 'installed'
-                    record = Path(tmp) / 'hosts/codex.json'
-                    if outcome in ('missing_path', 'revalidation_timeout'):
+                    host = 'claude' if outcome == 'claude_removed' else 'codex'
+                    which.side_effect = lambda name, **kw: None if outcome in ('unavailable', *saved_paths, *windows) and name == host else 'installed'
+                    record = Path(tmp) / 'hosts' / (host + '.json')
+                    if outcome in saved_paths:
                         record.parent.mkdir(exist_ok=True)
-                        record.write_text(json.dumps({'path': 'codex', 'pinned': False}))
+                        record.write_text(json.dumps({'path': str(saved_paths[outcome]), 'pinned': False}))
                     def command(args, **kwargs):
                         name, _, action, *rest = args
                         calls.append(args)
@@ -69,18 +97,37 @@ class InstallationTest(unittest.TestCase):
                         return SimpleNamespace(returncode=0, stdout='')
                     output, error = io.StringIO(), io.StringIO()
                     with patch.object(updater.subprocess, 'run', side_effect=command), \
+                            patch.object(updater.hosts, 'WINDOWS', outcome in windows), \
                             contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
                         result = updater.update(Path(tmp))
-                    self.assertEqual(result, int(outcome in ('failed', 'invalid', 'downgrade', 'resolution_timeout', 'revalidation_timeout')))
+                    self.assertEqual(result, int(outcome in ('failed', 'invalid', 'downgrade', 'resolution_timeout', 'revalidation_timeout', *gone, *retry)))
                     if outcome != 'absent':
                         self.assertFalse(any(args[0] == 'codex' and args[2] == 'add' for args in calls),
                                          'An installed Codex plugin must not be reinstalled after marketplace refresh')
-                    if outcome in ('updated', 'missing_path'):
+                    if outcome in ('updated', 'missing_path', 'posix_removed', *windows) and outcome not in (*gone, *retry):
                         for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 -> 0.6.0', output.getvalue())
                         self.assertIn('new host session', output.getvalue())
-                        if outcome == 'missing_path':
-                            trust.assert_called_once_with('codex', 'codex', Path(tmp), pinned=False)
-                            record.unlink()
+                        if outcome in ('missing_path', 'posix_removed', 'undecided_app', 'windows_native', 'claude_removed'):
+                            # An existing remembered copy stays usable when the app's copies are ambiguous.
+                            # The ambiguous-copies fallback may race with the app's cleanup, so it is checked as removable.
+                            options = {'removable': True} if outcome == 'undecided_app' else {}
+                            trust.assert_called_once_with(host, str(saved_paths[outcome]), Path(tmp), pinned=False, **options)
+                            self.assertNotIn('Codex app', output.getvalue() + error.getvalue())
+                        elif outcome != 'updated':
+                            trust.assert_not_called()
+                            executable.assert_any_call('codex', Path(tmp))
+                        if outcome in saved_paths:record.unlink()
+                    elif outcome in (*gone, *retry):
+                        if outcome in gone:
+                            self.assertIn(f'codex: The codex executable OH remembered is gone: {removed}. {gone[outcome]} '
+                                          'You can also run oh-update from a codex session.', error.getvalue())
+                            self.assertNotIn('nstall it', error.getvalue())
+                            trust.assert_not_called()
+                        else:
+                            self.assertIn(f'codex: {app_copy} was removed while codex updated itself. Retry the command.', error.getvalue())
+                            self.assertNotIn('remembered is gone', error.getvalue())
+                        self.assertIn('claude: 0.5.0 -> 0.6.0', output.getvalue())
+                        record.unlink()
                     elif outcome in ('resolution_timeout', 'revalidation_timeout'):
                         self.assertIn('codex: host identity check timed out. Retry oh-update.', error.getvalue())
                         self.assertIn('claude: 0.5.0 -> 0.6.0', output.getvalue())

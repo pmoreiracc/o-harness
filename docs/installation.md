@@ -91,7 +91,16 @@ not prevent updating the other host; the command reports the error and exits uns
 If the release plugin is missing, the command adds the official release marketplace and
 installs the latest release, reporting `not installed -> <version>`.
 When a session's `PATH` omits another host's CLI, OH revalidates and uses that host's
-previously recorded executable. Hosts it cannot find are reported explicitly as skipped.
+previously recorded executable. On Windows, the Codex app keeps its CLI in a folder it
+replaces on every app update, so when `codex` is not on `PATH`, OH looks that copy up again
+on each use and records the current one. `CODEX_CLI_PATH`, the app's own override, is used
+first when it is an absolute path to an existing file. If the app has not installed its CLI
+yet, open the Codex app once and retry. If a running Codex session keeps an older copy, OH
+uses the copy named by the installed app. When it cannot tell which copy is current,
+`oh-update` keeps using the copy it recorded if that still exists; otherwise close the
+Codex sessions, reopen the app and retry. Hosts it cannot find are reported explicitly as
+skipped. A binary named with `oh trust-host <host> <path>` stays pinned until you trust
+another.
 
 You can also use the host commands directly:
 
