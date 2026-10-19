@@ -168,10 +168,12 @@ class IntegrationTest(unittest.TestCase):
                         if component==found:
                             checks[0]+=1
                             if checks[0]==failing:raise FileNotFoundError(2,'gone')
-                    with patch.object(hosts,'locate',return_value=found),patch('oh.system.untrusted',side_effect=untrusted):
+                    # This interpreter stands in for the native binary on every OS, so its format is not checked here.
+                    with patch.object(hosts,'locate',return_value=found),patch('oh.system.untrusted',side_effect=untrusted),\
+                         patch.object(hosts,'script',return_value=False):
                         failing=1
                         with self.assertRaisesRegex(Refused,unreadable):hosts.executable('codex')
-                        with patch.object(type(found),'exists',autospec=True,side_effect=lambda path:path!=found):
+                        with patch.object(hosts,'removed',side_effect=lambda path:path==found):
                             for failing in (1,2,3):
                                 checks[0]=0
                                 with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
@@ -183,10 +185,19 @@ class IntegrationTest(unittest.TestCase):
                                                                  ('codex',found,{},unreadable),('claude',None,{},unreadable)):
                                 checks[0]=0
                                 with self.assertRaisesRegex(Refused,expected):hosts.trust(host,named,**options)
-                    # A copy removed just after its path is resolved is reported as removed, not as not executable.
-                    with patch.object(type(found),'exists',return_value=False),patch.object(type(found),'is_file',return_value=False):
-                        with self.assertRaises(FileNotFoundError):hosts.binary_identity(found,removable=True)
-                        with self.assertRaisesRegex(Refused,'not executable'):hosts.binary_identity(found)
+                        # A named path that is missing keeps its own error on every host.
+                        with self.assertRaises(FileNotFoundError):hosts.trust('codex',tmp/'missing.exe')
+                    # A copy removed just after its path is resolved is reported as removed; an existing file
+                    # that cannot run is still not executable.
+                    with patch.object(type(found),'is_file',return_value=False):
+                        with patch.object(hosts,'removed',return_value=True):
+                            with self.assertRaises(FileNotFoundError):hosts.binary_identity(found,removable=True)
+                            with self.assertRaisesRegex(Refused,'not executable'):hosts.binary_identity(found)
+                        with self.assertRaisesRegex(Refused,'not executable'):hosts.binary_identity(found,removable=True)
+                    # Only a path that is really gone counts as removed; one that cannot be read does not.
+                    self.assertTrue(hosts.removed(tmp/'missing.exe'));self.assertFalse(hosts.removed(found))
+                    with patch.object(type(found),'stat',side_effect=PermissionError(13,'denied')):
+                        self.assertFalse(hosts.removed(found))
             # A profile behind a junction or symlink still recognizes the app's copies once paths are resolved.
             real=tmp/'profile';(real/'OpenAI/Codex/bin/0123456789abcdef').mkdir(parents=True)
             if os.name=='nt':

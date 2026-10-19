@@ -72,8 +72,11 @@ def script(stream):
 
 def removed(path):
     """Whether a path really no longer exists; an unreadable one is not reported as removed."""
-    try:return not path.exists()
+    # Path.exists() swallows every error from Python 3.13, so read the path's status directly.
+    try:path.stat()
+    except (FileNotFoundError,NotADirectoryError):return True
     except OSError:return False
+    return False
 
 
 def binary_identity(path,root=None,*,removable=False):
