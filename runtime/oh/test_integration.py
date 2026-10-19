@@ -145,23 +145,30 @@ class IntegrationTest(unittest.TestCase):
                     (tmp/'state/hosts/codex.json').write_text(json.dumps({'path':str(old),'sha256':'old','pinned':False}))
                     for failing in (1,2,3):
                         checked=[]
-                        def identity(path,root=None):
+                        def identity(path,root=None,**options):
                             checked.append(path)
                             if len(checked)==failing:raise FileNotFoundError(path)
                             return {'path':str(path),'sha256':'new'}
                         with patch.object(hosts,'binary_identity',side_effect=identity):
                             with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
                         self.assertEqual(len(checked),failing)
+                    # Claude has no app that replaces its binary, so it keeps main's behavior.
+                    with patch.object(hosts,'binary_identity',side_effect=FileNotFoundError('gone')):
+                        with self.assertRaises(FileNotFoundError):hosts.executable('claude')
                     # A copy removed during the Windows permission check, including through trust-host, is a retry too;
-                    # a binary the person named keeps its own error.
-                    found=Path(sys.executable).resolve()
+                    # a named binary, Claude, or a component that still exists keeps the permission refusal.
+                    found=Path(sys.executable).resolve();unreadable='cannot read who may change'
                     with patch.object(hosts,'locate',return_value=found),patch('oh.system.untrusted',side_effect=FileNotFoundError(2,'gone')):
-                        with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
-                        with self.assertRaisesRegex(Refused,'Retry the command'):hosts.trust('codex')
-                        with self.assertRaises(FileNotFoundError):hosts.trust('codex',found)
+                        with self.assertRaisesRegex(Refused,unreadable):hosts.executable('codex')
+                        with patch.object(type(found),'exists',return_value=False):
+                            with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
+                            with self.assertRaisesRegex(Refused,'Retry the command'):hosts.trust('codex')
+                            with self.assertRaisesRegex(Refused,unreadable):hosts.trust('codex',found)
+                            with self.assertRaisesRegex(Refused,unreadable):hosts.executable('claude')
                     # A copy removed just after its path is resolved is reported as removed, not as not executable.
                     with patch.object(type(found),'exists',return_value=False),patch.object(type(found),'is_file',return_value=False):
-                        with self.assertRaises(FileNotFoundError):hosts.binary_identity(found)
+                        with self.assertRaises(FileNotFoundError):hosts.binary_identity(found,removable=True)
+                        with self.assertRaisesRegex(Refused,'not executable'):hosts.binary_identity(found)
             # A profile behind a junction or symlink still recognizes the app's copies once paths are resolved.
             real=tmp/'profile';(real/'OpenAI/Codex/bin/0123456789abcdef').mkdir(parents=True)
             if os.name=='nt':
@@ -176,7 +183,7 @@ class IntegrationTest(unittest.TestCase):
         from . import hosts
         from .storage import read_json
         binaries={'claude':'v1'}
-        def identity(path,root=None):
+        def identity(path,root=None,**options):
             if Path(path).name=='gone':raise FileNotFoundError(path)
             return {'path':str(path),'sha256':binaries.get(Path(path).name,'pinned')}
         probe=subprocess.CompletedProcess([],0,'2.1.0 (Claude Code)','')
@@ -206,7 +213,7 @@ class IntegrationTest(unittest.TestCase):
     def test_trust_records_from_before_automatic_trust_keep_working(self):
         from . import hosts
         from .storage import atomic_json,read_json
-        identity=lambda path,root=None:{'path':str(path),'sha256':'same'}
+        identity=lambda path,root=None,**options:{'path':str(path),'sha256':'same'}
         probe=subprocess.CompletedProcess([],0,'codex-cli 0.154.0','')
         with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp}),\
              patch.object(hosts,'binary_identity',side_effect=identity),patch.object(hosts.subprocess,'run',return_value=probe):
@@ -249,6 +256,12 @@ class IntegrationTest(unittest.TestCase):
                         else:
                             with self.assertRaisesRegex(hosts.Undecided,expected):hosts.executable('codex')
                     self.assertEqual(read_json(record).get('pinned'),True if expected is None else None)
+                # Claude has no replacing app, so its legacy records keep main's messages on Windows too.
+                claude=Path(tmp)/'hosts/claude.json';atomic_json(claude,{'path':str(Path(tmp)/'removed/claude.exe'),'sha256':'same'})
+                with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/claude')),patch('sys.stderr') as err,\
+                     patch.object(hosts.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'2.1.0 (Claude Code)','')):
+                    hosts.executable('claude')
+                self.assertIn('To keep using',''.join(c.args[0] for c in err.write.call_args_list))
 
 
 class GitSubjectTest(unittest.TestCase):

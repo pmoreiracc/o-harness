@@ -109,7 +109,9 @@ class InstallationTest(unittest.TestCase):
                         self.assertIn('new host session', output.getvalue())
                         if outcome in ('missing_path', 'posix_removed', 'undecided_app', 'windows_native', 'claude_removed'):
                             # An existing remembered copy stays usable when the app's copies are ambiguous.
-                            trust.assert_called_once_with(host, str(saved_paths[outcome]), Path(tmp), pinned=False)
+                            # The ambiguous-copies fallback may race with the app's cleanup, so it is checked as removable.
+                            options = {'removable': True} if outcome == 'undecided_app' else {}
+                            trust.assert_called_once_with(host, str(saved_paths[outcome]), Path(tmp), pinned=False, **options)
                             self.assertNotIn('Codex app', output.getvalue() + error.getvalue())
                         elif outcome != 'updated':
                             trust.assert_not_called()

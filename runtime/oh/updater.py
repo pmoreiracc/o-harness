@@ -51,7 +51,7 @@ def remembered(name, path, root):
     try:return hosts.executable(name, root)
     except Refused as refused:
         if known.is_file():
-            try:return hosts.trust(name, path, root, pinned=False)['path']
+            try:return hosts.trust(name, path, root, pinned=False, removable=True)['path']
             except FileNotFoundError:raise hosts.vanished(name, path) from None
         if isinstance(refused, hosts.Vanished):raise
         # Nothing usable was found: give the remedies. Any other refusal is the real reason and is kept.

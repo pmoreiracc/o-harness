@@ -70,14 +70,15 @@ def script(stream):
     return head!=b'MZ' if WINDOWS else head==b'#!'
 
 
-def binary_identity(path,root=None):
+def binary_identity(path,root=None,*,removable=False):
+    """`removable`: the Windows Codex app may remove this copy while it is checked; a removal is then
+    raised as FileNotFoundError, which callers report as a retry."""
     import hashlib
     import stat
     import tempfile
     path=Path(path).expanduser().resolve(strict=True)
     if not path.is_file() or not os.access(path,os.X_OK):
-        # On Windows the Codex app can remove its copy while it is checked; callers report that as a retry.
-        if WINDOWS and not path.exists():raise FileNotFoundError(2,'Host binary was removed',str(path))
+        if removable and not path.exists():raise FileNotFoundError(2,'Host binary was removed',str(path))
         raise Refused('Host binary is not executable')
     unsafe=[Path('/tmp').resolve(),Path('/private/var/folders'),Path('/var/tmp').resolve()]
     if WINDOWS:unsafe.append(Path(tempfile.gettempdir()).resolve())
@@ -89,8 +90,9 @@ def binary_identity(path,root=None):
         from .system import untrusted
         for component,kind in [(path,'file'),(path.parent,'folder'),*((p,'above') for p in path.parent.parents)]:
             try:reason=untrusted(component,kind)
-            except FileNotFoundError:raise
-            except OSError as exc:raise Refused(f'OH cannot read who may change {component} ({exc}); install the host where you can read its permissions') from None
+            except OSError as exc:
+                if removable and isinstance(exc,FileNotFoundError) and not component.exists():raise
+                raise Refused(f'OH cannot read who may change {component} ({exc}); install the host where you can read its permissions') from None
             if reason:raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
     for component in [] if WINDOWS else [path,*path.parents]:
         info=component.stat()
@@ -190,6 +192,11 @@ def vanished(host,path):
     return Vanished(f'{path} was removed while {host} updated itself. Retry the command.')
 
 
+def replaceable(host):
+    """Whether the host's binary can be removed under OH by its own app: only the Windows Codex app."""
+    return WINDOWS and host=='codex'
+
+
 def installed(host):
     """A host binary its own installer placed outside PATH: the Codex app's CLI on Windows."""
     if host!='codex' or not WINDOWS:return None
@@ -209,7 +216,7 @@ def locate(host,root=None):
     try:
         with path.open('rb') as stream:wrapper=script(stream)
     except FileNotFoundError:
-        if not WINDOWS:raise
+        if not replaceable(host):raise
         raise vanished(host,path) from None
     if wrapper and host=='codex':
         # npm installs a Node wrapper (on Windows, a .cmd shim beside node_modules); its native binary is vendored.
@@ -219,16 +226,18 @@ def locate(host,root=None):
     return path
 
 
-def trust(host,path=None,root=None,*,pinned=None):
-    """Record a host binary after the identity and version checks. A named path stays pinned."""
+def trust(host,path=None,root=None,*,pinned=None,removable=None):
+    """Record a host binary after the identity and version checks. A named path stays pinned.
+    A binary OH found itself (`removable`, by default when no path is named) can be removed by the
+    Windows Codex app before it is checked; that is reported as a retry."""
     from .storage import state_home
     if host not in ('codex','claude'):raise Refused('Unsupported host')
+    removable=replaceable(host) and (path is None if removable is None else removable)
     try:
-        identity=binary_identity(found:=path or locate(host,root),root)
+        identity=binary_identity(found:=path or locate(host,root),root,removable=removable)
         probe=subprocess.run([identity['path'],'--version'],capture_output=True,text=True,timeout=10,env=subscription_env(root))
     except FileNotFoundError:
-        # A binary OH found itself on Windows can be removed by the Codex app before it is checked.
-        if path is not None or not WINDOWS:raise
+        if not removable:raise
         raise vanished(host,found) from None
     if probe.returncode or ('codex-cli' if host=='codex' else 'Claude Code') not in probe.stdout:raise Refused('Unrecognized host version')
     record=identity|{'pinned':path is not None if pinned is None else pinned}
@@ -248,10 +257,10 @@ def executable(host,root=None):
     legacy=bool(saved) and 'pinned' not in saved
     path=saved['path'] if pinned else None
     if not pinned:
-        try:path=locate(host,root);binary_identity(path,root)
+        try:path=locate(host,root);binary_identity(path,root,removable=replaceable(host))
         except FileNotFoundError:
             # On Windows the Codex app can remove a found copy between lookup and use.
-            if not WINDOWS:raise
+            if not replaceable(host):raise
             raise vanished(host,path) from None
         except Refused:
             # A record from before automatic trust keeps working where PATH has no usable host.
@@ -259,23 +268,23 @@ def executable(host,root=None):
             # A removed Windows Codex record keeps the lookup's own reason instead of a pinned-gone message.
             if not legacy:raise
             app=in_codex_app(saved['path'])
-            if (app or WINDOWS and host=='codex') and not Path(saved['path']).is_file():raise
+            if (app or replaceable(host)) and not Path(saved['path']).is_file():raise
             path=saved['path'];pinned=not app
-    racing=WINDOWS and not pinned
-    try:same=saved and binary_identity(path,root)=={'path':saved['path'],'sha256':saved['sha256']}
+    racing=replaceable(host) and not pinned
+    try:same=saved and binary_identity(path,root,removable=racing)=={'path':saved['path'],'sha256':saved['sha256']}
     except FileNotFoundError:
         if racing:raise vanished(host,path) from None
         raise NotFound(f'The {host} binary you pinned is gone: {path}. Run: oh trust-host {host}') from None
     if same:
         if legacy:atomic_json(record,saved|{'pinned':pinned})
         return saved['path']
-    try:current=trust(host,path,root,pinned=pinned)
+    try:current=trust(host,path,root,pinned=pinned,removable=racing)
     except FileNotFoundError:
         if not racing:raise
         raise vanished(host,path) from None
     if legacy and current['path']!=saved['path']:
         # Do not offer to pin a removed binary or a Codex app copy the app will replace.
-        if WINDOWS and (not Path(saved['path']).is_file() or in_codex_app(saved['path'])):
+        if replaceable(host) and (not Path(saved['path']).is_file() or in_codex_app(saved['path'])):
             print(f'OH: {host} now uses {current["path"]}.',file=sys.stderr)
         else:print(f'OH: {host} now follows your PATH: {current["path"]}. To keep using {saved["path"]}, '
               f'run: oh trust-host {host} {saved["path"]}',file=sys.stderr)
