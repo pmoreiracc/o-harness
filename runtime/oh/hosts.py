@@ -75,9 +75,10 @@ def binary_identity(path,root=None):
     import stat
     import tempfile
     path=Path(path).expanduser().resolve(strict=True)
-    # On Windows the Codex app can remove its copy while it is checked; callers report that as a retry.
-    if WINDOWS and not path.exists():raise FileNotFoundError(2,'Host binary was removed',str(path))
-    if not path.is_file() or not os.access(path,os.X_OK):raise Refused('Host binary is not executable')
+    if not path.is_file() or not os.access(path,os.X_OK):
+        # On Windows the Codex app can remove its copy while it is checked; callers report that as a retry.
+        if WINDOWS and not path.exists():raise FileNotFoundError(2,'Host binary was removed',str(path))
+        raise Refused('Host binary is not executable')
     unsafe=[Path('/tmp').resolve(),Path('/private/var/folders'),Path('/var/tmp').resolve()]
     if WINDOWS:unsafe.append(Path(tempfile.gettempdir()).resolve())
     if root:unsafe.append(Path(root).resolve())
@@ -255,9 +256,10 @@ def executable(host,root=None):
         except Refused:
             # A record from before automatic trust keeps working where PATH has no usable host.
             # A Windows Codex app copy is replaced on update, so it is kept unpinned and only while it exists.
+            # A removed Windows Codex record keeps the lookup's own reason instead of a pinned-gone message.
             if not legacy:raise
             app=in_codex_app(saved['path'])
-            if app and not Path(saved['path']).is_file():raise
+            if (app or WINDOWS and host=='codex') and not Path(saved['path']).is_file():raise
             path=saved['path'];pinned=not app
     racing=WINDOWS and not pinned
     try:same=saved and binary_identity(path,root)=={'path':saved['path'],'sha256':saved['sha256']}

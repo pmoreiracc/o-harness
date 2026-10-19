@@ -42,7 +42,8 @@ def installed(host, command):
 
 def remembered(name, path, root):
     """Revalidate OH's known binary for a host whose CLI this session's PATH omits."""
-    if not hosts.WINDOWS:return hosts.trust(name, path, root, pinned=False)['path']
+    # Only the Windows Codex app replaces its CLI on update; every other host keeps revalidating as before.
+    if not hosts.WINDOWS or name != 'codex':return hosts.trust(name, path, root, pinned=False)['path']
     known = Path(path)
     if known.is_file() and not hosts.in_codex_app(path):
         return hosts.trust(name, path, root, pinned=False)['path']

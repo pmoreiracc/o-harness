@@ -40,7 +40,9 @@ class InstallationTest(unittest.TestCase):
                     'undecided_removed': 'Several app copies; reopen the app and retry.',
                     'refused_removed': 'Unrecognized host version'}
             retry = ('vanished_removed', 'vanishing_app')
-            windows = ('stale_app_path', 'app_copy', 'app_only', 'undecided_app', 'windows_native', *gone, *retry)
+            # Claude on Windows revalidates its remembered binary exactly as before, without Codex app advice.
+            saved_paths['claude_removed'] = removed
+            windows = ('stale_app_path', 'app_copy', 'app_only', 'undecided_app', 'windows_native', 'claude_removed', *gone, *retry)
             for outcome in ('updated', 'missing_path', 'unavailable', 'current', 'failed', 'absent', 'invalid', 'downgrade',
                             'resolution_timeout', 'revalidation_timeout', *windows, 'posix_removed'):
                 with self.subTest(outcome=outcome):
@@ -61,8 +63,9 @@ class InstallationTest(unittest.TestCase):
                         return {'path': name}
                     executable.side_effect = resolve
                     trust.side_effect = revalidate
-                    which.side_effect = lambda name, **kw: None if outcome in ('unavailable', *saved_paths, *windows) and name == 'codex' else 'installed'
-                    record = Path(tmp) / 'hosts/codex.json'
+                    host = 'claude' if outcome == 'claude_removed' else 'codex'
+                    which.side_effect = lambda name, **kw: None if outcome in ('unavailable', *saved_paths, *windows) and name == host else 'installed'
+                    record = Path(tmp) / 'hosts' / (host + '.json')
                     if outcome in saved_paths:
                         record.parent.mkdir(exist_ok=True)
                         record.write_text(json.dumps({'path': str(saved_paths[outcome]), 'pinned': False}))
@@ -104,9 +107,10 @@ class InstallationTest(unittest.TestCase):
                     if outcome in ('updated', 'missing_path', 'posix_removed', *windows) and outcome not in (*gone, *retry):
                         for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 -> 0.6.0', output.getvalue())
                         self.assertIn('new host session', output.getvalue())
-                        if outcome in ('missing_path', 'posix_removed', 'undecided_app', 'windows_native'):
+                        if outcome in ('missing_path', 'posix_removed', 'undecided_app', 'windows_native', 'claude_removed'):
                             # An existing remembered copy stays usable when the app's copies are ambiguous.
-                            trust.assert_called_once_with('codex', str(saved_paths[outcome]), Path(tmp), pinned=False)
+                            trust.assert_called_once_with(host, str(saved_paths[outcome]), Path(tmp), pinned=False)
+                            self.assertNotIn('Codex app', output.getvalue() + error.getvalue())
                         elif outcome != 'updated':
                             trust.assert_not_called()
                             executable.assert_any_call('codex', Path(tmp))

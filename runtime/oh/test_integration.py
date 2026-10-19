@@ -89,7 +89,8 @@ class IntegrationTest(unittest.TestCase):
             tmp=Path(tmp);(tmp/'empty').mkdir();bin_dir=tmp/'OpenAI/Codex/bin'
             with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp),'PATH':str(tmp/'empty'),'ProgramW6432':str(tmp/'pf')}):
                 os.environ.pop('CODEX_CLI_PATH',None)
-                with self.assertRaisesRegex(Refused,'Install it or open the Codex app once'):hosts.locate('codex')
+                # Not found is its own refusal: the updater gives it remedies instead of repeating install advice.
+                with self.assertRaisesRegex(hosts.NotFound,'Install it or open the Codex app once'):hosts.locate('codex')
                 def copy(folder,names=hosts.CODEX_APP_FILES):
                     for name in names:(bin_dir/folder).mkdir(parents=True,exist_ok=True);(bin_dir/folder/name).write_bytes(b'MZ'+name.encode())
                     return bin_dir/folder/'codex.exe'
@@ -159,7 +160,7 @@ class IntegrationTest(unittest.TestCase):
                         with self.assertRaisesRegex(Refused,'Retry the command'):hosts.trust('codex')
                         with self.assertRaises(FileNotFoundError):hosts.trust('codex',found)
                     # A copy removed just after its path is resolved is reported as removed, not as not executable.
-                    with patch.object(type(found),'exists',return_value=False):
+                    with patch.object(type(found),'exists',return_value=False),patch.object(type(found),'is_file',return_value=False):
                         with self.assertRaises(FileNotFoundError):hosts.binary_identity(found)
             # A profile behind a junction or symlink still recognizes the app's copies once paths are resolved.
             real=tmp/'profile';(real/'OpenAI/Codex/bin/0123456789abcdef').mkdir(parents=True)
@@ -200,7 +201,7 @@ class IntegrationTest(unittest.TestCase):
             hosts.trust('claude',Path('/custom/pinned'))
             self.assertEqual(hosts.executable('claude'),pinned)
             (record).write_text('{"path":"/custom/gone","sha256":"x","pinned":true}')
-            with self.assertRaises(Refused):hosts.executable('claude')
+            with self.assertRaisesRegex(hosts.NotFound,'you pinned is gone'):hosts.executable('claude')
 
     def test_trust_records_from_before_automatic_trust_keep_working(self):
         from . import hosts
@@ -212,7 +213,7 @@ class IntegrationTest(unittest.TestCase):
             record=Path(tmp)/'hosts/codex.json'
             atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
             # PATH has no usable codex: the old record stays in use, now as a pin.
-            with patch.object(hosts,'locate',side_effect=Refused('not found')):
+            with patch.object(hosts,'locate',side_effect=Refused('not found')),patch.object(hosts,'WINDOWS',False):
                 self.assertEqual(hosts.executable('codex'),'/opt/native/codex')
             self.assertTrue(read_json(record)['pinned'])
             atomic_json(record,{'path':'/opt/native/codex','sha256':'same'})
@@ -239,6 +240,15 @@ class IntegrationTest(unittest.TestCase):
                 with patch.object(hosts,'locate',side_effect=Refused('not found')):
                     with self.assertRaisesRegex(Refused,'^not found$'):hosts.executable('codex')
                 self.assertNotIn('pinned',read_json(record))
+                # Elsewhere an existing old binary still becomes a pin; a removed one keeps the lookup's reason.
+                native=Path(tmp)/'npm/codex.exe';native.parent.mkdir();native.write_text('')
+                for old,expected in ((native,None),(Path(tmp)/'npm/removed.exe','several copies')):
+                    atomic_json(record,{'path':str(old),'sha256':'same'})
+                    with patch.object(hosts,'locate',side_effect=hosts.Undecided('several copies')):
+                        if expected is None:self.assertEqual(hosts.executable('codex'),str(old))
+                        else:
+                            with self.assertRaisesRegex(hosts.Undecided,expected):hosts.executable('codex')
+                    self.assertEqual(read_json(record).get('pinned'),True if expected is None else None)
 
 
 class GitSubjectTest(unittest.TestCase):

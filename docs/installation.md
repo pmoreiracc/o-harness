@@ -99,8 +99,8 @@ yet, open the Codex app once and retry. If a running Codex session keeps an olde
 uses the copy named by the installed app. When it cannot tell which copy is current,
 `oh-update` keeps using the copy it recorded if that still exists; otherwise close the
 Codex sessions, reopen the app and retry. Hosts it cannot find are reported explicitly as
-skipped. A binary named with `oh trust-host <host> <path>` stays
-pinned until you trust another.
+skipped. A binary named with `oh trust-host <host> <path>` stays pinned until you trust
+another.
 
 You can also use the host commands directly:
 
