@@ -32,8 +32,8 @@ class InstallationTest(unittest.TestCase):
             # elsewhere the remembered path is revalidated as before.
             saved_paths = {'missing_path': native, 'revalidation_timeout': native, 'posix_removed': removed,
                            'stale_app_path': Path(tmp) / 'app-bin/fedcba9876543210/codex.exe', 'app_copy': app_copy,
-                           'undecided_app': app_copy, 'removed': removed, 'windows_native': native}
-            windows = ('stale_app_path', 'app_copy', 'app_only', 'undecided_app', 'removed', 'windows_native')
+                           'undecided_app': app_copy, 'removed': removed, 'undecided_removed': removed, 'windows_native': native}
+            windows = ('stale_app_path', 'app_copy', 'app_only', 'undecided_app', 'removed', 'undecided_removed', 'windows_native')
             for outcome in ('updated', 'missing_path', 'unavailable', 'current', 'failed', 'absent', 'invalid', 'downgrade',
                             'resolution_timeout', 'revalidation_timeout', *windows, 'posix_removed'):
                 with self.subTest(outcome=outcome):
@@ -43,7 +43,8 @@ class InstallationTest(unittest.TestCase):
                     versions = dict.fromkeys(updater.HOSTS, '0.5.0')
                     def resolve(name, root):
                         if name == 'codex' and outcome == 'resolution_timeout':raise subprocess.TimeoutExpired('codex --version', 10)
-                        if name == 'codex' and outcome in ('undecided_app', 'removed'):raise Refused('codex was not found on PATH.')
+                        if name == 'codex' and outcome in ('undecided_app', 'undecided_removed'):raise updater.hosts.Undecided('Several app copies; reopen the app and retry.')
+                        if name == 'codex' and outcome == 'removed':raise Refused('codex was not found on PATH. Install it or open the Codex app once.')
                         return name
                     def revalidate(name, path, root, **kwargs):
                         if outcome == 'revalidation_timeout':raise subprocess.TimeoutExpired('codex --version', 10)
@@ -86,11 +87,11 @@ class InstallationTest(unittest.TestCase):
                             patch.object(updater.hosts, 'WINDOWS', outcome in windows), \
                             contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
                         result = updater.update(Path(tmp))
-                    self.assertEqual(result, int(outcome in ('failed', 'invalid', 'downgrade', 'resolution_timeout', 'revalidation_timeout', 'removed')))
+                    self.assertEqual(result, int(outcome in ('failed', 'invalid', 'downgrade', 'resolution_timeout', 'revalidation_timeout', 'removed', 'undecided_removed')))
                     if outcome != 'absent':
                         self.assertFalse(any(args[0] == 'codex' and args[2] == 'add' for args in calls),
                                          'An installed Codex plugin must not be reinstalled after marketplace refresh')
-                    if outcome in ('updated', 'missing_path', 'posix_removed', *windows) and outcome != 'removed':
+                    if outcome in ('updated', 'missing_path', 'posix_removed', *windows) and outcome not in ('removed', 'undecided_removed'):
                         for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 -> 0.6.0', output.getvalue())
                         self.assertIn('new host session', output.getvalue())
                         if outcome in ('missing_path', 'posix_removed', 'undecided_app', 'windows_native'):
@@ -100,11 +101,14 @@ class InstallationTest(unittest.TestCase):
                             trust.assert_not_called()
                             executable.assert_any_call('codex', Path(tmp))
                         if outcome in saved_paths:record.unlink()
-                    elif outcome == 'removed':
-                        # A removed remembered binary is named with its remedies; it is not an OS error or reinstall advice.
-                        self.assertIn(f'codex: The codex executable OH remembered is gone: {removed}. codex was not found on PATH.', error.getvalue())
-                        self.assertIn('run oh-update from a codex session', error.getvalue())
-                        self.assertNotIn('einstall', error.getvalue())
+                    elif outcome in ('removed', 'undecided_removed'):
+                        # A removed remembered binary is named with its remedies; it is not an OS error or install advice.
+                        remedy = ('Several app copies; reopen the app and retry.' if outcome == 'undecided_removed' else
+                                  'Open the Codex app once so it installs its command-line binary, or name its native binary with: '
+                                  'oh trust-host codex <absolute-path>.')
+                        self.assertIn(f'codex: The codex executable OH remembered is gone: {removed}. {remedy} '
+                                      'You can also run oh-update from a codex session.', error.getvalue())
+                        self.assertNotIn('nstall it', error.getvalue())
                         trust.assert_not_called()
                         self.assertIn('claude: 0.5.0 -> 0.6.0', output.getvalue())
                         record.unlink()

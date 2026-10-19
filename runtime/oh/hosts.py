@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from .storage import Refused, atomic_json, identifier
 from .system import WINDOWS
 from .telemetry import best_effort
@@ -74,6 +75,8 @@ def binary_identity(path,root=None):
     import stat
     import tempfile
     path=Path(path).expanduser().resolve(strict=True)
+    # On Windows the Codex app can remove its copy while it is checked; callers report that as a retry.
+    if WINDOWS and not path.exists():raise FileNotFoundError(2,'Host binary was removed',str(path))
     if not path.is_file() or not os.access(path,os.X_OK):raise Refused('Host binary is not executable')
     unsafe=[Path('/tmp').resolve(),Path('/private/var/folders'),Path('/var/tmp').resolve()]
     if WINDOWS:unsafe.append(Path(tempfile.gettempdir()).resolve())
@@ -85,6 +88,7 @@ def binary_identity(path,root=None):
         from .system import untrusted
         for component,kind in [(path,'file'),(path.parent,'folder'),*((p,'above') for p in path.parent.parents)]:
             try:reason=untrusted(component,kind)
+            except FileNotFoundError:raise
             except OSError as exc:raise Refused(f'OH cannot read who may change {component} ({exc}); install the host where you can read its permissions') from None
             if reason:raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
     for component in [] if WINDOWS else [path,*path.parents]:
@@ -110,10 +114,17 @@ def codex_app_bin():
 
 def codex_app_folder(resources):
     """The folder name the Codex app gives the copy of these package resources."""
+    stamps=tuple((info.st_size,info.st_mtime_ns) for info in ((resources/name).stat() for name in CODEX_APP_FILES))
+    return _codex_app_folder(str(resources),stamps)
+
+
+@lru_cache(maxsize=4)
+def _codex_app_folder(resources,stamps):
+    # Hashing the package (hundreds of MB) once per version keeps repeated lookups cheap.
     import hashlib
     whole=hashlib.sha256()
     for name in CODEX_APP_FILES:
-        with (resources/name).open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+        with (Path(resources)/name).open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
         whole.update(name.encode()+b'\0'+digest.encode()+b'\0')
     return whole.hexdigest()[:16]
 
@@ -138,6 +149,10 @@ def codex_package():
     return roots[0]/'app'/'resources' if any(roots[0].parent==store for store in stores) else None
 
 
+class Undecided(Refused):
+    """The Codex app left several CLI copies and OH cannot tell which is current."""
+
+
 def codex_app():
     """The CLI copy the Codex app made for this user, or None."""
     import re
@@ -148,15 +163,18 @@ def codex_app():
     try:current=(resources:=codex_package()) and codex_app_folder(resources)
     except OSError:current=None
     found=next((copy for copy in copies if copy.parent.name==current),None)
-    if not found:raise Refused(f'The Codex app left several command-line copies in {codex_app_bin()} and its registered '
+    if not found:raise Undecided(f'The Codex app left several command-line copies in {codex_app_bin()} and its registered '
         'package does not name the current one. Close running Codex sessions, reopen the Codex app and retry, '
-        'or name its native binary with: oh trust-host codex <absolute-path>')
+        'or name its native binary with: oh trust-host codex <absolute-path>.')
     return found
 
 
 def in_codex_app(path):
     """Whether a path is one of the Windows Codex app's replaceable CLI copies."""
-    return WINDOWS and Path(path).is_relative_to(codex_app_bin())
+    if not WINDOWS:return False
+    # Recorded paths are resolved, so a profile behind a junction or redirect is compared resolved too.
+    bin_dir=codex_app_bin()
+    return any(Path(path).resolve().is_relative_to(folder) for folder in (bin_dir,bin_dir.resolve()))
 
 
 def vanished(host,path):
@@ -196,8 +214,13 @@ def trust(host,path=None,root=None,*,pinned=None):
     """Record a host binary after the identity and version checks. A named path stays pinned."""
     from .storage import state_home
     if host not in ('codex','claude'):raise Refused('Unsupported host')
-    identity=binary_identity(path or locate(host,root),root)
-    probe=subprocess.run([identity['path'],'--version'],capture_output=True,text=True,timeout=10,env=subscription_env(root))
+    try:
+        identity=binary_identity(found:=path or locate(host,root),root)
+        probe=subprocess.run([identity['path'],'--version'],capture_output=True,text=True,timeout=10,env=subscription_env(root))
+    except FileNotFoundError:
+        # A binary OH found itself on Windows can be removed by the Codex app before it is checked.
+        if path is not None or not WINDOWS:raise
+        raise vanished(host,found) from None
     if probe.returncode or ('codex-cli' if host=='codex' else 'Claude Code') not in probe.stdout:raise Refused('Unrecognized host version')
     record=identity|{'pinned':path is not None if pinned is None else pinned}
     atomic_json(state_home()/'hosts'/(host+'.json'),record)

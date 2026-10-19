@@ -151,6 +151,22 @@ class IntegrationTest(unittest.TestCase):
                         with patch.object(hosts,'binary_identity',side_effect=identity):
                             with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
                         self.assertEqual(len(checked),failing)
+                    # A copy removed during the Windows permission check, including through trust-host, is a retry too;
+                    # a binary the person named keeps its own error.
+                    found=Path(sys.executable).resolve()
+                    with patch.object(hosts,'locate',return_value=found),patch('oh.system.untrusted',side_effect=FileNotFoundError(2,'gone')):
+                        with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
+                        with self.assertRaisesRegex(Refused,'Retry the command'):hosts.trust('codex')
+                        with self.assertRaises(FileNotFoundError):hosts.trust('codex',found)
+            # A profile behind a junction or symlink still recognizes the app's copies once paths are resolved.
+            real=tmp/'profile';(real/'OpenAI/Codex/bin/0123456789abcdef').mkdir(parents=True)
+            if os.name=='nt':
+                import _winapi
+                _winapi.CreateJunction(str(real),str(tmp/'linked'))
+            else:(tmp/'linked').symlink_to(real)  # windows-ok: Windows uses a junction above
+            with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp/'linked')}):
+                self.assertTrue(hosts.in_codex_app((real/'OpenAI/Codex/bin/0123456789abcdef/codex.exe').resolve()))
+                self.assertFalse(hosts.in_codex_app(real/'npm/codex.exe'))
 
     def test_host_binary_is_trusted_automatically_and_followed_across_updates(self):
         from . import hosts
@@ -215,6 +231,11 @@ class IntegrationTest(unittest.TestCase):
                 with patch.object(hosts,'locate',side_effect=Refused('not found')):
                     self.assertEqual(hosts.executable('codex'),str(app_copy))
                 self.assertFalse(read_json(record)['pinned'])
+                # A removed app copy keeps the lookup's own explanation rather than becoming a pin or a retry.
+                atomic_json(record,{'path':str(app_copy.parent.parent/'fedcba9876543210/codex.exe'),'sha256':'same'})
+                with patch.object(hosts,'locate',side_effect=Refused('not found')):
+                    with self.assertRaisesRegex(Refused,'^not found$'):hosts.executable('codex')
+                self.assertNotIn('pinned',read_json(record))
 
 
 class GitSubjectTest(unittest.TestCase):

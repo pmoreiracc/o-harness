@@ -50,7 +50,10 @@ def remembered(name, path, root):
     try:return hosts.executable(name, root)
     except Refused as refused:
         if known.is_file():return hosts.trust(name, path, root, pinned=False)['path']
-        raise Refused(f'The {name} executable OH remembered is gone: {path}. {refused} '
+        remedy = (str(refused) if isinstance(refused, hosts.Undecided) else
+                  f'Open the Codex app once so it installs its command-line binary, or name its native binary with: '
+                  f'oh trust-host {name} <absolute-path>.')
+        raise Refused(f'The {name} executable OH remembered is gone: {path}. {remedy} '
                       f'You can also run oh-update from a {name} session.') from None
 
 
