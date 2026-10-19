@@ -158,6 +158,9 @@ class IntegrationTest(unittest.TestCase):
                         with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
                         with self.assertRaisesRegex(Refused,'Retry the command'):hosts.trust('codex')
                         with self.assertRaises(FileNotFoundError):hosts.trust('codex',found)
+                    # A copy removed just after its path is resolved is reported as removed, not as not executable.
+                    with patch.object(type(found),'exists',return_value=False):
+                        with self.assertRaises(FileNotFoundError):hosts.binary_identity(found)
             # A profile behind a junction or symlink still recognizes the app's copies once paths are resolved.
             real=tmp/'profile';(real/'OpenAI/Codex/bin/0123456789abcdef').mkdir(parents=True)
             if os.name=='nt':

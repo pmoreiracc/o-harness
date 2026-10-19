@@ -177,8 +177,16 @@ def in_codex_app(path):
     return any(Path(path).resolve().is_relative_to(folder) for folder in (bin_dir,bin_dir.resolve()))
 
 
+class NotFound(Refused):
+    """No usable host binary was found, or a pinned one is gone."""
+
+
+class Vanished(Refused):
+    """A found binary was removed before it could be used."""
+
+
 def vanished(host,path):
-    return Refused(f'{path} was removed while {host} updated itself. Retry the command.')
+    return Vanished(f'{path} was removed while {host} updated itself. Retry the command.')
 
 
 def installed(host):
@@ -193,7 +201,7 @@ def locate(host,root=None):
     import shutil
     search=subscription_env(root)['PATH'] if root else os.environ.get('PATH','')
     found=shutil.which(host,path=search) or installed(host)
-    if not found:raise Refused(f'{host} was not found on PATH'+(' outside the project' if root else '')+
+    if not found:raise NotFound(f'{host} was not found on PATH'+(' outside the project' if root else '')+
         ('. Install it or open the Codex app once so it installs its command-line binary' if host=='codex' and WINDOWS else '. Install it')+
         f', or name its native binary with: oh trust-host {host} <absolute-path>')
     path=Path(found).resolve()
@@ -255,7 +263,7 @@ def executable(host,root=None):
     try:same=saved and binary_identity(path,root)=={'path':saved['path'],'sha256':saved['sha256']}
     except FileNotFoundError:
         if racing:raise vanished(host,path) from None
-        raise Refused(f'The {host} binary you pinned is gone: {path}. Run: oh trust-host {host}') from None
+        raise NotFound(f'The {host} binary you pinned is gone: {path}. Run: oh trust-host {host}') from None
     if same:
         if legacy:atomic_json(record,saved|{'pinned':pinned})
         return saved['path']
