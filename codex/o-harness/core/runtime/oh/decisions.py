@@ -106,7 +106,8 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None):
         elif kind=='publish' and not dest:destination(root,required=True)
         key=digest(value);_immutable(_home(root)/'decisions'/(key+'.json'),value)
         options=(value['menu_options'] if checkpoint else
-                 [label,'Refine the proposal','Cancel'] if kind=='approve-proposal' else [label,'Refine the design','Cancel'] if kind=='approve-private' else [label,'Not now'])
+                 [label,'Refine the proposal','Cancel'] if kind=='approve-proposal' else [label,'Refine the design','Cancel'] if kind=='approve-private' else
+                 [label,'Fix concerns'] if kind=='accept-concerns' else [label,'Not now'])
         if len(options)==1:options.append('Not now')
         return {'decision':key,'question':value['question'],'options':options,
                 **({'actions':{label:action for action,label in value['choices'].items()}} if checkpoint else {}),

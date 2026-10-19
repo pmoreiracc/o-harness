@@ -46,6 +46,12 @@ phase labels are hints, not authority to bypass admission checks. A live child i
 or cancelled through its host before replacement; another session or elapsed time is not
 proof of termination. Completed reviewers are never resumed. A changed candidate needs
 its existing verification/review path, while unchanged work does not need repeated analysis.
+Claude Desktop Stop can leave child-local interruption evidence without a parent
+completion notification. Pass the original child identity to retention; OH checks its
+native stop metadata and transcript. A missing spawn-call ID can be recovered from the
+unique native launch result. Do not require a stopped child to produce a final report,
+or offer a new scope/reassessment to bypass an unresolved old attempt. Preserve the
+Resume answer and existing allowance while diagnosing or repairing retention.
 A spent allowance, proposal approval, concern acceptance, private approval or publication
 still needs its existing human decision; continuation cannot supply it.
 

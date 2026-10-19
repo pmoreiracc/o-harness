@@ -217,7 +217,7 @@ def saved_work(root):
                        **_continuation(state))
         summary['resumable']=not _finished(state)
         result.append(summary)
-    output={'saved_work':result,'next':'Ask once whether to resume the selected unfinished work. A matching command alone does not confirm continuation.'}
+    output={'saved_work':result,'next':'For matching unfinished work, read workflows/recovery.md and workflows/decisions.md, then prepare decision-request resume --run ID before asking. Show that returned question once; do not ask a preliminary Resume question. A matching command alone does not confirm continuation.'}
     from .storage import encode
     budget=min((state['config']['context']['result_chars'] for _,state in runs),default=1000)
     if len(encode(output))>budget:
@@ -229,7 +229,7 @@ def saved_work(root):
 
 
 def _resume_offer(root,state):
-    return select(root,state['id'])|{'resume_required':True,'next':'Ask whether to resume '+_saved_subject(state)+' on '+state['branch']+'; use its native answer with resume --run.'}
+    return select(root,state['id'])|{'resume_required':True,'next':'Read workflows/recovery.md and workflows/decisions.md, then prepare decision-request resume --run '+state['id']+' before asking. Show its returned question once and preserve that answer through recovery; bind it with resume --run.'}
 
 
 def _matching_entry(root,source,workflow,design=None,track='',selected=None):

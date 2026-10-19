@@ -108,6 +108,11 @@ continues to bind the actual full plan directly, without an extra decision reque
 Native Pause/Stop commands remain immediately usable. Older already-presented canonical
 choices remain readable for recovery; do not build new wording around that compatibility.
 Routine clarification, issue tracking and follow-up bookkeeping need no durable grant.
+For concern-only reviews, present the returned **Accept these concerns / Fix concerns**
+choices. Fix concerns continues the existing scoped repair, verification and fresh-review
+path within the remaining allowance; it does not accept the findings or renew that allowance.
+Do not submit that choice as `accept-concerns`. A dismissal or a legacy Not now answer
+alone does not request repairs; follow the person's actual choice without inventing one.
 An instruction to create an issue and allow another review needs only the review allowance
 recorded as a grant; recording the authorized issue URL does not consume the human answer
 or require a second confirmation. The person controls publication, scope and allowances.
