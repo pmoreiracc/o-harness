@@ -1,4 +1,6 @@
 from .registry import register
+import contextlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -87,7 +89,7 @@ class IntegrationTest(unittest.TestCase):
             tmp=Path(tmp);(tmp/'empty').mkdir();bin_dir=tmp/'OpenAI/Codex/bin'
             with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp),'PATH':str(tmp/'empty'),'ProgramW6432':str(tmp/'pf')}):
                 os.environ.pop('CODEX_CLI_PATH',None)
-                with self.assertRaisesRegex(Refused,'Open the Codex app once'):hosts.locate('codex')
+                with self.assertRaisesRegex(Refused,'Install it or open the Codex app once'):hosts.locate('codex')
                 def copy(folder,names=hosts.CODEX_APP_FILES):
                     for name in names:(bin_dir/folder).mkdir(parents=True,exist_ok=True);(bin_dir/folder/name).write_bytes(b'MZ'+name.encode())
                     return bin_dir/folder/'codex.exe'
@@ -123,6 +125,8 @@ class IntegrationTest(unittest.TestCase):
                     with patch.dict(os.environ,{'CODEX_CLI_PATH':str(old)}):self.assertEqual(hosts.locate('codex'),old.resolve())
                     with patch.dict(os.environ,{'CODEX_CLI_PATH':str(tmp/'gone.exe')}):
                         self.assertEqual(hosts.locate('codex'),current.resolve())
+                    with contextlib.chdir(tmp),patch.dict(os.environ,{'CODEX_CLI_PATH':str(old.relative_to(tmp))}):
+                        self.assertEqual(hosts.locate('codex'),current.resolve())
                     registered['OpenAI.Codex_26.2.0.0_x64__2p2nqsd0c76g0']=package
                     with self.assertRaisesRegex(Refused,undecided):hosts.locate('codex')
                     # A package moved to another drive is registered under that volume's WindowsApps.
@@ -132,6 +136,21 @@ class IntegrationTest(unittest.TestCase):
                 # A copy the app removes between lookup and use asks for a retry, not an OS error.
                 with patch.object(hosts,'installed',return_value=bin_dir/'fedcba9876543210/codex.exe'):
                     with self.assertRaisesRegex(Refused,'Retry the command'):hosts.locate('codex')
+                # So does one removed at any later identity check: after lookup, against the record, or while trusting.
+                probe=subprocess.CompletedProcess([],0,'codex-cli 0.154.0','')
+                with patch.dict(os.environ,{'OH_DATA_HOME':str(tmp/'state')}),patch.object(hosts,'locate',return_value=current),\
+                     patch.object(hosts.subprocess,'run',return_value=probe):
+                    (tmp/'state/hosts').mkdir(parents=True)
+                    (tmp/'state/hosts/codex.json').write_text(json.dumps({'path':str(old),'sha256':'old','pinned':False}))
+                    for failing in (1,2,3):
+                        checked=[]
+                        def identity(path,root=None):
+                            checked.append(path)
+                            if len(checked)==failing:raise FileNotFoundError(path)
+                            return {'path':str(path),'sha256':'new'}
+                        with patch.object(hosts,'binary_identity',side_effect=identity):
+                            with self.assertRaisesRegex(Refused,'Retry the command'):hosts.executable('codex')
+                        self.assertEqual(len(checked),failing)
 
     def test_host_binary_is_trusted_automatically_and_followed_across_updates(self):
         from . import hosts
@@ -183,12 +202,19 @@ class IntegrationTest(unittest.TestCase):
                  patch.object(hosts,'WINDOWS',False):
                 self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
             self.assertIn('oh trust-host codex /opt/native/codex',''.join(c.args[0] for c in err.write.call_args_list))
-            # On Windows a removed old binary, such as a replaced Codex app copy, is not offered as a pin.
-            atomic_json(record,{'path':str(Path(tmp)/'removed/codex.exe'),'sha256':'same'})
-            with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err,\
-                 patch.object(hosts,'WINDOWS',True):
-                self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
-            self.assertNotIn('oh trust-host',''.join(c.args[0] for c in err.write.call_args_list))
+            # On Windows neither a removed old binary nor a Codex app copy the app will replace is offered as a pin.
+            app_copy=Path(tmp)/'OpenAI/Codex/bin/0123456789abcdef/codex.exe';app_copy.parent.mkdir(parents=True);app_copy.write_text('')
+            with patch.object(hosts,'WINDOWS',True),patch.dict(os.environ,{'LOCALAPPDATA':tmp}):
+                for old in (Path(tmp)/'removed/codex.exe',app_copy):
+                    atomic_json(record,{'path':str(old),'sha256':'same'})
+                    with patch.object(hosts,'locate',return_value=Path('/usr/local/bin/codex')),patch('sys.stderr') as err:
+                        self.assertEqual(hosts.executable('codex'),str(Path('/usr/local/bin/codex')))
+                    self.assertNotIn('oh trust-host',''.join(c.args[0] for c in err.write.call_args_list))
+                # Without another usable copy, an existing app copy keeps working but stays unpinned.
+                atomic_json(record,{'path':str(app_copy),'sha256':'same'})
+                with patch.object(hosts,'locate',side_effect=Refused('not found')):
+                    self.assertEqual(hosts.executable('codex'),str(app_copy))
+                self.assertFalse(read_json(record)['pinned'])
 
 
 class GitSubjectTest(unittest.TestCase):

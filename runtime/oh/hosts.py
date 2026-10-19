@@ -154,6 +154,11 @@ def codex_app():
     return found
 
 
+def in_codex_app(path):
+    """Whether a path is one of the Windows Codex app's replaceable CLI copies."""
+    return WINDOWS and Path(path).is_relative_to(codex_app_bin())
+
+
 def vanished(host,path):
     return Refused(f'{path} was removed while {host} updated itself. Retry the command.')
 
@@ -171,7 +176,7 @@ def locate(host,root=None):
     search=subscription_env(root)['PATH'] if root else os.environ.get('PATH','')
     found=shutil.which(host,path=search) or installed(host)
     if not found:raise Refused(f'{host} was not found on PATH'+(' outside the project' if root else '')+
-        ('. Open the Codex app once so it installs its command-line binary' if host=='codex' and WINDOWS else '. Install it')+
+        ('. Install it or open the Codex app once so it installs its command-line binary' if host=='codex' and WINDOWS else '. Install it')+
         f', or name its native binary with: oh trust-host {host} <absolute-path>')
     path=Path(found).resolve()
     try:
@@ -212,11 +217,17 @@ def executable(host,root=None):
     path=saved['path'] if pinned else None
     if not pinned:
         try:path=locate(host,root);binary_identity(path,root)
+        except FileNotFoundError:
+            # On Windows the Codex app can remove a found copy between lookup and use.
+            if not WINDOWS:raise
+            raise vanished(host,path) from None
         except Refused:
             # A record from before automatic trust keeps working where PATH has no usable host.
+            # A Windows Codex app copy is replaced on update, so it is kept unpinned and only while it exists.
             if not legacy:raise
-            path=saved['path'];pinned=True
-    # On Windows the Codex app can remove a found copy between lookup and use.
+            app=in_codex_app(saved['path'])
+            if app and not Path(saved['path']).is_file():raise
+            path=saved['path'];pinned=not app
     racing=WINDOWS and not pinned
     try:same=saved and binary_identity(path,root)=={'path':saved['path'],'sha256':saved['sha256']}
     except FileNotFoundError:
@@ -230,8 +241,9 @@ def executable(host,root=None):
         if not racing:raise
         raise vanished(host,path) from None
     if legacy and current['path']!=saved['path']:
-        if WINDOWS and not Path(saved['path']).is_file():
-            print(f'OH: {host} now uses {current["path"]}; {saved["path"]} is gone.',file=sys.stderr)
+        # Do not offer to pin a removed binary or a Codex app copy the app will replace.
+        if WINDOWS and (not Path(saved['path']).is_file() or in_codex_app(saved['path'])):
+            print(f'OH: {host} now uses {current["path"]}.',file=sys.stderr)
         else:print(f'OH: {host} now follows your PATH: {current["path"]}. To keep using {saved["path"]}, '
               f'run: oh trust-host {host} {saved["path"]}',file=sys.stderr)
     elif saved:print(f'OH: {host} changed; now using {current["path"]}',file=sys.stderr)

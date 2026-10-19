@@ -32,8 +32,8 @@ class InstallationTest(unittest.TestCase):
             # elsewhere the remembered path is revalidated as before.
             saved_paths = {'missing_path': native, 'revalidation_timeout': native, 'posix_removed': removed,
                            'stale_app_path': Path(tmp) / 'app-bin/fedcba9876543210/codex.exe', 'app_copy': app_copy,
-                           'undecided_app': app_copy, 'removed': removed}
-            windows = ('stale_app_path', 'app_copy', 'app_only', 'undecided_app', 'removed')
+                           'undecided_app': app_copy, 'removed': removed, 'windows_native': native}
+            windows = ('stale_app_path', 'app_copy', 'app_only', 'undecided_app', 'removed', 'windows_native')
             for outcome in ('updated', 'missing_path', 'unavailable', 'current', 'failed', 'absent', 'invalid', 'downgrade',
                             'resolution_timeout', 'revalidation_timeout', *windows, 'posix_removed'):
                 with self.subTest(outcome=outcome):
@@ -93,7 +93,7 @@ class InstallationTest(unittest.TestCase):
                     if outcome in ('updated', 'missing_path', 'posix_removed', *windows) and outcome != 'removed':
                         for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 -> 0.6.0', output.getvalue())
                         self.assertIn('new host session', output.getvalue())
-                        if outcome in ('missing_path', 'posix_removed', 'undecided_app'):
+                        if outcome in ('missing_path', 'posix_removed', 'undecided_app', 'windows_native'):
                             # An existing remembered copy stays usable when the app's copies are ambiguous.
                             trust.assert_called_once_with('codex', str(saved_paths[outcome]), Path(tmp), pinned=False)
                         elif outcome != 'updated':
