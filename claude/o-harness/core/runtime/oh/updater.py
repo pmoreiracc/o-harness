@@ -40,6 +40,27 @@ def installed(host, command):
     return None
 
 
+def remembered(name, path, root):
+    """Revalidate OH's known binary for a host whose CLI this session's PATH omits."""
+    # Only the Windows Codex app replaces its CLI on update; every other host keeps revalidating as before.
+    if not hosts.WINDOWS or name != 'codex':return hosts.trust(name, path, root, pinned=False)['path']
+    known = Path(path)
+    if known.is_file() and not hosts.in_codex_app(path):
+        return hosts.trust(name, path, root, pinned=False)['path']
+    # The Windows Codex app replaces its CLI folder on update, so its copy is found again, not remembered.
+    try:return hosts.executable(name, root)
+    except Refused as refused:
+        if known.is_file():
+            try:return hosts.trust(name, path, root, pinned=False, removable=True)['path']
+            except FileNotFoundError:raise hosts.vanished(name, path) from None
+        if isinstance(refused, hosts.Vanished):raise
+        # Nothing usable was found: give the remedies. Any other refusal is the real reason and is kept.
+        remedy = (f'Open the Codex app once so it installs its command-line binary, or name its native binary with: '
+                  f'oh trust-host {name} <absolute-path>.' if isinstance(refused, hosts.NotFound) else str(refused))
+        raise Refused(f'The {name} executable OH remembered is gone: {path}. {remedy} '
+                      f'You can also run oh-update from a {name} session.') from None
+
+
 def update(root, host=None):
     failed = changed = found = False
     environment = hosts.subscription_env(root)
@@ -50,8 +71,8 @@ def update(root, host=None):
             available = shutil.which(name, path=environment['PATH'])
             if not available and saved and not saved.get('pinned'):
                 # Another host's session may omit this CLI from PATH. Revalidate OH's known binary.
-                program = hosts.trust(name, saved['path'], root, pinned=False)['path']
-            elif not host and not available and not saved:
+                program = remembered(name, saved['path'], root)
+            elif not host and not available and not saved and not hosts.installed(name):
                 print(f'{name}: not found on PATH and no known OH host executable (skipped).', flush=True)
                 continue
             else:program = hosts.executable(name, root)
