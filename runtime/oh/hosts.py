@@ -98,13 +98,70 @@ def binary_identity(path,root=None):
     return {'path':str(path),'sha256':sha}
 
 
+# The Windows Codex app cannot run its CLI from its package, so it copies these files to a per-user folder
+# named by their content hash. Each app update copies a new folder and removes the others it can.
+CODEX_APP_FILES=('codex.exe','codex-code-mode-host.exe','codex-windows-sandbox-setup.exe','codex-command-runner.exe')
+CODEX_PACKAGES=r'Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages'
+
+
+def codex_app_bin():
+    return Path(os.environ.get('LOCALAPPDATA') or Path.home()/'AppData'/'Local')/'OpenAI'/'Codex'/'bin'
+
+
+def codex_app_folder(resources):
+    """The folder name the Codex app gives the copy of these package resources."""
+    import hashlib
+    whole=hashlib.sha256()
+    for name in CODEX_APP_FILES:
+        with (resources/name).open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+        whole.update(name.encode()+b'\0'+digest.encode()+b'\0')
+    return whole.hexdigest()[:16]
+
+
+def codex_package():
+    """The resources of the one OpenAI-published Codex app package registered for this user, if any."""
+    import itertools
+    import winreg
+    roots=[]
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,CODEX_PACKAGES) as packages:
+            for index in itertools.count():
+                try:name=winreg.EnumKey(packages,index)
+                except OSError:break
+                if name.startswith('OpenAI.Codex_') and name.endswith('__2p2nqsd0c76g0'):
+                    with winreg.OpenKey(packages,name) as package:roots.append(Path(winreg.QueryValueEx(package,'PackageRootFolder')[0]))
+    except OSError:return None
+    store=Path(os.environ.get('ProgramFiles') or r'C:\Program Files')/'WindowsApps'
+    return roots[0]/'app'/'resources' if len(roots)==1 and roots[0].is_relative_to(store) else None
+
+
+def codex_app():
+    """The CLI copy the Codex app made for this user, or None."""
+    import re
+    try:copies=sorted(d/'codex.exe' for d in codex_app_bin().iterdir() if re.fullmatch('[0-9a-f]{16}',d.name) and (d/'codex.exe').is_file())
+    except OSError:return None
+    if len(copies)<2:return copies[0] if copies else None
+    # A copy still running survives the app's cleanup; the registered package names the current one.
+    try:current=(resources:=codex_package()) and codex_app_folder(resources)
+    except OSError:return None
+    return next((copy for copy in copies if copy.parent.name==current),None)
+
+
+def installed(host):
+    """A host binary its own installer placed outside PATH: the Codex app's CLI on Windows."""
+    if host!='codex' or not WINDOWS:return None
+    named=os.environ.get('CODEX_CLI_PATH','').strip()
+    return Path(named) if named and Path(named).is_absolute() and Path(named).is_file() else codex_app()
+
+
 def locate(host,root=None):
-    """Find the native binary behind the host command on PATH, outside the project."""
+    """Find the native binary behind the host command on PATH, outside the project, or its app's own copy."""
     import shutil
     search=subscription_env(root)['PATH'] if root else os.environ.get('PATH','')
-    found=shutil.which(host,path=search)
+    found=shutil.which(host,path=search) or installed(host)
     if not found:raise Refused(f'{host} was not found on PATH'+(' outside the project' if root else '')+
-        f'. Install it, or name its native binary with: oh trust-host {host} <absolute-path>')
+        ('. Open the Codex app once so it installs its command-line binary' if host=='codex' and WINDOWS else '. Install it')+
+        f', or name its native binary with: oh trust-host {host} <absolute-path>')
     path=Path(found).resolve()
     with path.open('rb') as stream:wrapper=script(stream)
     if wrapper and host=='codex':

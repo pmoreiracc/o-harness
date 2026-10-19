@@ -22,11 +22,20 @@ class InstallationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'OH_DATA_HOME': tmp}), \
                 patch.object(updater.hosts, 'executable') as executable, \
                 patch.object(updater.hosts, 'trust', return_value={'path': 'codex'}) as trust, \
+                patch.object(updater.hosts, 'installed') as installed, \
+                patch.object(updater.hosts, 'codex_app_bin', return_value=Path(tmp) / 'app-bin'), \
                 patch.object(updater.shutil, 'which') as which:
+            native = Path(tmp) / 'native-codex';native.write_text('')
+            app_copy = Path(tmp) / 'app-bin/0123456789abcdef/codex.exe';app_copy.parent.mkdir(parents=True);app_copy.write_text('')
+            # A remembered path the Codex app removed or will replace is found again through the app.
+            saved_paths = {'missing_path': native, 'revalidation_timeout': native,
+                           'stale_app_path': Path(tmp) / 'app-bin/fedcba9876543210/codex.exe', 'app_copy': app_copy}
             for outcome in ('updated', 'missing_path', 'unavailable', 'current', 'failed', 'absent', 'invalid', 'downgrade',
-                            'resolution_timeout', 'revalidation_timeout'):
+                            'resolution_timeout', 'revalidation_timeout', 'stale_app_path', 'app_copy', 'app_only'):
                 with self.subTest(outcome=outcome):
                     calls = []
+                    trust.reset_mock();executable.reset_mock()
+                    installed.side_effect = lambda name: app_copy if outcome == 'app_only' else None
                     versions = dict.fromkeys(updater.HOSTS, '0.5.0')
                     def resolve(name, root):
                         if name == 'codex' and outcome == 'resolution_timeout':raise subprocess.TimeoutExpired('codex --version', 10)
@@ -36,11 +45,11 @@ class InstallationTest(unittest.TestCase):
                         return {'path': name}
                     executable.side_effect = resolve
                     trust.side_effect = revalidate
-                    which.side_effect = lambda name, **kw: None if outcome in ('missing_path', 'unavailable', 'revalidation_timeout') and name == 'codex' else 'installed'
+                    which.side_effect = lambda name, **kw: None if outcome in ('missing_path', 'unavailable', 'revalidation_timeout', *saved_paths, 'app_only') and name == 'codex' else 'installed'
                     record = Path(tmp) / 'hosts/codex.json'
-                    if outcome in ('missing_path', 'revalidation_timeout'):
+                    if outcome in saved_paths:
                         record.parent.mkdir(exist_ok=True)
-                        record.write_text(json.dumps({'path': 'codex', 'pinned': False}))
+                        record.write_text(json.dumps({'path': str(saved_paths[outcome]), 'pinned': False}))
                     def command(args, **kwargs):
                         name, _, action, *rest = args
                         calls.append(args)
@@ -75,12 +84,15 @@ class InstallationTest(unittest.TestCase):
                     if outcome != 'absent':
                         self.assertFalse(any(args[0] == 'codex' and args[2] == 'add' for args in calls),
                                          'An installed Codex plugin must not be reinstalled after marketplace refresh')
-                    if outcome in ('updated', 'missing_path'):
+                    if outcome in ('updated', 'missing_path', 'stale_app_path', 'app_copy', 'app_only'):
                         for name in updater.HOSTS:self.assertIn(f'{name}: 0.5.0 -> 0.6.0', output.getvalue())
                         self.assertIn('new host session', output.getvalue())
                         if outcome == 'missing_path':
-                            trust.assert_called_once_with('codex', 'codex', Path(tmp), pinned=False)
-                            record.unlink()
+                            trust.assert_called_once_with('codex', str(native), Path(tmp), pinned=False)
+                        elif outcome != 'updated':
+                            trust.assert_not_called()
+                            executable.assert_any_call('codex', Path(tmp))
+                        if outcome in saved_paths:record.unlink()
                     elif outcome in ('resolution_timeout', 'revalidation_timeout'):
                         self.assertIn('codex: host identity check timed out. Retry oh-update.', error.getvalue())
                         self.assertIn('claude: 0.5.0 -> 0.6.0', output.getvalue())

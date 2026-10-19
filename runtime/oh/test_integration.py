@@ -39,7 +39,7 @@ class IntegrationTest(unittest.TestCase):
 
     def test_path_spoof_cannot_select_host_executable(self):
         from .hosts import executable,trust
-        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp,'PATH':tmp}):
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp,'PATH':tmp,'LOCALAPPDATA':tmp}):
             fake=Path(tmp)/'codex';fake.write_text('#!/bin/sh\necho codex-cli fake\n');fake.chmod(0o755)
             with self.assertRaises(Refused):executable('codex')
             with self.assertRaises(Refused):trust('codex',fake)
@@ -77,6 +77,52 @@ class IntegrationTest(unittest.TestCase):
             native.parent.mkdir(parents=True);native.write_bytes(b'MZ')
             with patch.dict(os.environ,{'PATH':str(npm)}):
                 self.assertEqual(locate('codex',Path(tmp)/'elsewhere'),native.resolve())
+
+    def test_codex_is_found_through_its_windows_app_across_app_updates(self):
+        import sys
+        from types import SimpleNamespace
+        from . import hosts
+        with tempfile.TemporaryDirectory() as tmp,patch.object(hosts,'WINDOWS',True):
+            tmp=Path(tmp);(tmp/'empty').mkdir();bin_dir=tmp/'OpenAI/Codex/bin'
+            with patch.dict(os.environ,{'LOCALAPPDATA':str(tmp),'PATH':str(tmp/'empty'),'ProgramFiles':str(tmp/'pf')}):
+                os.environ.pop('CODEX_CLI_PATH',None)
+                with self.assertRaisesRegex(Refused,'Open the Codex app once'):hosts.locate('codex')
+                def copy(folder,names=hosts.CODEX_APP_FILES):
+                    for name in names:(bin_dir/folder).mkdir(parents=True,exist_ok=True);(bin_dir/folder/name).write_bytes(b'MZ'+name.encode())
+                    return bin_dir/folder/'codex.exe'
+                # The app's staging folders and other tools' copies are not CLI copies.
+                for folder in ('.staging-2d3d1264c27dcfe3-x','not-a-hash-folder'):copy(folder)
+                copy('0000000000000001',('rg.exe',))
+                old=copy('0123456789abcdef')
+                self.assertEqual(hosts.locate('codex'),old.resolve())
+                # A copy still in use survives the app's cleanup; the registered package names the current one.
+                package=tmp/'pf/WindowsApps/OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0';resources=package/'app/resources'
+                resources.mkdir(parents=True)
+                for name in hosts.CODEX_APP_FILES:(resources/name).write_bytes(b'MZ'+name.encode())
+                current=copy('2d3d1264c27dcfe3')
+                registered={}
+                class Key(str):
+                    def __enter__(self):return self
+                    def __exit__(self,*args):pass
+                def enum(key,index):
+                    if index>=len(registered):raise OSError('no more keys')
+                    return list(registered)[index]
+                winreg=SimpleNamespace(HKEY_CURRENT_USER='HKCU',OpenKey=lambda parent,name:Key(name),EnumKey=enum,
+                                       QueryValueEx=lambda key,name:(str(registered[key]),1))
+                with patch.dict(sys.modules,{'winreg':winreg}):
+                    with self.assertRaises(Refused):hosts.locate('codex')
+                    registered['Other.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=package
+                    registered['OpenAI.Codex_26.1.0.0_x64__otherpublisher']=package
+                    registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=tmp/'elsewhere'
+                    with self.assertRaises(Refused):hosts.locate('codex')
+                    registered['OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0']=package
+                    self.assertEqual(hosts.locate('codex'),current.resolve())
+                    registered['OpenAI.Codex_26.2.0.0_x64__2p2nqsd0c76g0']=package
+                    with self.assertRaises(Refused):hosts.locate('codex')
+                # The app's own override names its CLI; a missing one leaves the app's copy in use.
+                with patch.dict(os.environ,{'CODEX_CLI_PATH':str(old)}):self.assertEqual(hosts.locate('codex'),old.resolve())
+                with patch.dict(os.environ,{'CODEX_CLI_PATH':str(tmp/'gone.exe')}):
+                    with self.assertRaises(Refused):hosts.locate('codex')
 
     def test_host_binary_is_trusted_automatically_and_followed_across_updates(self):
         from . import hosts

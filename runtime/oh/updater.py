@@ -48,10 +48,13 @@ def update(root, host=None):
             record = state_home() / 'hosts' / (name + '.json')
             saved = read_json(record) if record.is_file() else None
             available = shutil.which(name, path=environment['PATH'])
-            if not available and saved and not saved.get('pinned'):
+            # The Codex app replaces its CLI folder on update, so its copy is found again, not remembered.
+            remembered = (saved and not saved.get('pinned') and Path(saved['path']).is_file()
+                          and not Path(saved['path']).is_relative_to(hosts.codex_app_bin()))
+            if not available and remembered:
                 # Another host's session may omit this CLI from PATH. Revalidate OH's known binary.
                 program = hosts.trust(name, saved['path'], root, pinned=False)['path']
-            elif not host and not available and not saved:
+            elif not host and not available and not saved and not hosts.installed(name):
                 print(f'{name}: not found on PATH and no known OH host executable (skipped).', flush=True)
                 continue
             else:program = hosts.executable(name, root)
