@@ -221,7 +221,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         # A reboot may remove the private temp receipt. An ended shell call or
         # missing directory is insufficient; only a verified later boot settles it.
         receipt = Path(cancellation._read(self.root)['tools']['command']['receipt'])
-        shutil.rmtree(receipt)
+        shutil.rmtree(receipt)  # windows-ok: private temp JSON receipts, no Git objects or read-only files
         self.assertFalse(cancellation.quiescent(self.root, self.attempt))
         self.native_results[self.attempt] = {'status': 'cancelled', 'text': ''}
         answer = self.resume_choice()
@@ -375,7 +375,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         command = [sys.executable, '-c', child_code, str(heartbeat)]
         configure(self.root, checks=[{'name': 'signal-check', 'command': command}])
         self.approve(); self.assess()
-        for number in (signal.SIGTERM, signal.SIGKILL):
+        for number in (signal.SIGTERM, signal.SIGKILL):  # windows-ok: this POSIX signal test is skipped on Windows
             with self.subTest(signal=number):
                 heartbeat.unlink(missing_ok=True)
                 self.launch('implementation', turn='signal-' + str(number))
