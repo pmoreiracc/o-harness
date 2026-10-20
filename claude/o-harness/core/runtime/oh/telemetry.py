@@ -172,6 +172,8 @@ def ingest(connection, event):
     elif kind == 'attempt.finished':
         connection.execute('UPDATE attempts SET ended=?,duration_ms=?,outcome=?,substantive=?,context_tokens=? WHERE id=?',
             (event['at'],p.get('duration_ms'),p['outcome'],p.get('substantive'),p.get('context_tokens'),event['attempt']))
+    elif kind == 'review.reparsed':
+        connection.execute('UPDATE attempts SET outcome=? WHERE id=?',(p['outcome'],event['attempt']))
     elif kind == 'usage':
         u = usage_values(p)
         connection.execute('INSERT INTO usage VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET input=MAX(COALESCE(usage.input,excluded.input),COALESCE(excluded.input,usage.input)),cached=MAX(COALESCE(usage.cached,excluded.cached),COALESCE(excluded.cached,usage.cached)),output=MAX(COALESCE(usage.output,excluded.output),COALESCE(excluded.output,usage.output)),reasoning=MAX(COALESCE(usage.reasoning,excluded.reasoning),COALESCE(excluded.reasoning,usage.reasoning))',

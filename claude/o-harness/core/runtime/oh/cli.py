@@ -34,6 +34,7 @@ def main(argv=None):
         if not isinstance(getattr(sys,name),Tolerant):setattr(sys,name,Tolerant(getattr(sys,name)))
     parser=argparse.ArgumentParser(prog='oh')
     parser.add_argument('--root',type=Path)
+    parser.add_argument('--data-home',type=Path,help=argparse.SUPPRESS)
     sub=parser.add_subparsers(dest='command',required=True)
     scope=sub.add_parser('scope');actions=scope.add_subparsers(dest='action',required=True)
     prep=actions.add_parser('prepare');prep.add_argument('manifest',type=Path,nargs='?');prep.add_argument('--doc');prep.add_argument('--track',default='');prep.add_argument('--workflow',default='deliver',choices=['deliver','design','propose']);prep.add_argument('--human')
@@ -43,6 +44,10 @@ def main(argv=None):
     for action in ('bind','retain'):
         step=attempts.add_parser(action);step.add_argument('attempt');step.add_argument('locator')
     review_check=sub.add_parser('review-check');review_check.add_argument('report',type=Path,nargs='?')
+    review_check.add_argument('--text',help='Validate a literal draft without a shell pipe or scratch file')
+    native_event=sub.add_parser('native-event');native_event.add_argument('host',choices=['claude','codex'])
+    native_control=sub.add_parser('native-control');native_control.add_argument('host',choices=['claude','codex'])
+    owned=sub.add_parser('owned-command');owned.add_argument('attempt');owned.add_argument('--argv',required=True)
     sub.add_parser('candidate')
     evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
     complete=sub.add_parser('complete');complete.add_argument('attempt')
@@ -56,6 +61,7 @@ def main(argv=None):
     prep=sub.add_parser('prepare');prep.add_argument('manifest',type=Path);prep.add_argument('--review');prep.add_argument('--pr',type=int)
     pd=sub.add_parser('prepare-design');pd.add_argument('doc');pd.add_argument('track',nargs='?',default='')
     verify=sub.add_parser('verify');verify.add_argument('base',nargs='?');verify.add_argument('mode',nargs='?',default='review',choices=['review','pre-push','ci'])
+    verify.add_argument('--attempt',help=argparse.SUPPRESS)
     admission=sub.add_parser('admission');admission.add_argument('directory',type=Path)
     pub=sub.add_parser('publication');pub.add_argument('--pr',type=int)
     ci=sub.add_parser('ci-wait');ci.add_argument('--pr',type=int);ci.add_argument('--timeout',type=int,default=1500)
@@ -76,7 +82,15 @@ def main(argv=None):
     for name in ('collect','rebuild','observe-ci','service-install','service-uninstall'):sub.add_parser(name)
     serve=sub.add_parser('serve');serve.add_argument('--port',type=int,default=4319 if os.environ.get('OH_DASHBOARD_MODE')=='development' else 4318)
     args=parser.parse_args(argv);invocation=Path.cwd();root=(args.root or invocation).resolve()
+    if args.data_home:
+        os.environ['OH_DATA_HOME']=str(args.data_home.expanduser().resolve())
     try:
+        from .storage import state_home
+        enclosing=json.loads(os.environ.get('OH_OWNED_COMMAND','{}'))
+        if (enclosing.get('root')==str(root) and enclosing.get('data_home')==str(state_home())
+                and args.command not in ('status','plans','resource','review-check')
+                and not (args.command=='config' and args.action is None)):
+            raise Refused('Run OH helpers directly through the native tool using the packet helper prefix; do not nest them inside owned-command.')
         from . import native
         if args.command=='scope':
             result=(native.prepare_scope(root,read_json(args.manifest) if args.manifest else None,args.doc,args.track,args.workflow,_locator(args.human))
@@ -85,7 +99,17 @@ def main(argv=None):
             result=native.admit(root,args.role) if args.action=='admit' else getattr(native,args.action)(root,args.attempt,_locator(args.locator))
         elif args.command=='review-check':
             from .review_report import check
-            result=check(read_json(args.report)['report'] if args.report else sys.stdin.read())
+            if args.text is not None and args.report:raise Refused('Supply the draft as text or a report file, not both')
+            result=check(args.text if args.text is not None else read_json(args.report)['report'] if args.report else sys.stdin.read())
+        elif args.command=='native-event':
+            from .native_events import handle
+            result=handle(root,args.host,json.load(sys.stdin))
+        elif args.command=='native-control':
+            from .cancellation import hook
+            result=hook(root,args.host,json.load(sys.stdin))
+        elif args.command=='owned-command':
+            from .cancellation import owned_command
+            raise SystemExit(owned_command(root,args.attempt,json.loads(args.argv)))
         elif args.command=='candidate':result=native.candidate(root)
         elif args.command=='evidence':result=native.attach_evidence(root,read_json(args.attachment))
         elif args.command=='complete':result=native.complete(root,args.attempt)
@@ -112,8 +136,9 @@ def main(argv=None):
             result=prepare(root,manifest=args.manifest,review=args.review,pr=args.pr) if args.command=='prepare' else prepare(root,doc=args.doc,track=args.track)
         elif args.command=='verify':
             from .workflow import active_file
-            if active_file(root).exists():result=native.verify(root,args.base,args.mode)
+            if active_file(root).exists():result=native.verify(root,args.base,args.mode,attempt_id=args.attempt)
             else:
+                if args.attempt:raise Refused('This verification belongs to a saved attempt; no active run is available')
                 from .checks import run
                 result=run(root,args.base,args.mode)
         elif args.command=='admission':
@@ -190,5 +215,8 @@ def main(argv=None):
             from .verification import check_failed
             checks=result.get('checks',[]) if isinstance(result,dict) else result
             if any(check_failed(check) for check in checks):raise SystemExit(1)
+    except KeyboardInterrupt:
+        print('OH: Native interruption ended this operation; owned cleanup was attempted.',file=sys.stderr)
+        raise SystemExit(130)
     except (Refused,OSError,ValueError,KeyError) as exc:
         print(f'OH: {exc}',file=sys.stderr);raise SystemExit(2)

@@ -99,6 +99,11 @@ def reduce(records):
             matches=[a for a in state['attempts'] if a['id']==d['id']]
             if len(matches)!=1:raise Refused('Completion without exactly one admitted attempt')
             matches[0].update(d | {'finished':True,'finished_at':record['at']})
+        elif kind=='attempt.late-result':
+            matches=[a for a in state['attempts'] if a['id']==d['id']]
+            if len(matches)!=1 or not matches[0].get('revocation'):
+                raise Refused('Late native evidence requires a revoked attempt')
+            matches[0].update(d)
         elif kind=='native.authenticated':state['native_authenticated']=d
         elif kind=='native.adopted':state.update(d)
         elif kind=='native.child.bound':
@@ -113,6 +118,12 @@ def reduce(records):
         elif kind=='handoff.normalized':
             author=next(a for a in state['attempts'] if a['id']==d['id'])
             author.update(original_outcome=author['outcome'],outcome='implemented',normalized_report=d['report'])
+        elif kind=='review.reparsed':
+            review=next(a for a in state['attempts'] if a['id']==d['id'])
+            if review['role']!='review' or review.get('outcome')!='review_incomplete' or review.get('findings') or review.get('review_fragments') or review.get('normalized_report'):
+                raise Refused('Only an unclassified retained review can be reparsed once')
+            review.update(original_outcome=review['outcome'],original_report_issues=review.get('report_issues',[]),
+                          report_issues=[],review_fragments=[],**d)
         elif kind=='run.status':
             previous=state['status']
             if d['status'] in ('paused','stopped'):

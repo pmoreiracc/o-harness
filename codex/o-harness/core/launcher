@@ -24,7 +24,7 @@ else:
     home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
     active=home/'runtime/active.json'
     bundled=plugin/'core/revision.json'
-    if bundled.is_file():
+    if bundled.is_file() and command not in ('native-event','native-control'):
         # A plugin install or update carries its core. Activate it on first explicit use when it is
         # newer than the active core, so an older plugin in another host never downgrades OH.
         def number(value):
@@ -38,6 +38,7 @@ else:
             done=subprocess.run([*python,str(plugin/'core/oh'),'setup','--if-newer'],stdin=subprocess.DEVNULL,capture_output=True,encoding='utf-8',errors='replace')
             if done.returncode:print('OH: automatic setup failed. '+done.stderr.strip(),file=sys.stderr)
     if not active.is_file():
+        if command in ('native-event','native-control'):raise SystemExit(0)
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')
     revision=json.loads(active.read_bytes())['revision']
     if Path(revision).name!=revision:raise SystemExit('Invalid installed OH revision')

@@ -363,7 +363,7 @@ def task_evidence(root,state,task,review,parent):
     from .review import workflow_reviews
     if review.get('purpose','workflow')!='workflow':raise Refused('Standalone review cannot authorize completion')
     attempts=workflow_reviews(state,task['id'])
-    history=[{k:a.get(k) for k in ('id','host','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions')} for a in attempts]
+    history=[{k:a.get(k) for k in ('id','host','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions','original_outcome','original_report_issues','original_result_hash','native_result_hash')} for a in attempts]
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],

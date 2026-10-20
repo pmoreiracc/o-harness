@@ -2,7 +2,8 @@
 
 Load this once for the active workflow. The skill coordinates sequential native agents;
 focused OH helpers preserve scope, allowances, evidence and reviewed completion. Native
-hosts own agent execution, tool permissions and cancellation. Keep OH state outside
+hosts own agent execution and tool permissions. OH records native Stop and cancels
+owned commands through the existing process utilities. Keep OH state outside
 consumer repositories and keep raw worker transcripts out of the coordinator's context.
 
 ## Entries and facts
@@ -66,7 +67,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Bind the launched native child | `attempt bind <attempt-id> <locator.json>` | `attempt_bind` |
 | Retain its original native result | `attempt retain <attempt-id> <locator.json>` | `attempt_retain` |
 | Validate review admission | `admission <attempt-directory>` | `admission` |
-| Check a draft review decision | `review-check` (draft on stdin) | `review_check` |
+| Check a draft review decision | `review-check --text <quoted-draft>` | `review_check` |
 | Prepare provisional candidate content | `candidate` | `candidate` |
 | Check the current candidate | `verify [base] [mode]` | `verify` |
 | Attach supplementary proof | `evidence <attachment.json>` | `evidence` |
@@ -161,6 +162,15 @@ scope and remaining allowance.
 Include the admitted attempt ID, its actual `request.json` path, bounded task-context
 path, role contract and absolute OH entry in the child prompt. Reference original
 scope/evidence files rather than pasting the parent history or full worker transcripts.
+Require admission validation before the first working tool. Every role follows the
+packet’s `native_commands`: native shell commands use the literal `owned-command`
+invocation with an explicit executable/argument array; focused OH helpers run directly.
+Pass an explicit shell inside that array when shell syntax is needed. Never append
+outer shell operators, nest OH helpers in the wrapper, or bypass a refused tool.
+The wrapper inherits the native tool’s permissions; it grants no permission. Do not
+launch detached services or use another execution tool to escape owned cleanup.
+A Stop refusal or exit 130 ends this worker. The coordinator can admit a fresh one
+only after the existing Resume decision and cleanup.
 
 - Codex: call native `spawn_agent` with `agent_type: "default"`, `fork_turns: "none"`,
   the admitted `model` and `reasoning_effort`, the returned `native_task_name` and the self-contained
@@ -169,6 +179,9 @@ scope/evidence files rather than pasting the parent history or full worker trans
 - Claude: call native `Agent` with the packaged named non-fork type
   `o-harness:implementation`, `o-harness:analysis`, `o-harness:assessment` or
   `o-harness:reviewer`. Pass the admitted model and effort explicitly on the invocation.
+  Set its native `name` to the admitted `native_task_name` so the host supplies the
+  messaging roster. The child uses `SendMessage` to the native `main` coordinator
+  for meaningful progress, including immediately before configured verification.
   Use the host's native child result/notification and cancellation tools. Do not use
   the `fork` type or send a new review to a completed agent.
 
@@ -187,6 +200,12 @@ delay. This is not a new attempt, model selection or approval.
 Bind the returned native child identity immediately. Retain its complete original result
 by native locator only after its terminal native outcome is saved and its owned tools
 have finished; an intermediate assistant `end_turn` does not establish quiescence.
+Claude's lifecycle hooks attempt the same checked binding and retention automatically.
+They never launch agents or continue a task. If a hook ran before the host saved its
+evidence, retry the existing helper after the native result arrives. Both hosts' child
+admission and candidate helpers recover an omitted binding from a unique native launch.
+Codex task paths are resolved to their native session IDs; missing IDs can be recovered
+with an empty locator object. Ambiguous launches still require the actual original ID.
 If binding is rejected, read `workflows/recovery.md`: cancel or await the child, retain
 its actual terminal outcome with the original child and spawn identities, then recover
 within existing scope and remaining allowance. A cancelled child needs no final report;

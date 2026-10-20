@@ -25,7 +25,7 @@ def family_identity(finding):
 def report(attempt):
     if not attempt or not attempt.get('evidence'):return {}
     try:
-        if ref:=attempt.get('normalized_report'):
+        if ref:=attempt.get('late_report') or attempt.get('normalized_report'):
             value=read_json(ref['path'])
             if digest(value)!=ref['hash']:raise Refused('The normalized handoff changed; preserve the original evidence.')
         else:
@@ -144,9 +144,28 @@ def prepare(state, task, role, directory, admission, feedback=''):
         'standalone_artifact':state.get('standalone_artifact'),
         'history': str(directory.parent.parent),
         'history_policy': 'Read the current packet, complete finding index and full current_review report before repairing findings. Consult older reports for unresolved questions; do not replay prior author reports or transcripts.'}
+    from .cancellation import command_line, command_prefix
+    import os, shlex
+    prefix=command_prefix(admission['root'],admission['id'])[:-3]
+    packet['native_commands']={
+        'example':command_line(admission['root'],admission['id'],['executable','argument']),
+        'powershell_example':command_line(admission['root'],admission['id'],['executable','argument'],windows=True),
+        'helper_prefix':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix)) if os.name=='nt' else shlex.join(prefix),
+        'admission':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix+['admission',str(directory)])+'; exit $LASTEXITCODE')
+                    if os.name=='nt' else shlex.join(prefix+['admission',str(directory)]),
+        'verify':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix+['verify','--attempt',admission['id']])+'; exit $LASTEXITCODE')
+                    if os.name=='nt' else shlex.join(prefix+['verify','--attempt',admission['id']]),
+        'instruction':'Use the native shell tool and its normal permissions. Run shell commands through owned-command '
+            'with the actual executable and argument array. Choose the example for the shell actually in use: '
+            'example is POSIX/Bash; powershell_example is PowerShell. Include an explicit shell for shell syntax. '
+            'For PowerShell helpers, quote every argument and finish with ; exit $LASTEXITCODE. '
+            'Use focused OH helpers directly (Codex MCP is preferred). For shell verification use the verify '
+            'invocation here; its --attempt binding prevents delayed checks from running against replacement work. Native Stop revokes this attempt; '
+            'exit 130 is cancellation, never a passing check or a reason to retry this worker.'}
     latest=next((a for a in reversed(state['attempts']) if a['task']==task['id'] and a['role']=='review' and a.get('finished') and a.get('evidence')),None)
     if latest:
-        path=Path(latest['evidence'])/'result.json'
+        ref=latest.get('late_report') or latest.get('normalized_report')
+        path=Path(ref['path']) if ref else Path(latest['evidence'])/'result.json'
         packet['current_review']={'attempt':latest['id'],'outcome':latest.get('outcome'),
             'report':{'path':str(path),'hash':digest(read_json(path))},
             'instruction':'Read the full receipt, including reasoning and limits, before deciding repairs. Judge claims against the approved scope and concrete behavior; do not implement suggestions blindly.'}

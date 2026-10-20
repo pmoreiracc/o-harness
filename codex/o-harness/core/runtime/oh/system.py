@@ -5,6 +5,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 
 WINDOWS=os.name=='nt'
@@ -21,6 +22,15 @@ if WINDOWS:
     class _Overlapped(ctypes.Structure):
         _fields_=[('Internal',ctypes.c_size_t),('InternalHigh',ctypes.c_size_t),('Offset',wintypes.DWORD),
                   ('OffsetHigh',wintypes.DWORD),('hEvent',wintypes.HANDLE)]
+    class _JobLimits(ctypes.Structure):
+        _fields_=[('times',ctypes.c_int64*2),('flags',wintypes.DWORD),
+                  ('minimum',ctypes.c_size_t),('maximum',ctypes.c_size_t),
+                  ('count',wintypes.DWORD),('affinity',ctypes.c_size_t),
+                  ('priority',wintypes.DWORD),('scheduling',wintypes.DWORD)]
+
+    class _JobExtended(ctypes.Structure):
+        _fields_=[('basic',_JobLimits),('io',ctypes.c_uint64*6),('memory',ctypes.c_size_t*4)]
+
     _kernel32=ctypes.WinDLL('kernel32',use_last_error=True)
     for _name,_args in (('LockFileEx',[wintypes.HANDLE,wintypes.DWORD,wintypes.DWORD,wintypes.DWORD,wintypes.DWORD,ctypes.POINTER(_Overlapped)]),
                         ('UnlockFileEx',[wintypes.HANDLE,wintypes.DWORD,wintypes.DWORD,wintypes.DWORD,ctypes.POINTER(_Overlapped)]),
@@ -28,6 +38,10 @@ if WINDOWS:
                         ('TerminateJobObject',[wintypes.HANDLE,wintypes.UINT]),('CloseHandle',[wintypes.HANDLE])):
         getattr(_kernel32,_name).argtypes=_args;getattr(_kernel32,_name).restype=wintypes.BOOL
     _kernel32.CreateJobObjectW.argtypes=[ctypes.c_void_p,wintypes.LPCWSTR];_kernel32.CreateJobObjectW.restype=wintypes.HANDLE
+    _kernel32.SetInformationJobObject.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
+    _kernel32.OpenJobObjectW.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.LPCWSTR]
+    _kernel32.OpenJobObjectW.restype=wintypes.HANDLE
+    _kernel32.QueryInformationJobObject.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD,ctypes.c_void_p]
     _advapi32=ctypes.WinDLL('advapi32',use_last_error=True)
     _advapi32.GetNamedSecurityInfoW.argtypes=[wintypes.LPCWSTR,ctypes.c_int,wintypes.DWORD]+[ctypes.POINTER(ctypes.c_void_p)]*5
     _advapi32.GetNamedSecurityInfoW.restype=wintypes.DWORD
@@ -91,21 +105,47 @@ def executable(program,*,env=None,cwd=None):
         'Native Windows Bash is unavailable. Install Git for Windows or register an explicit WSL command',program)
 
 
-def spawn(command,**kwargs):
+def spawn(command,*,on_spawn=None,**kwargs):
     """Start a command that stop() can end together with every descendant."""
-    if not WINDOWS:return subprocess.Popen(command,start_new_session=True,**kwargs)
+    if not WINDOWS:
+        if on_spawn is None:return subprocess.Popen(command,start_new_session=True,**kwargs)
+        # Release execution only after its process identity is durably saved.
+        # Owner death closes the gate: EOF exits without executing the command.
+        reader,writer=os.pipe()
+        gate=('import os,sys;fd=int(sys.argv[1]);ok=os.read(fd,1)==b"1";os.close(fd);'
+              'sys.exit(130) if not ok else os.execvpe(sys.argv[2],sys.argv[2:],os.environ)')
+        try:
+            child=subprocess.Popen([sys.executable,'-I','-c',gate,str(reader),*command],
+                start_new_session=True,pass_fds=(*kwargs.pop('pass_fds',()),reader),**kwargs)
+            try:
+                on_spawn(child)
+                os.write(writer,b'1')
+                return child
+            except BaseException:
+                stop(child,force=True);child.wait(timeout=10);raise
+        finally:
+            os.close(reader);os.close(writer)
     # CreateProcess needs PATHEXT shims and resolves relative executables against OH rather than cwd.
     command=[executable(command[0],env=kwargs.get('env'),cwd=kwargs.get('cwd')),*command[1:]]
     # Start suspended and resume only inside a job object, so no descendant can be born outside it.
     child=subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP|0x4,**kwargs)  # CREATE_SUSPENDED
-    job=_kernel32.CreateJobObjectW(None,None)
-    if not job or not _kernel32.AssignProcessToJobObject(job,int(child._handle)):
+    import uuid
+    name='Local\\OH-'+str(uuid.uuid4())
+    job=_kernel32.CreateJobObjectW(None,name)
+    limits=_JobExtended();limits.basic.flags=0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (not job or not _kernel32.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits))
+            or not _kernel32.AssignProcessToJobObject(job,int(child._handle))):
         # Without the job, descendants of an exited leader could outlive stop(); refuse instead.
         if job:_kernel32.CloseHandle(job)
         child.kill();child.wait()
         raise OSError('Could not contain '+str(command[0])+' in a job object')
     child.oh_job=job
+    child.oh_job_name=name
     weakref.finalize(child,_kernel32.CloseHandle,job)
+    if on_spawn:
+        try:on_spawn(child)
+        except BaseException:
+            stop(child,force=True);child.wait(timeout=10);raise
     if _ntdll.NtResumeProcess(int(child._handle)):
         stop(child,force=True);child.wait()
         raise OSError('Could not start '+str(command[0]))
@@ -125,9 +165,157 @@ def stop(child,*,force=False,interrupt=False):
     except ProcessLookupError:pass
     except PermissionError:
         # Darwin reports EPERM for a group containing only unreaped zombies.
-        rows=subprocess.check_output(['/bin/ps','-axo','pgid=,stat='],text=True).splitlines()
-        live=[row.split() for row in rows if len(row.split())==2 and row.split()[0]==str(child.pid) and not row.split()[1].startswith('Z')]
-        if live:raise
+        # /bin/ps cannot execute inside the native macOS sandbox. Read only this
+        # owned group's status through libproc instead; denied/unknown remains an error.
+        if sys.platform!='darwin' or _darwin_group_live(child.pid):raise
+
+
+def _darwin_group_live(group):
+    """libproc.h / sys/proc_info.h: PROC_PGRP_ONLY, PROC_PIDT_SHORTBSDINFO."""
+    import ctypes
+    class ShortInfo(ctypes.Structure):
+        _fields_=[('pid',ctypes.c_uint32),('ppid',ctypes.c_uint32),
+                  ('pgid',ctypes.c_uint32),('status',ctypes.c_uint32),
+                  ('command',ctypes.c_char*16),('identity',ctypes.c_uint32*8)]
+    lib=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+    lib.proc_listpids.argtypes=[ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p,ctypes.c_int]
+    lib.proc_listpids.restype=ctypes.c_int
+    lib.proc_pidinfo.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_uint64,ctypes.c_void_p,ctypes.c_int]
+    lib.proc_pidinfo.restype=ctypes.c_int
+    capacity=64
+    while capacity<=65536:
+        pids=(ctypes.c_int*capacity)()
+        ctypes.set_errno(0)
+        size=lib.proc_listpids(2,group,pids,ctypes.sizeof(pids))
+        if size<=0:
+            if error:=ctypes.get_errno():raise OSError(error,os.strerror(error))
+            return False
+        if size>=ctypes.sizeof(pids):
+            capacity*=2
+            continue
+        for pid in pids[:size//ctypes.sizeof(ctypes.c_int)]:
+            if not pid:continue
+            info=ShortInfo()
+            ctypes.set_errno(0)
+            read=lib.proc_pidinfo(pid,13,0,ctypes.byref(info),ctypes.sizeof(info))
+            if read!=ctypes.sizeof(info):
+                error=ctypes.get_errno()
+                if error==errno.ESRCH:continue
+                raise OSError(error or errno.EPERM,'Cannot verify the owned process group')
+            if info.pgid==group and info.status!=5:return True  # SZOMB
+        return False
+    raise OSError(errno.EAGAIN,'Owned process group changed while checking cleanup')
+
+
+def process_identity(pid):
+    """Kernel creation identity, not a process name or a reusable PID alone."""
+    import ctypes
+    if WINDOWS:
+        from ctypes import wintypes
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]
+        kernel.OpenProcess.restype=wintypes.HANDLE
+        handle=kernel.OpenProcess(0x1000,False,pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            if ctypes.get_last_error()==87:return None
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            times=[wintypes.FILETIME() for _ in range(4)]
+            kernel.GetProcessTimes.argtypes=[wintypes.HANDLE,*([ctypes.POINTER(wintypes.FILETIME)]*4)]
+            if not kernel.GetProcessTimes(handle,*(ctypes.byref(t) for t in times)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return [times[0].dwHighDateTime,times[0].dwLowDateTime]
+        finally:_kernel32.CloseHandle(handle)
+    if sys.platform=='darwin':
+        import ctypes
+        class Info(ctypes.Structure):
+            _fields_=[('ids',ctypes.c_uint32*12),('names',ctypes.c_char*48),
+                      ('other',ctypes.c_uint32*6),('seconds',ctypes.c_uint64),('micros',ctypes.c_uint64)]
+        lib=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+        lib.proc_pidinfo.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_uint64,ctypes.c_void_p,ctypes.c_int]
+        lib.proc_pidinfo.restype=ctypes.c_int
+        info=Info();size=lib.proc_pidinfo(pid,3,0,ctypes.byref(info),ctypes.sizeof(info))
+        if size==ctypes.sizeof(info):return [info.seconds,info.micros]
+        error=ctypes.get_errno()
+        if error==errno.ESRCH:return None
+        raise OSError(error or errno.EPERM,'Cannot read the owned process identity')
+    from pathlib import Path
+    try:return [Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                Path('/proc',str(pid),'stat').read_text().rsplit(')',1)[1].split()[19]]
+    except FileNotFoundError:return None
+
+
+def group_live(pid):
+    if sys.platform=='darwin':return _darwin_group_live(pid)
+    if WINDOWS:raise OSError('Process-group recovery is unavailable on Windows')
+    from pathlib import Path
+    for path in Path('/proc').glob('[0-9]*/stat'):
+        try:fields=path.read_text().rsplit(')',1)[1].split()
+        except FileNotFoundError:continue
+        if int(fields[2])==pid and fields[0]!='Z':return True
+    return False
+
+
+def recover_process(record):
+    """Clean a saved POSIX group only while its original leader is identifiable."""
+    process=record.get('process')
+    if not process:
+        if record.get('gated'):return {'source':'command-never-released'}
+        from datetime import datetime
+        started=datetime.fromisoformat(record['started'].replace('Z','+00:00')).timestamp()
+        try:boot=boot_time()
+        except OSError:return None  # A restricted host cannot establish reboot cleanup.
+        return {'source':'kernel-reboot','boot_time':boot} if boot>started else None
+    if WINDOWS:
+        name=process.get('job')
+        if not name:return None
+        job=_kernel32.OpenJobObjectW(0x0004|0x0008,False,name)  # QUERY | TERMINATE
+        if not job:
+            if ctypes.get_last_error()==2:return {'source':'kernel-job-absent','job':name}
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not _kernel32.TerminateJobObject(job,130):raise ctypes.WinError(ctypes.get_last_error())
+            counters=(ctypes.c_uint64*6)()  # BASIC_ACCOUNTING_INFORMATION, 48 bytes
+            until=time.monotonic()+2
+            while True:
+                if not _kernel32.QueryInformationJobObject(job,1,ctypes.byref(counters),48,None):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                active=ctypes.cast(ctypes.byref(counters),ctypes.POINTER(wintypes.DWORD))[10]
+                if not active:return {'source':'owned-job-cleaned','job':name}
+                if time.monotonic()>=until:return None
+                time.sleep(.02)
+        finally:_kernel32.CloseHandle(job)
+    pid=process['pid']
+    if not group_live(pid):return {'source':'kernel-process-group-absent','pid':pid}
+    if process.get('identity') is None or process_identity(pid)!=process['identity']:return None
+    # No signal is sent to an unidentified/reused PID or group.
+    # The owner has already died and Stop revoked the attempt. End the group
+    # together; a graceful leader exit here would lose its identity before we
+    # could end a descendant that ignores SIGTERM.
+    try:os.killpg(pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+    until=time.monotonic()+2
+    while group_live(pid) and time.monotonic()<until:time.sleep(.02)
+    return {'source':'owned-process-group-cleaned','pid':pid} if not group_live(pid) else None
+
+
+def boot_time():
+    """A reboot is conclusive cleanup even for old receipts without a process ID."""
+    import ctypes
+    if WINDOWS:
+        _kernel32.GetTickCount64.restype=ctypes.c_uint64
+        return time.time()-_kernel32.GetTickCount64()/1000
+    if sys.platform=='darwin':
+        import ctypes
+        class Timeval(ctypes.Structure):
+            _fields_=[('seconds',ctypes.c_long),('micros',ctypes.c_int)]
+        value=Timeval();size=ctypes.c_size_t(ctypes.sizeof(value))
+        lib=ctypes.CDLL(None,use_errno=True)
+        if lib.sysctlbyname(b'kern.boottime',ctypes.byref(value),ctypes.byref(size),None,0):
+            error=ctypes.get_errno();raise OSError(error,os.strerror(error))
+        return value.seconds+value.micros/1_000_000
+    from pathlib import Path
+    return float(next(line.split()[1] for line in Path('/proc/stat').read_text().splitlines() if line.startswith('btime ')))
 
 
 def wait_for_exit(child, timeout=None):
