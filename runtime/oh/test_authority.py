@@ -126,10 +126,21 @@ class AuthorityTest(unittest.TestCase):
                     parent.write_text(''.join(json.dumps(row)+'\n' for row in pr),newline='\n')
                     child.write_text(''.join(json.dumps(row)+'\n' for row in ch),newline='\n')
                 save();bound=native_child(root,state,attempt,locator)
+                self.assertEqual(native_child(root,state,attempt,{}),bound)
+                if host=='codex':
+                    self.assertEqual(native_child(root,state,attempt,{'child_session':'/root/oh_admission'}),bound)
+                    with self.assertRaises(Refused):native_child(root,state,attempt,{'child_session':'/foreign/oh_admission'})
+                    duplicate=child.with_name('duplicate.jsonl');duplicate.write_bytes(child.read_bytes())
+                    with self.assertRaises(Refused):native_child(root,state,attempt,{})
+                    duplicate.unlink()
                 self.assertEqual(bound['profile'],profile)
                 self.assertEqual(bound['child_session'],'child')
                 with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                 if host=='claude':
+                    # Claude also saves API bookkeeping with agent IDs but no cwd.
+                    save(ch=children+[{'type':'api-request','agentId':'child','sessionId':'parent'}])
+                    self.assertEqual(native_child(root,state,attempt,locator),bound)
+                    save()
                     # Native Agent exposes a parent path alongside the child identity.
                     # Resolve only that known hint or the exact derived child path.
                     self.assertEqual(native_child(root,state,attempt,locator|{'transcript_path':str(parent)}),bound)
@@ -208,6 +219,13 @@ class AuthorityTest(unittest.TestCase):
                     self.assertGreater(len(receipt),12563)
                     self.assertEqual((handback['status'],handback['text']),('completed',receipt))
                     self.assertEqual(len(handback['record_hashes']),3)
+                    closing=finished|{'timestamp':'2026-10-15T12:00:07Z','message':{'content':[{'type':'text','text':'Report sent.'}]}}
+                    for events in (parents+[notice],parents+[notice,completion|{'timestamp':'2026-10-15T12:00:08Z'}]):
+                        save(pr=events,ch=[call,acknowledgement,closing])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                    bad_ack=deepcopy(acknowledgement);bad_ack['message']['content'][0]['is_error']=True
+                    save(pr=events,ch=[call,bad_ack,closing])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                     # Background task envelopes survive even when Claude absorbs
                     # the peer handback into an already running parent turn.
                     def notification(status='completed',use='spawn',at='2026-10-15T12:00:07Z'):
@@ -293,6 +311,17 @@ class AuthorityTest(unittest.TestCase):
                     save(pr=parents,ch=children+[marker])
                     settled=native_result(root,state,attempt|{'native_child':bound},short_locator)
                     self.assertEqual(settled['status'],'interrupted')
+                    # Windows Stop can use the tool-interruption marker. It is
+                    # cancellation with native evidence, never later author work.
+                    tool_marker=marker|{'message':{'content':[{'type':'text','text':'[Request interrupted by user for tool use]'}]}}
+                    for rows in (parents,parents+[stop,stopped]):
+                        save(pr=rows,ch=children+[tool_marker])
+                        self.assertEqual(native_result(root,state,attempt|{'native_child':bound},short_locator)['status'],'interrupted')
+                    meta_path.unlink();save(pr=parents+[stop,stopped],ch=children+[tool_marker])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},short_locator)['status'],'interrupted')
+                    save(pr=parents,ch=children+[tool_marker])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},short_locator)
+                    meta_path.write_text(json.dumps(stop_meta),newline='\n');save(pr=parents,ch=children+[marker])
                     failed=native_result(root,state,attempt,short_locator)
                     self.assertEqual((failed['status'],failed['terminal_status']),('binding_failed','interrupted'))
                     self.assertEqual(native_result(root,state,attempt,short_locator),failed)
@@ -614,6 +643,7 @@ class AuthorityTest(unittest.TestCase):
                 def save(rows):path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
                 save([request,failure])
                 result=native_result(root,state,attempt,{'tool_use_id':'launch'})
+                self.assertEqual(native_result(root,state,attempt,{}),result)
                 self.assertEqual(result['status'],'failed')
                 self.assertIsNone(result['profile'])
                 self.assertEqual(result['admitted_profile'],attempt['profile'])

@@ -1,5 +1,12 @@
 # Independent reviewer contract
 
+Validate the supplied immutable admission before working. Follow the packet's
+`native_commands` for shell execution, using the native tool's normal permissions.
+Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,
+never inside `owned-command`. Do not substitute the coordinator's plugin launcher.
+Do not detach work or switch execution tools to bypass cancellation. A Stop refusal or exit 130 ends
+this attempt; return without retrying work or launching another worker.
+
 Read the supplied immutable OH admission before inspecting the subject. Confirm its
 root, task or standalone subject, HEAD, candidate identity, scope, profile and evidence
 bindings with `admission <attempt-directory>` (Codex OH `admission` tool). Read the
@@ -202,12 +209,18 @@ in this list. Refer to these positions in the receipt when useful. Descriptive
 metadata can stay in the receipt; it is not a required schema. Do not omit a finding
 from the decision because its explanation is in the receipt.
 
-Before finishing, use `review_check` with the complete draft report (Claude CLI:
-pipe the draft to `review-check`; an existing external JSON file containing
-`{"report":"complete draft text"}` may also be passed as its argument).
+Before finishing, use `review_check` with the complete draft report. In Claude, use
+the packet's direct helper prefix with `review-check --text <quoted-complete-draft>`.
+Quote the draft as one literal argument for the native shell; no pipe, nested helper
+or scratch-file edit is needed. An existing external JSON file containing
+`{"report":"complete draft text"}` remains supported as the positional argument.
 Correct decision errors within this same reviewer turn. This is a local format
 check, grants no authority and starts no agent. Keep the full receipt in the final
 native result; a count, coordinator message or successful check does not replace it.
+Check the exact text you deliver, including any hand-back introduction. Return one
+unquoted decision outside code fences before the full receipt. A short preamble is
+accepted; competing decisions are ambiguous. With Claude `SubagentHandback`, deliver
+that checked text as the tool's message; its later closing message is not the report.
 Never edit the candidate to fix a report. The independent native identity, immutable
 admission, exact candidate and completed host result remain required.
 

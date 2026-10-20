@@ -29,7 +29,7 @@ OBJECT = {'type': 'object'}
 TOOLS = [
     tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; saved lists both workflow and review without selection.', {'saved':{'type':'boolean'}}, read_only=True),
     tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
-    tool('admission', 'Read review admission', 'Read the immutable subject and review request for the admitted reviewer.', {'attempt_directory':TEXT}, ['attempt_directory'], read_only=True),
+    tool('admission', 'Validate review admission', 'Validate the immutable subject and request, recovering a missing native child binding when needed.', {'attempt_directory':TEXT}, ['attempt_directory']),
     tool('config', 'OH settings', 'Read project settings and configured checks.', read_only=True),
     tool('init', 'Register project', 'Register this checkout with OH.', {'name': TEXT}),
     tool('plans', 'Project plans', 'Read plan locations, validate plans, or list designs.',

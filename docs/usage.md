@@ -3,7 +3,11 @@
 This guide describes the native workflow candidate. **Known limitation:** in the tested
 Codex Desktop and CLI paths, stopping the parent did not cancel its native child.
 The Desktop child continued to its natural deadline, 168.7 seconds after parent Stop.
-This does not block activation or release; it is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81).
+It is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81) and
+[OpenAI #55521](https://github.com/openai/codex/issues/55521).
+The [requested recovery design](plans/native-stop-recovery.md) makes native Stop
+and automatic cleanup on Resume the intended experience, without a second manual
+`oh-stop`. The local implementation is awaiting integrated host acceptance.
 Do not assume an idle parent means its children have stopped. OH adds no cancellation
 supervisor or fallback runner. Claude's successful bounded terminal probe does not
 establish Remote Control or detached-command behavior. See the
@@ -189,13 +193,14 @@ the earlier clean commit cannot override a newly discovered blocker.
 ## Pause, Stop and resume
 
 `oh-pause` requests a cooperative pause: the current native step finishes and its
-result is retained before another phase starts. `oh-stop` requests cancellation of
-owned native work and preserves edits and evidence. Stopped is reported only after
-native cancellation is confirmed; a parent interruption or saved stopped status
-alone is not that proof. If a known native check remains live, OH reports Stop
-requested; cancellation pending, cancels it through the host and starts no later phase.
-The native parent-Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81).
-It does not block release. There is no OH process supervisor workaround.
+result is retained before another phase starts.
+
+The local native Stop implementation is awaiting full OH host acceptance. Its
+intended experience is: click the host's Stop button, then invoke the same work in
+this conversation or a new one and accept Resume once. No second `oh-stop` command
+or manual child management should be needed. Edits, findings and remaining allowances
+are preserved. See the [implementation and evidence](plans/native-stop-recovery.md)
+for what has been tested and the remaining limits.
 
 Every work entry checks saved work before preparing a new scope. For example, repeat
 `oh-design agent-pipeline` in the same checkout to find its interrupted draft or
@@ -219,7 +224,7 @@ is needed when no attempt or check is executing. The new coordinator continues t
 same work and the superseded coordinator launches nothing further. Existing attempts
 keep their original native parents. If a check is still executing, OH waits for that
 step before retrying the valid continuation. A new session must not start another
-agent while an old child may still be running. Discovery alone does not lift a saved
+agent while an old child can still execute tools or its tracked commands remain live. Discovery alone does not lift a saved
 Pause or Stop; a later human Resume answer can. Resume does not
 renew a spent review allowance, accept findings or widen scope. This uses the same
 checkout and OH data, not migration to another computer.

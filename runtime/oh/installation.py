@@ -11,7 +11,7 @@ from .system import replace
 
 # The launcher finds Python through these: python.sh from sh and Git Bash, oh.cmd from PowerShell and cmd,
 # and get-python.ps1 fetches the official Python on Windows during setup when none is installed.
-HELPERS=('python.sh','python.cmd','oh.cmd','hook.cmd','agent-hook.cmd','get-python.ps1')
+HELPERS=('python.sh','python.cmd','oh.cmd','hook.cmd','agent-hook.cmd','native-control.cmd','get-python.ps1')
 LAUNCHERS=(b'#!/usr/bin/env -S python3 -I\n"""Resolve bundled setup',b'#!/bin/sh\n""":"\nself=$0\n')
 
 
@@ -46,12 +46,23 @@ def build(destination, host):
     atomic_json(core/'revision.json',{'revision':revision,'version':read_json(source/'.claude-plugin/plugin.json')['version']})
     atomic_json(core/'package.json',{'schema_version':1,'revision':revision,'files':inventory(core)})
     hooks=read_json(destination/'hooks/hooks.json')
+    if host=='codex':
+        hooks['hooks'].pop('PostToolUseFailure',None)
+        # These Claude payloads are not a Codex lifecycle contract. Codex's focused
+        # helpers recover identities directly from its native session metadata.
+        for event in ('PostToolUse','SubagentStop'):
+            hooks['hooks'][event]=[group for group in hooks['hooks'].get(event,[])
+                                  if all('agent-event.py' not in h['command'] for h in group['hooks'])]
+            if not hooks['hooks'][event]:hooks['hooks'].pop(event)
+    else:
+        hooks['hooks'].pop('Interrupt',None)
     for groups in hooks['hooks'].values():
         for hook in (hook for group in groups for hook in group['hooks']):
             hook['command']=hook['command'].rsplit(' ',1)[0]+' '+host
             # Codex's default Windows runner supplies cmd /C and its outer quote pair.
             # Keep the quoted executable first, avoiding a redundant nested shell.
-            runner='agent-hook.cmd' if 'agent-launch.py' in hook['command'] else 'hook.cmd'
+            runner=('native-control.cmd' if 'native-control.py' in hook['command']
+                    else 'agent-hook.cmd' if 'agent-launch.py' in hook['command'] else 'hook.cmd')
             if host=='codex':hook['commandWindows']='"%PLUGIN_ROOT%\\scripts\\'+runner+'" codex'
     servers=destination/'codex-mcp.json'
     if host=='codex':

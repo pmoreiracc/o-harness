@@ -12,6 +12,22 @@ skill and supporting scripts before redesigning a working flow. Prefer its prove
 when it fits OH's goals; explain a concrete reason when departing from it. Its implementation
 and Geoffrey-specific policies are not requirements for OH.
 
+## Evidence before claims
+
+Every agent, including delegated agents, must verify factual claims, diagnoses,
+instructions and completion reports before presenting them to the developer. Use
+the relevant implementation, observed results and current official documentation.
+Never present a guess, remembered behavior or intended behavior as an established fact.
+Distinguish verified behavior from inference, proposed behavior and untested expectations;
+state what remains unknown when the available evidence cannot establish the answer.
+
+Before giving steps, confirm that the commands or controls exist and apply to the
+developer's actual host, interface, version and workflow. Do not infer desktop controls
+from CLI tools, another host or generic documentation. Report tests only when actually
+run, and do not describe fixture coverage as live host validation. Reference the evidence
+needed to check consequential claims. If a claim proves wrong, correct it explicitly,
+verify the replacement guidance and give a concrete supported next step.
+
 ## Product goals and experience
 
 OH helps independent developers turn an idea into code they can confidently ship,

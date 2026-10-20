@@ -21,6 +21,81 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent|Task|SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/agent-event.py\" claude",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^o-harness:(implementation|analysis|assessment|reviewer)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/agent-event.py\" claude",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "timeout": 3
+          }
+        ]
       }
     ]
   }

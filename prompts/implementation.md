@@ -1,5 +1,12 @@
 # Implementation agent contract
 
+Validate the supplied immutable admission before working. Follow the packet's
+`native_commands` for shell execution, using the native tool's normal permissions.
+Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,
+never inside `owned-command`. The coordinator's plugin launcher is for bootstrapping,
+not a substitute for that exact invocation. Do not detach work or switch execution tools to bypass cancellation. A Stop refusal or exit 130 ends
+this attempt; return without retrying work or launching another worker.
+
 Read the supplied task packet and role instructions before acting. Work only on that
 task, using the model and effort selected for this invocation. You are not alone in the
 checkout: preserve other edits and useful work from earlier attempts.
@@ -11,7 +18,8 @@ paths when fixing a defect family. Additional experiments use the host's ordinar
 permissions. A missing permission or product decision belongs to the coordinator.
 
 Use the focused `candidate` helper after final edits and self-review, then `verify`
-for that actual candidate. These helpers prepare authorized provisional metadata and
+for that actual candidate. When using the shell, use the packet's `native_commands.verify`
+invocation, which binds checks to this attempt. These helpers prepare authorized provisional metadata and
 record checks; never hand-tick completion or hand-edit their evidence. After any
 further edit, prepare and verify the candidate again. Return candidate/check references
 with the report; the coordinator does not repeat a passing final check.

@@ -16,7 +16,10 @@ ask which one, then prepare Resume for that run. A clearly different request sel
 no unrelated work. Completed work presents its result or remaining publication step.
 
 Read selected facts with `resume --run ID` (Codex `resume` with `run`). After the Resume
-answer, inspect pending native attempts. Retain any already-terminal result through
+answer, call Resume with that same answer. For recorded native interruptions it
+settles revoked attempts after owned command and tool cleanup. If cleanup or native
+saves are pending, wait briefly and retry the same answer; never ask again.
+For other pending native attempts, retain any already-terminal result through
 its original child locator before binding continuation; do not launch a replacement.
 `binding_status: unbound` means only that OH has no accepted child binding; it never
 means the attempt was not launched. `execution_status: not_checked` means status has
@@ -43,8 +46,10 @@ Resume the actual phase: retain terminal child evidence, continue unfinished aut
 use valid completed author/check/review evidence, restore the latest proposal preview or
 human decision, or finish completion/publication. Read the referenced report and scope;
 phase labels are hints, not authority to bypass admission checks. A live child is awaited
-or cancelled through its host before replacement; another session or elapsed time is not
-proof of termination. Completed reviewers are never resumed. A changed candidate needs
+or cancelled through its host before replacement, unless OH has verified its Stop
+revocation and all tracked tools/owned commands are settled. Revocation blocks its
+future tools; it does not claim the host has stopped model generation. Another
+session or elapsed time is never proof of cleanup. Completed reviewers are never resumed. A changed candidate needs
 its existing verification/review path, while unchanged work does not need repeated analysis.
 Claude Desktop Stop can leave child-local interruption evidence without a parent
 completion notification. Pass the original child identity to retention; OH checks its
@@ -55,6 +60,13 @@ Resume answer and existing allowance while diagnosing or repairing retention.
 A spent allowance, proposal approval, concern acceptance, private approval or publication
 still needs its existing human decision; continuation cannot supply it.
 
+If an older review was retained as incomplete solely because its decision followed a
+preamble, retry retention or completion on that same attempt before requesting another
+reviewer. OH rechecks the original native result and unchanged admitted subject, then
+records the recovered decision separately. Original reports, findings and charged rounds
+remain saved. A changed candidate, ambiguous decisions or later attempt cannot use this
+repair to bypass fresh review. Never resume a completed reviewer to reformat its result.
+
 Completed work presents its result or outstanding publication/handoff rather than
 restarting. An explicit new review after terminal feedback uses a fresh reviewer. For
 older scopes without a subject identifier, inspect the original native request and bound
@@ -64,15 +76,32 @@ and human-authored edits; no reset, stash or regeneration is a recovery shortcut
 
 ## Interruption and recovery
 
-Stop means cancel owned native work before any later phase. Use native cancellation
-for known active children/commands and confirm their outcome; interrupting the parent
-alone is not proof. Do not claim cancellation until confirmed or start another worker
-while old work may run. If the host cannot confirm cancellation, explain the specific
-remaining native task and next action. Saved stopped status records the instruction to
-launch nothing further; it alone does not prove native cancellation. While a known
-check is still executing, report Stop requested; cancellation pending, and use its
-native host cancellation. Retaining its eventual check evidence starts no later phase.
-Do not build a replacement process supervisor.
+The native Stop button is the intended control; do not ask the person to run
+`oh-stop` or manage child IDs afterward. Codex's Interrupt hook records the stop;
+OH also reads saved native interruption records, including Claude's root interruption
+markers. Commands admitted through `owned-command` and configured checks use the
+existing process-group/job cleanup. Tool guards refuse later calls from the revoked
+worker, including after Resume in the same conversation.
+A stopped turn does not retire its conversation. A later human turn can inspect
+saved work, prepare the Resume question and bind its answer there. These recovery
+tools grant no authoring authority before cleanup and the accepted ownership transfer.
+If Stop is pressed during that recovery, it cancels the recovery turn too, including
+when recovery is taking place in another conversation.
+
+After the existing Resume answer, OH waits for tracked commands and in-flight tools
+to finish before transferring ownership. A revoked attempt can be retained without
+a final model report only when its native identity is bound and cleanup is verified.
+That receipt is explicitly OH revocation, not evidence of native model termination.
+Preserve any later native report under its original attempt; it cannot finish a new
+attempt. Retrying retention saves that report without reviving the old worker.
+
+An unresolved launch, failed cleanup, unavailable hook or lost command wrapper must
+not be cleared by hand or relabelled as stopped. Keep the valid Resume answer and
+inspect the original native records and retained operation. Retry after the host
+has saved the evidence or the original operation has finished; if it cannot be
+verified, report that exact blocker and a concrete recovery action. Never claim
+that external services or detached processes were cancelled by a local process group.
+
 Pause lets the current step finish and retains its result before waiting. A bound author
 can finish its provisional candidate and checks after Pause; no later agent starts.
 Pause and Stop are optional controls, never prerequisites for a future matching work
