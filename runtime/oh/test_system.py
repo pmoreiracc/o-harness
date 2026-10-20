@@ -15,6 +15,44 @@ from . import hosts
 
 
 class SystemTest(unittest.TestCase):
+    def test_owned_command_cannot_execute_before_its_identity_is_saved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker=Path(tmp)/'executed'
+            command=[sys.executable,'-c','from pathlib import Path;import sys;Path(sys.argv[1]).touch()',str(marker)]
+            def refuse(child):
+                self.assertIsNotNone(system.process_identity(child.pid))
+                time.sleep(.1)
+                self.assertFalse(marker.exists())
+                raise OSError('Cannot save ownership')
+            with self.assertRaisesRegex(OSError,'Cannot save ownership'):
+                system.spawn(command,on_spawn=refuse)
+            self.assertFalse(marker.exists())
+
+    @unittest.skipIf(os.name=='nt','POSIX process-group recovery; Windows uses named jobs')
+    def test_recovery_refuses_reused_identity_and_cleans_identified_descendants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            beat=Path(tmp)/'beat'
+            descendant='import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN)\nwhile True:\n open(sys.argv[1],"a").write(".");time.sleep(.02)'
+            leader='import subprocess,sys,time;subprocess.Popen([sys.executable,"-c",sys.argv[1],sys.argv[2]]);time.sleep(30)'
+            child=system.spawn([sys.executable,'-c',leader,descendant,str(beat)])
+            try:
+                until=time.monotonic()+5
+                while not beat.exists() and time.monotonic()<until:time.sleep(.02)
+                self.assertTrue(beat.exists())
+                identity=system.process_identity(child.pid)
+                self.assertIsNone(system.recover_process({'process':{'pid':child.pid,'identity':'wrong'}}))
+                self.assertIsNone(child.poll())
+                proof=system.recover_process({'process':{'pid':child.pid,'identity':identity}})
+                self.assertEqual(proof['source'],'owned-process-group-cleaned')
+                size=beat.stat().st_size;time.sleep(.1)
+                self.assertEqual(beat.stat().st_size,size)
+            finally:
+                system.stop(child,force=True);child.wait(timeout=5)
+        with patch.object(system,'boot_time',return_value=200):
+            self.assertIsNone(system.recover_process({'started':'1970-01-01T00:05:00+00:00'}))
+            self.assertEqual(system.recover_process({'started':'1970-01-01T00:01:00+00:00'})['source'],'kernel-reboot')
+        self.assertEqual(system.recover_process({'gated':True})['source'],'command-never-released')
+
     def test_explicit_command_deadline_still_cancels(self):
         from .processes import capture
         with tempfile.TemporaryDirectory() as tmp:

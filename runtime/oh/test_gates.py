@@ -18,6 +18,33 @@ class GateTest(unittest.TestCase):
         delay=patch('oh.authority.sleep');delay.start();self.addCleanup(delay.stop)
         self.subject=self.home/'approved scope.md';self.subject.write_text('One bounded task.',newline='\n')
 
+    def test_direct_resume_answer_survives_only_the_prescribed_retry_on_both_hosts(self):
+        for host in ('codex','claude'):
+            with self.subTest(host=host):
+                path=self.home/('.codex/sessions' if host=='codex' else '.claude/projects')/'s.jsonl'
+                path.parent.mkdir(parents=True)
+                question='Resume saved work for '+str(self.subject)+'?'
+                def typed(turn,text,at):
+                    return ({'type':'event_msg','timestamp':at,'payload':{'type':'user_message','turn_id':turn,'message':text}}
+                            if host=='codex' else {'type':'user','sessionId':'s','promptId':turn,'cwd':str(self.root),
+                                'timestamp':at,'message':{'role':'user','content':text}})
+                context=({'type':'response_item','timestamp':'2026-10-20T12:00:01Z','payload':{
+                    'type':'message','role':'assistant','content':[{'type':'output_text','text':question}]}}
+                    if host=='codex' else {'type':'assistant','sessionId':'s','timestamp':'2026-10-20T12:00:01Z',
+                        'message':{'content':[{'type':'text','text':question}]}})
+                rows=([{'type':'session_meta','payload':{'id':'s','cwd':str(self.root),'source':'cli'}}] if host=='codex' else [])
+                rows += [context,typed('answer','Yes','2026-10-20T12:00:02Z')]
+                locator={'host':host,'session':'s','turn':'answer','prompt':'Yes','transcript_path':str(path)}
+                def save(extra):path.write_text(''.join(json.dumps(r)+'\n' for r in rows+extra),newline='\n')
+                save([]);approved=native_human(self.root,locator,subject=self.subject)
+                for phrase in ('Retry the same Resume answer.','Retry the same Resume answer now.'):
+                    retry=typed('retry',phrase,'2026-10-20T12:00:04Z');save([retry])
+                    with self.assertRaises(Refused):native_human(self.root,locator)
+                    self.assertEqual(native_human(self.root,locator,subject=self.subject,retry_resume=True),approved)
+                    with self.assertRaises(Refused):native_human(self.root,locator|{'prompt':'Approve everything'},retry_resume=True)
+                    save([typed('cancel','Cancel that work.','2026-10-20T12:00:03Z'),retry])
+                    with self.assertRaises(Refused):native_human(self.root,locator,retry_resume=True)
+
     def test_codex_question_reply_belongs_to_the_exact_native_call(self):
         from copy import deepcopy
         path=self.home/'.codex/sessions/s.jsonl';path.parent.mkdir(parents=True)
@@ -50,6 +77,10 @@ class GateTest(unittest.TestCase):
         approved=read([initial,call,submitted,waiting,message(reply)])
         self.assertEqual(approved['prompt'],'Proceed with the task')
         self.assertEqual(approved['question_options'],question['options'])
+        # Desktop saves a trailing newline after the native answer wrapper.
+        padded=message(reply)
+        padded['payload']['item']['content'][0]['text']+='\n'
+        self.assertEqual(read([initial,call,padded])['prompt'],approved['prompt'])
         for invalid in ({'questions':[question,question]},
                         {'questions':[question|{'multiSelect':True}]},
                         {'questions':[question|{'options':[question['options'][0]]*2}]}):
@@ -118,6 +149,11 @@ class GateTest(unittest.TestCase):
                             'message':{'role':'user','content':'No. Cancel that decision; repair the concerns.'}}
         with self.assertRaises(Refused):read(rows+[cancellation])
         self.assertEqual(native_human(self.root,locator,subject=self.subject,latest=False),approved)
+        retry=cancellation|{'message':{'role':'user','content':'Retry the same Resume answer now.'}}
+        with self.assertRaises(Refused):read(rows+[retry])
+        self.assertEqual(native_human(self.root,locator,subject=self.subject,retry_resume=True),approved)
+        path.write_text(''.join(json.dumps(row)+'\n' for row in rows+[cancellation,retry]),newline='\n')
+        with self.assertRaises(Refused):native_human(self.root,locator,retry_resume=True)
         with self.assertRaises(Refused):read([rows[0],cancellation,rows[1]])
         for label in ('model claim','foreign','notification','cancelled'):
             wrong=deepcopy(rows)
@@ -143,3 +179,23 @@ class GateTest(unittest.TestCase):
                     if hidden_in=='metadata':arguments['artifact']=str(subject)
                     hidden[1]['toolUseResult']['answers']={'Accept these concerns?':'Accept these concerns'}
                     with self.subTest(hidden_in=hidden_in),self.assertRaises(Refused):read(hidden,subject)
+        # Repeated identical questions must never fall back to an older consumed
+        # answer when the current question is unanswered or explicitly retried.
+        from . import native
+        from .storage import digest
+        prepared={'question':question,'kind':'resume','created_at':'2026-10-15T12:00:02Z'}
+        key=digest(prepared);folder=self.home/'decisions';folder.mkdir()
+        (folder/(key+'.json')).write_text(json.dumps(prepared),newline='\n')
+        current=deepcopy(rows)
+        current[0]['timestamp']='2026-10-15T12:00:03Z'
+        current[0]['message']['content'][0]['id']='current'
+        current[1]['timestamp']='2026-10-15T12:00:04Z'
+        current[1]['message']['content'][0]['tool_use_id']='current'
+        requested={'host':'claude','session':'s','decision':key,'transcript_path':str(path)}
+        consumed={'decisions':{digest({k:approved[k] for k in ('host','session','turn','prompt')}):{}},'host':'claude'}
+        with patch('oh.native._home',return_value=self.home):
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows+current[:1]),newline='\n')
+            self.assertEqual(native._presented(self.root,requested,consumed),requested)
+            retry['timestamp']='2026-10-15T12:00:05Z'
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows+current+[retry]),newline='\n')
+            self.assertEqual(native._presented(self.root,requested,consumed)['tool_use_id'],'current')

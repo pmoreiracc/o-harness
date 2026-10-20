@@ -135,11 +135,11 @@ def prompted(x,session):
             and not x.get('isCompactSummary') and human(x))
 
 
-def attest(host,payload,root=None,*,latest=True):
-    return saved(lambda: _attest(host,payload,root,latest=latest))
+def attest(host,payload,root=None,*,latest=True,retry_resume=False):
+    return saved(lambda: _attest(host,payload,root,latest=latest,retry_resume=retry_resume))
 
 
-def _attest(host,payload,root=None,*,caller=True,latest=True):
+def _attest(host,payload,root=None,*,caller=True,latest=True,retry_resume=False):
     from .workflow import human_event
     event=human_event(payload,host)
     if caller and os.environ.get('CODEX_THREAD_ID') and (host!='codex' or event['session']!=os.environ['CODEX_THREAD_ID']):
@@ -155,7 +155,8 @@ def _attest(host,payload,root=None,*,caller=True,latest=True):
         path=paths[0];_,_,messages,_=codex_history(path,event['session'])
         matches=[m for m in messages if (m['turn'],m['prompt'])==(event['turn'],event['prompt'])]
         if root is not None and any(not within(m['cwd'],root) for m in matches):raise Refused('Human turn belongs to another project checkout')
-        if latest and matches and messages[-1] not in matches:raise Expired('The person typed something newer in this conversation')
+        consequential=[m for m in messages if not (retry_resume and _resume_retry(m['prompt']))]
+        if latest and matches and consequential and consequential[-1] not in matches:raise Expired('The person typed something newer in this conversation')
         if not matches:
             if messages and messages[-1]['turn']==event['turn']:
                 raise Refused('The requested command does not match the native human message; nothing was applied')
@@ -173,7 +174,10 @@ def _attest(host,payload,root=None,*,caller=True,latest=True):
                 if not line.endswith(b'\n'):raise Saving('Claude is still saving this conversation; retry the same OH operation.')
                 continue
             if not isinstance(x,dict):continue
-            if prompted(x,event['session']):latest_turn=x['promptId']
+            if prompted(x,event['session']):
+                content=(x.get('message') or {}).get('content')
+                typed=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
+                if not (retry_resume and _resume_retry(typed)):latest_turn=x['promptId']
             if x.get('type')!='user' or x.get('sessionId')!=event['session'] or x.get('promptId')!=event['turn']:continue
             if x.get('isMeta') and not x.get('isSidechain'):
                 # The model's own Skill tool call saves the same text; only a typed command's expansion
@@ -246,7 +250,7 @@ def _records(path):
             if isinstance(value,dict):yield value
 
 
-def native_human(root, locator, *, since=None, subject=None, latest=True):
+def native_human(root, locator, *, since=None, subject=None, latest=True, retry_resume=False):
     """Read native human provenance. latest=False identifies already-consumed sources for
     idempotent replay only; any new authority requires the default freshness check."""
     if not isinstance(locator,dict):raise Refused('Supply a native human evidence locator')
@@ -269,7 +273,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
             if not matches:raise Saving('This native human turn is not saved yet')
             locator=locator|{'prompt':matches[-1]['prompt'],'transcript_path':str(path)}
         payload=dict(locator,hook_event_name='UserPromptSubmit',session_id=session,turn_id=locator.get('turn'))
-        result=attest(host,payload,root,latest=latest)
+        result=attest(host,payload,root,latest=latest,retry_resume=retry_resume)
         if since and not newer(result.get('at'),since):raise Refused('This human reply predates the subject it would approve')
         context='';context_at=None
         for record in _records(result['transcript_path']):
@@ -292,8 +296,10 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
         # Supersession follows saved input order, including a human turn whose timestamp
         # is not yet saved. Tool output and notifications never supersede a human reply.
         if host=='claude' and prompted(record,session):
-            inputs.append((record.get('timestamp'),None))
-            if answer:superseded=True
+            content=(record.get('message') or {}).get('content')
+            typed=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
+            inputs.append((record.get('timestamp'),typed))
+            if answer and not (retry_resume and _resume_retry(typed)):superseded=True
         payload=record.get('payload') or {};text=None
         if host=='codex' and record.get('type')=='event_msg' and payload.get('thread_id',session)==session:
             if payload.get('type')=='user_message':text=payload.get('message')
@@ -304,7 +310,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
             # Codex can save the same native reply as both user_message and UserMessage.
             if isinstance(text,str):
                 inputs.append((record.get('timestamp'),text))
-                if answer and text!=answered_text:superseded=True
+                if answer and text!=answered_text and not (retry_resume and _resume_retry(text)):superseded=True
         if since and not newer(record.get('timestamp'),since):continue
         if host=='claude':
             if record.get('sessionId')!=session or record.get('isSidechain') or record.get('isMeta'):continue
@@ -341,7 +347,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
             # A function_call_output alone is model/tool text. The host's direct UserMessage is authority.
             if record.get('type')=='event_msg' and payload.get('type') in ('user_message','item_completed') and call and not answer:
                 if not isinstance(text,str):continue
-                wrapped=re.fullmatch(r'<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>',text,re.S)
+                wrapped=re.fullmatch(r'<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>',text.strip(),re.S)
                 if not wrapped:continue
                 try:replies=json.loads(wrapped[1])
                 except ValueError:continue
@@ -353,7 +359,8 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
                         'via':'question','at':record.get('timestamp'),'record_hashes':[digest(call[0]),digest(record)],'transcript_path':str(path)}
                 answered_text=text
     if not answer:raise Saving('The native human answer is not saved or was cancelled; no authority was granted')
-    if latest and (superseded or any(newer(at,answer.get('at')) and (host=='claude' or text!=answered_text) for at,text in inputs)):
+    if latest and (superseded or any(newer(at,answer.get('at')) and (host=='claude' or text!=answered_text)
+                                    and not (retry_resume and _resume_retry(text)) for at,text in inputs)):
         raise Expired('The person supplied newer input in this conversation; the earlier native answer grants no new authority')
     request=call[1].get('input') if host=='claude' else None
     if host=='codex':
@@ -366,6 +373,12 @@ def native_human(root, locator, *, since=None, subject=None, latest=True):
     if subject and answer.get('via')!='plan' and str(subject) not in answer['question']:
         raise Refused('This native question does not identify the reviewed artifact; ask about its actual path')
     return answer
+
+
+def _resume_retry(text):
+    """A retry preserves an existing Resume answer; it grants no new effect."""
+    return isinstance(text,str) and text.strip().casefold().rstrip('.!') in (
+        'retry the same resume answer', 'retry the same resume answer now')
 
 
 def question_options(request):
@@ -408,11 +421,11 @@ def question_calls(root, host, session, question, supplied=None, *, options=None
     return path,[call for call in calls if isinstance(call,str) and call]
 
 
-def coordinator(root, state, locator=None):
+def coordinator(root, state, locator=None, *, retry_resume=False):
     """Consequential helpers belong to the native parent, not an implementation/review child."""
     session=os.environ.get('CODEX_THREAD_ID') or os.environ.get('OH_NATIVE_SESSION_ID')
     if locator:
-        source=native_human(root,locator)
+        source=native_human(root,locator,retry_resume=retry_resume)
         if session and session!=source['session']:raise Refused('The native caller cannot use another session’s human grant')
         return source
     if session and session!=state['human']['session']:
@@ -426,7 +439,76 @@ def coordinator(root, state, locator=None):
 
 def native_child(root, state, attempt, locator):
     """Bind saved native spawn provenance and its real model/effort, without launching anything."""
-    return saved(lambda: _child(root,state,attempt,locator,binding=True))
+    return saved(lambda: _child(root,state,attempt,child_locator(root,state,attempt,locator),binding=True))
+
+
+def child_locator(root,state,attempt,locator,*,allow_failure=False):
+    """Resolve host-returned task names and missing IDs from one attributable launch.
+    This identifies evidence only; _child still checks profile, freshness and parentage.
+    """
+    state=_attempt_parent(state,attempt);locator=dict(locator or {})
+    child=locator.get('child_session') or locator.get('session')
+    if child and not isinstance(child,str):raise Refused('A native child identity is required')
+    if child and re.fullmatch(r'[A-Za-z0-9_-]+',child):return locator
+    parent=state['human']['session'];host=state['host']
+    path=_path(host,parent,state['human'].get('transcript_path'))
+    uses=set();name='oh_'+attempt['id'].replace('-','')
+    if host=='codex':
+        if child and (not isinstance(child,str) or child.rsplit('/',1)[-1]!=name):raise Refused('Native task path does not identify this admission')
+        for record in _records(path):
+            item=record.get('payload') or {}
+            if record.get('type')!='response_item' or item.get('type')!='function_call' or item.get('name','').split('.')[-1]!='spawn_agent':continue
+            try:args=json.loads(item.get('arguments','{}'))
+            except ValueError:continue
+            if args.get('task_name')==name and (not locator.get('tool_use_id') or locator['tool_use_id']==item.get('call_id')):uses.add(item.get('call_id'))
+        if len(uses)!=1:raise Saving('No unique native spawn call is saved for this admission yet; retry the same operation')
+        use=uses.pop()
+        from .hosts import codex_home
+        found=[]
+        for candidate in (codex_home()/'sessions').rglob('*.jsonl'):
+            # Only the metadata record is needed; never load unrelated transcripts.
+            try:
+                with candidate.open(encoding='utf-8') as stream:record=json.loads(stream.readline())
+            except (FileNotFoundError,ValueError):continue
+            if not isinstance(record,dict):continue
+            meta=record.get('payload') or {};source=meta.get('source')
+            spawn=source.get('subagent',{}).get('thread_spawn',{}) if isinstance(source,dict) else {}
+            if (record.get('type')=='session_meta' and spawn.get('parent_thread_id')==parent
+                    and spawn.get('agent_path','').rsplit('/',1)[-1]==name
+                    and (not child or spawn.get('agent_path')==child)
+                    and within(meta.get('cwd'),root) and newer(meta.get('timestamp'),attempt['started_at'])):
+                found.append((meta.get('id'),candidate))
+        if not found and not child and allow_failure:return locator|{'tool_use_id':use}
+        if len(found)!=1:raise Saving('No unique native child is saved for this admission yet; retry the same operation')
+        identity,candidate=found[0]
+        if locator.get('transcript_path') and Path(locator['transcript_path']).expanduser().resolve() not in (path,candidate.resolve()):
+            raise Refused('The supplied transcript does not match the native task')
+        return locator|{'child_session':identity,'transcript_path':str(candidate),'tool_use_id':use}
+    if child:raise Refused('A native child identity is required')
+    records=list(_records(path))
+    for record in records:
+        if record.get('sessionId')!=parent or record.get('isSidechain') or record.get('type')!='assistant':continue
+        parts=(record.get('message') or {}).get('content')
+        for part in parts if isinstance(parts,list) else []:
+            if not isinstance(part,dict):continue
+            args=part.get('input') or {}
+            if not isinstance(args,dict):continue
+            if (part.get('type')=='tool_use' and part.get('name') in ('Agent','Task')
+                    and attempt['id'] in args.get('prompt','')
+                    and (not locator.get('tool_use_id') or part.get('id')==locator['tool_use_id'])):uses.add(part.get('id'))
+    found=set()
+    for record in records:
+        result=record.get('toolUseResult');parts=(record.get('message') or {}).get('content')
+        if (record.get('type')!='user' or record.get('sessionId')!=parent or record.get('isSidechain')
+                or not isinstance(result,dict) or not isinstance(result.get('agentId'),str)):continue
+        for part in parts if isinstance(parts,list) else []:
+            if not isinstance(part,dict):continue
+            if part.get('type')=='tool_result' and part.get('tool_use_id') in uses and not part.get('is_error'):
+                found.add((result['agentId'],part['tool_use_id']))
+    if not found and len(uses)==1 and allow_failure:return locator|{'tool_use_id':uses.pop()}
+    if len(found)!=1:raise Saving('No unique native launch result is saved for this admission yet; retry the same operation')
+    identity,use=found.pop()
+    return locator|{'child_session':identity,'tool_use_id':use}
 
 
 def _attempt_parent(state,attempt):
@@ -441,8 +523,8 @@ def _claude_spawn_use(path,parent,child):
     for record in _records(path):
         result=record.get('toolUseResult');parts=(record.get('message') or {}).get('content')
         if (record.get('type')!='user' or record.get('sessionId')!=parent or record.get('isSidechain')
-                or not isinstance(result,dict) or result.get('agentId')!=child or result.get('isAsync') is not True
-                or result.get('status')!='async_launched' or not isinstance(parts,list)):continue
+                or not isinstance(result,dict) or result.get('agentId')!=child
+                or result.get('status') not in ('async_launched','completed','cancelled','failed') or not isinstance(parts,list)):continue
         uses.update(p['tool_use_id'] for p in parts if isinstance(p,dict) and p.get('type')=='tool_result'
                     and not p.get('is_error') and isinstance(p.get('tool_use_id'),str) and p['tool_use_id'])
     if len(uses)==1:return uses.pop()
@@ -510,6 +592,7 @@ def _child(root,state,attempt,locator,*,binding):
         if path.parent.name!='subagents' or path.parent.parent.name!=parent:raise Refused('Child is not in this parent’s native subagents')
         for r in child_records:
             if r.get('agentId')!=child or r.get('sessionId')!=parent:continue
+            if r.get('type') not in ('user','assistant'):continue
             if not within(r.get('cwd'),root):raise Refused('Native child belongs to another checkout')
             if r.get('type')=='assistant' and (r.get('message') or {}).get('model'):
                 actual=r['message']['model'];requested=attempt['profile']['model']
@@ -567,7 +650,9 @@ def _claude_handback(root,attempt,bound,records,forwarded,completion=None):
         if done:background.discard(done['use'])
         parts=(record.get('message') or {}).get('content')
         if record.get('type') not in ('assistant','user'):continue
-        # Further child activity invalidates an earlier handback as quiescence.
+        # Claude may append a closing message after delivering the report. It
+        # does not replace that report; further tools or input still invalidate it.
+        if record['type']=='assistant' and isinstance(parts,list) and all(isinstance(p,dict) and p.get('type') in ('text','thinking') for p in parts):continue
         final=None
         if not isinstance(parts,list):continue
         for part in parts:
@@ -662,9 +747,9 @@ def _claude_notification(record,*,delivered=False):
     return {'child':match[1],'use':match[2],'status':'cancelled' if match[3]=='killed' else match[3],'at':at}
 
 
-def _claude_terminal(attempt,bound,records):
+def _claude_terminal(attempt,bound,records,*,cleanup=None,lifecycles=None):
     """Follow the attributed child's latest lifecycle, including native stop and resume."""
-    terminal=None;status=None;forwarded=[];calls={};resumes={};active_use=bound['tool_use_id'];active_at=attempt['started_at']
+    terminal=None;status=None;forwarded=[];calls={};resumes={};failed_resumes=set();active_use=bound['tool_use_id'];active_at=attempt['started_at']
     for record in records:
         if record.get('sessionId') not in (None,bound['parent_session']) or record.get('isSidechain'):continue
         parts=(record.get('message') or {}).get('content');result=record.get('toolUseResult')
@@ -687,6 +772,7 @@ def _claude_terminal(attempt,bound,records):
                     or part.get('type')!='tool_result'):continue
             use=part.get('tool_use_id');call=calls.get(use)
             if part.get('is_error') or isinstance(result,dict) and (result.get('success') is False or result.get('error')):
+                if use in resumes:failed_resumes.add(use)
                 if use==active_use and use in resumes:status,terminal,forwarded,active_at,active_use=resumes[use]
                 continue
             if not isinstance(result,dict):continue
@@ -700,6 +786,7 @@ def _claude_terminal(attempt,bound,records):
                         and not newer(active_at,request.get('timestamp'))
                         and not newer(request.get('timestamp'),record.get('timestamp'))):
                     status='cancelled';terminal=record
+                    if cleanup is not None:cleanup.append((request,record))
             if (use==active_use and result.get('agentId')==bound['child_session'] and result.get('status') in ('completed','cancelled','failed')
                     and newer(record.get('timestamp'),attempt['started_at']) and not newer(active_at,record.get('timestamp'))):
                 if status!=result['status']:status=result['status'];terminal=record
@@ -716,11 +803,68 @@ def _claude_terminal(attempt,bound,records):
                 and (not terminal or not newer(terminal.get('timestamp'),notification['at']))):
             if status!=notification['status'] or newer(notification['at'],terminal.get('timestamp')):
                 status=notification['status'];terminal=record
+    if lifecycles is not None:lifecycles.extend(calls[use][0] for use in resumes if use not in failed_resumes)
     return status,terminal,forwarded,active_at
 
 
 def native_result(root, state, attempt, locator):
-    return saved(lambda: _native_result(root,state,attempt,locator))
+    def read():
+        located=locator or {}
+        child=located.get('child_session') or located.get('session')
+        if isinstance(child,str) and '/' in child or not attempt.get('native_child') and not located.get('tool_use_id') and not child:
+            located=child_locator(root,state,attempt,located,allow_failure=True)
+        return _native_result(root,state,attempt,located)
+    return saved(read)
+
+
+def _claude_interruption(record):
+    # These are host interruption markers, not reports or ordinary tool output.
+    return record.get('type')=='user' and (record.get('message') or {}).get('content') in (
+        [{'type':'text','text':'[Request interrupted by user]'}],
+        [{'type':'text','text':'[Request interrupted by user for tool use]'}])
+
+
+def _claude_user_stop(root,bound,path,records,since):
+    """A child-only human interruption needs both attributed native sources."""
+    try:meta=read_json(path.with_suffix('.meta.json'))
+    except (OSError,ValueError):return None
+    if (not isinstance(meta,dict) or meta.get('stoppedByUser') is not True
+            or meta.get('toolUseId')!=bound['tool_use_id']):return None
+    found=None
+    for record in records:
+        if (record.get('type')=='user' and record.get('isSidechain') is True
+                and (record.get('agentId'),record.get('sessionId'))==(bound['child_session'],bound['parent_session'])
+                and within(record.get('cwd'),root) and _claude_interruption(record)
+                and newer(record.get('timestamp'),since)
+                and (not found or newer(record.get('timestamp'),found['timestamp']))):found=record
+    return found,meta
+
+
+def child_user_interruption(root,state,attempt):
+    """Stop ordering at Resume, not a new grant or a generic cancellation signal."""
+    state=_attempt_parent(state,attempt);bound=attempt.get('native_child')
+    if state['host']!='claude' or not bound:return None
+    path=Path(bound['transcript_path'])
+    if not path.exists():return None
+    stopped=_claude_user_stop(root,bound,path,_records(path),attempt['started_at'])
+    if not stopped:return None
+    parent=_path('claude',bound['parent_session'],state['human'].get('transcript_path'))
+    cleanup=[];lifecycles=[]
+    _claude_terminal(attempt,bound,_records(parent),cleanup=cleanup,lifecycles=lifecycles)
+    record,meta=stopped
+    if record is None:
+        raise Saving('The native child Stop occurrence is still saving; retry the same Resume answer')
+    # Native messaging can reactivate a child, but cannot erase a personal Stop.
+    # Only cleanup belonging to the lifecycle at that Stop can explain its marker.
+    since=attempt['started_at']
+    for request in lifecycles:
+        at=request.get('timestamp')
+        if newer(at,since) and not newer(at,record['timestamp']):since=at
+    # A coordinator's successful TaskStop can be followed by a delayed child
+    # marker. It settles old work; it is not a new instruction from the person.
+    if any(newer(request.get('timestamp'),since) and not newer(request.get('timestamp'),record['timestamp'])
+           for request,_ in cleanup):return None
+    return {'at':record['timestamp'],'record_hashes':[digest(record),digest(meta)]}
 
 
 def _native_result(root, state, attempt, locator):
@@ -731,6 +875,9 @@ def _native_result(root, state, attempt, locator):
         use=locator.get('tool_use_id');launch=None;requested=None;context=None
         if not use and state['host']=='claude' and locator.get('child_session'):
             use=_claude_spawn_use(parent,state['human']['session'],locator['child_session'])
+            locator=locator|{'tool_use_id':use}
+        if not use and state['host']=='codex' and locator.get('child_session'):
+            use=_child(root,state,attempt,locator,binding=False)['tool_use_id']
             locator=locator|{'tool_use_id':use}
         if not isinstance(use,str) or not use:raise Refused('A failed native launch requires its actual tool call identity')
         for record in _records(parent):
@@ -788,27 +935,17 @@ def _native_result(root, state, attempt, locator):
     if state['host']=='claude':
         # Desktop Stop can save only a child interruption and its native sidecar,
         # with no TaskStop or completion event in the old parent conversation.
-        meta_path=path.with_suffix('.meta.json')
-        try:stop_meta=read_json(meta_path)
-        except (OSError,ValueError):stop_meta=None
-        if (isinstance(stop_meta,dict) and stop_meta.get('stoppedByUser') is True
-                and stop_meta.get('toolUseId')==bound['tool_use_id']):
-            for record in child_records:
-                if (record.get('type')=='user' and record.get('isSidechain') is True
-                        and (record.get('agentId'),record.get('sessionId'))==(bound['child_session'],bound['parent_session'])
-                        and within(record.get('cwd'),root)
-                        and (record.get('message') or {}).get('content')==[{'type':'text','text':'[Request interrupted by user]'}]
-                        and newer(record.get('timestamp'),active_at)
-                        and (not terminal_record or newer(record.get('timestamp'),terminal_record.get('timestamp')))):
-                    terminal='cancelled';terminal_record=record
-            if terminal_record in child_records:public_hashes.append(digest(stop_meta))
+        stopped=_claude_user_stop(root,bound,path,child_records,active_at)
+        if stopped and stopped[0] and (not terminal_record or newer(stopped[0]['timestamp'],terminal_record.get('timestamp'))):
+            terminal='cancelled';terminal_record=stopped[0]
+            public_hashes.append(digest(stopped[1]))
     for r in child_records:
         if state['host']=='claude' and (r.get('agentId'),r.get('sessionId'))!=(bound['child_session'],bound['parent_session']):continue
         if terminal_record and newer(r.get('timestamp'),terminal_record.get('timestamp')) and r.get('type') in ('assistant','user'):
             # TaskStop can save its acknowledgement just before the child's
             # interruption marker. Any actual later work invalidates that stop.
             parts=(r.get('message') or {}).get('content')
-            if r.get('type')=='user' and parts==[{'type':'text','text':'[Request interrupted by user]'}]:continue
+            if _claude_interruption(r):continue
             raise Saving('The native child has later activity; await or cancel it, then retry retention with its original locator')
         if state['host']=='codex':
             p=r.get('payload') or {}
@@ -846,10 +983,10 @@ def _native_result(root, state, attempt, locator):
         # own background tools. Neither plain text nor an empty report settles it.
         if terminal=='completed' and not settled:
             raise Saving('The native child still has unsettled tool work; await its final completion, then retry retention with the original locator')
-        if not final:final=report
         handback=any(p.get('name')=='SubagentHandback' for r in child_records
                      for p in ((r.get('message') or {}).get('content') or []) if isinstance(p,dict))
         result=(terminal_record or {}).get('toolUseResult')
+        if handback or isinstance(result,dict) and result.get('handbackReport') or not final:final=report
         if not final and terminal=='completed' and not handback and not (isinstance(result,dict) and result.get('handbackReport')):
             final={'text':'\n\n'.join(public),'status':'unfinished','record_hashes':public_hashes+[digest(terminal_record)]}
     if not final:raise Saving("OH could not yet verify the native child's terminal result; await or cancel the child through its host, then retry retention with the original child and spawn identities")

@@ -8,6 +8,10 @@ next I’ll check cancellation and timeout cases.” Avoid repeating unchanged u
 
 Use the host's supported nonterminal coordinator/progress channel when available,
 with the recipient supplied by the host or coordinator; otherwise ordinary commentary.
+Claude named OH agents have `SendMessage`: send progress with `to: "main"` when
+the native roster identifies `main` as your coordinator. Send the update before
+starting configured verification; ordinary assistant text stays inside the child.
+Use the actual tool and check its result; never claim a message was sent from text alone.
 Do not guess a recipient, add tools, write progress files or create a reporting service.
 Progress grants no approval and does not replace the final report. Never use Claude's
 terminal `SubagentHandback` merely to report progress or restart a child to obtain an update.

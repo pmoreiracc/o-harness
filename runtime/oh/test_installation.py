@@ -538,6 +538,20 @@ class InstallationTest(unittest.TestCase):
             a=build(first,'codex');b=build(second,'claude')
             for plugin in (first, second):self.assert_plugin_branding(plugin)
             self.assertEqual(a['revision'],b['revision'])
+            codex_hooks=json.loads((first/'hooks/hooks.json').read_text())['hooks']
+            claude_hooks=json.loads((second/'hooks/hooks.json').read_text())['hooks']
+            for event in ('PostToolUse','SubagentStop'):
+                self.assertFalse(any('agent-event.py' in h['command']
+                                     for group in codex_hooks.get(event,[]) for h in group['hooks']))
+                self.assertIn('agent-event.py',claude_hooks[event][0]['hooks'][0]['command'])
+            self.assertIn('Interrupt',codex_hooks)
+            self.assertNotIn('Interrupt',claude_hooks)
+            for role in ('assessment','analysis','implementation','reviewer'):
+                self.assertIn('SendMessage',(second/'agents'/(role+'.md')).read_text())
+            for hooks in (codex_hooks,claude_hooks):
+                for event in ('PreToolUse','PostToolUse','SubagentStart'):
+                    self.assertTrue(any('native-control.py' in h['command']
+                                        for group in hooks[event] for h in group['hooks']))
             # Both hosts must receive the current shared interaction contract,
             # including the pending-question lifecycle, through the same resource.
             from .config import HOME
@@ -602,6 +616,12 @@ class InstallationTest(unittest.TestCase):
                     env=env,capture_output=True,text=True,check=True)
                 context=json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
                 self.assertIn('native-session',context);self.assertIn('not an approval',context)
+                self.assertFalse((base/'state').exists())
+            for event in ({'hook_event_name':'PostToolUse','tool_name':'Agent','tool_input':{'prompt':'Unrelated exploration'}},
+                          {'hook_event_name':'SubagentStop','agent_id':'child'}):
+                result=subprocess.run([sys.executable,str(scripts/'agent-event.py'),'claude'],
+                    input=json.dumps(event|{'cwd':tmp,'session_id':'native-session'}),env=env,capture_output=True,text=True,check=True)
+                self.assertEqual(result.stdout,'');self.assertEqual(result.stderr,'')
                 self.assertFalse((base/'state').exists())
 
     def test_ordinary_prompt_hook_has_no_setup_or_project_side_effects(self):

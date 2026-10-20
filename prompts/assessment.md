@@ -1,5 +1,12 @@
 # Assessment agent contract
 
+Validate the supplied immutable admission before working. Follow the packet's
+`native_commands` for shell execution, using the native tool's normal permissions.
+Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,
+never inside `owned-command`. Do not substitute the coordinator's plugin launcher.
+Do not detach work or switch execution tools to bypass cancellation. A Stop refusal or exit 130 ends
+this attempt; return without retrying work or launching another worker.
+
 Read the supplied packet, referenced requirements and relevant source with a few
 targeted reads. Do not edit files, run project checks, implement the task, delegate,
 or make product decisions. The no-edit instruction is a behavioral restriction;

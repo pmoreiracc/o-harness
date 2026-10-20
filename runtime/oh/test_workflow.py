@@ -154,7 +154,7 @@ class NativeFixture:
             return {'host':'codex','session':'s','turn':locator.get('turn','human'),
                     'prompt':locator.get('prompt','approve'),'at':now(),'record_hashes':['native-human'],
                     'transcript_path':str(self.parent_path)}|locator
-        def coordinator(root,state,locator=None):return human(root,locator) if locator else state['human']
+        def coordinator(root,state,locator=None,**kwargs):return human(root,locator) if locator else state['human']
         def child(root,state,attempt,locator):
             return {'child_session':locator.get('child_session','child-'+attempt['id']),
                     'parent_session':state['human']['session'],'profile':attempt['profile'],
@@ -309,6 +309,8 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         implement=native.admit(self.root,'implementation')
         with self.assertRaises(Refused):native.bind(self.root,implement['id'],{'child_session':'first-child'})
         self.assertEqual(load_run(self.root)[1]['attempts'][-1]['id'],implement['id'])
+        native.candidate(self.root)
+        self.assertEqual(load_run(self.root)[1]['attempts'][-1]['native_child']['child_session'],'child-'+implement['id'])
 
     def test_blocked_resume_retains_parent_evidence_and_does_not_spend_review_allowance(self):
         from . import native
@@ -488,7 +490,8 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
                     with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'question_at':'2000-01-01T00:00:00Z'})
                     if host=='claude':
                         hooked={'host':host,'session':'s','turn':'unsaved-hook-turn','transcript_path':str(path),'decision':offered['decision']}
-                        self.assertEqual(native._presented(self.root,hooked,load_run(self.root)[1])['tool_use_id'],'grant')
+                        with patch('oh.authority.native_human',side_effect=self.native_human_original):
+                            self.assertEqual(native._presented(self.root,hooked,load_run(self.root)[1])['tool_use_id'],'grant')
             # The hook's conversation locator plus the decision identity is enough: OH finds
             # the question that showed it, even when the copied turn was never saved.
             hook={'host':'codex','session':'s','turn':'unsaved-hook-turn','transcript_path':str(path),'decision':offer['decision']}
@@ -534,8 +537,47 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         receipt='Arbitrary layout, quoted examples, code and detailed reasoning.\n'+('Full evidence. '*1000)
         clean=PREFIX+json.dumps({'verdict':'clean','findings':[]})+'\n'+receipt
         self.assertTrue(check(clean)['valid'])
+        wrapped='Review finished.\n\n'+clean
+        self.assertTrue(check(wrapped)['valid'])
+        # Receipt examples and ambiguous decisions cannot become clean authority.
+        example='```text\n'+clean+'\n```'
+        self.assertFalse(check(example)['valid'])
+        self.assertFalse(check(wrapped+'\n'+clean)['valid'])
+        self.assertTrue(check(wrapped+'\n'+example)['valid'])
         self.assertFalse(check(PREFIX+json.dumps({'verdict':'clean','findings':[]})+'\n')['valid'])
+        self.assertFalse(check('Summary only.\n'+PREFIX+json.dumps({'verdict':'clean','findings':[]}))['valid'])
         self.approve();self.assess();self.implement()
+        # Replay the old first-line parser's retained failure, not a new review.
+        wrapped_blocking='Review finished.\n'+PREFIX+json.dumps({'verdict':'findings','findings':[
+            {'severity':'blocking','family':'retained','description':'Concrete retained defect.'}]})+'\n'+receipt
+        with patch('oh.review_report.read',return_value=({'summary':wrapped_blocking,'findings':[]},['Missing structured review decision'])):
+            old=self.reviewed(wrapped_blocking)
+        directory=Path(old['evidence'])
+        originals={name:(directory/name).read_bytes() for name in ('result.json','native-result.json','review.md')}
+        journal,before=load_run(self.root)
+        native_source=json.loads(originals['native-result.json'])
+        with patch('oh.authority.native_result',return_value=native_source|{'text':'Changed reviewer result'}):
+            with self.assertRaisesRegex(Refused,'evidence changed'):native.retain(self.root,old['id'],{})
+        candidate=self.root/'output.txt';contents=candidate.read_bytes();candidate.write_bytes(b'later change\n')
+        with self.assertRaisesRegex(Refused,'earlier candidate'):native.retain(self.root,old['id'],{})
+        candidate.write_bytes(contents)
+        recovered=native.retain(self.root,old['id'],{})
+        self.assertEqual((recovered['outcome'],recovered['original_outcome']),('blocking','review_incomplete'))
+        self.assertFalse(recovered['report_issues'])
+        with self.assertRaises(Refused):native.complete(self.root,old['id'])
+        self.assertEqual({name:(directory/name).read_bytes() for name in originals},originals)
+        _,after=load_run(self.root)
+        self.assertEqual(len(after['attempts']),len(before['attempts']))
+        self.assertEqual(after.get('review_grants'),before.get('review_grants'))
+        records=journal.records()
+        self.assertEqual(native.retain(self.root,old['id'],{}),recovered)
+        self.assertEqual(journal.records(),records)
+        self.assertIn('reparsed-review.json',(journal.path/'index.md').read_text())
+        collect()
+        with connect() as db:
+            observed=db.execute('SELECT outcome,ended,duration_ms FROM attempts WHERE id=?',(old['id'],)).fetchone()
+        self.assertEqual(observed['outcome'],'blocking')
+        self.assertEqual(observed['duration_ms'],old['duration_ms'])
         findings=[{'severity':'unknown','description':'Unclassified neighboring risk.'},
             {'severity':'blocking','description':'Concrete retained defect.','family':'retained','relation':None},
             {'severity':'concern','description':'A concrete concern.','family':'concern'}]
@@ -552,7 +594,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertIn(receipt,(Path(review['evidence'])/'review.md').read_text())
         self.assertEqual(json.loads((Path(review['evidence'])/'native-result.json').read_text())['text'],original)
         index=finding_index(load_run(self.root)[1],'1')
-        self.assertEqual(index['families'][0]['occurrences'][0]['id'],review['id']+'#2')
+        self.assertEqual(index['families'][0]['occurrences'][-1]['id'],review['id']+'#2')
         self.assertEqual(index['families'][1]['occurrences'][0]['id'],review['id']+'#3')
         self.assertTrue(index['incomplete_reviews'][-1]['issues'])
         with self.assertRaises(Refused):native.complete(self.root,review['id'])
@@ -562,12 +604,53 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(json.loads(Path(packet['current_review']['report']['path']).read_text())['receipt'],receipt)
         self.assertEqual(packet['current_review']['attempt'],review['id'])
 
+    def test_native_lifecycle_events_recover_binding_and_retain_once(self):
+        from . import native,worker_checks
+        from .native_events import handle
+        with patch.object(self,'human',return_value={'host':'claude','session':'s','turn':'1','prompt':'approve'}):self.approve()
+        admitted=native.admit(self.root,'assessment')
+        event={'hook_event_name':'PostToolUse','session_id':'s','tool_name':'Agent','tool_use_id':'spawn',
+               'tool_input':{'subagent_type':'o-harness:assessment','prompt':admitted['id']},
+               'tool_response':{'agentId':'child','status':'async_launched'}}
+        journal,before=load_run(self.root)
+        records=journal.records()
+        self.assertEqual(handle(self.root,'codex',event),{})
+        self.assertEqual(handle(self.root,'claude',event|{'session_id':'foreign'}),{})
+        self.assertEqual(journal.records(),records)
+        nested=self.root/'source';nested.mkdir()
+        self.assertEqual(handle(nested,'claude',event)['binding'],'saved')
+        records=journal.records()
+        handle(self.root,'claude',event)
+        self.assertEqual(journal.records(),records)
+        bound=load_run(self.root)[1]['attempts'][-1]['native_child']
+        with patch('oh.authority.native_child',return_value=bound|{'record_hashes':['later-native-message']}):
+            self.assertEqual(native.bind(self.root,admitted['id'],{'child_session':'child'}),bound)
+        self.assertEqual(journal.records(),records)
+        with patch('oh.authority.native_child',return_value=bound|{'child_session':'different-child'}):
+            with self.assertRaisesRegex(Refused,'cannot be replaced'):
+                native.bind(self.root,admitted['id'],{'child_session':'different-child'})
+        self.native_results[admitted['id']]={'text':json.dumps({'difficulty':'standard','rationale':'Bound.'}),'status':'completed'}
+        stopped={'hook_event_name':'SubagentStop','session_id':'s','agent_id':'child','last_assistant_message':'Untrusted summary'}
+        self.assertEqual(handle(self.root,'claude',stopped)['outcome'],'assessed')
+        records=journal.records();self.assertEqual(handle(self.root,'claude',stopped),{})
+        self.assertEqual(journal.records(),records)
+        # The same checked fallback works when the host has no lifecycle hooks.
+        author=native.admit(self.root,'implementation')
+        worker_checks.admission(Path(author['request']).parent)
+        self.assertTrue(load_run(self.root)[1]['attempts'][-1]['native_child'])
+        self.assertEqual(len(load_run(self.root)[1]['attempts']),len(before['attempts'])+1)
+
     def test_completion_commits_exact_reviewed_tree_once_and_task_grants_do_not_expand(self):
         from . import native
         configure(self.root,tasks_per_batch=1)
         self.approve(self.tasks[:2]);self.assess();self.implement()
-        review=self.reviewed();head=self.git('rev-parse','HEAD')
+        # Completion itself repairs the old preamble failure on the same candidate.
+        wrapped='Finished review.\nOH-REVIEW-DECISION: {"verdict":"clean","findings":[]}\nChecked the exact candidate.'
+        with patch('oh.review_report.read',return_value=({'summary':wrapped,'findings':[]},['Missing structured review decision'])):
+            review=self.reviewed(wrapped)
+        head=self.git('rev-parse','HEAD')
         completed=native.complete(self.root,review['id'])
+        self.assertEqual(load_run(self.root)[1]['attempts'][-1]['original_outcome'],'review_incomplete')
         self.assertEqual(self.git('rev-parse','HEAD^'),head)
         self.assertEqual(self.git('rev-parse','HEAD^{tree}'),review['git_tree'])
         self.assertEqual(native.complete(self.root,review['id']),completed)

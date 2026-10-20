@@ -184,8 +184,12 @@ def index(journal, state):
             scope = state.get('scope_records', {}).get(attempt['id'])
             if resolution:lines.append(f"| Decision | | {resolution['choice']} | |")
             if scope:lines.append(f"| Scope | | {scope['action']} | |")
+            if attempt.get('late_report'):
+                lines.append("| Late native evidence | | "+artifact('Original worker report',f"attempts/{attempt['id']}/late-result.json")+"; attempt remains cancelled | |")
             if attempt.get('normalized_report'):
-                lines.append(f"| Handoff correction | | "+artifact('Unambiguous legacy references',f"attempts/{attempt['id']}/normalized-report.json")+"; original outcome retained | |")
+                name='reparsed-review.json' if role=='review' else 'normalized-report.json'
+                label='Recovered review decision' if role=='review' else 'Unambiguous legacy references'
+                lines.append(f"| Handoff correction | | "+artifact(label,f"attempts/{attempt['id']}/{name}")+"; original outcome retained | |")
         lines.append('')
         from .handoff import finding_index
         findings=finding_index(state,task['id'])

@@ -1,14 +1,30 @@
 """Small review decisions; the accompanying receipt is never interpreted as control data."""
 import json
+import re
 
 PREFIX = 'OH-REVIEW-DECISION: '
 SEVERITIES = ('blocking', 'concern', 'scope')
 
 
 def read(text):
-    header, _, receipt = text.partition('\n')
-    header = header.strip()
-    structured = header.startswith(PREFIX)
+    # A native hand-back may introduce the decision with a short summary. Quoted
+    # examples are receipt content, and competing decisions are never first/last-wins.
+    lines=text.splitlines(keepends=True);decisions=[];fence=None
+    for index,line in enumerate(lines):
+        stripped=line.strip()
+        marker=re.match(r'^ {0,3}(`{3,}|~{3,})',line)
+        if marker:
+            token=marker[1]
+            if fence is None:fence=token
+            elif token[0]==fence[0] and len(token)>=len(fence):fence=None
+            continue
+        if fence is None and (index==0 or len(line)-len(line.lstrip(' '))<=3 and not line.startswith('\t')) and stripped.startswith(PREFIX):decisions.append(index)
+    if len(decisions)>1:
+        return {'summary':text,'findings':[]}, ['Multiple review decisions; preserve the complete report and resolve the ambiguity.']
+    structured=bool(decisions)
+    index=decisions[0] if structured else 0
+    header=lines[index].strip() if lines else ''
+    receipt=''.join(lines[:index]+lines[index+1:]) if structured else ''
     candidate = header[len(PREFIX):] if structured else text.strip()
     # Compatibility with explicit JSON reports already used by native hosts.
     if candidate.startswith('```json\n') and candidate.endswith('\n```'):
@@ -37,7 +53,7 @@ def read(text):
     if verdict not in allowed:issues.append('Decision verdict must be clean, findings or incomplete.')
     elif (verdict == 'clean' and findings) or (verdict == 'findings' and not findings):
         issues.append('Decision verdict and finding list disagree.')
-    if structured and not receipt.strip():issues.append('Keep the full review receipt after the decision line.')
+    if structured and not ''.join(lines[index+1:]).strip():issues.append('Keep the full review receipt after the decision line.')
     return report, issues
 
 

@@ -3,9 +3,11 @@
 OH's native workflow candidate uses skills and focused validation helpers. The host
 runs agents and their tools; OH retains scope, allowances and evidence. The observed
 Codex parent-Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81)
-and is accepted as non-blocking for activation and release. OH must still distinguish
-a stopped parent from active children. This is not a claim of validated cancellation
-on other host surfaces; see [the migration plan](plans/native-workflows.md).
+and [upstream #55521](https://github.com/openai/codex/issues/55521).
+The [native Stop recovery implementation](plans/native-stop-recovery.md) adds tool
+revocation and owned command cleanup. Disposable Codex Desktop probes established
+the approach; integrated host acceptance remains pending. A stopped parent, revoked
+worker and terminated native model are distinct facts.
 
 | Path | Contents |
 |---|---|
@@ -50,10 +52,29 @@ never human approval, including when Claude delivers them as user-role messages.
 Claude Desktop Stop may leave only the child's native interruption record and
 spawn-linked `stoppedByUser` metadata. Together they establish interruption when
 no later lifecycle or child activity supersedes them; no parent completion is required.
-An omitted Claude spawn-call ID is recovered only from a unique native async launch
+Both native user-interruption marker variants are recognized, including interruption
+during tool use; the marker still needs the associated native cancellation evidence.
+An omitted Claude spawn-call ID is recovered only from a unique native launch
 result, then checked against the immutable admission as usual.
 
-The native host owns tool permissions, shell execution and cancellation. Reviewers
+Claude's Agent and SubagentStop hooks reuse checked binding and retention. A hook is
+a wakeup, not proof that the child's tools have settled; delayed evidence is retried
+through the same helpers. Codex task paths resolve through native session metadata.
+Child admission and author helpers can recover a missed binding on both hosts, preserving
+the original profile checks and admission. No hook launches work or grants continuation.
+This keeps the golden reference's automatic bookkeeping while checking the delivered
+report rather than copying `last_assistant_message`: current Claude can deliver its report
+through `SubagentHandback` before Stop, and hooks can precede saved terminal evidence.
+See [Claude's lifecycle payloads](https://code.claude.com/docs/en/hooks#subagentstop) and
+[Codex's native orchestration](https://learn.chatgpt.com/docs/agent-configuration/subagents#orchestration).
+
+Review decisions may follow a short preamble, but must be unique and outside quoted
+examples. The complete receipt is retained. An older missing-header classification can
+be corrected from the same native result on the unchanged subject without a new round;
+its original result and receipt remain immutable and the correction is journaled separately.
+
+The native host owns tool permissions and agent execution. OH shell wrappers inherit
+those permissions and use the existing process cleanup utilities. Reviewers
 follow a no-edit contract under inherited host permissions. Candidate mutation
 invalidates their receipt; this does not provide a separate filesystem sandbox and
 cannot detect an edit subsequently reverted.
@@ -142,12 +163,37 @@ arbitrary command proxy. Project checks use the saved configuration and ordinary
 check process utilities. Settings, setup, backups and services remain explicit
 commands. A native permission rejection is not bypassed through another entry.
 
-Transport cancellation alone does not establish workflow Stop. The recorded Codex
-terminal probe left a delegated command running after parent interruption. Stop must
-be confirmed by supported native cancellation before later work or completion. OH
-adds no replacement process supervisor. The unresolved host behavior is accepted as
-non-blocking and tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81);
-see the validation record rather than assuming parent interruption cancels children.
+Transport cancellation alone does not establish workflow Stop. `cancellation.py`
+records attributed native interruptions outside the consumer checkout. Codex uses
+its Interrupt callback; both hosts can recover from saved interruption records.
+Tool callbacks block revoked workers. Each native shell command is reserved by its
+PreToolUse callback and runs through a literal `owned-command` invocation using the
+same shell tool and sandbox. No hook returns permission approval or rewrites inputs.
+Worker cleanup receipts use private temporary storage; shell commands only read
+OH’s durable state. Configured checks reuse their existing process groups or Windows jobs.
+Native SIGINT/SIGTERM unwinds the check helper through command cleanup. Owned command
+execution waits until its kernel process identity has been saved; Windows processes
+start suspended in a named job that terminates members when its last handle closes.
+After a stopped verification helper releases its execution lock, Resume can reconcile
+a missing configured-check receipt from that saved identity. Unknown or reused identities
+never authorize a signal. Historical receipts without an identity require conclusive
+cleanup evidence, such as a kernel boot time later than the command start.
+
+Resume verifies the existing human answer, waits for command/tool cleanup, and then
+transfers ownership under the tool-admission lock. Old attempts remain revoked after
+same-conversation or cross-conversation continuation. A cleanup receipt does not
+claim native model termination. Late reports remain attached to the original attempt
+and cannot turn its cancelled outcome into success.
+The exact instruction “Retry the same Resume answer now” preserves the existing
+answer; it grants nothing independently. Changed instructions or a later Stop still
+invalidate continuation. Repeated questions are matched to their prepared decision's
+creation time, so an older identical question cannot replace the current answer.
+
+Native hooks are trusted host integrations, not a security sandbox. A missing or
+failed callback, a killed wrapper, detached work or an external service can prevent
+verified cleanup. OH must retain that uncertainty and refuse overlapping work.
+The [evidence and acceptance plan](plans/native-stop-recovery.md) separates live
+prototype results from fixture coverage and pending platform tests.
 
 ## Git subjects, completion and publication
 
