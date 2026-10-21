@@ -5,6 +5,8 @@ description: Deliver approved design tasks or a bounded quick fix with fresh nat
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
 entry and communication protocol before new work. For a matching unfinished run,
 follow `workflows/recovery.md`; resume its saved phase instead of restarting these steps.
+Use its shared recovery gate (Continue, Start fresh, Stop and take over), including
+when old native transcripts are unavailable. Do not ask the person to repair OH state.
 If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Select the work

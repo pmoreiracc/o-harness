@@ -119,8 +119,10 @@ def _record_stop(owner, turn, record):
 def _turn_stopped(owner, turn):
     """Observed owner turns include recovery turns; only an actual Stop revokes a turn."""
     path = Path(owner['marker'])
-    if path.exists() and read_json(path).get('turn') == turn:
-        return True
+    if path.exists():
+        record = read_json(path)
+        if record.get('event') != 'recovery' and record.get('turn') == turn:
+            return True
     return any((path.parent / path.stem / (digest([turn, event]) + '.json')).exists()
                for event in ('Interrupt', 'native-interruption'))
 
@@ -540,6 +542,33 @@ def settlement(root, attempt):
 
 def reconcile_tools(root, attempt):
     """Reconcile under native's control lock, before retention/ownership transfer."""
+    value = _read(root)
+    control = value['attempts'].get(attempt['id']) if value else None
+    launches = {key for key, tool in value['tools'].items()
+                if tool['attempt'] == attempt['id'] and tool['kind'] == 'launch'
+                and not tool.get('ended')} if control else set()
+    if launches:
+        from .authority import _records
+        owner = value['owners'][control['owner']]
+        ended = set()
+        # Launch calls belong to the original parent, including rejected calls
+        # with no child and earlier calls superseded by a corrected retry.
+        # Settling a launch does not establish child or owned-command completion.
+        for record in _records(owner['transcript']):
+            if owner['host'] == 'codex' and record.get('type') == 'response_item':
+                item = record.get('payload') or {}
+                if item.get('type') in ('function_call_output', 'custom_tool_call_output') and item.get('call_id') in launches:
+                    ended.add(item['call_id'])
+            if (owner['host'] == 'claude' and record.get('type') == 'user'
+                    and record.get('sessionId') == owner['session'] and not record.get('isSidechain')):
+                content = (record.get('message') or {}).get('content')
+                for item in content if isinstance(content, list) else []:
+                    if isinstance(item, dict) and item.get('type') == 'tool_result' and item.get('tool_use_id') in launches:
+                        ended.add(item['tool_use_id'])
+        if ended:
+            with _edit(root) as updated:
+                for key in ended:
+                    updated['tools'][key].update(ended=now(), completion_source='native-parent-record')
     bound = attempt.get('native_child')
     if not bound:
         return
@@ -666,17 +695,17 @@ def unlaunched_stop(root, attempt, stopped):
 
 
 @contextmanager
-def continuation(root, state, source):
+def continuation(root, state, source, *, replacing=False):
     """Serialize the final ownership transfer with a native Stop during cleanup."""
     from .authority import newer
     proposed = state | {'human': source}
     key = register_owner(root, proposed, active=False)
-    for owner_state in (state, proposed):
+    for owner_state in ((proposed,) if replacing else (state, proposed)):
         if not poll(root, state=owner_state):
             raise Refused('Native interruption evidence is still being saved or read. Retry the same Resume answer.')
     from .authority import child_user_interruption
     control = _read(root)
-    for attempt in state.get('attempts', []):
+    for attempt in (() if replacing else state.get('attempts', [])):
         owner = (control or {}).get('attempts', {}).get(attempt['id'], {}).get('owner')
         if owner and owner != owner_key(state):
             continue  # A previous owner epoch cannot revoke this continuation.
@@ -684,7 +713,7 @@ def continuation(root, state, source):
         if stopped and not newer(source.get('at'), stopped['at']):
             raise Refused('Work was stopped after this Resume answer. Invoke the work again to resume; the old answer cannot restart it.')
     with _edit(root) as value:
-        for owner_id in {owner_key(state), key}:
+        for owner_id in ({key} if replacing else {owner_key(state), key}):
             owner = value['owners'].get(owner_id)
             if not owner or not Path(owner['marker']).exists():
                 continue

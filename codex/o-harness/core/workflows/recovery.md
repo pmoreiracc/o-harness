@@ -1,5 +1,46 @@
 # Saved work and recovery
 
+## Delivery entry and recovery
+
+For an unfinished delivery, use `decision-request recover --run ID` (Codex
+`decision_request` with kind `recover`). It inspects Git and prepares one native
+question: **How would you like OH to proceed with this delivery?** Show the
+returned work, branch, affected paths, restart base and task allowance with its
+short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
+the returned options; never substitute a generic Resume/Not now question.
+
+Bind the chosen action from the returned `actions` map with `decision` and that
+same human locator, including its decision ID. Continue uses `resume`, Start fresh
+uses `restart`, and Stop and take over uses `stop`. The helper retains available
+results, revokes old execution, checks tracked operation cleanup and binds the new
+owner. A deleted chat does not require recreating its transcript: missing results
+are abandoned, never counted as successful. Preserve the answer through bounded
+cleanup retries; do not ask again or make the person manage worker IDs.
+
+Continue preserves existing changes and usable evidence. When the old branch is
+already merged and has no extra changes, it starts from the refreshed base on the
+delivery branch. Start fresh discards precisely the changes and branch work shown
+in the question, starts from its displayed base, and authorizes the displayed
+bounded task batch. No backup is made; ignored files and other branches are not
+discarded. Existing review usage and findings remain. Stop and take over revokes
+OH execution and leaves files untouched. If files changed after the question,
+inspect those changes before presenting the updated effect; the old answer cannot
+authorize discarding unseen work.
+
+After Continue or Start fresh, read the returned phase and finish its remaining
+assessment, implementation, checks, independent review and completion. Do not
+reprepare the same scope or reset allowances. Missing credentials, required project
+checks, scope changes and operations whose cleanup is unverified still need their
+specific remedy; recovery does not bypass these prerequisites.
+
+For new design delivery, `scope prepare --doc` refreshes the base, checks actual
+Git ancestry, selects approved pending work and creates its delivery branch. It
+preserves unmerged work instead of replacing it. Do not prepare new work on a
+merged branch merely because it was already open. Dirty unrelated work requires
+an explicit scope/ownership decision; never discard it as routine entry cleanup.
+
+## Planning, review and previously presented Resume decisions
+
 Read when saved work matches the request, an attempt needs recovery, or Pause/Stop is requested.
 Read `workflows/decisions.md` before the Resume question. Prepare `decision-request resume --run ID`
 first, present its actual question, and preserve the answer while settling old native work.

@@ -28,7 +28,9 @@ words: read their saved scope/report and judge whether this is the same work. Ne
 build a similarity parser or silently absorb a changed scope.
 
 For a matching saved run, read `workflows/recovery.md` and `workflows/decisions.md`
-before the first Resume question. Settle prior native work, then bind the same answer;
+before the first question. Delivery uses `decision-request recover` and its Continue,
+Start fresh, Stop and take over choices; bind its returned action with `decision`.
+Other workflows use Resume. Settle prior native work, then bind the same answer;
 continue its actual phase without new scope, repeated questions or renewed allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
 

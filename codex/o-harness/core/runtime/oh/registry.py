@@ -1,15 +1,25 @@
 """External project profiles and checkout identities; consumers remain untouched."""
 from pathlib import Path
 from contextlib import ExitStack
+from subprocess import CalledProcessError
 from .storage import (Refused, atomic_json, digest, git, identifier, lock, read_json,
                       state_home, state_writer, validate_id)
 
 
-def identity(root):
+def identity(root, revision='HEAD'):
     root = Path(root).resolve(strict=True)
-    # Resolve all three paths in one Git process, but still inspect the live folders on every lookup.
-    paths = git(root, 'rev-parse', '--path-format=absolute', '--show-toplevel',
-                '--absolute-git-dir', '--git-common-dir').splitlines()
+    # Git distinguishes a worktree's private admin directory from its shared repository.
+    arguments = ['rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']
+    if revision is not None:arguments += ['--verify', '--quiet', revision + '^{commit}']
+    commit = None
+    try:
+        paths = git(root, *arguments).splitlines()
+        if revision is not None:commit = paths.pop()
+    except CalledProcessError as exc:
+        if exc.returncode != 1:raise
+        # --verify returns 1 for an unborn HEAD or missing saved commit; the paths
+        # printed before it still identify the repository without another process.
+        paths = exc.output.decode().strip().splitlines()
     if len(paths) != 3:
         # POSIX paths can contain newlines: keep the individual queries when line separation is ambiguous.
         paths = [git(root, 'rev-parse', '--show-toplevel'),
@@ -18,44 +28,38 @@ def identity(root):
     top, admin, common = [Path(path).resolve(strict=True) for path in paths]
     if root != top:
         raise Refused('Select the repository root, not a subdirectory')
-    return {'root': str(root), 'admin': str(admin), 'common': str(common),
-            'root_identity': stamp(root), 'admin_identity': stamp(admin),
-            'common_identity': stamp(common)}
+    return {'root': str(root), 'admin': str(admin), 'common': str(common), 'commit': commit}
 
 
-def stamp(path):
-    st = Path(path).stat()
-    value = {'device': st.st_dev, 'inode': st.st_ino}
-    # Directory mtime/ctime change during normal Git work. Birth time does not.
-    if hasattr(st, 'st_birthtime'):
-        value['birth'] = st.st_birthtime
-    return value
+def same_repository(recorded, current):
+    """Same local Git store containing the recorded history, even if its first worktree is gone."""
+    if 'commit' not in recorded or recorded.get('common') != current['common']:return False
+    if recorded['commit'] is None or recorded['commit'] == current['commit']:return True
+    try:return git(current['root'], 'rev-parse', '--verify', '--quiet', recorded['commit'] + '^{commit}') == recorded['commit']
+    except CalledProcessError:return False
 
 
 def verified(recorded):
-    """Whether a recorded checkout is still there, with the same folder and Git folders (no Git call)."""
-    try:return all(stamp(recorded[key]) == recorded[key + '_identity'] for key in ('root', 'admin', 'common'))
-    except (OSError, KeyError, TypeError, ValueError):return False
+    """The registered paths still resolve to Git and contain their recorded commit."""
+    try:return ('commit' in recorded and all(Path(recorded[key]).is_dir() for key in ('root', 'admin', 'common'))
+                and identity(recorded['root'], recorded['commit']) == recorded)
+    except (OSError, KeyError, TypeError, ValueError, CalledProcessError, Refused):return False
 
 
-def repository_projects(current):
+def repository_projects(current, *, excluding_root=None):
     """Registered projects of the Git repository `current` belongs to: those with a registration whose
-    Git common folder is this checkout's (same path and folder id). Without birth times (Linux), a
-    folder deleted and re-created at the same path may get the same id back; see issue #20."""
+    Git common folder and recorded history match this checkout's. Other clones have another path."""
     from .config import registrations
-    def same(recorded):
-        try:return (recorded.get('common_identity') == current['common_identity'] == stamp(recorded['common'])
-                    and recorded['common'] == current['common'])
-        except (OSError, KeyError, TypeError, ValueError):return False
-    return {p for p, found in registrations().items() if any(same(e) for e in found)}
+    return {p for p, found in registrations().items()
+            if any(e['root'] != excluding_root and same_repository(e, current) for e in found)}
 
 
-def join_candidates(current, name, here):
+def join_candidates(current, name, here, *, replacing=False):
     """(present projects holding `name`, projects of this repository named `name` that a checkout could
     join). When a present project holds the name, only it can be joined."""
     from .config import name_of, projects_named
     holders = projects_named(name, excluding_root=here)
-    same = {p for p in repository_projects(current) if name_of(p) == name}
+    same = {p for p in repository_projects(current, excluding_root=here if replacing else None) if name_of(p) == name}
     return holders, (holders & same if holders else same)
 
 
@@ -82,11 +86,14 @@ def lookup(root):
     if not path.is_file():
         raise Refused('Project is not registered. Run oh init once for this checkout.')
     value = read_json(path)
-    if value.get('schema_version') != 1 or value.get('identity') != identity(root):
+    if (value.get('schema_version') != 2 or value.get('identity', {}).get('root') != str(Path(root).resolve())
+            or not verified(value.get('identity', {}))):
         from .config import name_of
         name = name_of(value.get('project', '')) if isinstance(value.get('project'), str) else None
-        raise Refused(f'Checkout identity changed. For a new checkout at this path, run oh init --name "{name or "<name>"}" --replace; '
-                      'for a moved one, reattach it. Old grants were not reused.')
+        reason = ('This checkout uses the older filesystem registration. Start fresh with '
+                  if value.get('schema_version') == 1 else 'The registered Git checkout or saved commit is unavailable. Restore it, or start fresh with ')
+        raise Refused(reason + f'oh init --name "{name or "<name>"}" --replace. '
+                      'Fresh registration archives the old binding and does not reuse its grants; moved Git registrations can use --reattach.')
     validate_id(value['checkout']); validate_id(value['project'])
     return value
 
@@ -149,7 +156,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             # at an old path, whose replaced registration counts too) joins that project, as --attach would,
             # with a fresh checkout id and no grants.
             here = str(Path(root).resolve())
-            holders, match = join_candidates(current, name, here)
+            holders, match = join_candidates(current, name, here, replacing=replace)
             if len(match) > 1 and not holders:
                 raise Refused(f'Several earlier OH projects of this repository are named {name}; join one with '
                               f'oh init --name "{name}" --attach <id> (ids: {", ".join(sorted(match))})')
@@ -161,7 +168,8 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             if (attach and not joined) or reattach or imported:raise Refused('Replacement needs a fresh profile; it cannot import old grants')
             if not path.exists():raise Refused('No prior checkout registration exists to replace')
             previous=read_json(path)
-            if previous.get('identity')==current:raise Refused('This checkout has not been replaced; its existing registration remains authoritative')
+            if previous.get('schema_version') == 2 and previous.get('identity', {}).get('commit') and verified(previous['identity']):
+                raise Refused('This Git checkout still matches its registration; its existing registration remains authoritative')
             old_profile=read_json(home/'projects'/previous['project']/'profile.json')
             preserved_plans={'private_plans_name':old_profile.get('private_plans_name',old_profile['name']),
                              'private_plans_legacy':old_profile.get('private_plans_legacy',previous['project'])}
@@ -172,6 +180,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             from .private_storage import owned
             if old_folder.is_dir() or owned(old_folder,old_profile):preserved_plans['private_plans_path']=str(old_folder)
             preserved_plans['private_plans_previous_owner']=previous['project']
+            preserved_plans['private_plans_previous_root']=previous['identity']['root']
             if old_folder.is_dir() and not attach:
                 from .private_storage import reserve
                 reserve(old_folder,preserved_plans|{'id':identifier()},claim=False)
@@ -181,6 +190,10 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             existing = lookup(root)
             if attach and existing['project'] != attach:
                 raise Refused('Checkout is already registered to another project')
+            # An empty repository has no history or runnable scope yet. Bind its first
+            # commit during explicit enrollment, before any new work is approved.
+            if existing['identity']['commit'] is None and current['commit'] is not None:
+                atomic_json(path, existing | {'identity': current})
             return profile(root)
         if reattach:
             validate_id(reattach)
@@ -189,9 +202,15 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             if len(matches) != 1:
                 raise Refused('Moved checkout identity is missing or ambiguous')
             previous = matches[0]
-            keys = ('root_identity', 'admin_identity', 'common_identity')
-            if any(current[k] != previous['identity'][k] for k in keys):
-                raise Refused('This is not the original moved checkout; register it separately')
+            recorded = previous['identity']
+            if previous.get('schema_version') != 2:
+                raise Refused('An older filesystem registration cannot be reattached; register this checkout fresh')
+            def relocated(key):
+                old = Path(recorded[key]); before = Path(recorded['root'])
+                return str(Path(root).resolve() / old.relative_to(before)) if old.is_relative_to(before) else str(old)
+            expected = recorded | {key: relocated(key) for key in ('root', 'admin', 'common')}
+            if not verified(expected):
+                raise Refused('The moved checkout does not contain the registered Git layout and commit; restore them or register it separately')
             if Path(previous['identity']['root']).exists():
                 raise Refused('Original checkout still exists; do not alias its active grants')
             from .config import name_of, projects_named
@@ -199,7 +218,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
             if taken:
                 raise Refused(f'Another project took the name {name_of(previous["project"])} while this checkout was away. '
                               'Rename that project first (oh --root <its checkout> rename <new name>), then reattach.')
-            entry = previous | {'identity': current}
+            entry = previous | {'identity': expected}
             atomic_json(path, entry, immutable=True)
             # Old locator becomes a tombstone; it can never silently authorize a replacement.
             old = home / 'registry/checkouts' / (digest(previous['identity']['root']) + '.json')
@@ -210,7 +229,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
         if attach:
             value = read_json(destination)
             known = [read_json(p) for p in (home / 'registry/checkouts').glob('*.json')]
-            if not joined and not any(v.get('project') == attach and v['identity']['common_identity'] == current['common_identity'] for v in known):
+            if not joined and not any(v.get('project') == attach and same_repository(v['identity'], current) for v in known):
                 raise Refused('Automatic project attachment is limited to sibling worktrees; clones need separate registration')
         else:
             value = (dict(imported) if imported else {}) | preserved_plans | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
@@ -225,7 +244,7 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
                 raise Refused('Existing external profile differs; preserve it and resolve the import explicitly')
             if not destination.exists():
                 atomic_json(destination, value, immutable=True)
-        entry = {'schema_version': 1, 'checkout': identifier(), 'project': project_id, 'identity': current}
+        entry = {'schema_version': 2, 'checkout': identifier(), 'project': project_id, 'identity': current}
         try:atomic_json(path, entry, immutable=not replace)
         except OSError as exc:
             from .private_storage import published

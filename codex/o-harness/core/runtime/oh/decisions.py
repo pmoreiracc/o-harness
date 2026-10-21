@@ -55,6 +55,9 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None):
     from .native import _locked, _home, _immutable, _attempt, _saved_subject, _active
     with _locked(root):
         journal,state=load_run(root,run)
+        if kind=='recover':
+            from .recovery import prepare
+            return prepare(root,state)
         task=next_task(state|{'status':'running'}) or next((t for t in state['tasks'] if t['id'] not in state['done']),state['tasks'][-1])
         subject=_saved_subject(state)
         details=f'Work: {subject}\nBranch: {state["branch"]}'
@@ -130,8 +133,8 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
             or value['run']!=state['id'] or value['attempt']!=attempt):
         raise Refused('This answer belongs to a different decision')
     question=source.get('question','')
-    if value.get('presentation')=='checkpoint-menu' and source.get('via')=='question':
-        if {k:source.get(k) for k in ('host','session')}!=value['coordinator']:
+    if value.get('presentation') in ('checkpoint-menu','recovery-menu') and source.get('via')=='question':
+        if value['presentation']=='checkpoint-menu' and {k:source.get(k) for k in ('host','session')}!=value['coordinator']:
             raise Refused('This checkpoint belongs to its saved coordinator; resume the work before presenting a new checkpoint')
         shown=source.get('question_options')
         expected=value['menu_options']
@@ -150,8 +153,9 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     if not replay:
         if value.get('presentation')=='checkpoint-menu' and {k:state['human'].get(k) for k in ('host','session')}!=value['coordinator']:
             raise Refused('This checkpoint coordinator changed; use the current saved-work decision')
-        if value['boundary']!=boundary(root,state,value['kind'] if choices else kind,attempt):raise Refused('The decision subject changed; present the actual current effect before granting authority')
-        if choices and value['checkpoint_status']!=state['status']:raise Refused('This checkpoint changed; present its current actions before continuing')
+        compared=boundary(root,state,'resume' if value.get('presentation')=='recovery-menu' else value['kind'] if choices else kind,attempt)
+        if value['boundary']!=compared:raise Refused('The decision subject changed; present the actual current effect before granting authority')
+        if value.get('presentation')=='checkpoint-menu' and value['checkpoint_status']!=state['status']:raise Refused('This checkpoint changed; present its current actions before continuing')
         if choices and kind=='publish':
             from .publication import destination
             from .branches import trunk

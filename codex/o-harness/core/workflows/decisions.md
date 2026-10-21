@@ -24,6 +24,18 @@ answer across recoverable failures; do not regenerate the question after it was 
 If the person changes the requested scope/count, prepare that actual effect and ask only
 for the changed boundary. Do not infer grants from a model's paraphrase of free text.
 
+## Delivery recovery
+
+Use `decision-request recover --run ID` for an unfinished delivery. Show its Git
+context and discard effect, then its native single-select question with Continue,
+Start fresh and Stop and take over. Use the returned `actions` map with `decision`;
+the existing `continue` action is a task-batch grant, not this recovery's Continue.
+Recovery's Continue maps to `resume`, Start fresh to `restart`, and Stop to `stop`.
+Use the exact selected label if answered in ordinary chat; a bare Yes does not
+choose among these different effects. Missing old transcripts never supply a
+successful result. The verified new decision authorizes retirement and recovery
+only after old execution is revoked and tracked operations are settled.
+
 ## Completed-task checkpoint
 
 After a completed batch, call `decision-request continue` when tasks remain, or
