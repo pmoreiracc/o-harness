@@ -7,14 +7,17 @@ Load `workflows/runtime.md` through OH's resource entry, then inspect `status --
 and `resume --run ID` facts (Codex `status` with `saved`, `resume` with `run`).
 Discovery never changes the selected run. Show the requested saved subject, branch,
 next step and remaining allowance. Read `workflows/recovery.md` and `workflows/decisions.md`,
-then prepare `decision-request resume --run ID` before asking its returned question once.
+then prepare `decision-request recover --run ID` for delivery, or `decision-request resume --run ID`
+for planning/review, before asking its returned question once. Delivery presents Continue,
+Start fresh and Stop and take over; bind the selected action from its returned `actions`
+map with `decision` and the same human locator. Never replace these choices with Not now.
 Do not ask a preliminary Resume question. Wait; this invocation alone does not answer it.
 After acceptance, continue the saved task or decision with its original scope, settings, findings and
 remaining allowances. Confirm old native work is quiescent before a fresh agent starts;
 never reuse a completed reviewer or renew allowances to switch hosts. Preserve useful
 unfinished edits. Report the actual resumed work, not a new implementation introduction
 when only a decision or publication remains.
-Bind the requested continuation with `resume --run ID --human <native-locator.json>`
+For the ordinary Resume question, bind continuation with `resume --run ID --human <native-locator.json>`
 (Codex `resume` with its human locator); a factual status read alone grants nothing.
 The old conversation may remain open. Require no prior Stop/Pause when no attempt or
 check is executing, even if legacy saved status still says running. After continuation,

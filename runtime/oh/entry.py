@@ -4,8 +4,12 @@ from .storage import Refused
 
 def enroll(root):
     """Register an explicit native invocation; preserve moved-checkout recovery."""
-    from .registry import lookup
-    try:lookup(root)
+    from .registry import lookup, register
+    try:
+        entry = lookup(root)
+        if entry['identity']['commit'] is None:
+            from .config import name_of
+            register(root, name_of(entry['project']))
     except Refused as unregistered:
         # Typing an OH command in a checkout is the person's choice to use OH here: register it as `init` would,
         # so the command they typed carries on.

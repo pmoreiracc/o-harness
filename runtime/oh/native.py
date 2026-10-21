@@ -222,22 +222,26 @@ def _pending_attempt(state,attempt):
     return {'id':attempt['id'],'role':attempt['role'],'native_child':child.get('child_session'),
             'binding_status':'bound' if child else 'unbound','execution_status':'not_checked',
             'parent':parent,'request':str(Path(attempt['evidence'])/'request.json') if attempt.get('evidence') else None,
-            'next':('Inspect this child’s latest native outcome; a saved binding does not mean it is still running. '
+            'next':('Prepare decision-request recover --run '+state['id']+' and bind its selected action. '
+                    'The shared helper retains available evidence or abandons missing results after execution cleanup; do not require the person to restore a deleted chat.'
+                    if state['workflow']=='deliver' else
+                   ('Inspect this child’s latest native outcome; a saved binding does not mean it is still running. '
                     if child else 'No child binding is saved; this does not mean it was never launched. Inspect the original parent’s native launch and result records using this admission. ')
-                   +'After Resume is confirmed, retain any terminal outcome with its original child/spawn locator before transferring ownership or replacing the attempt.'}
+                   +'After Resume is confirmed, retain any terminal outcome with its original child/spawn locator before transferring ownership or replacing the attempt.')}
 
 
 def _continuation(state):
     """Compact evidence hints, not a second execution/admission state machine."""
     pending=[a for a in state['attempts'] if not a.get('finished')]
     task=display_task(state)
-    history=[a for a in state['attempts'] if a['task']==task['id']]
+    history=[a for a in state['attempts'] if a['task']==task['id'] and not a.get('superseded')]
     phase=('native_attempt' if pending else 'task_correction' if state.get('correction') else 'task_review' if state.get('extra_review') else 'finished' if _finished(state)
            else 'publication' if state.get('publication') or state['status']=='pr'
            else 'completion' if len(state['done'])==len(state['tasks'])
            else 'task_window' if task['id'] not in state['granted']
            else history[-1]['role']+'_result' if history else 'authoring' if state['workflow'] in ('design','propose') else 'review' if state['workflow']=='review' else 'assessment')
     decision=None
+    if not pending and history and history[-1].get('outcome')=='abandoned':phase=history[-1]['role']
     if not pending:
         if phase=='task_window':decision='task_window'
         elif phase=='completion' and state.get('plans',{}).get('location')!='private':decision='publication'
@@ -283,7 +287,8 @@ def saved_work(root):
 
 
 def _resume_offer(root,state):
-    return select(root,state['id'])|{'resume_required':True,'next':'Read workflows/recovery.md and workflows/decisions.md, then prepare decision-request resume --run '+state['id']+' before asking. Show its returned question once and preserve that answer through recovery; bind it with resume --run.'}
+    kind='recover' if state['workflow']=='deliver' else 'resume'
+    return select(root,state['id'])|{'resume_required':True,'next':'Read workflows/recovery.md and workflows/decisions.md, then prepare decision-request '+kind+' --run '+state['id']+' before asking. Show its returned question once and preserve that answer through recovery; bind the selected action.'}
 
 
 def _matching_entry(root,source,workflow,design=None,track='',selected=None):
@@ -340,12 +345,36 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     if source and (existing:=_matching_entry(root,source,workflow,initiative,track)) is not None:return existing
     if doc is not None:
         if manifest is not None:raise Refused('Choose approved design selection or a task manifest')
+        # New delivery starts on the selected delivery branch, never whichever
+        # merged branch the host happened to leave open. Saved runs recover first.
+        new_branch=False
+        if not any(s['status'] not in ('stopped','completed','pr') for _,s in _saved_runs(root)):
+            from .branches import delivery_branch,to_delivery,refresh,contained,fetched,trunk,from_main,holder
+            if not changes(root):
+                main=trunk(root)
+                base=fetched(root,main) if main else None
+                current=git(root,'branch','--show-current')
+                if base and (current==main or contained(root,base,'HEAD')):
+                    if holder(root,main):git(root,'switch','--quiet','--detach',base)
+                    else:from_main(root,base=base)
+                    new_branch=True
+                elif base:refresh(root,current,base)
         from .delivery import selection
         manifest,extra=selection(root,doc,track)
+        if new_branch:
+            name=delivery_branch(doc,track)
+            if base:=to_delivery(root,name):refresh(root,name,base)
     else:extra={}
     if not isinstance(manifest,dict):raise Refused('Supply a task manifest or approved design number')
     tasks=validate_tasks(manifest.get('tasks'));config=snapshot(root)
     if workflow=='deliver' and not project_checks(root):raise Refused('Register this project’s existing verification checks before delivery')
+    if workflow=='deliver' and doc is None and not _saved_runs(root):
+        from .branches import main_ref,trunk,contained,from_main,execution_branch
+        current=git(root,'branch','--show-current');base=main_ref(root,config)
+        if not changes(root) and base and (current==trunk(root,config) or
+                git(root,'rev-parse','HEAD')!=git(root,'rev-parse',base) and contained(root,base,'HEAD')):
+            from_main(root)
+            git(root,'switch','--quiet','-c',execution_branch(root,tasks[0]['title'],identifier()))
     documents={};bound=extra.get('delivery')
     if bound:
         for name in bound['inputs']:
@@ -455,12 +484,11 @@ def _start(root,key,source):
         if committed(scope) and scope['branch']==trunk(root,scope['config']):raise Refused('Create an execution branch from the selected base with native Git tools, then prepare scope on that branch')
         source_key=digest({k:source[k] for k in ('host','session','turn','prompt')})
         p=project(root);run=identifier()
-        from .branches import incarnation
         data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],'checkout':checkout_id(root),
               'host':source['host'],'human':source,'source':source_key,'native_version':2,
               'scope_id':key,'scope_snapshot':scope,'workflow':scope['workflow'],'tasks':scope['tasks'],
               'design':scope.get('design'),'track':scope.get('track'),'base':scope['base'],'branch':scope['branch'],
-              'incarnation':incarnation(root,scope['branch'],create=True),'checks':[],
+              'checks':[],
               **{k:scope[k] for k in ('config','config_hash','harness_version','project_checks')},
               **{k:scope[k] for k in ('delivery','plans') if k in scope}}
         if source.get('accepted_plan') is not None:data['accepted_scope']=source['accepted_plan']
@@ -561,7 +589,7 @@ def admit(root,role):
             journal.append('native.authenticated',{'host':state['host'],'session':state['human']['session']})
         subject=_subject(root,state)
         if role=='review' and state['workflow']!='review':
-            authors=[a for a in state['attempts'] if a['task']==task['id'] and a['role'] in ('implementation','analysis') and a.get('finished')]
+            authors=[a for a in state['attempts'] if a['task']==task['id'] and a['role'] in ('implementation','analysis') and a.get('finished') and not a.get('superseded')]
             if not state.get('extra_review') and (not authors or authors[-1]['outcome']!='implemented'):
                 raise Refused('Finish the approved task before requesting its independent review')
             checked=state.get('verification',{}).get(task['id'])
@@ -929,7 +957,7 @@ def _presented(root,locator,state=None):
     host=locator.get('host') or ('codex' if os.environ.get('CODEX_THREAD_ID') else (state or {}).get('host'))
     session=locator.get('session') or env or ((state or {}).get('human') or {}).get('session')
     if not host or not session:return locator
-    options=prepared['menu_options'] if prepared.get('presentation')=='checkpoint-menu' else None
+    options=prepared['menu_options'] if prepared.get('presentation') in ('checkpoint-menu','recovery-menu') else None
     try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options)
     except Refused:return locator
     consumed=(state or {}).get('decisions',{})
@@ -946,6 +974,11 @@ def _presented(root,locator,state=None):
 
 
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
+    if isinstance(locator,dict) and re.fullmatch(r'[0-9a-f]{64}',locator.get('decision') or ''):
+        prepared=read_json(_home(root)/'decisions'/(locator['decision']+'.json'))
+        if prepared.get('presentation')=='recovery-menu':
+            from .recovery import apply
+            return apply(root,kind,locator,run=run)
     allowed={'continue','grant-review','accept-concerns','dismiss-scope','route-scope','publish','pause','stop','resume','approve-private','approve-proposal'}
     if kind not in allowed:raise Refused('Unknown consequential decision')
     with _locked(root):
@@ -1160,6 +1193,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
 def complete(root,attempt_id):
     with _locked(root):
         journal,state=load_run(root);_owner(root,state);_idle(root);review=_attempt(state,attempt_id)
+        if review.get('superseded'):raise Refused('Recovery changed the reviewed subject; finish fresh checks and review before completion')
         task=next((t for t in state['tasks'] if t['id']==review['task']),None)
         existing=next((d for d in state['summaries'] if d.get('review')==attempt_id),None)
         if existing:return existing
@@ -1307,7 +1341,7 @@ def review(root,arguments,human=None):
         p=project(root);run=identifier();config=snapshot(root);journal=Journal(p['id'],run)
         source=source or {'host':host,'session':session,'turn':identifier(),'prompt':arguments}
         data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],'checkout':checkout_id(root),'host':host,'human':source,
-              'source':digest({k:source[k] for k in ('host','session','turn','prompt')}),'workflow':'review','native_version':2,'branch':selected['branch'],'base':selected['head'],'incarnation':'standalone',
+              'source':digest({k:source[k] for k in ('host','session','turn','prompt')}),'workflow':'review','native_version':2,'branch':selected['branch'],'base':selected['head'],
               'tasks':[{'id':'review','title':selected['description'],'instructions':'Inspect the exact selected subject; feedback only.'}],
               'checks':[],'project_checks':[],'standalone_subject':selected,**config}
         data['subject']=selected

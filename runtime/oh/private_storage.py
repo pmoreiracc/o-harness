@@ -32,8 +32,10 @@ def reservations(candidates, *, claim=True):
         for base,owner in candidates:
             base=Path(base);key=canonical(base)
             previous=owner.get('private_plans_previous_owner')
+            # Explicit replacement releases this checkout, not any surviving sibling.
+            remaining = present_projects(excluding_root=owner['private_plans_previous_root']) if owner.get('private_plans_previous_root') else present
             transferable=(previous and owner.get('private_plans_path') and canonical(owner['private_plans_path'])==key
-                          and previous not in present)
+                          and previous not in remaining)
             for other,record in records.items():
                 if Path(key).is_relative_to(Path(other)) or Path(other).is_relative_to(Path(key)):
                     if record['project'] != owner['id'] and not (other==key and transferable and record['project']==previous):

@@ -137,6 +137,15 @@ def reduce(records):
         elif kind=='task.intervention':state['interventions'][d['task']]=state['interventions'].get(d['task'],0)+1
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
         elif kind=='run.owner':state['human']=d['human'];state['host']=d['human']['host']
+        elif kind=='recovery.started':state['recovery_intent']=d
+        elif kind=='delivery.recovered':
+            state.update(branch=d['branch'],base=d['base'],done=d['done'],summaries=d['summaries'],granted=d['granted'])
+            for key in ('verification','candidate','extra_review','correction','rendered','delivery_render','private_native_approval','publication'):
+                state.pop(key,None)
+            state['commit_intents']={key:intent for key,intent in state['commit_intents'].items() if intent['task'] in state['done']}
+            if d['restart']:state.pop('assessments',None)
+            for attempt in state['attempts']:
+                if attempt['task'] not in state['done']:attempt['superseded']=True
         elif kind=='delivery.continued':
             state['human']=d['human'];state['host']=d['human']['host'];state['harness_version']=d['version']
             state.setdefault('continuations',[]).append(d|{'at':record['at']})
@@ -190,6 +199,7 @@ def reduce(records):
             matches[0].update(outcome='verification_failed',summary=d['summary'],failed_at=record['at'])
         elif kind=='decision':
             state['decisions'].append(d['source'])
+            if d.get('recovery'):state.pop('recovery_intent',None)
             if d['choice']=='pr':state['publication']=d
             if d['choice']=='handoff pr':state['review_handoff']=d
     return state

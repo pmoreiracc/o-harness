@@ -35,6 +35,15 @@ A run completed outside OH must not be reopened or relabelled as OH-reviewed. Se
 
 ## Native execution and authority
 
+Checkout registration binds Git's canonical worktree root, private admin directory and
+common repository directory to an existing commit. Lookups resolve that same commit;
+they do not pin the moving HEAD, remote URL, filesystem device or inode. Separate paths
+remain separate checkout identities. A same-path restore with the saved commit is the
+same logical workspace, while unrelated Git history cannot reuse its registration.
+Empty repositories acquire their first commit during explicit workflow enrollment,
+before scope approval. Branch reflog file identity is not an execution requirement.
+Legacy filesystem registrations use explicit fresh replacement, not an approval migration.
+
 The coordinating skill selects work and launches one fresh native agent at a time.
 Codex uses its default native role with no parent-history fork and explicit model and
 reasoning effort. Claude uses packaged named non-fork agents with invocation-specific
@@ -196,6 +205,18 @@ The [evidence and acceptance plan](plans/native-stop-recovery.md) separates live
 prototype results from fixture coverage and pending platform tests.
 
 ## Git subjects, completion and publication
+
+Delivery entry refreshes its Git base and checks ancestry before selecting pending
+approved tasks. New work does not inherit a merged branch merely because it is open;
+unmerged work is preserved and existing branch helpers perform base integration.
+The shared delivery recovery gate binds the current Git contents, affected paths,
+base commit and chosen effect. Continue, Start fresh and Stop use the existing native
+human-decision verifier, tool revocation and journal. Old results are retained when
+verifiable; otherwise an explicitly abandoned attempt records uncertainty without
+requiring a deleted transcript or inventing a native success. Tracked writes must
+settle before transfer. Restart preserves findings and consumed review rounds and
+invalidates superseded execution evidence. Its displayed task batch is explicit
+authority; no backup, alternate runner or implicit allowance renewal is introduced.
 
 Git reads and candidate construction preserve the user's configuration, including
 line endings, while discarding inherited selectors for a different repository or

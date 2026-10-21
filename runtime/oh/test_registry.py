@@ -43,6 +43,25 @@ class RegistryTests(unittest.TestCase):
         self.assertTrue(checkout_state(self.root).is_relative_to(self.base / 'state'))
         self.assertEqual(lookup(self.root), first)
         self.assertEqual(self.inventory(), before)
+        # Reboot may renumber the mounted filesystem without changing any Git data.
+        from types import SimpleNamespace
+        original_stat = Path.stat
+        def remounted(path, *args, **kwargs):
+            st = original_stat(path, *args, **kwargs)
+            if path in (self.root, self.root / '.git'):
+                fields = {k: getattr(st, k) for k in dir(st) if k.startswith('st_')}
+                fields['st_dev'] += 1
+                return SimpleNamespace(**fields)
+            return st
+        with patch.object(Path, 'stat', remounted):
+            self.assertEqual(lookup(self.root), first)
+            self.assertEqual(profile(self.root), value)
+        # Normal commits, remote edits and branch switches do not replace a registration.
+        self.git('commit', '--allow-empty', '-qm', 'ordinary work')
+        self.git('remote', 'add', 'origin', 'https://example.invalid/one.git')
+        self.git('remote', 'set-url', 'origin', 'https://example.invalid/two.git')
+        self.git('checkout', '-qb', 'another', 'HEAD~1')
+        self.assertEqual(lookup(self.root), first)
         from .registry import identity
         child = self.root / 'folder';child.mkdir()
         with self.assertRaisesRegex(Refused, 'repository root'):identity(child)
@@ -51,6 +70,11 @@ class RegistryTests(unittest.TestCase):
         original = register(self.root, 'Fixture')
         clone = self.base / 'clone'
         self.git('clone', '-q', str(self.root), str(clone))
+        from .registry import index_path
+        # A copied OH index must not make another clone borrow the original's grants.
+        index_path(clone).write_bytes(index_path(self.root).read_bytes())
+        with self.assertRaises(Refused):lookup(clone)
+        index_path(clone).unlink()
         with self.assertRaises(Refused):
             register(clone, 'Fixture', attach=original['id'])
         with self.assertRaisesRegex(Refused, 'already named Fixture'): register(clone, 'Fixture')  # names pick settings
@@ -108,27 +132,23 @@ class RegistryTests(unittest.TestCase):
         sibling=self.base/'sibling';self.git('worktree','add','-qb','sibling',str(sibling))
         joined=register(sibling,'Fixture')  # a worktree that asks for its project's name joins it
         self.assertEqual((joined['id'],joined['joined']),(project,'Fixture'))
+        sibling_id=lookup(sibling)['checkout']
         self.git('worktree','remove',str(sibling));self.git('worktree','add','-q',str(sibling),'sibling')
-        with self.assertRaisesRegex(Refused,'--replace'):register(sibling,'Fixture')
+        self.assertEqual(register(sibling,'Fixture')['id'],project)
+        self.assertEqual(lookup(sibling)['checkout'],sibling_id)
         old=lookup(self.root)['checkout']
-        self.assertEqual(register(sibling,'Fixture',replace=True)['id'],project)  # same project, fresh checkout, no grants
-        # A repository restored from a copy: every registration is stale, so the name is free again.
+        # Restoring the same Git repository to the same path preserves the logical workspace.
         import shutil,stat
         copy=self.base/'copy';shutil.copytree(self.root,copy,symlinks=True)
         shutil.rmtree(self.root,onexc=lambda remove,path,_:(os.chmod(path,stat.S_IWRITE),remove(path)))  # Git's read-only files, on Windows
         copy.rename(self.root)
         self.git('worktree','repair',str(sibling))
-        restored=register(self.root,'Fixture',replace=True)
-        self.assertNotEqual((restored['id'],lookup(self.root)['checkout']),(project,old))
-        self.assertEqual(register(sibling,'Fixture',replace=True)['id'],restored['id'])
+        restored=register(self.root,'Fixture')
+        self.assertEqual((restored['id'],lookup(self.root)['checkout']),(project,old))
+        self.assertEqual(register(sibling,'Fixture')['id'],restored['id'])
 
     def test_a_project_known_only_through_a_worktree_keeps_its_identity(self):
-        from . import registry
-        real=registry.stamp
-        for birth in (True,False):  # the rule never depends on birth times, which Linux lacks
-            with self.subTest(birth=birth),patch('oh.registry.stamp',side_effect=lambda path:real(path) if birth else
-                                                {k:v for k,v in real(path).items() if k!='birth'}):
-                self.known_only_through_a_worktree(f'Planner {birth}')
+        self.known_only_through_a_worktree('Planner')
 
     def known_only_through_a_worktree(self,name):
         from .config import describe
@@ -139,13 +159,49 @@ class RegistryTests(unittest.TestCase):
         sibling=self.base/name.replace(' ','-');self.git('worktree','add','-qb',sibling.name,str(sibling),root=main)
         project=register(sibling,name,imported={'id':identifier(),'design_profile':'consumer-v1'})['id']
         self.git('worktree','remove',str(sibling),root=main);self.git('worktree','add','-q',str(sibling),sibling.name,root=main)
-        again=register(sibling,name,replace=True)  # its own replaced registration shows the repository
+        again=register(sibling,name)  # its surviving Git history shows the repository
         self.assertEqual((again['id'],again['design_profile']),(project,'consumer-v1'))
         self.git('worktree','remove',str(sibling),root=main)
         self.assertEqual(describe(main)['join'],name)  # the main checkout learns which project it belongs to
         self.assertEqual(register(main,name)['id'],project)
         clone=self.base/('clone-'+sibling.name);self.git('clone','-q',str(main),str(clone),root=self.base)
         with self.assertRaisesRegex(Refused,'already named'):register(clone,name)  # another repository never joins
+
+    def test_legacy_registration_requires_fresh_setup_and_preserves_settings_and_files(self):
+        from .registry import index_path
+        from .storage import read_json, atomic_json
+        from .config import change, project_checks
+        original=register(self.root,'Fixture');old=lookup(self.root)
+        change(self.root,'checks','[{"name":"tests","command":["true"]}]')
+        legacy=old | {'schema_version':1,'identity':{k:v for k,v in old['identity'].items() if k!='commit'}}
+        for key in ('root','admin','common'):legacy['identity'][key+'_identity']={'device':1,'inode':1}
+        atomic_json(index_path(self.root),legacy)
+        (checkout_state_path:=self.base/'state/checkout-state'/old['checkout']).mkdir(parents=True)
+        (checkout_state_path/'oh-active-run.json').write_text('{"old":"saved evidence"}')
+        before=self.inventory()
+        with self.assertRaisesRegex(Refused,'older filesystem registration'):lookup(self.root)
+        fresh=register(self.root,'Fixture',replace=True)
+        self.assertNotEqual(fresh['id'],original['id'])
+        self.assertNotEqual(lookup(self.root)['checkout'],old['checkout'])
+        self.assertFalse((checkout_state(self.root)/'oh-active-run.json').exists())
+        self.assertTrue((checkout_state_path/'oh-active-run.json').is_file())
+        self.assertEqual(project_checks(self.root),[{'name':'tests','command':['true']}])
+        self.assertEqual(self.inventory(),before)
+        retired=list((self.base/'state/registry/retired').glob('*.json'))
+        self.assertEqual([read_json(p) for p in retired],[legacy])
+
+    def test_empty_repository_binds_its_first_commit_before_work(self):
+        from .entry import enroll
+        empty=self.base/'empty';self.git('init','-q',str(empty),root=self.base)
+        register(empty,'Empty');old=lookup(empty)
+        self.assertIsNone(old['identity']['commit'])
+        self.git('-c','user.name=F','-c','user.email=f@example.invalid','commit','-q','--allow-empty','-m','initial',root=empty)
+        self.assertIsNone(enroll(empty))
+        anchored=lookup(empty)
+        self.assertEqual(anchored['checkout'],old['checkout'])
+        self.assertEqual(anchored['identity']['commit'],self.git('rev-parse','HEAD',root=empty))
+        (empty/'.git').rename(self.base/'empty-old-git');self.git('init','-q',root=empty)
+        with self.assertRaises(Refused):lookup(empty)
 
     def test_older_same_name_projects_of_the_repository_never_block_a_worktree(self):
         from .storage import identifier
