@@ -216,7 +216,17 @@ selection. `resume --run ID` reads one run; adding `--human` binds an actual nat
 continuation. Codex exposes the equivalent `status` (`saved`) and `resume` (`run`, `human`)
 inputs. These are focused helpers, not another agent runner.
 
-`oh-resume` asks the same one Resume question. After your answer and once native work
+For delivery, the recovery question is **How would you like OH to proceed with this
+delivery?** Its short choices are **Continue**, **Start fresh**, and **Stop and take
+over**. Continue keeps existing changes; Start fresh discards the displayed work and
+starts from the displayed main/base commit, without backups; Stop and take over ends
+OH execution and leaves files unchanged. The question names the affected paths and
+restart task batch. Review usage and findings are retained. Deleted chat transcripts
+do not require reconstructing the chat: after verified execution cleanup, missing
+results can be recorded as abandoned and the required work repeated.
+
+`oh-resume` uses that delivery gate, or the ordinary Resume question for planning
+and review. After your answer and once native work
 is quiet, it continues the saved task or decision with its
 original scope, settings, findings and remaining allowances. A new session or host
 can continue even while the old conversation remains open; no prior Pause or Stop
@@ -257,6 +267,18 @@ Register a checkout with `oh init`; registration grants no work. Use `--name` to
 a project name, `--attach <project-id>` for another worktree, `--reattach <checkout-id>`
 for a moved checkout, and `--replace` for a new checkout at an old path. Configuration,
 checks and evidence stay outside consumer repositories.
+
+Registration uses Git's checkout/admin/common paths and a saved commit, not filesystem
+device or inode numbers. Reboots, normal commits, branch switches and remote URL changes
+do not replace the registration. A restored or re-cloned repository at the same paths
+containing that commit is the same logical workspace; another clone or sibling worktree
+has its own checkout authority. Missing saved history must be restored before reuse.
+The usual Resume, branch, scope, exact-review and publication checks still apply.
+
+Older filesystem registrations require a one-time fresh `oh init --replace` at the
+checkout. This preserves project files and named settings and archives the old binding;
+it does not migrate old runs or their approvals. An empty repository records its first
+commit when a workflow is explicitly invoked. Git reflogs are not required.
 
 `oh config` shows the effective settings and their sources. The base branch is detected
 from `origin/HEAD`, then `main`, then `master`; `oh config set base_branch develop`

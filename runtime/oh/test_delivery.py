@@ -61,6 +61,22 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(len(delivery.listing(self.root)['ready']),1)
         self.assertEqual(registry.read_bytes(),before)
 
+    def test_new_delivery_leaves_merged_branch_and_selects_remaining_task_from_main(self):
+        from . import native
+        _,path=self.documents()
+        self.git('switch','-c','old-task-1')
+        path.write_text(path.read_text().replace('- [ ] **1.**','- [x] **1.**'),newline='\n')
+        (self.root/'first.txt').write_text('delivered',newline='\n')
+        self.git('add','.');self.git('commit','-qm','first task delivered')
+        self.git('switch','main');self.git('merge','--no-ff','--no-edit','old-task-1')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        main=self.git('rev-parse','HEAD')
+        self.git('switch','old-task-1')
+        selected=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001'))
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
+        self.assertEqual(self.git('rev-parse','HEAD'),main)
+        self.assertEqual(selected['task']['id'],'2')
+
     def test_original_manual_work_is_in_both_delivery_intakes_and_publication(self):
         from . import native,publication
         where,path=self.documents()
@@ -95,14 +111,14 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
         self.git('update-ref','refs/remotes/origin/main','HEAD');base=self.git('rev-parse','HEAD')
         with self.assertRaisesRegex(Refused,'unfinished auth'):delivery.selection(self.root,downstream)
         for track in ('core','ui'):
-            self.git('switch','-c','deliver/'+track,base)
+            self.git('switch','-c','deliver/0001-'+track,base)
             selected=native.prepare_scope(self.root,doc='0001',track=track)
             native.approve_scope(self.root,selected['scope_id'],self.human())
             self.assess();self.implement(edit=lambda:(self.root/(track+'.txt')).write_text(track,newline='\n'))
             review=self.reviewed();native.complete(self.root,review['id'])
             self.assertIn('status: approved',path.read_text())
         self.git('switch','main')
-        for track in ('core','ui'):self.git('merge','--no-edit','deliver/'+track)
+        for track in ('core','ui'):self.git('merge','--no-edit','deliver/0001-'+track)
         self.git('update-ref','refs/remotes/origin/main','HEAD')
         self.assertIn('status: approved',path.read_text());self.assertNotIn('- [ ]',path.read_text())
         self.git('switch','-c','deliver/finalize')

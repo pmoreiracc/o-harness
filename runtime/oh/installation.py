@@ -33,6 +33,8 @@ def build(destination, host):
     source=HOME/'plugins/o-harness'
     revision=version()
     shutil.copytree(source,destination)
+    for skill in (destination/'skills').iterdir():
+        shutil.copyfile(destination/'assets/prod.png',skill/'assets/icon.png')
     if host=='codex' and (destination/'agents').exists():
         # Codex delegates through its native default role with invocation settings.
         # Claude's packaged agent definitions are not Codex custom-agent files.

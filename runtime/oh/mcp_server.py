@@ -54,7 +54,7 @@ TOOLS = [
          {'attachment':OBJECT}, ['attachment']),
     tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate.',
          {'attempt':TEXT}, ['attempt']),
-    tool('decision_request', 'Bind decision effect', 'Prepare native human choices. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions; bind the selected action from the same answer. Displays no menu and grants nothing.',
+    tool('decision_request', 'Bind decision effect', 'Prepare native human choices. Use recover for delivery recovery: Continue, Start fresh, Stop and take over. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions. Bind the returned action from the same answer. Displays no menu and grants nothing.',
          {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1,
           'description':'Omit to renew the run’s configured review window. Supply only when the person explicitly requests a different number of additional rounds.'},'run':TEXT,'also':TEXT}, ['kind']),
     tool('finding_track', 'Track outside-scope findings', 'Record a saved follow-up, design note or an issue URL. Grants no implementation or issue-creation authority.',

@@ -630,7 +630,10 @@ class CancellationTest(NativeFixture, unittest.TestCase):
                 'hook_event_name': kind, 'session_id': 's', **extra})
         event('PreToolUse', tool_use_id='failed-launch', tool_name='Agent',
               tool_input={'prompt': admitted['request']})
-        event('PostToolUseFailure', tool_use_id='failed-launch')
+        # A rejected PreToolUse can have a saved result without a failure callback.
+        self.parent_path.write_text(json.dumps({'type': 'user', 'sessionId': 's',
+            'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'failed-launch',
+                                    'is_error': True, 'content': 'Launch rejected'}]}}) + '\n', newline='\n')
         self.native_results[admitted['id']] = {'status': 'failed', 'text': 'Native launch failed'}
         with patch('oh.authority.native_child', side_effect=authority.Saving('No child was launched')):
             native.retain(self.root, admitted['id'], {'tool_use_id': 'failed-launch'})
@@ -645,6 +648,63 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         event('SubagentStart', agent_id='replacement-child')
         self.assertEqual(cancellation._read(self.root)['attempts'][replacement['id']]['child'],
                          'replacement-child')
+
+    def _rejected_launch_retry(self, host):
+        with patch.object(self, 'human', return_value={'host': host, 'session': 's',
+                         'turn': '1', 'prompt': 'approve', 'transcript_path': str(self.parent_path)}):
+            self.approve()
+        admitted = native.admit(self.root, 'assessment')
+        before = load_run(self.root)[1]
+        def event(kind, **extra):
+            return cancellation.hook(self.root, host, {
+                'hook_event_name': kind, 'session_id': 's', **extra})
+        for use in ('rejected-launch', 'corrected-launch'):
+            event('PreToolUse', tool_use_id=use, tool_name='Agent' if host == 'claude' else 'spawn_agent',
+                  tool_input={'prompt': admitted['request']})
+        child = Path(self.temp.name) / 'child.jsonl'
+        child.write_text('', newline='\n')
+        binding = {'child_session': 'worker', 'parent_session': 's', 'profile': admitted['profile'],
+                   'transcript_path': str(child), 'record_hashes': ['native-spawn']}
+        with patch('oh.authority.native_child', return_value=binding):
+            native.bind(self.root, admitted['id'], {'child_session': 'worker'})
+        event('PreToolUse', agent_id='worker', tool_use_id='worker-read', tool_name='Read')
+        def result(use, **extra):
+            if host == 'claude':
+                return {'type': 'user', 'sessionId': 's', 'message': {'content': [
+                    {'type': 'tool_result', 'tool_use_id': use, 'is_error': True}]}, **extra}
+            return {'type': 'response_item', 'payload': {
+                'type': 'function_call_output', 'call_id': use, 'output': 'Launch rejected'}}
+        records = [result('unrelated-launch'), result('worker-read')]
+        if host == 'claude':
+            records += [result('rejected-launch', sessionId='another-parent'),
+                        result('rejected-launch', isSidechain=True)]
+        self.parent_path.write_text(''.join(json.dumps(r) + '\n' for r in records), newline='\n')
+        self.native_results[admitted['id']] = {'status': 'completed', 'text': json.dumps({
+            'difficulty': 'standard', 'rationale': 'Contained change'})}
+        with self.assertRaisesRegex(Refused, 'still running'):
+            native.retain(self.root, admitted['id'], {})
+        self.assertNotIn('ended', cancellation._read(self.root)['tools']['rejected-launch'])
+        # The parent's exact launch result settles only that call, not child tools.
+        with self.parent_path.open('a', newline='\n') as stream:
+            stream.write(json.dumps(result('rejected-launch')) + '\n')
+        with self.assertRaisesRegex(Refused, 'still running'):
+            native.retain(self.root, admitted['id'], {})
+        tools = cancellation._read(self.root)['tools']
+        self.assertEqual(tools['rejected-launch']['completion_source'], 'native-parent-record')
+        self.assertNotIn('ended', tools['worker-read'])
+        event('PostToolUse', agent_id='worker', tool_use_id='worker-read')
+        self.assertEqual(native.retain(self.root, admitted['id'], {})['outcome'], 'assessed')
+        native.retain(self.root, admitted['id'], {})  # Recovery remains idempotent.
+        after = load_run(self.root)[1]
+        for key in ('granted', 'scope_id', 'config', 'decisions'):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(len(after['attempts']), 1)
+
+    def test_claude_rejected_launch_retry_settles_without_callback(self):
+        self._rejected_launch_retry('claude')
+
+    def test_codex_rejected_launch_retry_settles_without_callback(self):
+        self._rejected_launch_retry('codex')
 
     def test_two_resume_claimants_do_not_both_take_ownership(self):
         self.approve()

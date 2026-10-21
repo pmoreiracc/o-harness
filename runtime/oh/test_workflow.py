@@ -642,6 +642,9 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
 
     def test_completion_commits_exact_reviewed_tree_once_and_task_grants_do_not_expand(self):
         from . import native
+        # Git history and exact candidate evidence suffice; reflog files may be disabled or expired.
+        self.git('config','core.logAllRefUpdates','false')
+        (self.root/'.git/logs/refs/heads/work').unlink()
         configure(self.root,tasks_per_batch=1)
         self.approve(self.tasks[:2]);self.assess();self.implement()
         # Completion itself repairs the old preamble failure on the same candidate.
