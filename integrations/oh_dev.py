@@ -232,7 +232,7 @@ def build(host, folder, source=SOURCE, snapshot_version=None, *, shared_data=Tru
             f'source = {selected}\n'
             'sys.path.insert(0, str(source / "integrations"))\n'
             'from oh_dev import launch\n'
-            f'launch(source, Path({str(data)!r}), {kind!r}, Path(__file__))\n')
+            f'launch(source, Path({str(data)!r}), {kind!r}, Path(__file__), shared_data={shared_data!r})\n')
         (plugin / 'scripts' / name).write_text(script, encoding='utf-8', newline='\n')
     for kind in HOSTS:
         manifest = plugin / ('.' + kind + '-plugin/plugin.json')
@@ -316,7 +316,7 @@ def selected_entry(host=None):
     return entry
 
 
-def launch(source, data, kind, entry):
+def launch(source, data, kind, entry, *, shared_data=None):
     """Development-only routing; execution and approval behavior remain owned by OH."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--root', type=Path)
@@ -325,8 +325,11 @@ def launch(source, data, kind, entry):
     # Both releases use the same service name. Parse the command after global options/--.
     if kind == 'cli' and selected.command in ('setup', 'service-install', 'service-uninstall'):
         raise SystemExit('Development cannot install release services. Select a build with oh-dev on; run the dashboard with oh-dev exec serve --port 4319.')
-    if data != normal_data():validate_storage(data.parent, data)
-    os.environ['OH_DEV_NORMAL_DATA_HOME'] = str(normal_data())
+    # Generated entries freeze the storage mode as well as its path. Older live
+    # entries omit it and keep their original environment-based selection.
+    if shared_data is None:shared_data = data == normal_data()
+    if not shared_data:validate_storage(data.parent, data)
+    os.environ['OH_DEV_NORMAL_DATA_HOME'] = str(data if shared_data else normal_data())
     os.environ['OH_DATA_HOME'] = str(data)
     os.environ['OH_DASHBOARD_MODE'] = 'development'
     manifest = read(entry.parents[1] / '.codex-plugin/plugin.json', {})

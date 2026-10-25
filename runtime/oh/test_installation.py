@@ -462,15 +462,28 @@ class InstallationTest(unittest.TestCase):
             workflow.write_text('uncommitted fixture workflow', encoding='utf-8')
             with patch.object(dev, 'SOURCE', source), patch.object(installation, 'HOME', source), patch.object(config, 'HOME', source):
                 revision = config.version()
-                with patch.object(dev, 'version', side_effect=[revision, 'editor saved', revision, revision]):
+                # A GUI host need not inherit the terminal's build-time data override.
+                frozen_data = Path(tmp) / '.local/share/alternate-oh-data'
+                with patch.dict(os.environ, {'OH_DATA_HOME': str(frozen_data)}), \
+                        patch.object(dev, 'version', side_effect=[revision, 'editor saved', revision, revision]):
                     first, metadata = dev.create_snapshot()
-                self.assertEqual(metadata['data'], str(dev.normal_data()))
+                self.assertEqual(metadata['data'], str(frozen_data))
+                self.assertNotEqual(frozen_data, dev.normal_data())
                 self.assertEqual(list((dev.home() / 'builds').iterdir()), [first])  # discarded partial copy was removed
                 workflow.write_text('later fixture workflow', encoding='utf-8')
                 second, other = dev.create_snapshot(shared_data=False)
                 self.assertEqual(other['data'], str(dev.home() / 'data'))
             self.assertNotEqual(metadata['version'], other['version'])
             self.assertRegex(metadata['version'], r'^\d+\.\d+\.\d+-SNAPSHOT\.\d+$')
+            with patch.dict(os.environ), patch('sys.argv', ['oh', 'status']), \
+                    patch.object(dev.runpy, 'run_path') as dispatch:
+                dev.launch(source, frozen_data, 'cli', first / 'codex/plugins/o-harness/scripts/oh', shared_data=True)
+                self.assertEqual(os.environ['OH_DATA_HOME'], str(frozen_data))
+                self.assertEqual(os.environ['OH_DEV_NORMAL_DATA_HOME'], str(frozen_data))
+                dispatch.reset_mock()
+                with self.assertRaisesRegex(RuntimeError, 'overlaps normal OH data'):
+                    dev.launch(source, frozen_data, 'cli', first / 'codex/plugins/o-harness/scripts/oh', shared_data=False)
+                dispatch.assert_not_called()
             self.assertFalse((dev.home() / 'switch.json').exists())  # build alone changes no host selection
             self.assertEqual(dev.read_snapshot(first), (first, metadata))
             shutil.rmtree(template)  # windows-ok: packager fixture has no Git metadata; all entries must survive source removal
@@ -499,7 +512,7 @@ class InstallationTest(unittest.TestCase):
                         self.assertIn('OH native control is unavailable', failed.stderr)
                 verify_package(plugin / 'core')  # running any entry must not add bytecode
                 state[host] = {'phase': 'on', 'mode': 'snapshot', 'source': str(source), 'build': str(first),
-                               'marketplace': str(first / host), 'host_home': dev.host_home(host)}
+                               'marketplace': str(first / host), 'host_home': dev.host_home(host), 'data': metadata['data']}
             dev.write(dev.home() / 'switch.json', state)
             self.assertEqual(dev.read_snapshot(first),(first,metadata))  # reusable after execution
             self.assertIn(dev.selected_entry(), [first / host / 'plugins/o-harness/scripts/oh' for host in dev.HOSTS])
@@ -507,7 +520,7 @@ class InstallationTest(unittest.TestCase):
                 with self.assertRaises(SystemExit) as done:dev.main(['exec', '--root', tmp, 'status'])
                 self.assertEqual(done.exception.code, 0)
                 self.assertEqual(execute.call_args.args[0][2:], [str(dev.selected_entry()), '--root', tmp, 'status'])
-            state['claude'].update(build=str(second), marketplace=str(second / 'claude'))
+            state['claude'].update(build=str(second), marketplace=str(second / 'claude'), data=other['data'])
             dev.write(dev.home() / 'switch.json', state)
             with self.assertRaisesRegex(RuntimeError, 'different builds'):dev.selected_entry()
             self.assertEqual(dev.selected_entry('claude'), second / 'claude/plugins/o-harness/scripts/oh')
@@ -584,7 +597,7 @@ class InstallationTest(unittest.TestCase):
                     current=health(port)
                     self.assertIsNotNone(current)
                     self.assertEqual((current['mode'],current['version']),('development',metadata['version']))
-                    self.assertTrue((dev.normal_data()/'analytics.sqlite3').is_file())
+                    self.assertTrue((frozen_data/'analytics.sqlite3').is_file())
                     dev.show_dashboard(state,('codex',),'on')
                     self.assertEqual(len(children),1)
                     self.assertEqual(health(port)['instance'],current['instance'])
