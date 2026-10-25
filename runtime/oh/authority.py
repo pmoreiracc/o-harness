@@ -997,6 +997,7 @@ def _native_result(root, state, attempt, locator):
             identified=_child(root,state,attempt,locator,binding=False)
             terminal=_native_result(root,state,attempt|{'native_child':identified},locator)
             return terminal|{'status':'binding_failed','terminal_status':terminal['status'],
+                'rejected_child':identified,
                 'tool_use_id':identified['tool_use_id'],
                 'admitted_profile':attempt['profile'],'requested_profile':identified['requested_profile'],
                 'requested_context':identified['requested_context'],

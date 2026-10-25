@@ -837,6 +837,47 @@ class CancellationTest(NativeFixture, unittest.TestCase):
     def test_codex_rejected_launch_retry_settles_without_callback(self):
         self._rejected_launch_retry('codex')
 
+    def test_rejected_child_retention_reconciles_tools_without_binding_its_work(self):
+        self.approve()
+        admitted = native.admit(self.root, 'assessment')
+        before = load_run(self.root)[1]
+        child = Path(self.temp.name) / 'rejected-child.jsonl'
+        child.write_text('', newline='\n')
+        identified = {'child_session': 'rejected-child', 'parent_session': 's',
+                      'transcript_path': str(child), 'profile': admitted['profile']}
+        self.native_results[admitted['id']] = {
+            'status': 'binding_failed', 'terminal_status': 'interrupted',
+            'text': 'Interrupted after admission was refused.', 'rejected_child': identified,
+            'binding_issues': ['Native spawn omitted its explicit profile.']}
+        with cancellation._edit(self.root) as value:
+            value['tools']['admission-read'] = {'attempt': admitted['id'], 'kind': 'tool',
+                'name': 'OH helper', 'helper': 'admission', 'started': now()}
+            value['commands']['owned'] = {'attempt': admitted['id'], 'started': now()}
+        def result(session):
+            return {'type': 'event_msg', 'payload': {'type': 'item_completed',
+                'thread_id': session, 'item': {'type': 'CommandExecution',
+                    'id': 'admission-read', 'status': 'failed', 'exit_code': 2}}}
+        with patch('oh.authority.native_child', side_effect=Refused('Explicit profile missing')):
+            child.write_text(json.dumps(result('another-child')) + '\n', newline='\n')
+            with self.assertRaisesRegex(Refused, 'still running'):
+                native.retain(self.root, admitted['id'], {})
+            self.assertNotIn('ended', cancellation._read(self.root)['tools']['admission-read'])
+            child.write_text(json.dumps(result('rejected-child')) + '\n', newline='\n')
+            with self.assertRaisesRegex(Refused, 'still running'):
+                native.retain(self.root, admitted['id'], {})
+            self.assertEqual(cancellation._read(self.root)['tools']['admission-read']['completion_source'], 'native-record')
+            # Native helper completion never substitutes for owned-process cleanup.
+            with cancellation._edit(self.root) as value:
+                value['commands']['owned'].update(ended=now(), returncode=130)
+            retained = native.retain(self.root, admitted['id'], {})
+            self.assertEqual(retained['outcome'], 'binding_failed')
+            self.assertNotIn('native_child', retained)
+            native.retain(self.root, admitted['id'], {})
+        after = load_run(self.root)[1]
+        for key in ('granted', 'scope_id', 'config', 'decisions'):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(after['done'], [])
+
     def test_two_resume_claimants_do_not_both_take_ownership(self):
         self.approve()
         self.launch()

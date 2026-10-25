@@ -740,12 +740,20 @@ def _retain_locked(root,attempt_id,locator,run=None):
             pass
     from .cancellation import interrupted, quiescent, reconcile_tools, unlaunched_stop, guarded
     stopped=interrupted(root,attempt=attempt_id)
-    pending_edits=reconcile_tools(root,attempt)
     source=None
+    cleanup_attempt=attempt
+    if not attempt.get('native_child'):
+        try:source=authority.native_result(root,state,attempt,locator)
+        except authority.Saving:pass
+        if source and source.get('status')=='binding_failed' and source.get('rejected_child'):
+            # Attribution of a terminal rejected child permits callback reconciliation,
+            # never successful binding, accepted work, or waived command cleanup.
+            cleanup_attempt=attempt|{'native_child':source['rejected_child']}
+    pending_edits=reconcile_tools(root,cleanup_attempt)
     if pending_edits:
         try:source=authority.native_result(root,state,attempt,locator)
         except authority.Saving:pass
-        if source:reconcile_tools(root,attempt,terminal=source)
+        if source:reconcile_tools(root,cleanup_attempt,terminal=source)
     if not quiescent(root,attempt_id):
         raise authority.Saving('Native Stop cleanup is still pending. Retry with the same Resume answer after the owned commands and tools finish.'
                                if stopped else 'Owned commands or tools are still running. Retain this same attempt after they finish; do not start another worker.')
