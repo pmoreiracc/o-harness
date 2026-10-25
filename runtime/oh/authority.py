@@ -2,7 +2,7 @@
 import json
 import os
 import re
-from pathlib import Path
+from .system import Path
 from time import sleep
 from .storage import Refused, atomic_json, checkout_file, digest, read_json
 
@@ -46,16 +46,27 @@ def codex_history(path,session):
             if x.get('type')!='event_msg':continue
             if p.get('type')=='task_started':turn=p.get('turn_id')
             if p.get('thread_id',session)!=session:continue
+            message_id=None
             if p.get('type')=='user_message':
                 message_turn=p.get('turn_id') or turn;text=p.get('message')
             elif p.get('type')=='item_completed' and (p.get('item') or {}).get('type')=='UserMessage':
                 item=p['item'];message_turn=p.get('turn_id');content=item.get('content')
                 if not isinstance(item.get('id'),str) or not item['id']:continue
+                message_id=item['id']
                 text=content if isinstance(content,str) else '\n'.join(c['text'] for c in content
                     if isinstance(c,dict) and c.get('type')=='text' and isinstance(c.get('text'),str)) if isinstance(content,list) else None
             else:continue
             if isinstance(message_turn,str) and message_turn and isinstance(text,str):
-                messages.append({'turn':message_turn,'prompt':text.strip(),'cwd':cwd,'at':x.get('timestamp'),'record_hashes':[digest(x)]})
+                value={'turn':message_turn,'prompt':text.strip(),'cwd':cwd,'at':x.get('timestamp'),'record_hashes':[digest(x)],
+                       **({'message_id':message_id} if message_id else {})}
+                # Some versions save both event forms for one input. Coalesce
+                # only the same timed input, never two distinct native IDs.
+                prior=messages[-1] if messages else None
+                if (prior and value['at'] and all(prior[k]==value[k] for k in ('turn','prompt','cwd','at'))
+                        and (not prior.get('message_id') or not message_id or prior['message_id']==message_id)):
+                    prior['record_hashes']+=value['record_hashes']
+                    if message_id:prior['message_id']=message_id
+                else:messages.append(value)
     return meta,turn,messages,cwd
 
 
@@ -153,7 +164,8 @@ def _attest(host,payload,root=None,*,caller=True,latest=True,retry_resume=False)
         raise Unavailable('The native human transcript is not available yet; retry the same OH operation after the host saves it')
     if host=='codex':
         path=paths[0];_,_,messages,_=codex_history(path,event['session'])
-        matches=[m for m in messages if (m['turn'],m['prompt'])==(event['turn'],event['prompt'])]
+        matches=[m for m in messages if (m['turn'],m['prompt'])==(event['turn'],event['prompt'])
+                 and (not payload.get('message_id') or m.get('message_id')==payload['message_id'])]
         if root is not None and any(not within(m['cwd'],root) for m in matches):raise Refused('Human turn belongs to another project checkout')
         consequential=[m for m in messages if not (retry_resume and _resume_retry(m['prompt']))]
         if latest and matches and consequential and consequential[-1] not in matches:raise Expired('The person typed something newer in this conversation')
@@ -161,8 +173,14 @@ def _attest(host,payload,root=None,*,caller=True,latest=True,retry_resume=False)
             if messages and messages[-1]['turn']==event['turn']:
                 raise Refused('The requested command does not match the native human message; nothing was applied')
             raise Saving('Codex has not saved this human message yet; retry the same OH operation.')
-        return event|{'at':min(m['at'] for m in matches if m['at']) if any(m['at'] for m in matches) else None,
-            'record_hashes':sorted({h for m in matches for h in m['record_hashes']}),'transcript_path':str(path)}
+        # A running Codex turn may receive several identical human replies. Its
+        # native UserMessage ID, not the turn/text pair, identifies the answer.
+        selected=matches[-1]
+        if selected.get('message_id'):
+            matches=[m for m in matches if m.get('message_id')==selected['message_id']]
+        return event|{'at':selected['at'],
+            'record_hashes':sorted({h for m in matches for h in m['record_hashes']}),'transcript_path':str(path),
+            **({'message_id':selected['message_id']} if selected.get('message_id') else {})}
     path=paths[0];matches=[];times=[];tagged=[];expanded={};latest_turn=None
     with path.open('rb') as stream:
         first=stream.readline()
@@ -261,35 +279,54 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
             path=_path(host,session,locator.get('transcript_path'))
             messages=codex_history(path,session)[2] if host=='codex' else claude_history(path,session)
             hint=locator.get('prompt')
-            matching=[m for m in messages if not hint or m['prompt']==hint.strip() or saved_command(m['prompt']) is not None and saved_command(m['prompt'])==saved_command(hint)]
+            matching=[m for m in messages if (not locator.get('message_id') or m.get('message_id')==locator['message_id'])
+                      and (not hint or m['prompt']==hint.strip() or saved_command(m['prompt']) is not None and saved_command(m['prompt'])==saved_command(hint))]
             if not matching:raise Saving('The native host has not saved this human input yet; retry the same operation')
             selected=matching[-1]
-            locator=locator|{'turn':selected['turn'],'prompt':selected['prompt'],'transcript_path':str(path)}
+            locator=locator|{'turn':selected['turn'],'prompt':selected['prompt'],'transcript_path':str(path),
+                             **({'message_id':selected['message_id']} if selected.get('message_id') else {})}
         if not isinstance(locator.get('prompt'),str):
             path=_path(host,session,locator.get('transcript_path'))
             if host=='codex':messages=codex_history(path,session)[2]
             else:messages=claude_history(path,session)
-            matches=[m for m in messages if m['turn']==locator.get('turn')]
+            matches=[m for m in messages if m['turn']==locator.get('turn')
+                     and (not locator.get('message_id') or m.get('message_id')==locator['message_id'])]
             if not matches:raise Saving('This native human turn is not saved yet')
             locator=locator|{'prompt':matches[-1]['prompt'],'transcript_path':str(path)}
         payload=dict(locator,hook_event_name='UserPromptSubmit',session_id=session,turn_id=locator.get('turn'))
         result=attest(host,payload,root,latest=latest,retry_resume=retry_resume)
         if since and not newer(result.get('at'),since):raise Refused('This human reply predates the subject it would approve')
-        context='';context_at=None
+        context='';context_at=None;displays=[]
         for record in _records(result['transcript_path']):
             if record.get('timestamp') and result.get('at') and not newer(result['at'],record['timestamp']):continue
             if host=='codex':
                 item=record.get('payload') or {}
-                if record.get('type')!='response_item' or item.get('type')!='message' or item.get('role')!='assistant':continue
+                if (record.get('type')=='event_msg' and item.get('thread_id',session)==session
+                        and (item.get('type')=='user_message' or item.get('type')=='item_completed'
+                             and (item.get('item') or {}).get('type')=='UserMessage')):
+                    displays=[];context='';context_at=None
+                    continue
+                if (record.get('type')=='event_msg' and item.get('type')=='item_completed'
+                        and item.get('thread_id')==session):
+                    item=item.get('item') or {}
+                    if item.get('type')!='AgentMessage':continue
+                elif record.get('type')!='response_item' or item.get('type')!='message' or item.get('role')!='assistant':continue
                 parts=item.get('content')
             else:
+                if prompted(record,session):
+                    displays=[];context='';context_at=None
+                    continue
                 if record.get('type')!='assistant' or record.get('sessionId')!=session or record.get('isSidechain'):continue
                 parts=(record.get('message') or {}).get('content')
-            text='\n'.join(part.get('text','') for part in parts if isinstance(part,dict) and part.get('type') in ('text','output_text')) if isinstance(parts,list) else ''
-            if text:context=text;context_at=record.get('timestamp')
-        if subject and str(subject) not in context:raise Refused('This typed reply has no preceding native context identifying the reviewed artifact')
+            text='\n'.join(part.get('text','') for part in parts if isinstance(part,dict) and part.get('type') in ('text','output_text','Text')) if isinstance(parts,list) else ''
+            if text:
+                context=text;context_at=record.get('timestamp')
+                displays.append({'text':text,'at':context_at,'record_hash':digest(record)})
+        if subject and not any(str(subject) in shown['text'] for shown in displays):
+            raise Refused('This typed reply has no preceding native context identifying the reviewed artifact')
         result['question']=context
         result['question_at']=context_at
+        result['question_context']=displays
         return result
     path=_path(host,session,locator.get('transcript_path'));call=None;answer=None;answered_text=None;superseded=False;inputs=[]
     for record in _records(path):
@@ -375,6 +412,28 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
     return answer
 
 
+def scope_human(root, locator, *, since, subject, latest=True):
+    """Recover a missing Claude plan-call ID, then use normal native validation."""
+    try:
+        return native_human(root,locator,since=since,subject=subject,latest=latest),locator
+    except Refused:
+        if locator.get('host')!='claude' or locator.get('tool_use_id') or locator.get('decision'):raise
+        session=locator.get('session');path=_path('claude',session,locator.get('transcript_path'))
+        call=None
+        for record in _records(path):
+            if (record.get('type')!='assistant' or record.get('sessionId')!=session
+                    or record.get('isSidechain') or record.get('isMeta')
+                    or not within(record.get('cwd'),root) or not newer(record.get('timestamp'),since)):continue
+            content=(record.get('message') or {}).get('content')
+            for part in content if isinstance(content,list) else []:
+                if isinstance(part,dict) and part.get('type')=='tool_use' and part.get('name')=='ExitPlanMode':
+                    call=part.get('id')
+        if not isinstance(call,str) or not call:raise
+    # Never search backwards past a newer pending, denied or changed plan.
+    resolved=locator|{'tool_use_id':call,'transcript_path':str(path)}
+    return native_human(root,resolved,since=since,subject=subject,latest=latest),resolved
+
+
 def _resume_retry(text):
     """A retry preserves an existing Resume answer; it grants no new effect."""
     return isinstance(text,str) and text.strip().casefold().rstrip('.!') in (
@@ -394,6 +453,26 @@ def question_options(request):
     return labels
 
 
+def question_text(text):
+    """Ignore display-only Markdown and whitespace, preserving the actual words."""
+    text=re.sub(r'\*\*([^*\n]+)\*\*',r'\1',text)
+    text=re.sub(r'`([^`\n]+)`',r'\1',text)
+    return ' '.join(text.split())
+
+
+def presented_question_at(source,question):
+    """Match the complete prepared text in this reply's verified display context.
+
+    A native host may display the full question and its compact choices separately.
+    Keep the time of the actual full display; later prose cannot refresh an old grant.
+    """
+    expected=question_text(question)
+    displays=source.get('question_context') or [{'text':source.get('question',''),'at':source.get('question_at')}]
+    for shown in reversed(displays):
+        if expected in question_text(shown['text']):return shown.get('at')
+    return None
+
+
 def question_calls(root, host, session, question, supplied=None, *, options=None):
     """List native calls showing this prepared text or its complete checkpoint menu.
     Locating a call grants nothing; native_human still validates its saved answer."""
@@ -403,7 +482,7 @@ def question_calls(root, host, session, question, supplied=None, *, options=None
             shown=question_options(arguments)
             return shown is not None and set(shown)==set(options)
         questions=arguments.get('questions') if isinstance(arguments,dict) else None
-        return isinstance(questions,list) and questions and isinstance(questions[0],dict) and (questions[0].get('question') or questions[0].get('title'))==question
+        return isinstance(questions,list) and questions and isinstance(questions[0],dict) and question_text(questions[0].get('question') or questions[0].get('title') or '')==question_text(question)
     for record in _records(path):
         if host=='claude':
             if record.get('type')!='assistant' or record.get('sessionId')!=session or record.get('isSidechain') or not within(record.get('cwd'),root):continue
@@ -433,7 +512,7 @@ def coordinator(root, state, locator=None, *, retry_resume=False):
     session=session or state['human']['session']
     path=_path(state['host'],session,state['human'].get('transcript_path'))
     if state['host']=='codex':codex_history(path,session)
-    elif '/subagents/' in str(path):raise Refused('A delegated child cannot become the owning parent')
+    elif 'subagents' in path.parts:raise Refused('A delegated child cannot become the owning parent')
     return state['human']
 
 
@@ -949,7 +1028,7 @@ def _native_result(root, state, attempt, locator):
             raise Saving('The native child has later activity; await or cancel it, then retry retention with its original locator')
         if state['host']=='codex':
             p=r.get('payload') or {}
-            if (r.get('type')=='turn_context' or r.get('type')=='event_msg' and p.get('type') in ('task_started','user_message')
+            if (r.get('type')=='turn_context' or r.get('type')=='event_msg' and p.get('type') in ('task_started','user_message','item_started')
                     or r.get('type')=='response_item' and p.get('type') in ('message','function_call','custom_tool_call')):final=None
             if r.get('type')=='response_item' and p.get('type')=='message' and p.get('role')=='assistant':
                 text='\n'.join(part.get('text','') for part in p.get('content',[]) if isinstance(part,dict) and part.get('type') in ('text','output_text'))
@@ -958,7 +1037,8 @@ def _native_result(root, state, attempt, locator):
                 text=p.get('last_agent_message')
                 final={'text':text if isinstance(text,str) and text.strip() else '\n\n'.join(public),
                        'status':'completed' if isinstance(text,str) and text.strip() else 'unfinished',
-                       'duration_ms':p.get('duration_ms'),'record_hashes':public_hashes+[digest(r)]}
+                       'duration_ms':p.get('duration_ms'),'completed_at':r.get('timestamp'),
+                       'record_hashes':public_hashes+[digest(r)]}
             elif r.get('type')=='event_msg' and p.get('type')=='turn_aborted':
                 final={'text':'\n\n'.join(public) or p.get('reason','Native child interrupted'),'status':'interrupted','record_hashes':public_hashes+[digest(r)]}
         elif r.get('type')=='assistant' and r.get('agentId')==bound['child_session']:

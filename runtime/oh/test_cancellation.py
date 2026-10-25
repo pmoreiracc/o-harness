@@ -59,6 +59,62 @@ class CancellationTest(NativeFixture, unittest.TestCase):
             'turn_id': 'worker-turn', 'agent_id': worker or self.worker,
             'tool_name': name, 'tool_input': args or {}, 'tool_use_id': use})
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows hook shell contract')
+    def test_packaged_windows_hooks_reserve_commands_and_revoke_workers(self):
+        from .installation import build
+        plugin = Path(self.temp.name) / 'plugin with spaces & %OH_HOOK_PATH_TEST% !' / 'o-harness'
+        environment = patch.dict(os.environ, {'OH_HOOK_PATH_TEST': 'must-not-expand'})
+        environment.start(); self.addCleanup(environment.stop)
+        build(plugin, 'codex')
+        installed = subprocess.run([sys.executable, '-I', str(plugin / 'core/oh'),
+                                    'setup', '--development'], capture_output=True, text=True)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        hooks = json.loads((plugin / 'hooks/hooks.json').read_text())['hooks']
+        self.approve();self.launch()
+        data = Path(os.environ['OH_DATA_HOME'])
+        revision = json.loads((data / 'runtime/active.json').read_text())['revision']
+        home = patch('oh.config.HOME', data / 'versions' / revision);home.start();self.addCleanup(home.stop)
+        shells = [[str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+                   '-NoProfile', '-Command']]
+        if shutil.which('pwsh'):
+            shells.append([shutil.which('pwsh'), '-NoProfile', '-Command'])
+        shells.append(None)  # Codex's default cmd runner uses a raw outer quote pair.
+        def invoke(shell, event, payload, group=-1):
+            hook = hooks[event][group]['hooks'][0]
+            command = hook['commandWindows']
+            args = [*shell, command] if shell else f'"{os.environ["COMSPEC"]}" /d /s /c "{command}"'
+            called = subprocess.run(args, input=json.dumps(payload | {'hook_event_name': event,
+                'cwd': str(self.root)}), env=os.environ | {'PLUGIN_ROOT': str(plugin)},
+                capture_output=True, text=True, encoding='utf-8', timeout=hook['timeout'])
+            self.assertEqual(called.returncode, 0, called.stderr)
+            self.assertEqual(called.stderr, '')
+            return json.loads(called.stdout) if called.stdout.strip() else {}
+        for index, shell in enumerate(shells):
+            with self.subTest(shell=shell):
+                argv = [sys.executable, '-c', f'print("reserved-{index}")']
+                payload = {'session_id': 's', 'agent_id': self.worker, 'turn_id': 'worker-turn',
+                           'tool_use_id': f'windows-command-{index}', 'tool_name': 'Bash',
+                           'tool_input': {'command': cancellation.command_line(self.root, self.attempt, argv, windows=True)}}
+                result = invoke(shell, 'PreToolUse', payload)
+                self.assertEqual(result, {}, result)
+                # Execute the exact suggested worker command too, not just its
+                # decoded Python argv; PowerShell 5 used to strip the JSON quotes.
+                worker_shell = shell or shells[0]
+                executed = subprocess.run([*worker_shell, payload['tool_input']['command']],
+                                          capture_output=True, text=True)
+                self.assertEqual(executed.returncode, 0, executed.stderr)
+                self.assertEqual(executed.stdout.strip(), f'reserved-{index}')
+                invoke(shell, 'PostToolUse', payload)
+        # Exercise the other generated entry points without creating human authority.
+        invoke(shells[0], 'UserPromptSubmit', {})
+        invoke(shells[0], 'PreToolUse', {}, group=0)
+        invoke(shells[0], 'SubagentStart', {'session_id': 's', 'agent_id': self.worker})
+        for shell in shells:
+            invoke(shell, 'Interrupt', {'session_id': 's', 'turn_id': 'running-turn'})
+        denied = invoke(shells[0], 'PreToolUse', payload)
+        self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertIsNotNone(cancellation.interrupted(self.root, attempt=self.attempt))
+
     def test_stop_and_resume_keep_old_worker_revoked_in_same_and_other_conversations(self):
         # Drive the native tool boundary and the real human-answer parser, rather
         # than jumping directly from a stopped attempt into native.resume().
@@ -218,6 +274,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         self.assertEqual(heartbeat.stat().st_size, size)
         self.assertTrue(cancellation.quiescent(self.root, self.attempt))
         self.assertEqual(self.tool('Bash', {'command': line})['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('exec_command', {'cmd': line})['hookSpecificOutput']['permissionDecision'], 'deny')
         # A reboot may remove the private temp receipt. An ended shell call or
         # missing directory is insufficient; only a verified later boot settles it.
         receipt = Path(cancellation._read(self.root)['tools']['command']['receipt'])
@@ -237,13 +294,36 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         self.approve()
         self.launch()
         argv = [sys.executable, '-c', "print('a; b')"]
-        for windows in (False, True):
-            with self.subTest(windows=windows):
-                line = cancellation.command_line(self.root, self.attempt, argv, windows=windows)
-                self.assertEqual(self.tool('Bash', {'command': line}, use=str(windows)), {})
-                for suffix in ('; echo unowned', ' && echo unowned', '\\necho unowned'):
-                    self.assertEqual(self.tool('Bash', {'command': line + suffix})['hookSpecificOutput']['permissionDecision'], 'deny')
-        self.assertEqual(self.tool('Bash', {'command': 'echo unowned'})['hookSpecificOutput']['permissionDecision'], 'deny')
+        for name, key in (('Bash', 'command'), ('PowerShell', 'command'),
+                          ('exec_command', 'cmd'), ('functions.exec_command', 'cmd')):
+            for windows in ((False, True) if os.name == 'nt' else (False,)):
+                with self.subTest(name=name, windows=windows):
+                    line = cancellation.command_line(self.root, self.attempt, argv, windows=windows)
+                    use = name + str(windows)
+                    self.assertEqual(self.tool(name, {key: line}, use=use), {})
+                    self.assertEqual(cancellation._read(self.root)['tools'][use]['kind'], 'command')
+                    for suffix in ('; echo unowned', ' && echo unowned', '\\necho unowned'):
+                        self.assertEqual(self.tool(name, {key: line + suffix})['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertEqual(self.tool(name, {key: 'echo unowned'})['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertEqual(self.tool(name, {})['hookSpecificOutput']['permissionDecision'], 'deny')
+        # A native exec_command reservation must be consumable by the actual wrapper.
+        from .worker_checks import command_format
+        literals=['C:\\a path\\quoted "value"',"single'quote",'', 'line\nnext','a; $(not executed)']
+        native_argv = [sys.executable, '-X', 'utf8', '-c', 'import sys,json; print(json.dumps(sys.argv[1:]))',*literals]
+        before=cancellation._read(self.root)
+        from .config import HOME
+        rendered=subprocess.run([sys.executable,'-I',str(HOME/'oh'),'--root',str(self.root),
+                                 'command-format','--argv',json.dumps(native_argv),'--',self.attempt],
+                                capture_output=True,text=True)
+        self.assertEqual(rendered.returncode,0,rendered.stderr)
+        formatted=json.loads(rendered.stdout)
+        self.assertEqual(cancellation._read(self.root),before)  # formatting reserves and executes nothing
+        native_line=formatted['powershell' if os.name=='nt' else 'bash']
+        self.assertEqual(self.tool('exec_command', {'cmd': native_line}, use='native-command'), {})
+        invocation = ['powershell.exe','-NoProfile','-Command',native_line] if os.name=='nt' else ['bash','-c',native_line]
+        executed = subprocess.run(invocation, capture_output=True, text=True)
+        self.assertEqual(executed.returncode, 0, executed.stderr)
+        self.assertEqual(json.loads(executed.stdout),literals)
         with self.assertRaisesRegex(Refused, 'no native hook reservation'):
             cancellation.owned_command(self.root, self.attempt, ['unreserved-command'])
         # A read-only reviewer needs a direct helper call: no outer pipe and no
@@ -254,6 +334,43 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         checked = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(checked.returncode, 0, checked.stderr)
         self.assertTrue(json.loads(checked.stdout)['valid'])
+        # A recovery instruction must execute in Claude's Bash on Windows too.
+        # OS-based PowerShell guidance previously made the retry fail in Bash.
+        from .system import executable
+        guidance = cancellation._shell_guidance(command, 'claude', 'Bash')
+        checked = subprocess.run([executable('bash'), '-c', guidance.removeprefix('Bash: ')],
+                                 capture_output=True, text=True)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertTrue(json.loads(checked.stdout)['valid'])
+        if os.name == 'nt':
+            # Native Bash agents also spell Windows helper paths with forward slashes.
+            forward=[word.replace('\\','/') if os.path.isabs(word) else word for word in command]
+            self.assertEqual(self.tool('Bash', {'command':shlex.join(forward)},use='forward-helper'),{})
+            record=cancellation._read(self.root)['attempts'][self.attempt]
+            admission=cancellation.command_prefix(self.root,self.attempt)[:-3]+['admission',record['directory']]
+            admission=[word.replace('\\','/') if os.path.isabs(word) else word for word in admission]
+            self.assertEqual(self.tool('Bash',{'command':shlex.join(admission)},use='forward-admission'),{})
+            foreign=admission.copy();foreign[0]+='.other'
+            self.assertEqual(self.tool('Bash',{'command':shlex.join(foreign)})['hookSpecificOutput']['permissionDecision'],'deny')
+            owned=cancellation.command_prefix(self.root,self.attempt)
+            owned=[word.replace('\\','/') if os.path.isabs(word) else word for word in owned]
+            self.assertEqual(cancellation._owned_argv(self.root,self.attempt,shlex.join(owned+[json.dumps(argv)])),argv)
+            guidance = cancellation._shell_guidance(command, 'codex', 'Bash')
+            _, powershell = guidance.split('\nPowerShell: ', 1)
+            checked = subprocess.run(['powershell.exe', '-NoProfile', '-Command', powershell],
+                                     capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertTrue(json.loads(checked.stdout)['valid'])
+            invalid = cancellation.shell_line(command[:-1]+['No decision header.'],windows=True)
+            checked = subprocess.run(['powershell.exe', '-NoProfile', '-Command', invalid],
+                                     capture_output=True, text=True)
+            self.assertNotEqual(checked.returncode,0,checked.stdout)
+            missing = cancellation.shell_line([str(self.root/'absent-python.exe'), '--version'],windows=True)
+            checked = subprocess.run(['powershell.exe', '-NoProfile', '-Command', missing],
+                                     capture_output=True, text=True)
+            self.assertNotEqual(checked.returncode,0,checked.stdout)
+        self.stop()
+        with self.assertRaises(Refused):command_format(self.root,self.attempt,native_argv)
 
     def test_native_stop_cancels_configured_checks_without_recording_a_pass(self):
         heartbeat = Path(self.temp.name) / 'checking'
@@ -483,13 +600,24 @@ class CancellationTest(NativeFixture, unittest.TestCase):
     def test_terminal_model_does_not_override_unfinished_tools(self):
         self.approve()
         self.launch()
+        # A rejected sibling in Promise.all can cancel a read without its post-hook.
+        # It cannot hold a writer alive. An edit requires a completion boundary;
+        # commands and external tools still need their own execution evidence.
+        self.tool('mcp__o_harness__resource', {'path':'prompts/implementation.md'},use='cancelled-read')
+        self.tool('mcp__o_harness__command_format',use='cancelled-format')
         self.tool('apply_patch', use='unfinished-edit')
         self.native_results[self.attempt] = {'status': 'completed', 'text': ''}
         with self.assertRaisesRegex(Refused, 'tools are still running'):
             native.retain(self.root, self.attempt, {})
-        # The native completion record settles a tool even if its post-tool hook was missed.
-        self.parent_path.write_text(json.dumps({'type': 'response_item', 'payload': {
-            'type': 'custom_tool_call_output', 'call_id': 'unfinished-edit', 'output': 'done'}}) + '\n', newline='\n')
+        # Old completion, another child and interrupted/synthetic completion do
+        # not settle a later file edit whose own callback is absent.
+        for result in ({'completed_at':'2000-01-01T00:00:00Z'},
+                       {'completed_at':now(),'native_id':'another-child'},
+                       {'completed_at':now(),'status':'interrupted'}):
+            with patch('oh.authority.native_result',return_value={'status':'completed','native_id':self.worker,**result}):
+                with self.assertRaisesRegex(Refused, 'tools are still running'):
+                    native.retain(self.root,self.attempt,{})
+        self.native_results[self.attempt]['completed_at']=now()
         self.tool('mcp__o_harness__verify', use='nested-failure')
         self.tool('apply_patch', use='nested-patch')
         helper = shlex.join(cancellation.command_prefix(self.root, self.attempt)[:-3] + ['status'])
@@ -502,8 +630,11 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         completed('other-child', status='failed', result={'isError': True})
         completed(self.worker, status='in_progress', result={})
         completed(self.worker, status='failed', error={'message': 'transport timed out'})
+        with self.parent_path.open('a',newline='\n') as stream:
+            stream.write(json.dumps({'type':'event_msg','payload':{'type':'task_complete'}})+'\n')
         with self.assertRaisesRegex(Refused, 'tools are still running'):
             native.retain(self.root, self.attempt, {})
+        self.assertEqual(cancellation._read(self.root)['tools']['unfinished-edit']['completion_source'],'native-child-completed')
         completed(self.worker, status='failed', result={'isError': True, 'content': []})
         completed(self.worker, type='FileChange', id='nested-patch', status='failed', stderr='patch did not apply')
         completed(self.worker, type='CommandExecution', id='nested-helper', status='completed', exit_code=None)

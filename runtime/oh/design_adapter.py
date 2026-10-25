@@ -1,5 +1,5 @@
 """OH's plan document format only; execution and grants belong to the common runner."""
-from pathlib import Path
+from .system import Path
 import re
 from .design_parse import freeze_render, plan
 from .storage import Refused, git, matches_git, project

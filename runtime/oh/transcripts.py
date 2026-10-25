@@ -2,7 +2,7 @@
 from .storage import state_writer
 """Incremental coordinator usage; raw conversation text never enters analytics."""
 import json
-from pathlib import Path
+from .system import Path
 import os
 from .storage import Refused,atomic_json,digest,identifier,lock,now,read_json,state_home
 from .telemetry import emit

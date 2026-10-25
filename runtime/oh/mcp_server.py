@@ -5,7 +5,7 @@ menus nor executes model-selected shell commands or launches agent subprocesses.
 """
 import json
 import os
-from pathlib import Path
+from .system import Path
 import re
 import subprocess
 import sys
@@ -30,6 +30,8 @@ TOOLS = [
     tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; saved lists both workflow and review without selection.', {'saved':{'type':'boolean'}}, read_only=True),
     tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
     tool('admission', 'Validate review admission', 'Validate the immutable subject and request, recovering a missing native child binding when needed.', {'attempt_directory':TEXT}, ['attempt_directory']),
+    tool('command_format', 'Format native shell command', 'Return exact Bash and PowerShell quoting for an admitted worker command. Does not execute or authorize it. Pass an executable/argument array, then run the returned string unchanged with the native shell tool and its normal permissions.',
+         {'attempt':TEXT,'argv':{'type':'array','minItems':1,'items':TEXT}}, ['attempt','argv'], read_only=True),
     tool('config', 'OH settings', 'Read project settings and configured checks.', read_only=True),
     tool('init', 'Register project', 'Register this checkout with OH.', {'name': TEXT}),
     tool('plans', 'Project plans', 'Read plan locations, validate plans, or list designs.',
@@ -56,7 +58,8 @@ TOOLS = [
          {'attempt':TEXT}, ['attempt']),
     tool('decision_request', 'Bind decision effect', 'Prepare native human choices. Use recover for delivery recovery: Continue, Start fresh, Stop and take over. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions. Bind the returned action from the same answer. Displays no menu and grants nothing.',
          {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1,
-          'description':'Omit to renew the run’s configured review window. Supply only when the person explicitly requests a different number of additional rounds.'},'run':TEXT,'also':TEXT}, ['kind']),
+          'description':'Omit to renew the run’s configured review window. Supply only when the person explicitly requests a different number of additional rounds.'},'run':TEXT,'also':TEXT,
+          'repair':{'type':'string','description':'For approve-repair: bounded supporting repair and why additional approval is needed. Continues the same delivery task; does not renew allowances or waive checks.'}}, ['kind']),
     tool('finding_track', 'Track outside-scope findings', 'Record a saved follow-up, design note or an issue URL. Grants no implementation or issue-creation authority.',
          {'attempt':TEXT,'destination':OBJECT}, ['attempt']),
     tool('decision', 'Record human decision', 'Verify a native human decision about task/review allowance, findings or publication. Displays no menu.',
@@ -98,6 +101,10 @@ def command(name, arguments, root):
     if name in ('config','candidate'):return [name]
     if name=='resume':return ['resume']+(['--run',text('run')] if text('run') else [])+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
     if name=='admission':return ['admission','--',text('attempt_directory',True)]
+    if name=='command_format':
+        argv=arguments.get('argv')
+        if not isinstance(argv,list) or not argv or not all(isinstance(v,str) and '\0' not in v for v in argv):raise Refused('argv must be a nonempty string array')
+        return ['command-format','--argv',json.dumps(argv,ensure_ascii=False),'--',text('attempt',True)]
     if name=='init':return ['init']+([f'--name={text("name")}'] if text('name') else [])
     if name=='plans':
         if arguments.get('action') not in ('path','check','list'):raise Refused('Invalid plans action')
@@ -124,7 +131,7 @@ def command(name, arguments, root):
     if name=='complete':return ['complete','--',text('attempt',True)]
     if name=='decision_request':
         args=['decision-request']
-        for key in ('attempt','run','also'):
+        for key in ('attempt','run','also','repair'):
             if text(key):args+=['--'+key,text(key)]
         if 'rounds' in arguments:
             if type(arguments['rounds']) is not int or arguments['rounds']<1:raise Refused('rounds must be a positive whole number')

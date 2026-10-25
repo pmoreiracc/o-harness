@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+from .system import Path
 import shlex
 import sys
 from .config import HOME
@@ -36,6 +36,7 @@ def main(argv=None):
     parser.add_argument('--root',type=Path)
     parser.add_argument('--data-home',type=Path,help=argparse.SUPPRESS)
     sub=parser.add_subparsers(dest='command',required=True)
+    formatting=sub.add_parser('command-format');formatting.add_argument('attempt');formatting.add_argument('--argv',required=True)
     scope=sub.add_parser('scope');actions=scope.add_subparsers(dest='action',required=True)
     prep=actions.add_parser('prepare');prep.add_argument('manifest',type=Path,nargs='?');prep.add_argument('--doc');prep.add_argument('--track',default='');prep.add_argument('--workflow',default='deliver',choices=['deliver','design','propose']);prep.add_argument('--human')
     approve=actions.add_parser('approve');approve.add_argument('scope_id');approve.add_argument('locator')
@@ -52,7 +53,7 @@ def main(argv=None):
     evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
     complete=sub.add_parser('complete');complete.add_argument('attempt')
     decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator');decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
-    request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int,help='Override the configured review window only when the person explicitly requests a different count; otherwise omit');request.add_argument('--run');request.add_argument('--also')
+    request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int,help='Override the configured review window only when the person explicitly requests a different count; otherwise omit');request.add_argument('--run');request.add_argument('--also');request.add_argument('--repair')
     track=sub.add_parser('finding-track');track.add_argument('attempt');track.add_argument('--destination',type=Path)
     resume=sub.add_parser('resume');resume.add_argument('--human');resume.add_argument('--run')
     status=sub.add_parser('status');status.add_argument('--saved',action='store_true')
@@ -116,7 +117,7 @@ def main(argv=None):
         elif args.command=='decision':result=native.decision(root,args.kind,_locator(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
         elif args.command=='decision-request':
             from .decisions import prepare
-            result=prepare(root,args.kind,args.attempt,args.rounds,args.run,args.also)
+            result=prepare(root,args.kind,args.attempt,args.rounds,args.run,args.also,args.repair)
         elif args.command=='finding-track':
             from .scope import track
             result=track(root,args.attempt,read_json(args.destination) if args.destination else None)
@@ -144,6 +145,9 @@ def main(argv=None):
         elif args.command=='admission':
             from .worker_checks import admission
             result=admission(args.directory)
+        elif args.command=='command-format':
+            from .worker_checks import command_format
+            result=command_format(root,args.attempt,json.loads(args.argv))
         elif args.command=='publication':
             from .publication import reconcile
             result=reconcile(root,args.pr)

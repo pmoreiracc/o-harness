@@ -3,7 +3,7 @@ Output and messages match the former core/scripts/plan.sh, roadmap.sh and freeze
 whitespace and case folding are ASCII only. Under a UTF-8 locale macOS awk also treated U+00A0 as space and
 lowercased non-ASCII capitals, and it cut long titles by bytes where this cuts by characters."""
 from datetime import date
-from pathlib import Path
+from .system import Path
 import re
 from .storage import Refused
 

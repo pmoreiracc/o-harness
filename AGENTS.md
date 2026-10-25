@@ -1,60 +1,71 @@
 # Working on OH
 
-These instructions guide development of OH itself. Use the product goals below to
-evaluate every proposed fix or improvement to OH.
-
-Read `config/invariants.json`, `CONTRIBUTING.md` and the relevant implementation.
-OH has no mandatory ADR process. Product policies belong to consumers.
-
-For workflow changes, use the golden reference in `my-geoffrey` at tag
-`harness-before-separation` (`b508bdc`) as a strong reference point. Consult the relevant
-skill and supporting scripts before redesigning a working flow. Prefer its proven approach
-when it fits OH's goals; explain a concrete reason when departing from it. Its implementation
-and Geoffrey-specific policies are not requirements for OH.
-
-## Evidence before claims
-
-Every agent, including delegated agents, must verify factual claims, diagnoses,
-instructions and completion reports before presenting them to the developer. Use
-the relevant implementation, observed results and current official documentation.
-Never present a guess, remembered behavior or intended behavior as an established fact.
-Distinguish verified behavior from inference, proposed behavior and untested expectations;
-state what remains unknown when the available evidence cannot establish the answer.
-
-Before giving steps, confirm that the commands or controls exist and apply to the
-developer's actual host, interface, version and workflow. Do not infer desktop controls
-from CLI tools, another host or generic documentation. Report tests only when actually
-run, and do not describe fixture coverage as live host validation. Reference the evidence
-needed to check consequential claims. If a claim proves wrong, correct it explicitly,
-verify the replacement guidance and give a concrete supported next step.
+These instructions apply to agents developing or reviewing **OH itself**, including
+delegated agents. They are not consumer product requirements: do not inject OH's product
+goals into the plugin's shared reviewer prompt or another project's review context.
 
 ## Product goals and experience
 
-OH helps independent developers turn an idea into code they can confidently ship,
-with less supervision than prompting an agent directly. Approved work should be
-easier to complete with OH than with a simple skill.
+**OH should feel as fluid as prompting an agent or using a simple skill, while providing
+the guidance, independent scrutiny and verification needed to ship quality, secure code
+with confidence.** Both the experience and the trustworthiness of the result are requirements.
+
+Use only the machinery needed to uphold meaningful guarantees. Preserve the agent's
+freedom to reason, investigate and choose solutions within the approved outcome. Neither
+adding controls nor removing them is an objective; choose the smallest complete design
+that supports autonomous work, trustworthy evidence and human control.
 
 - **Clear work:** Propose shapes the idea; Design defines scope, ordered tasks and
   acceptance checks; Deliver builds approved designs or bounded quick fixes.
-- **Autonomous delivery:** Approved work progresses automatically within its scope.
-  Project checks and a fresh independent reviewer establish whether it is ready;
-  blocking findings are repaired before reviewed work is committed.
-- **Minimal interruption:** Routine failures are repaired within existing authority.
-  The developer should not need to repeat valid commands, manage agents or debug OH.
-  Questions belong to real decisions, missing authority or unavoidable external actions.
-- **Useful visibility:** Show meaningful transitions and short results: what changed,
-  what was checked, what review found and what remains unresolved. Repeating unchanged
-  status does not improve confidence.
-- **Human control:** Scope stays fixed. The developer controls further allowances and
-  publication, and decides what ships. Agent claims never substitute for human approval.
+- **Autonomous delivery:** Complete approved work, including diagnosis and supporting
+  repairs covered by that approval. Required checks and fresh independent review establish
+  readiness; repair blocking findings before committing reviewed work.
+- **Minimal interruption:** Recover routine failures without making the developer repeat
+  commands, manage agents or debug OH. Questions belong to real decisions, missing authority
+  or unavoidable external actions, with an actionable path after the answer.
+- **Useful visibility:** Report meaningful transitions, changes, checks, review results
+  and unresolved limits concisely. Do not repeat unchanged status.
+- **Human control:** Preserve approved scope and allowances. The developer controls their
+  expansion and publication; agent claims never substitute for approval.
 - **Natural fit:** Support Claude and Codex through existing subscriptions across
   macOS, Linux and Windows. Respect each project's standards and keep OH configuration
   outside consumer repositories.
 
-Judge changes by the complete developer workflow, not by what makes an isolated test pass.
-Do not weaken useful production behavior just to accommodate a local test setup.
-Explain changes through what the developer will see or do, with a brief before/after example
-when useful; internal mechanism names alone do not explain the behavior.
+## Reason about the complete workflow
+
+Treat a reported failure as evidence of a problem family, not the specification for a
+special-case fix. Trace the affected callers, shared contracts, consumers and recovery
+paths through to completion, across Propose, Design, Deliver, review and publication
+where relevant. Check what happens after each proposed recovery or human choice: removing
+one blocker is insufficient if the next transition blocks the same approved outcome.
+
+Prefer general guidance that leaves room for agent judgment over incident-specific scripts.
+For each restriction, identify the guarantee it protects and whether a less restrictive
+approach preserves it. Consider different projects, failure causes and supported hosts.
+Do not weaken production behavior or checks to make a test pass. Explain the user-visible
+result, tradeoffs, downstream risks and remaining uncertainty; agreement between agents
+and isolated passing tests do not prove a complete workflow works.
+
+When the developer challenges a plan, reassess the evidence and surrounding design.
+Do not simply agree or implement what you guess they want. Ask when the intended outcome
+or authority is genuinely unclear; do not promise that all future failures are impossible.
+
+Read `config/invariants.json`, `CONTRIBUTING.md` and the relevant implementation.
+For workflow changes, consult the relevant skill and supporting scripts in the golden
+reference: `my-geoffrey`, tag `harness-before-separation` (`b508bdc`). Prefer its proven
+approach when it fits OH's goals; explain departures. Its implementation and product
+policies are not requirements for OH. OH has no mandatory ADR process.
+
+## Evidence before claims
+
+Every agent must ground diagnoses, instructions and completion claims in inspected code,
+observed results and current official documentation. Separate facts from hypotheses,
+proposals and untested expectations. State consequential unknowns and cite useful evidence.
+
+Before giving steps, verify the commands or controls on the actual host, interface and
+version. Do not infer desktop controls from a CLI or another host. Report only tests
+actually run; fixture coverage is not live host validation. Correct wrong claims explicitly
+and give a verified next step.
 
 ## Development workflow
 
@@ -63,18 +74,11 @@ fresh native host agents; focused helpers validate scope, evidence and completio
 Do not introduce a second agent runner, permission broker or custom menu engine.
 Consumer task implementation remains sequential.
 
-Reliable execution with minimal interruption is a development requirement on both Claude
-and Codex, across macOS, Linux and Windows. Reuse native host tools and focused
-validation helpers; prefer the smallest complete fix over new machinery, abstractions
-or approval gates.
-
 Handle routine recoverable failures automatically within the existing authorization:
 preserve valid commands and choices, repair what OH owns, and retry with a short bounded
-wait when host evidence is still being saved. Do not make the person retype a valid command,
-restart a session or debug OH's internals when OH can recover itself. Ask only for a real
-decision, missing authority or an external action OH cannot perform. Keep existing authority
-and review guarantees; recovery never invents approval, broadens scope or renews allowances.
-An unavoidable blocker must explain what happened and give a concrete next step.
+wait when host evidence is still being saved. Recovery never invents approval, broadens
+scope or renews allowances. An unavoidable blocker must explain what happened and provide
+a concrete supported next step; an internal stop/restart requirement is not a complete solution.
 
 For OH host-interaction fixes, implement and verify locally, then let the developer rebuild
 with `oh-dev on` and test the snapshot before independent review or publication. Use short,
@@ -92,12 +96,12 @@ registered with its checks), or run `bash integrations/test.sh affected origin/m
 and `bash integrations/test.sh syntax`. Use `bash integrations/test.sh native` when
 the full behavioral suite is needed. Do not read old backlog files.
 
-Keep tests as fast as practical while preserving required behavioral coverage. Avoid runtime
-regressions and use measured durations to find unnecessary work; there is no fixed time limit.
-- Add tests only for a concrete behavior or failure risk; do not test implementation details
-  or add speculative coverage. Check affected behavior on both hosts without duplicating suites.
-- Add only causal regression or behavior coverage. Extend an existing test before adding
-  one that repeats its setup; never add a second test of the same path.
+Keep tests fast while preserving behavioral coverage; use measured durations to find waste.
+Avoid runtime regressions. There is no fixed test time limit.
+
+- Add causal regression or behavior coverage for concrete risks, not implementation details
+  or speculative cases. Extend existing tests instead of duplicating a path or setup.
+  Check affected behavior on both hosts without duplicating suites.
 - Use the smallest fixture that shows the behavior: call the function, not a whole run,
   unless the run is what is tested. Check `--durations` in the output of the PR's CI run.
 - Before pushing, `bash integrations/test.sh syntax` flags added lines that break on

@@ -1,5 +1,5 @@
 """Immutable standalone review subjects and historical repair evidence."""
-from pathlib import Path
+from .system import Path
 import hashlib
 import shlex
 import subprocess

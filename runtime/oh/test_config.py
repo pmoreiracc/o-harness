@@ -107,6 +107,14 @@ class ConfigTest(unittest.TestCase):
                                                        if json.loads((p/'profile.json').read_text())['name']==(root or 'Fixture'))
 
     def test_settings_from_older_versions_move_into_the_file_once_with_backups(self):
+        # Migration must keep filesystem path handling when moving old settings,
+        # including when restored state already exceeds Windows' legacy limit.
+        from .system import Path as FilesystemPath
+        deep=FilesystemPath(self.temp)/('old-state-'+'a'*90)/('b'*90)/('c'*90)
+        moved=patch.dict(os.environ,{'OH_DATA_HOME':str(deep)});moved.start();self.addCleanup(moved.stop)
+        register(self.root,'Fixture')
+        self.addCleanup(shutil.rmtree,deep.parents[1])
+        self.assertGreater(len(str(deep)),260)
         home=state_home();project=self.legacy()
         shared={'max_escalations':2,'review_rounds':3,'tasks_per_batch':15,'models':{
             'codex':{'orchestrator':{'model':'global-codex','effort':'low'}},

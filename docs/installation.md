@@ -70,8 +70,13 @@ Windows has been recorded yet, so treat Windows support as a preview.
   in arguments, so pass JSON from a file: `oh.cmd config set checks @checks.json`.
 - Git for Windows converts line endings by default (`core.autocrlf`); OH accepts files whose
   only difference from what Git stores is their line endings.
+- OH uses Windows extended paths for its file operations, including saved evidence,
+  locks, recovery and backups. Existing saved path identities stay unchanged; no registry
+  change or data migration is needed. External tools retain their own path limits.
 - Native Claude and Codex agents use their host's available tools and permissions.
   OH does not remove Claude's shell or install a replacement Windows sandbox.
+  Codex shell hooks accept both canonical `Bash` command payloads and native
+  `exec_command` payloads (`cmd`); both require the same owned-command reservation.
   Real native Windows workflow and Stop validation are still required before claiming
   support for this candidate.
 - `oh service-install` adds a Task Scheduler task that starts the dashboard at logon,

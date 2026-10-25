@@ -1,6 +1,6 @@
 """Re-derive design delivery from the approved task list and actual task commits before publication."""
 import hashlib
-from pathlib import Path
+from .system import Path
 import subprocess
 import tempfile
 from .storage import Journal, Refused, git, git_env

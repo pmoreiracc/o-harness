@@ -5,7 +5,7 @@ import json
 import math
 import os
 import re
-from pathlib import Path
+from .system import Path
 from .storage import Refused, digest, git, read_json
 
 HOME = Path(__file__).resolve().parents[2]
@@ -586,7 +586,7 @@ def upgrade(*, creating=False):
                 target = folder / path.relative_to(state_home())
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.chmod(path, 0o600)  # retired files were read-only; Windows can't move them otherwise
-                shutil.move(str(path), target)
+                shutil.move(path, target)
         record.unlink(missing_ok=True)
         refresh_schema()
     return stuck

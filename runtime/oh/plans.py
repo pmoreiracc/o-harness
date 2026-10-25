@@ -6,7 +6,7 @@ break a rule afterwards, every file the edit touched is put back byte for byte."
 import contextlib
 from datetime import date
 import os
-from pathlib import Path
+from .system import Path
 import re
 import threading
 from .design_parse import US, design_file, lines, link_prefix, plan, roadmap
@@ -87,7 +87,7 @@ def one_line(text, what):
 
 def layout_snapshot(where):
     """Bind both the location and resolved document paths, including symlink destinations."""
-    return {key: str(value.resolve()) if isinstance(value, Path) else value for key, value in where.items()}
+    return {key: str(Path(value).resolve()) if isinstance(value, os.PathLike) else value for key, value in where.items()}
 
 
 def section_prose(text):

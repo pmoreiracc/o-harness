@@ -1,7 +1,7 @@
 """Verify saved delivery evidence and prepare a human-readable PR summary."""
 import json
 import re
-from pathlib import Path
+from .system import Path
 from .storage import Refused,Journal,changes,digest,git,project,state_writer
 from .workflow import reduce
 from .verification import check_failed
@@ -60,7 +60,7 @@ def github(root,host,endpoint,*,pages=False):
     import subprocess
     args=['gh','api','--hostname',host,endpoint]+(['--paginate','--slurp'] if pages else [])
     try:
-        result=subprocess.run(args,cwd=Path(__file__).resolve().parent,capture_output=True,text=True,encoding='utf-8',timeout=30)
+        result=subprocess.run(args,cwd=str(Path(__file__).resolve().parent),capture_output=True,text=True,encoding='utf-8',timeout=30)
     except FileNotFoundError:
         raise Refused('GitHub verification needs gh. Install GitHub CLI, then repeat publication; do not create another PR before checking for the existing one.') from None
     except (OSError,subprocess.TimeoutExpired):
@@ -363,7 +363,7 @@ def task_evidence(root,state,task,review,parent):
     from .review import workflow_reviews
     if review.get('purpose','workflow')!='workflow':raise Refused('Standalone review cannot authorize completion')
     attempts=workflow_reviews(state,task['id'])
-    history=[{k:a.get(k) for k in ('id','host','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions','original_outcome','original_report_issues','original_result_hash','native_result_hash')} for a in attempts]
+    history=[{k:a.get(k) for k in ('id','host','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions','original_outcome','original_report_issues','original_result_hash','native_result_hash','superseded')} for a in attempts]
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
@@ -372,11 +372,18 @@ def task_evidence(root,state,task,review,parent):
     if state.get('correction'):
         value['correction_of']=state['correction']['prior_commit']
         correction_ancestor(root,value)
-    # The first task a run commits was also reviewed with the commits OH didn't make before it: the person's own,
-    # and merges of main resolved by hand.
-    if (covers:=state.get('covers') or (state.get('delivery') or {}).get('covers') or state.get('repair_source',{}).get('covers') or state.get('pr_target',{}).get('covers')) and not state['summaries']:value['covers']=covers
+    # New admissions bind coverage at review time. Older admissions keep their
+    # original first-task coverage; never infer extra coverage after the review.
+    original=review.get('included_original_work')
+    if original is not None:
+        if original['head']!=parent:raise Refused('Included branch history belongs to another reviewed candidate')
+        if original['covers']:value['covers']=original['covers']
+    elif not state['summaries']:
+        covers=state.get('covers') or (state.get('delivery') or {}).get('covers') or state.get('repair_source',{}).get('covers') or state.get('pr_target',{}).get('covers')
+        if covers:value['covers']=covers
     scope={k:{name:v for name,v in record.items() if name not in ('render','change')} for k,record in state.get('scope_records',{}).items() if record['task']==task['id']}
     if scope:value['scope']=scope
+    if repairs:=state.get('approved_repairs',{}).get(task['id']):value['approved_repairs']=repairs
     value=public_value(root,state,value)
     validate_evidence(value)
     return value
@@ -421,6 +428,7 @@ def validate_evidence(value):
     history=value['attempts'];ids=[a['id'] for a in history]
     if len(set(ids))!=len(ids) or ids[-1]!=value['review']:raise Refused('Final review does not match retained history')
     final=history[-1]
+    if final.get('superseded'):raise Refused('The final review was superseded; review the current approved work before completion')
     if final.get('report_issues') or final.get('review_fragments'):raise Refused('The final review has unclassified evidence; obtain a complete review of the retained fragments before completion')
     if final['git_tree']!=value['git_tree'] or final['head']!=value['parent']:raise Refused('Review is not bound to this commit tree and parent')
     validate_scope(value)
@@ -571,13 +579,16 @@ def readable(records,states,root=None):
         original=record['original_evidence']
         at=next((i for i,a in enumerate(state['attempts']) if a.get('id')==original['review']),len(state['attempts']))
         author=next((a for a in reversed(state['attempts'][:at]) if a['task']==task and
-                     a['role'] in ('implementation','analysis') and a.get('outcome')=='implemented'),None)
+                     a['role'] in ('implementation','analysis') and a.get('outcome') in ('reported','implemented')),None)
         value=report(author)
         summary=value.get('summary') or (author or {}).get('human_summary') or (author or {}).get('summary')
         summary=(summary or 'No author summary was recorded.').split('\n\n',1)[0].strip()
         lines.extend([f"## Task {task} — {escape(evidence['title'])}",'',escape(public_value(root,state,summary)),''])
+        for repair in evidence.get('approved_repairs',[]):
+            lines.extend(['Approved supporting repair: '+escape(repair['instructions']),
+                          'Approval: `'+repair['decision']+'`.',''])
         if original!=evidence:
-            repair=next((a for a in reversed(state['attempts']) if a['task']==task and a['role']=='implementation' and a.get('outcome')=='implemented'),None)
+            repair=next((a for a in reversed(state['attempts']) if a['task']==task and a['role']=='implementation' and a.get('outcome') in ('reported','implemented')),None)
             lines.extend(['Correction: '+escape(public_value(root,state,report(repair).get('summary','Reviewed corrections committed.').split('\n\n',1)[0].strip())), ''])
         if evidence.get('covers') or original.get('covers'):
             lines.extend(['Includes reviewed original commits: '+', '.join('`'+c+'`' for c in dict.fromkeys(original.get('covers',[])+evidence.get('covers',[])))+'.',''])
@@ -624,7 +635,7 @@ def readable(records,states,root=None):
                 lines.append('  Scope: '+scope['action']+'; recorded in '+escape(where)+'.')
             elif resolution and resolution.get('issue'):lines.append('  Destination: '+issue_url(resolution['issue'])+'.')
             elif any(f['severity']=='scope' for f in attempt.get('findings',[])):
-                lines.append('  Outside-scope work remains open in saved workflow follow-ups; it was not implemented or dismissed.')
+                lines.append('  Historical outside-scope observation retained; see any subsequent approved supporting repairs and the final review for work addressed.')
             for issue in attempt.get('report_issues') or []:lines.append('  Historical report limitation: '+escape(issue))
             if attempt.get('review_fragments'):lines.append('  Unclassified finding fragments are retained in the complete workflow history.')
         lines.append('')

@@ -1,5 +1,5 @@
 """Human-selected delivery recovery using the existing journal, Git and tool gates."""
-from pathlib import Path
+from .system import Path
 import time
 from .storage import Refused, atomic_json, changes, digest, git, now, read_json
 from .verification import tree
@@ -46,6 +46,7 @@ def _private_restart(root, state, base):
 
 def prepare(root, state):
     from . import native
+    from .decisions import boundary
     from .branches import fetched, trunk
     if state['workflow'] != 'deliver' or state.get('published'):
         raise Refused('This recovery gate is for unpublished delivery; use the saved planning or publication step')
@@ -64,6 +65,8 @@ def prepare(root, state):
                'Old workers are revoked before continuation. Review usage and findings remain recorded.\n'
                'Affected paths: '+(', '.join(sorted(paths)) or 'none')+'\n')
     choices = {'resume': 'Continue', 'stop': 'Stop and take over'}
+    if state.get('approved_repairs'):
+        details += 'Continue retains approved supporting repairs. Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
     if subject['base'] and subject['branch'] in (state['branch'],state.get('recovery_intent',{}).get('branch')):
         choices = {'resume': 'Continue', 'restart': 'Start fresh', 'stop': 'Stop and take over'}
         details += 'Restart base: '+subject['base_ref']+' ('+subject['base'][:12]+').\n'
@@ -73,7 +76,7 @@ def prepare(root, state):
         details += 'Restart authorizes this task batch: '+', '.join(batch)+'. No additional review rounds.\n'
     details += '\nHow would you like OH to proceed with this delivery?'
     value = {'kind': 'recover', 'run': state['id'], 'attempt': None, 'presentation': 'recovery-menu',
-             'boundary': {'id': state['id'], 'scope_id': state['scope_id'], 'branch': state['branch']},
+             'boundary': boundary(root,state,'resume'),
              'subject': subject, 'question': details, 'choices': choices,
              'menu_options': list(choices.values()), 'created_at': now()}
     if 'restart' in choices:value['private_restart'] = _private_restart(root,state,subject['base'])
@@ -96,7 +99,7 @@ def _settle(root, journal, state, source):
             pass
         control = cancellation._read(root)
         record = (control or {}).get('attempts', {}).get(attempt['id'])
-        if not record or (record.get('launch') and not record.get('guard_observed')):
+        if not record or not record.get('guard_observed'):
             raise Refused('The old worker has no verified OH tool guard. Stop it in its native host, then retry this same recovery answer.')
         owner = control['owners'][record['owner']]
         revocation = {'event': 'recovery', 'at': source['at'], 'turn': source['turn'],
@@ -150,7 +153,7 @@ def apply(root, kind, locator, *, run=None):
         locator = native._presented(root, locator, state)
         source = authority.native_human(root, locator, latest=False)
         verify(root, state, kind, locator, source, replay=True)
-        key = digest({k: source[k] for k in ('host', 'session', 'turn', 'prompt')})
+        key = native._human_key(source,state)
         if key in state['decisions']:
             if state['human']['session'] != source['session']:
                 raise Refused('A newer coordinator owns this delivery; use its current recovery decision')
@@ -163,7 +166,7 @@ def apply(root, kind, locator, *, run=None):
         intent = state.get('recovery_intent')
         retry = intent and intent['key'] == key and intent['kind'] == kind
         applied = retry and current['branch'] == intent['branch'] and current['head'] == intent['base'] and not current['paths']
-        if current != original and not applied:
+        if kind == 'restart' and current != original and not applied:
             raise Refused('The files or Git base changed since this recovery question. Inspect the changes and present the updated choices.')
         if kind != 'stop' and current['branch'] not in (state['branch'],(intent or {}).get('branch')) and not applied:
             raise Refused('This checkout is on different work. Return to '+state['branch']+' without discarding edits, then present recovery there.')
@@ -176,13 +179,21 @@ def apply(root, kind, locator, *, run=None):
         with cancellation.continuation(root, state, source, replacing=True):
             # Recheck after cleanup: an old operation may have changed files while
             # the question was open. Never discard changes the person did not see.
-            if facts(root, state) != original and not applied:
+            settled = facts(root, state)
+            if kind == 'restart' and settled != original and not applied:
                 raise Refused('Old work changed the files during cleanup. Inspect the result and present the updated recovery choices.')
+            if kind != 'restart':
+                if settled['branch'] != original['branch']:
+                    raise Refused('The selected branch changed during recovery; return to '+original['branch']+' and retry the same answer without discarding edits.')
+                # Continue preserves the current candidate, including an old worker's
+                # final writes. Only destructive restart binds the exact shown files.
+                current = original = settled
             changed_base = bool(applied) or current['branch'] != state['branch']
             if kind != 'stop':
                 base = original['base']
                 merged = base and contained(root, base, original['head'])
-                if not applied and (kind == 'restart' or merged and not original['paths']):
+                if not applied and (kind == 'restart' or merged and not original['paths'] and
+                                    (original['head'] != base or original['branch'] == trunk(root,state['config']))):
                     name = (original['branch'] if kind == 'restart' and not merged and original['branch'] != trunk(root,state['config']) else
                             delivery_branch(state['design'], state.get('track', '')) if state.get('design') else
                             execution_branch(root, state['tasks'][0]['title'], state['id']))

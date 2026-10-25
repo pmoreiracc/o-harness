@@ -5,7 +5,7 @@ from .storage import state_writer, snapshot_guard
 import json
 import sqlite3
 import time
-from pathlib import Path
+from .system import Path, file_uri
 from .storage import atomic_json, encode, identifier, now, read_json, state_home, lock, Refused
 
 SCHEMA = '''
@@ -64,7 +64,7 @@ def connect(path=None,*,readonly=False):
     guard=snapshot_guard();guard.__enter__()
     try:
         path=Path(path or state_home()/'analytics.sqlite3')
-        connection=sqlite3.connect('file:'+str(path)+'?mode=ro' if readonly else path,
+        connection=sqlite3.connect(file_uri(path)+'?mode=ro' if readonly else path,
           uri=readonly,timeout=1,factory=Connection)
         connection._snapshot=guard
         connection.row_factory=sqlite3.Row

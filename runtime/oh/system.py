@@ -7,8 +7,52 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path as _Path, WindowsPath as _WindowsPath
 
 WINDOWS=os.name=='nt'
+
+
+if WINDOWS:
+    class Path(_WindowsPath):
+        """Keep portable saved identities; use extended Windows paths only for I/O.
+
+        Reopening a path from an old journal must work exactly like a newly built
+        path. Do not persist the OS prefix or require a machine-wide policy change.
+        """
+        def __init__(self, *parts):
+            def ordinary(part):
+                value=str(part) if isinstance(part, _Path) else os.fspath(part)
+                if value[:8].upper()=='\\\\?\\UNC\\':return '\\\\'+value[8:]
+                if value.startswith('\\\\?\\'):return value[4:]
+                return value
+            super().__init__(*(ordinary(part) for part in parts))
+
+        def __fspath__(self):
+            value=os.path.abspath(str(self))
+            if value.startswith('\\\\.\\'):return value
+            return '\\\\?\\UNC\\'+value[2:] if value.startswith('\\\\') else '\\\\?\\'+value
+else:
+    Path=_Path
+
+
+def file_uri(path):
+    """SQLite URI with the native path and literal filename punctuation preserved."""
+    from urllib.parse import quote
+    return 'file:'+quote(os.fspath(Path(path).absolute()),safe='/:')
+
+
+def windows_command_words(command):
+    """Decode a literal Windows command line using the OS argument parser."""
+    if not WINDOWS:return None
+    shell32=ctypes.WinDLL('shell32',use_last_error=True)
+    split=shell32.CommandLineToArgvW
+    split.argtypes=[ctypes.c_wchar_p,ctypes.POINTER(ctypes.c_int)]
+    split.restype=ctypes.POINTER(ctypes.c_wchar_p)
+    count=ctypes.c_int()
+    words=split(command,ctypes.byref(count))
+    if not words:raise ctypes.WinError(ctypes.get_last_error())
+    try:return [words[i] for i in range(count.value)]
+    finally:_kernel32.LocalFree(words)
 
 if WINDOWS:
     # Windows also looks for a bare command such as git in the current folder, which can be a checkout a
@@ -107,6 +151,8 @@ def executable(program,*,env=None,cwd=None):
 
 def spawn(command,*,on_spawn=None,**kwargs):
     """Start a command that stop() can end together with every descendant."""
+    # A filesystem prefix is not a process cwd: cmd treats it as an unsupported UNC folder.
+    if kwargs.get('cwd') is not None:kwargs['cwd']=str(Path(kwargs['cwd']))
     if not WINDOWS:
         if on_spawn is None:return subprocess.Popen(command,start_new_session=True,**kwargs)
         # Release execution only after its process identity is durably saved.
@@ -349,6 +395,7 @@ def wait_for_exit(child, timeout=None):
 def replace(source,target):
     """os.replace. Windows refuses it while a reader briefly holds the target open, so retry."""
     if not WINDOWS:return os.replace(source,target)
+    source,target=Path(source),Path(target)
     if os.path.isdir(target) and not os.listdir(target):os.rmdir(target)  # POSIX renames onto an empty directory
     for delay in (.05,.1,.2,.4,.8,None):
         try:return os.replace(source,target)
@@ -367,7 +414,7 @@ def sync_directory(path):
 
 def sync_file(path):
     # Windows flushes only a handle opened for writing.
-    with open(path,'r+b' if WINDOWS else 'rb') as stream:os.fsync(stream.fileno())
+    with Path(path).open('r+b' if WINDOWS else 'rb') as stream:os.fsync(stream.fileno())
 
 
 # Who may change a trusted file on Windows: you, the system, administrators and the installer service.
@@ -429,7 +476,7 @@ def untrusted(path,kind):
     """Why someone other than you, the system or administrators can change this Windows file or folder, or
     None. kind: 'file' (the program), 'folder' (the folder holding it) or 'above' (any folder further up)."""
     owner,dacl,descriptor=ctypes.c_void_p(),ctypes.c_void_p(),ctypes.c_void_p()
-    error=_advapi32.GetNamedSecurityInfoW(str(path),1,0x1|0x4,ctypes.byref(owner),None,ctypes.byref(dacl),None,ctypes.byref(descriptor))
+    error=_advapi32.GetNamedSecurityInfoW(os.fspath(Path(path)),1,0x1|0x4,ctypes.byref(owner),None,ctypes.byref(dacl),None,ctypes.byref(descriptor))
     if error:raise ctypes.WinError(error)
     try:
         trusted=TRUSTED_SIDS|{_current_user()}

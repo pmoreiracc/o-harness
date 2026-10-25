@@ -33,6 +33,56 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
         self.git('update-ref','refs/remotes/origin/'+base,'HEAD')
         return where,Path(path)
 
+    def test_additional_repair_continues_same_design_through_checks_review_and_publication(self):
+        import sys
+        from . import native,decisions,publication
+        from .storage import now
+        check={'name':'fixture setup','command':[sys.executable,'-I','-c',
+            'from pathlib import Path; assert Path("fixture.txt").read_text() == "ready"']}
+        fixtures.configure(self.root,checks=[check],review_rounds=2)
+        _,path=self.documents(body='## Tasks\n\n### Core track\n\n- [ ] **1.** Add the credential store.\n')
+        self.git('switch','-c','deliver/0001')
+        prepared=native.prepare_scope(self.root,doc='0001')
+        native.approve_scope(self.root,prepared['scope_id'],self.human())
+        self.assess();self.implement()
+        native.candidate(self.root)
+        self.assertTrue(native.verify(self.root)['checks'][0]['returncode'])
+        with self.assertRaisesRegex(Refused,'configured checks'):native.admit(self.root,'review')
+        before=load_run(self.root)[1]
+        gate=decisions.prepare(self.root,'approve-repair',repair='Restore the shared fixture required by the credential-store checks; preserve all assertions.')
+        answer=self.human(gate['options'][0],decision=gate['decision'],question=gate['question'],question_at=now(),via='question')
+        native.decision(self.root,'approve-repair',answer)
+        journal,approved=load_run(self.root);records=journal.records()
+        native.decision(self.root,'approve-repair',answer)
+        self.assertEqual(journal.records(),records)
+        for key in ('id','scope_snapshot','delivery','tasks','granted','config','project_checks','assessments'):
+            self.assertEqual(approved[key],before[key])
+        # A fresh conversation retains the added authority rather than requesting it again.
+        native.decision(self.root,'resume',self.resume_choice(session='fresh-parent'))
+        self.assertEqual(load_run(self.root)[1]['approved_repairs'],approved['approved_repairs'])
+        self.implement(edit=lambda:(self.root/'fixture.txt').write_text('ready',newline='\n'))
+        review=self.reviewed()
+        packet=read_json(Path(review['evidence'])/'task-context.json')
+        self.assertEqual(packet['approved_repairs'],approved['approved_repairs']['1'])
+        self.assertIn('Restore the shared fixture',(Path(review['evidence'])/'request.md').read_text())
+        native.complete(self.root,review['id'])
+        final=load_run(self.root)[1]
+        self.assertEqual(final['id'],before['id']);self.assertEqual(final['done'],['1'])
+        self.assertIn('status: frozen',path.read_text())
+        evidence=final['commit_intents']['1']['publication']
+        self.assertEqual(evidence['approved_repairs'],approved['approved_repairs']['1'])
+        # Later task reviewers need earlier repair authority for accumulated-branch review;
+        # later authors must not receive it as authority to extend their own task.
+        from .handoff import prepare as handoff
+        admission=read_json(Path(review['evidence'])/'request.json')
+        for role in ('implementation','review'):
+            packet_ref,_=handoff(final,self.tasks[1],role,journal.path/'attempts'/('later-'+role),admission)
+            packet=read_json(packet_ref['path'])
+            self.assertEqual(packet['approved_repairs'],approved['approved_repairs']['1'] if role=='review' else [])
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        native.decision(self.root,'publish',self.human('publish',session='fresh-parent',question='Publish deliver/0001 to example/product?'))
+        self.assertIn('Restore the shared fixture',publication.render(self.root))
+
     def test_private_progress_keeps_reviewed_code_lineage_and_rejects_another_checkout(self):
         from . import native
         where,path=self.documents('private')

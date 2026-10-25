@@ -1,5 +1,5 @@
 import contextlib
-from pathlib import Path
+from .system import Path, file_uri
 import shutil
 import sqlite3
 import tempfile
@@ -44,7 +44,7 @@ def validate(source,*,manifest=True):
             previous=value['hash']
     database=source/'analytics.sqlite3'
     if not database.is_file():raise Refused('Backup has no analytics database')
-    with contextlib.closing(sqlite3.connect('file:'+str(database)+'?mode=ro&immutable=1',uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(file_uri(database)+'?mode=ro&immutable=1',uri=True)) as db:
         if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise Refused('Backup database failed integrity validation')
 
 

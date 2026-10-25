@@ -1,5 +1,5 @@
 """External project profiles and checkout identities; consumers remain untouched."""
-from pathlib import Path
+from .system import Path
 from contextlib import ExitStack
 from subprocess import CalledProcessError
 from .storage import (Refused, atomic_json, digest, git, identifier, lock, read_json,

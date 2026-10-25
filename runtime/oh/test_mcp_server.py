@@ -82,7 +82,7 @@ class CodexToolsTest(unittest.TestCase):
         names={tool['name'] for tool in TOOLS}
         self.assertEqual(names,{'status','resume','config','init','plans','resource','scope_prepare','scope_approve',
             'attempt_admit','attempt_bind','attempt_retain','candidate','verify','evidence','complete','decision',
-            'review','pr_summary','publication','ci_wait','admission','review_check','decision_request','finding_track'})
+            'review','pr_summary','publication','ci_wait','admission','command_format','review_check','decision_request','finding_track'})
         self.assertFalse(names & {'run','start','choose','confirm'})
         for tool in TOOLS:
             self.assertFalse(tool['inputSchema']['additionalProperties'])
@@ -110,6 +110,13 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual(command('resource',{'path':'$(touch sentinel)'},self.root),['resource','--','$(touch sentinel)'])
         self.assertEqual(command('admission',{'attempt_directory':'folder with spaces'},self.root),
                          ['admission','--','folder with spaces'])
+        argv=['python','-c','print("literal")','$(not executed)','',"a'b"]
+        formatted=command('command_format',{'attempt':'worker','argv':argv},self.root)
+        self.assertEqual(formatted[:2],['command-format','--argv'])
+        self.assertEqual(json.loads(formatted[2]),argv)
+        self.assertEqual(formatted[3:],['--','worker'])
+        for invalid in ([],['python',1],['python','\0']):
+            with self.assertRaises(Refused):command('command_format',{'attempt':'worker','argv':invalid},self.root)
         checked=command('review_check',{'report':'OH-REVIEW-DECISION: {}\nFree text $(literal)'},self.root)
         self.assertEqual(checked[:2],['review-check','--'])
         self.assertFalse(Path(checked[-1]).is_relative_to(self.root))
@@ -118,6 +125,13 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual(resumed[:2],['resume','--human'])
         self.assertEqual(read_json(resumed[-1]),human)
         self.assertEqual(command('decision_request',{'kind':'grant-review','rounds':1},self.root),['decision-request','--rounds','1','--','grant-review'])
+        repair='Repair fixture setup; preserve assertions and $(literal) text.'
+        argv=command('decision_request',{'kind':'approve-repair','repair':repair},self.root)
+        self.assertEqual(argv,['decision-request','--repair',repair,'--','approve-repair'])
+        from .cli import main
+        with patch('oh.decisions.prepare',return_value=None) as prepare,patch('sys.stdout',new=io.StringIO()):
+            main(['--root',str(self.root)]+argv)
+        self.assertEqual(prepare.call_args.args[-1],repair)
         tracked=command('finding_track',{'attempt':'review','destination':{'saved':True}},self.root)
         self.assertEqual(read_json(tracked[2]),{'saved':True})
         self.assertEqual(tracked[-2:],['--','review'])
@@ -169,9 +183,39 @@ class CodexToolsTest(unittest.TestCase):
         self.assertFalse(error,text)
         records=[json.loads(line) for line in text.splitlines()]
         self.assertEqual(records[0],{'argv':['--root',str(self.root.resolve()),'status'],'thread':'t1'})
-        text,error=self.call('config',{'root':str(self.root)})
-        self.assertFalse(error,text)
-        self.assertEqual(json.loads(text)['thread'],'t1')
+        # Keep the real MCP input pipe open while Git checks the checkout. StringIO
+        # and communicate(input=...) hide Windows Git inheriting that live pipe.
+        import queue
+        import subprocess
+        import threading
+        responses=queue.Queue()
+        script=('import sys;sys.path.insert(0,sys.argv[1]);'
+                'from oh.mcp_server import serve;serve(sys.stdin,sys.stdout,sys.argv[2])')
+        process=subprocess.Popen([sys.executable,'-I','-B','-X','utf8','-c',script,str(HOME/'runtime'),str(self.launcher)],
+                                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                                 text=True,encoding='utf-8')
+        reader=threading.Thread(target=lambda:[responses.put(line) for line in process.stdout],daemon=True)
+        reader.start()
+        try:
+            for request in (
+                {'id':1,'method':'initialize','params':{'protocolVersion':'2025-06-18'}},
+                {'id':2,'method':'tools/call','params':{'name':'config','arguments':{'root':str(self.root)}}|calling('t1')},
+                {'id':3,'method':'ping'},
+            ):
+                process.stdin.write(json.dumps({'jsonrpc':'2.0'}|request)+'\n');process.stdin.flush()
+                try:response=json.loads(responses.get(timeout=10))
+                except queue.Empty:self.fail(f"MCP did not answer {request['method']} with its input pipe open")
+                self.assertEqual(response['id'],request['id'])
+                if request['id']==2:
+                    result=response['result'];self.assertFalse(result['isError'],result)
+                    self.assertEqual(json.loads(result['content'][0]['text']),
+                                     {'argv':['--root',str(self.root.resolve()),'config'],'thread':'t1'})
+        finally:
+            process.stdin.close()
+            try:process.wait(timeout=5)
+            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
+            reader.join(timeout=5)
+            process.stdout.close();process.stderr.close()
         # The command's environment is checked directly because stderr is not a progress protocol.
         from .mcp_server import Server
         server=Server(None,None);server.shell={'FROM_SHELL':'yes','OH_DATA_HOME':'wrong'}

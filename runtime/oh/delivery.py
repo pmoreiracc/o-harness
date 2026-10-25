@@ -1,6 +1,6 @@
 """Approved document selection and historical progress validation; no execution loop."""
 import hashlib
-from pathlib import Path
+from .system import Path
 import re
 from . import plans
 from .design_parse import freeze_render, plan

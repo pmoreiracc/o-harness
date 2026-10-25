@@ -4,7 +4,7 @@ import contextlib
 import hashlib
 import json
 import os
-from pathlib import Path
+from .system import Path
 import subprocess
 import tempfile
 import uuid
@@ -141,7 +141,9 @@ def git_env():
 
 
 def git(root, *args, raw=False):
-    output=subprocess.check_output(['git', '-C', str(root), *args], env=git_env())
+    # Input belongs to the host protocol, never Git. Inheriting a live MCP pipe
+    # can block Windows Git even for rev-parse, before the tool helper starts.
+    output=subprocess.check_output(['git', '-C', str(root), *args], env=git_env(),stdin=subprocess.DEVNULL)
     return output if raw else output.decode().strip()
 
 

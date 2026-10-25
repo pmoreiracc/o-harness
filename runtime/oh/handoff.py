@@ -1,5 +1,5 @@
 """Bounded evidence packets, never agent prompts or mandatory prose schemas."""
-from pathlib import Path
+from .system import Path
 from .storage import Refused, atomic_json, digest, read_json
 VERSION=4
 READINESS_LISTS=('requirements','rules','surfaces','proof','self_review','family_closure','verification','repairs','limits')
@@ -36,7 +36,7 @@ def report(attempt):
 
 def confirms_repairs(state, attempt):
     """Only valid independent evidence closes earlier in-scope findings."""
-    if attempt.get('finished') is False:return False
+    if attempt.get('finished') is False or attempt.get('superseded'):return False
     if attempt.get('report_issues') or attempt.get('review_fragments'):return False
     findings=attempt.get('findings',[])
     if attempt.get('outcome')=='clean':return not findings
@@ -106,6 +106,21 @@ def finding_index(state, task):
 def finding_ids(index):
     return {item['id'] for family in index['families'] for item in family['occurrences']}
 
+def supplementary_evidence(references):
+    """Label historical references at admission without freezing their source files."""
+    import hashlib
+    result=[]
+    for reference in references:
+        statuses={}
+        for name,expected in reference['files'].items():
+            path=Path(name)
+            try:
+                statuses[name]=('unchanged' if hashlib.sha256(path.read_bytes()).hexdigest()==expected
+                                else 'changed') if path.is_file() and not path.is_symlink() else 'unavailable'
+            except OSError:statuses[name]='unavailable'
+        result.append(reference|{'file_status':statuses})
+    return result
+
 def prepare(state, task, role, directory, admission, feedback=''):
     """An immutable projection of native facts and the latest author's explicitly labelled claims."""
     directory = Path(directory)
@@ -119,11 +134,11 @@ def prepare(state, task, role, directory, admission, feedback=''):
     current = None
     if author:
         path = Path(author['normalized_report']['path']) if author.get('normalized_report') else Path(author['evidence'])/'result.json'
-        current = {'attempt': author['id'], 'outcome': author.get('outcome'),
+        current = {'attempt': author['id'], 'outcome': author.get('outcome'), 'superseded':bool(author.get('superseded')),
             'summary': value.get('summary') or author.get('summary', ''),
             'readiness': value.get('readiness'), 'report': {'path': str(path),
                 'hash': digest(read_json(path)) if path.is_file() else None, 'available':path.is_file()},
-            'authority': 'Author claims to verify, never approval or proof of completion.'}
+            'authority': 'Historical author report, never approval or proof of completion. Recheck reported execution failures in the current environment.'}
     verification = state.get('verification', {}).get(task['id'])
     # Full command logs stay with their native check receipt, outside the mandatory context.
     if verification:
@@ -137,28 +152,36 @@ def prepare(state, task, role, directory, admission, feedback=''):
         'findings': {'path': str(index_path), 'hash': digest(index)},
         'scope_snapshot':{'path':str(directory.parent.parent/'scope'/'scope.json'),'hash':digest(state['scope_snapshot'])} if state.get('scope_snapshot') else None,
         'accepted_scope':{'path':str(directory.parent.parent/'scope'/'accepted.md')} if state.get('accepted_scope') else None,
+        'approved_repairs':[repair for task_id,repairs in state.get('approved_repairs',{}).items()
+                            if task_id==task['id'] or role=='review' and task_id in state['done'] for repair in repairs],
         'proposal_decisions':state.get('proposal_answers',[]),
-        'supplementary_evidence':state.get('supplementary',[]),
+        'supplementary_evidence':supplementary_evidence(state.get('supplementary',[])),
+        'supplementary_evidence_policy':'Historical diagnostics, not current verification or authority. File status is observed at admission. Changed or unavailable references do not block authorized repairs; inspect current inputs when relevant and use current candidate checks and independent review for completion.',
         'completed_tasks':[{'id':t['id'],'title':t['title']} for t in state['tasks'] if t['id'] in state['done']],
         'standalone_subject':state.get('standalone_subject'),
         'standalone_artifact':state.get('standalone_artifact'),
         'history': str(directory.parent.parent),
         'history_policy': 'Read the current packet, complete finding index and full current_review report before repairing findings. Consult older reports for unresolved questions; do not replay prior author reports or transcripts.'}
-    from .cancellation import command_line, command_prefix
+    from .cancellation import command_line, command_prefix, shell_line
     import os, shlex
     prefix=command_prefix(admission['root'],admission['id'])[:-3]
+    powershell=os.name=='nt' and state['host']=='codex'
     packet['native_commands']={
         'example':command_line(admission['root'],admission['id'],['executable','argument']),
         'powershell_example':command_line(admission['root'],admission['id'],['executable','argument'],windows=True),
-        'helper_prefix':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix)) if os.name=='nt' else shlex.join(prefix),
-        'admission':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix+['admission',str(directory)])+'; exit $LASTEXITCODE')
-                    if os.name=='nt' else shlex.join(prefix+['admission',str(directory)]),
-        'verify':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix+['verify','--attempt',admission['id']])+'; exit $LASTEXITCODE')
-                    if os.name=='nt' else shlex.join(prefix+['verify','--attempt',admission['id']]),
-        'instruction':'Use the native shell tool and its normal permissions. Run shell commands through owned-command '
-            'with the actual executable and argument array. Choose the example for the shell actually in use: '
+        'helper_prefix':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix)) if powershell else shlex.join(prefix),
+        'admission':shell_line(prefix+['admission',str(directory)],windows=powershell),
+        'verify':shell_line(prefix+['verify','--attempt',admission['id']],windows=powershell),
+        'instruction':'Use the native shell tool and its normal permissions. Run shell commands through owned-command. '
+            'In Codex, call command_format with this attempt ID and the executable/argument array; run its returned '
+            'command unchanged in the corresponding native shell. Do not reconstruct Windows argument escaping. '
+            'Supply the actual executable and argument array. Choose the example for the shell actually in use: '
             'example is POSIX/Bash; powershell_example is PowerShell. Include an explicit shell for shell syntax. '
-            'For PowerShell helpers, quote every argument and finish with ; exit $LASTEXITCODE. '
+            'The helper defaults below use '+('PowerShell' if powershell else 'Bash')+'. For another shell, '
+            'take the quoted prefix from its example and replace owned-command and its arguments with the helper and its arguments. '
+            'For simple PowerShell helpers, quote every argument and finish with ; exit $LASTEXITCODE. '
+            'For JSON, empty arguments or embedded quotes, use the literal Start-Process form shown in powershell_example: '
+            'one Windows-quoted ArgumentList string, -NoNewWindow -Wait -PassThru -ErrorAction Stop and its ExitCode. '
             'Use focused OH helpers directly (Codex MCP is preferred). For shell verification use the verify '
             'invocation here; its --attempt binding prevents delayed checks from running against replacement work. Native Stop revokes this attempt; '
             'exit 130 is cancellation, never a passing check or a reason to retry this worker.'}
@@ -177,7 +200,9 @@ def prepare(state, task, role, directory, admission, feedback=''):
             if original.is_file():packet['original_scope_provenance']={'path':str(original),
                 'authority':'Original run provenance; not a newly accepted native scope.'}
     if state.get('repair_source'):packet['repair_source']=state['repair_source']
-    if (original:=state.get('pr_target') or state.get('original_work')) and not state['summaries']:
+    original=admission.get('included_original_work')
+    if original is None and not state['summaries']:original=state.get('pr_target') or state.get('original_work')
+    if original:
         packet['included_original_work']={k:original[k] for k in ('url','head','review_base','covers') if k in original}
     if state.get('plans'):
         packet['planning'] = state['plans']

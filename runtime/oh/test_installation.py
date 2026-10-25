@@ -72,7 +72,7 @@ class InstallationTest(unittest.TestCase):
                     def command(args, **kwargs):
                         name, _, action, *rest = args
                         calls.append(args)
-                        self.assertEqual(kwargs['cwd'], Path.home())
+                        self.assertEqual(Path(kwargs['cwd']), Path.home())
                         if action == 'list':
                             if name == 'codex':self.assertEqual(rest, ['--marketplace', 'o-harness', '--json'])
                             else:self.assertEqual(rest, ['--json'])
@@ -211,17 +211,18 @@ class InstallationTest(unittest.TestCase):
                 if 'on' in race and plugin == dev.PLUGIN and value:plugins[host]['o-harness@during-enable'] = True
                 if 'off' in race and plugin == 'o-harness@released':plugins[host]['o-harness@disabled'] = True
             snapshot = (dev.home() / 'builds/snapshot', {'version': '0.5.0-SNAPSHOT.1',
-                        'source': str(dev.SOURCE), 'source_revision': 'revision'})
+                        'source': str(dev.SOURCE), 'source_revision': 'revision', 'data': str(dev.normal_data())})
             with patch.object(dev, 'installed', side_effect=inventory), \
                     patch.object(dev, 'call', side_effect=command), patch.object(dev, 'enable', side_effect=enabled), \
                     patch.object(dev, 'marketplace', side_effect=lambda host: marketplaces.get(host)), \
                     patch.object(dev, 'build'), patch.object(dev, 'create_snapshot', return_value=snapshot) as packaged, \
                     patch.object(dev, 'show_dashboard') as dashboard, \
                     contextlib.redirect_stdout(io.StringIO()):
-                dev.switch('on', dev.HOSTS)
+                dev.main(['on'])
                 self.assertEqual(dashboard.call_args.args[2], 'on')
-                packaged.assert_called_once()  # the same snapshot powers both hosts
+                packaged.assert_called_once_with(shared_data=True)  # the same snapshot powers both hosts
                 self.assertEqual({r['build'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(snapshot[0])})
+                self.assertEqual({r['data'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(dev.normal_data())})
                 original['o-harness@during-install'] = True
                 for host in dev.HOSTS:
                     self.assertFalse(plugins[host]['o-harness@during-install'])
@@ -243,10 +244,29 @@ class InstallationTest(unittest.TestCase):
                 packaged.reset_mock()
                 with patch.object(dev, 'read_snapshot', return_value=snapshot):
                     dev.main(['on', '--build', str(snapshot[0])])
+                    with self.assertRaisesRegex(RuntimeError, 'different data store'):
+                        dev.switch('on', dev.HOSTS, build_path=str(snapshot[0]), shared_data=False)
+                    # Legacy snapshots without a data field retain their original isolated store.
+                    frozen = snapshot[1].pop('data')
+                    dev.main(['on', '--build', str(snapshot[0])])
+                    self.assertEqual({r['data'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(dev.home() / 'data')})
+                    with self.assertRaisesRegex(RuntimeError, 'different data store'):
+                        dev.switch('on', dev.HOSTS, build_path=str(snapshot[0]), shared_data=True)
+                    snapshot[1]['data'] = frozen
                 packaged.assert_not_called()  # selecting an existing snapshot must not silently rebuild it
+                for flag, shared in (([], True), (['--isolated-data'], False), (['--shared-data'], True)):
+                    dev.main(['on', *flag])
+                    packaged.assert_called_with(shared_data=shared)
+                    dev.main(['build', *flag])
+                    packaged.assert_called_with(shared_data=shared)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    dev.main(['on', '--isolated-data', '--shared-data'])
                 dev.switch('off', dev.HOSTS)
-                dev.switch('on', dev.HOSTS, live=True)
+                dev.main(['on', '--live'])
                 self.assertEqual({r['mode'] for r in dev.read(dev.home() / 'switch.json').values()}, {'live'})
+                self.assertEqual({r['data'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(dev.normal_data())})
+                dev.main(['on', '--live', '--isolated-data'])
+                self.assertEqual({r['data'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(dev.home() / 'data')})
                 dev.switch('off', dev.HOSTS)
                 dev.switch('on', ('codex',))
                 failed.append('install')
@@ -297,6 +317,20 @@ class InstallationTest(unittest.TestCase):
                     self.assertIn('Retry with oh-dev dashboard --host codex', error.getvalue())
                 dashboard.side_effect = None
                 dev.switch('off', dev.HOSTS)
+                # A slow healthy startup must survive the old five-second cutoff;
+                # a process that never becomes healthy still has a bounded cleanup.
+                elapsed=[0.0];child=unittest.mock.Mock();child.poll.return_value=None
+                def tick(delay):elapsed[0]+=delay
+                with patch.object(dev.time,'monotonic',side_effect=lambda:elapsed[0]), \
+                        patch.object(dev.time,'sleep',side_effect=tick), \
+                        patch.object(dev,'dashboard_health',side_effect=lambda port:{'instance':'owned'} if elapsed[0]>=8 else None):
+                    dev.wait_dashboard(4319,'owned',child)
+                child.terminate.assert_not_called()
+                elapsed[0]=0
+                with patch.object(dev.time,'monotonic',side_effect=lambda:elapsed[0]), \
+                        patch.object(dev.time,'sleep',side_effect=tick),patch.object(dev,'dashboard_health',return_value=None):
+                    with self.assertRaisesRegex(RuntimeError,'Dashboard did not start'):dev.wait_dashboard(4319,'owned',child)
+                self.assertLess(elapsed[0],31);child.terminate.assert_called_once();child.wait.assert_called_once()
                 # A stalled browser launcher cannot hold the switch's final dashboard step open.
                 import threading
                 release=threading.Event();entered=threading.Event();finished=threading.Event()
@@ -320,10 +354,10 @@ class InstallationTest(unittest.TestCase):
         from .config import HOME
         dev = self.development()
         with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)), patch.dict(os.environ, {'OH_DEV_NORMAL_DATA_HOME': '',
-                'CODEX_HOME': str(Path(tmp) / 'codex'), 'CLAUDE_CONFIG_DIR': str(Path(tmp) / 'claude'), 'HOME': tmp, 'USERPROFILE': tmp}):
+                'CODEX_HOME': str(Path(tmp) / 'codex'), 'CLAUDE_CONFIG_DIR': str(Path(tmp) / 'claude'), 'HOME': tmp, 'USERPROFILE': tmp}), contextlib.ExitStack() as cleanup:
             os.environ.pop('OH_DATA_HOME', None)
             base = dev.home();base.mkdir(parents=True)
-            plugin = dev.build('codex', base / 'build')
+            plugin = dev.build('codex', base / 'build', shared_data=False)
             self.assert_plugin_branding(plugin, development=True)
             normal = Path(tmp) / '.local/share/o-harness'
             self.assertFalse(normal.exists())
@@ -354,7 +388,7 @@ class InstallationTest(unittest.TestCase):
             for command in ('setup', 'service-install', 'service-uninstall'):
                 for prefix in ([], ['--'], ['--root', str(consumer), '--'], ['--ro=' + str(consumer)]):
                     with patch('sys.argv', ['oh', *prefix, command]), patch.object(dev.runpy, 'run_path') as dispatch:
-                        with self.assertRaisesRegex(SystemExit, 'Development is isolated'):
+                        with self.assertRaisesRegex(SystemExit, 'Development cannot install release services'):
                             dev.launch(HOME, base / 'data', 'cli', launcher)
                         dispatch.assert_not_called()
             from .cli import main as cli_main
@@ -378,6 +412,32 @@ class InstallationTest(unittest.TestCase):
                                   'hook_event_name': 'UserPromptSubmit', 'turn_id': 'fixture'}), capture_output=True, text=True)
             self.assertEqual(hooked.returncode, 0, hooked.stderr)
             self.assertIn('Native conversation locator', hooked.stdout)
+            # Shared-data routing finds the existing registration in native hooks too.
+            from .system import Path as FilePath
+            long_root=FilePath(tmp)/'long-shared-data'
+            cleanup.callback(shutil.rmtree,long_root,ignore_errors=True)
+            normal=long_root/('a'*90)/('b'*90)/('c'*90)
+            os.environ['OH_DEV_NORMAL_DATA_HOME']=str(normal)
+            shared=dev.build('codex',base/'shared-build')
+            result=subprocess.run([sys.executable,'-I',str(shared/'scripts/oh'),'--root',str(consumer),'init'],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue(list((normal/'registry/checkouts').glob('*.json')))
+            self.assertFalse((normal/'runtime/active.json').exists())
+            from . import cancellation
+            from .storage import identifier
+            parent=base/'parent.jsonl';parent.write_text('',newline='\n')
+            attempt=identifier()
+            with patch.dict(os.environ,{'OH_DATA_HOME':str(normal)}):
+                state={'id':identifier(),'human':{'host':'codex','session':'parent','transcript_path':str(parent)}}
+                cancellation.register_attempt(consumer,state,{'id':attempt,'evidence':str(base/'evidence')})
+                cancellation.bind(consumer,{'id':attempt},'child')
+                payload={'hook_event_name':'PreToolUse','cwd':str(consumer),'session_id':'parent',
+                         'agent_id':'child','tool_use_id':'read','tool_name':'Read','tool_input':{}}
+                called=subprocess.run([sys.executable,'-I',str(shared/'scripts/native-control.py'),'codex'],
+                    input=json.dumps(payload),capture_output=True,text=True)
+                self.assertEqual(called.stderr,'')
+                self.assertTrue(cancellation.guarded(consumer,attempt))
+            verify_package(shared/'core')
 
     def test_development_snapshot_freezes_all_entries_and_exec_selects_it(self):
         """CONTRIBUTING: snapshots survive source edits/removal and never activate the released core."""
@@ -388,6 +448,9 @@ class InstallationTest(unittest.TestCase):
                 patch.dict(os.environ, {'OH_DEV_NORMAL_DATA_HOME': '', 'HOME': tmp, 'USERPROFILE': tmp,
                                        'CODEX_HOME': str(Path(tmp) / 'codex'), 'CLAUDE_CONFIG_DIR': str(Path(tmp) / 'claude')}):
             os.environ.pop('OH_DATA_HOME', None)
+            with patch.object(dev, 'launch') as launch, patch('sys.argv', ['oh-dev']):
+                dev.main(['exec', 'profile-import', 'integrations/oh-profile.json'])
+                self.assertEqual(launch.call_args.args[1], dev.normal_data())
             # A small source fixture using the real packager, without a second Git repository or run.
             template = Path(tmp) / 'source/o-harness'
             with dev.development_data():build(template, 'claude')
@@ -401,9 +464,11 @@ class InstallationTest(unittest.TestCase):
                 revision = config.version()
                 with patch.object(dev, 'version', side_effect=[revision, 'editor saved', revision, revision]):
                     first, metadata = dev.create_snapshot()
+                self.assertEqual(metadata['data'], str(dev.normal_data()))
                 self.assertEqual(list((dev.home() / 'builds').iterdir()), [first])  # discarded partial copy was removed
                 workflow.write_text('later fixture workflow', encoding='utf-8')
-                second, other = dev.create_snapshot()
+                second, other = dev.create_snapshot(shared_data=False)
+                self.assertEqual(other['data'], str(dev.home() / 'data'))
             self.assertNotEqual(metadata['version'], other['version'])
             self.assertRegex(metadata['version'], r'^\d+\.\d+\.\d+-SNAPSHOT\.\d+$')
             self.assertFalse((dev.home() / 'switch.json').exists())  # build alone changes no host selection
@@ -421,14 +486,22 @@ class InstallationTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('uncommitted fixture workflow', result.stdout)
                 for script, args, payload in (('human-event.py', [host], {'prompt': 'hello'}),
+                                              ('native-control.py', [host], {'session_id':'fixture','cwd':str(Path(tmp)), 'hook_event_name':'PreToolUse'}),
                                               ('mcp-server', [], {'id': 1, 'method': 'initialize', 'params': {}})):
                     invoked = subprocess.run([sys.executable, '-I', str(plugin / 'scripts' / script), *args],
                         input=json.dumps(payload)+'\n', capture_output=True, text=True)
                     self.assertEqual(invoked.returncode, 0, invoked.stderr)
                     if script == 'mcp-server':self.assertIn('protocolVersion', invoked.stdout)
+                    if script == 'native-control.py':
+                        failed = subprocess.run([sys.executable, '-I', str(plugin / 'scripts' / script), *args],
+                            input='{invalid', capture_output=True, text=True)
+                        self.assertEqual(failed.returncode, 1)
+                        self.assertIn('OH native control is unavailable', failed.stderr)
+                verify_package(plugin / 'core')  # running any entry must not add bytecode
                 state[host] = {'phase': 'on', 'mode': 'snapshot', 'source': str(source), 'build': str(first),
                                'marketplace': str(first / host), 'host_home': dev.host_home(host)}
             dev.write(dev.home() / 'switch.json', state)
+            self.assertEqual(dev.read_snapshot(first),(first,metadata))  # reusable after execution
             self.assertIn(dev.selected_entry(), [first / host / 'plugins/o-harness/scripts/oh' for host in dev.HOSTS])
             with patch.object(dev.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as execute:
                 with self.assertRaises(SystemExit) as done:dev.main(['exec', '--root', tmp, 'status'])
@@ -441,6 +514,28 @@ class InstallationTest(unittest.TestCase):
             with patch.object(dev.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as execute:
                 with self.assertRaises(SystemExit):dev.main(['exec', '--host', 'claude', 'status'])
                 self.assertEqual(execute.call_args.args[0][2:], [str(dev.selected_entry('claude')), 'status'])
+            # Live source equality must not hide different frozen data destinations.
+            from copy import deepcopy
+            live=deepcopy(state)
+            for record in live.values():record.update(mode='live',build=None,data=str(dev.normal_data()))
+            dev.write(dev.home()/'switch.json',live)
+            self.assertIsNotNone(dev.selected_entry())
+            live['claude']['data']=str(dev.home()/'data')
+            for legacy in (False,True):
+                if legacy:live['claude'].pop('data')  # old records mean isolated storage
+                dev.write(dev.home()/'switch.json',live)
+                with patch.object(dev.subprocess,'run') as execute:
+                    with self.assertRaisesRegex(RuntimeError,'different builds or data stores'):
+                        dev.selected_entry()
+                    with self.assertRaises(SystemExit) as refused:
+                        dev.main(['exec','status'])
+                    self.assertEqual(refused.exception.code,1)
+                    execute.assert_not_called()
+                self.assertEqual(dev.selected_entry('claude'),second/'claude/plugins/o-harness/scripts/oh')
+            live['codex']['data']=str(dev.home()/'data')
+            dev.write(dev.home()/'switch.json',live)
+            self.assertIsNotNone(dev.selected_entry())
+            dev.write(dev.home()/'switch.json',state)
             # Real packaged servers exercise lease replacement, reuse and both host selections.
             import socket
             with socket.socket() as available:
@@ -489,7 +584,7 @@ class InstallationTest(unittest.TestCase):
                     current=health(port)
                     self.assertIsNotNone(current)
                     self.assertEqual((current['mode'],current['version']),('development',metadata['version']))
-                    self.assertTrue((dev.home()/'data/analytics.sqlite3').is_file())
+                    self.assertTrue((dev.normal_data()/'analytics.sqlite3').is_file())
                     dev.show_dashboard(state,('codex',),'on')
                     self.assertEqual(len(children),1)
                     self.assertEqual(health(port)['instance'],current['instance'])
@@ -501,6 +596,7 @@ class InstallationTest(unittest.TestCase):
                     state['codex']['phase']='off';dev.write(dev.home()/'switch.json',state)
                     dev.show_dashboard(state,('codex',),'off')
                     self.assertEqual(health(port)['version'],other['version'])
+                    self.assertTrue((dev.home()/'data/analytics.sqlite3').is_file())
                     self.assertEqual(len(children),2)
                     children[0].wait(timeout=2)
                     browser.assert_called_with('http://localhost:4318')
@@ -527,11 +623,11 @@ class InstallationTest(unittest.TestCase):
             # A corrupt build is refused before installation, without touching the released installation.
             (first / 'claude/plugins/o-harness/core/workflows/propose/SKILL.md').write_text('changed')
             with self.assertRaisesRegex(Refused, 'changed or is incomplete'):dev.read_snapshot(first)
-            self.assertFalse((Path(tmp) / '.local/share/o-harness').exists())
+            self.assertFalse((dev.normal_data() / 'runtime/active.json').exists())
             self.assertFalse((dev.home() / 'data/runtime/active.json').exists())
 
     def test_both_hosts_share_one_core_and_setup_is_explicit_and_idempotent(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as cleanup:
             base=Path(tmp);consumer=base/'product';consumer.mkdir()
             (consumer/'manual.txt').write_text('unchanged')
             first=base/'codex/o-harness';second=base/'claude/o-harness'
@@ -545,6 +641,7 @@ class InstallationTest(unittest.TestCase):
                                      for group in codex_hooks.get(event,[]) for h in group['hooks']))
                 self.assertIn('agent-event.py',claude_hooks[event][0]['hooks'][0]['command'])
             self.assertIn('Interrupt',codex_hooks)
+            self.assertEqual(codex_hooks['Interrupt'][0]['hooks'][0]['timeout'],5)
             self.assertNotIn('Interrupt',claude_hooks)
             for role in ('assessment','analysis','implementation','reviewer'):
                 self.assertIn('SendMessage',(second/'agents'/(role+'.md')).read_text())
@@ -562,18 +659,21 @@ class InstallationTest(unittest.TestCase):
             self.assertNotIn('disable-model-invocation: true',(first/'skills/oh-deliver/SKILL.md').read_text())
             self.assertIn('allow_implicit_invocation: false',(first/'skills/oh-deliver/agents/openai.yaml').read_text())
             self.assertIn('disable-model-invocation: true',(second/'skills/oh-deliver/SKILL.md').read_text())
-            env=os.environ|{'OH_DATA_HOME':str(base/'state')}
+            from .system import Path as FilePath
+            data=FilePath(base/'state')/('a'*90)/('b'*90)/('c'*90)
+            cleanup.callback(shutil.rmtree,FilePath(base/'state'),ignore_errors=True)
+            env=os.environ|{'OH_DATA_HOME':str(data)}
             entry=first/'core/oh'
             for _ in range(2):
                 result=subprocess.run([*RUN,str(entry),'setup','--development'],cwd=consumer,env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
-            launcher=base/'state/bin/oh'
-            status=subprocess.run([*RUN,str(launcher),'resource','workflows/deliver/SKILL.md'],cwd=consumer,env=env,capture_output=True,text=True)
+            launcher=data/'bin/oh'
+            status=subprocess.run([*RUN,os.fspath(launcher),'resource','workflows/deliver/SKILL.md'],cwd=consumer,env=env,capture_output=True,text=True)
             self.assertEqual(status.returncode,0,status.stderr)
             self.assertTrue((first/'core/dashboard/app.js').is_file())
             self.assertEqual([p.name for p in consumer.iterdir()],['manual.txt'])
             self.assertEqual((consumer/'manual.txt').read_text(),'unchanged')
-            self.assertEqual(len(list((base/'state/versions').iterdir())),1)
+            self.assertEqual(len(list((data/'versions').iterdir())),1)
             self.assertEqual(verify_package(first/'core'),a['revision'])
             (first/'core/runtime/oh/cli.py').write_text('changed')
             with self.assertRaises(Refused):verify_package(first/'core')

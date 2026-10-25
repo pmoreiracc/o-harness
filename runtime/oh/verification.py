@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import re
-from pathlib import Path
+from .system import Path
 import stat
 import subprocess
 import time

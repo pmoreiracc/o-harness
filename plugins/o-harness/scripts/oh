@@ -10,7 +10,14 @@ import os
 from pathlib import Path
 import sys
 sys.dont_write_bytecode = True
-plugin=Path(__file__).resolve().parents[1]
+def filesystem_path(value):
+    # Bootstrap precedes importing OH's platform layer. These paths are I/O only,
+    # never saved identities; the active engine will use its own system.Path.
+    path=os.path.abspath(os.path.expanduser(str(value)))
+    if os.name=='nt' and not path.startswith('\\\\?\\'):
+        path='\\\\?\\UNC\\'+path[2:] if path.startswith('\\\\') else '\\\\?\\'+path
+    return Path(path)
+plugin=filesystem_path(__file__).resolve().parents[1]
 # Windows needs UTF-8 mode requested explicitly; POSIX runs OH exactly as before.
 python=[sys.executable,'-I',*(['-X','utf8'] if os.name=='nt' else [])]
 import argparse
@@ -21,7 +28,7 @@ command=remaining[0] if remaining else ''
 if command=='setup':
     entry=plugin/'core/oh'
 else:
-    home=Path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).expanduser().resolve()
+    home=filesystem_path(os.environ.get('OH_DATA_HOME',Path.home()/'.local/share/o-harness')).resolve()
     active=home/'runtime/active.json'
     bundled=plugin/'core/revision.json'
     if bundled.is_file() and command not in ('native-event','native-control'):
@@ -46,6 +53,11 @@ else:
     entry=home/'versions'/revision/'oh'
 if not entry.is_file():raise SystemExit('Shared OH core is missing. Rebuild/reinstall the plugin, then run setup.')
 if os.name=='nt':
+    if command=='native-control':
+        import runpy
+        sys.argv[0]=str(entry)
+        runpy.run_path(str(entry),run_name='__main__')
+        raise SystemExit(0)
     # Windows has no exec: os.execv would return control to the caller before OH finishes.
     import subprocess
     raise SystemExit(subprocess.run([*python,str(entry),*sys.argv[1:]]).returncode)

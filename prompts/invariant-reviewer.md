@@ -2,6 +2,8 @@
 
 Validate the supplied immutable admission before working. Follow the packet's
 `native_commands` for shell execution, using the native tool's normal permissions.
+Read the verified `task_context` returned by admission. In Codex, use `command_format`
+for shell quoting and run its returned command unchanged with the native shell tool.
 Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,
 never inside `owned-command`. Do not substitute the coordinator's plugin launcher.
 Do not detach work or switch execution tools to bypass cancellation. A Stop refusal or exit 130 ends
@@ -20,8 +22,11 @@ Read the bounded current packet and complete finding index; consult older eviden
 only for a specific unresolved question. A standalone receipt is feedback on its exact
 subject and grants no implementation, completion or publication authority.
 
-Review the admitted candidate against the immutable original scope, not an author's
-restatement or provisional task marks. Living planning documents may change within
+Review the admitted candidate against the immutable original scope and the packet's
+verified `approved_repairs`, not an author's restatement or provisional task marks.
+Check the supporting repairs and their interactions against the same project standards;
+historical outside-scope findings may now have explicit repair authority, but approval
+alone never establishes that they were fixed. Living planning documents may change within
 that scope. On the last task, review the accumulated branch and task interactions
 included in the admission. Prior author repair claims never establish reviewer closure.
 A changed subject invalidates the receipt. Native reviewers follow this no-edit

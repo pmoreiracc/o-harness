@@ -57,10 +57,22 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         author=self.finish_attempt('analysis',{'summary':'Propose a search initiative in the first milestone.'})
         native.decision(self.root,'approve-proposal',self.human('approve'),attempt=author['id'])
         plans.add_initiative(self.root,self.where,'M1','search','Search notes',[])
+        # An overnight checkpoint after intake must be included in the next review.
+        self.git('add','.');self.git('commit','-qm','WIP checkpoint')
+        checkpoint=self.git('rev-parse','HEAD')
         native.candidate(self.root);native.verify(self.root)
         self.assertEqual(load_run(self.root)[1]['done'],[])
         review=self.finish_attempt('review',{'verdict':'clean','summary':'Reviewed the approved addition.','findings':[]})
-        native.complete(self.root,review['id'])
+        completed=native.complete(self.root,review['id'])
+        self.assertEqual(completed['continuation']['pending_decision'],'publication')
+        from .storage import read_json
+        packet=read_json(Path(review['evidence'])/'task-context.json')
+        self.assertIn(checkpoint,packet['included_original_work']['covers'])
+        self.assertIn(checkpoint,load_run(self.root)[1]['commit_intents']['propose']['publication']['covers'])
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        native.decision(self.root,'publish',self.human('publish',question='Publish work to example/product?'))
+        from .publication import render
+        self.assertIn(checkpoint,render(self.root))
         self.assertIn('Search notes',self.git('show','HEAD:docs/roadmap.md'))
         self.assertEqual(load_run(self.root)[1]['done'],['propose'])
 
@@ -80,11 +92,13 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         discovered=native.prepare_scope(self.root,manifest,workflow='design',human=request)
         self.assertTrue(discovered['resume_required'])
         choice=self.resume_choice(session='new-parent',host='claude',at=now())
-        with self.assertRaisesRegex(Refused,'native attempt'):native.resume(self.root,choice,run=first['run'])
+        from unittest.mock import patch
+        from .authority import Saving
+        with patch('oh.authority.native_result',side_effect=Saving('Result still saving')),self.assertRaisesRegex(Refused,'tool guard'):
+            native.resume(self.root,choice,run=first['run'])
         # Host terminal evidence arrives after the valid human command. Keep that
         # command while settling the old author instead of asking for it again.
         self.native_results[admitted['id']]={'text':'{"summary":"Retained the interrupted draft."}','status':'completed'}
-        native.retain(self.root,admitted['id'],{})
         before=load_run(self.root)[1]
         self.assertTrue(native.prepare_scope(self.root,manifest,workflow='design',human=request)['resume_required'])
         self.assertEqual(load_run(self.root)[1]['human'],before['human'])
@@ -93,7 +107,9 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         self.assertEqual(list((journal.path.parent.parent/'scopes').iterdir()),scopes)
         self.assertEqual(draft.read_text(),'Human-edited unfinished draft.\n')
         after=load_run(self.root)[1]
-        for key in ('scope_id','tasks','config','granted','attempts'):self.assertEqual(after[key],before[key])
+        for key in ('scope_id','tasks','config','granted'):self.assertEqual(after[key],before[key])
+        self.assertEqual(after['attempts'][0]['id'],before['attempts'][0]['id'])
+        self.assertTrue(after['attempts'][0]['finished'])
         records=journal.records()
         self.assertEqual(native.resume(self.root,choice,run=first['run'])['run'],first['run'])
         self.assertEqual(journal.records(),records)

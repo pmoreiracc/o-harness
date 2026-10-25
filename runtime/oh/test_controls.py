@@ -126,7 +126,9 @@ class ControlsTest(NativeFixture,unittest.TestCase):
                     attempt=load_run(self.root)[1]['attempts'][-1]
                     self.assertEqual(attempt['parent'],{'host':host,'session':session,'transcript_path':str(path.resolve())})
                     with self.assertRaisesRegex(Refused,'current native attempt'):native.admit(self.root,'assessment')
-                    with self.assertRaisesRegex(Refused,'native attempt'):native.resume(self.root,choose('again','Resume'))
+                    from .authority import Saving
+                    with patch('oh.authority.native_result',side_effect=Saving('Native result pending')),self.assertRaisesRegex(Refused,'tool guard'):
+                        native.resume(self.root,choose('again','Resume'))
                     self.native_results[admitted['id']]={'text':'Interrupted assessment','status':'interrupted'}
                     native.retain(self.root,admitted['id'],{})
                 with patch.dict(os.environ,{'CODEX_THREAD_ID':'superseded-parent','OH_NATIVE_SESSION_ID':''}):

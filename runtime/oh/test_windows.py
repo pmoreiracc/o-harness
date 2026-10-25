@@ -96,7 +96,7 @@ class WindowsTest(unittest.TestCase):
             build(Path(tmp) / 'codex/o-harness', 'codex');build(Path(tmp) / 'claude/o-harness', 'claude')
             codex = json.loads((Path(tmp) / 'codex/o-harness/hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]
             claude = json.loads((Path(tmp) / 'claude/o-harness/hooks/hooks.json').read_text())['hooks']['UserPromptSubmit'][0]['hooks'][0]
-            self.assertEqual(codex['commandWindows'], '"%PLUGIN_ROOT%\\scripts\\hook.cmd" codex')
+            self.assertIn(codex['commandWindows'].split()[0], ('powershell.exe', 'cmd.exe'))
             self.assertNotIn('commandWindows', claude)
             for name in ('python.cmd', 'hook.cmd', 'oh.cmd', 'python.sh', 'get-python.ps1'):self.assertTrue((Path(tmp) / 'codex/o-harness/core' / name).is_file())
 
