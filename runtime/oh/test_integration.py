@@ -312,6 +312,46 @@ class GitSubjectTest(unittest.TestCase):
         from .storage import git
         return git(self.root,*args)
 
+    def test_candidate_and_review_export_do_not_start_git_per_file(self):
+        from .verification import candidate_tree
+        from .review import capture
+        with patch('subprocess.Popen',wraps=subprocess.Popen) as starts:
+            candidate_tree(self.root)
+        baseline=starts.call_count
+        contents={'empty':b'', 'binary \u00e9.dat':bytes(range(256))*512}
+        contents.update({f'file {n}':f'payload {n}\n'.encode() for n in range(24)})
+        for name,data in contents.items():(self.root/name).write_bytes(data)
+        (self.root/'.gitattributes').write_bytes(b'* -text\n')
+        before=self.git('write-tree')
+        with patch('subprocess.Popen',wraps=subprocess.Popen) as starts:
+            candidate=candidate_tree(self.root)
+        self.assertEqual(starts.call_count,baseline)  # Process work must not grow with the file count.
+        self.assertEqual(self.git('write-tree'),before)  # The real index was not staged.
+        self.git('add','--all');self.assertEqual(candidate,self.git('write-tree'))
+        destination=Path(self.temp.name)/'export'
+        with patch.dict(os.environ,{'OH_DATA_HOME':str(Path(self.temp.name)/'state')}), \
+                patch('subprocess.Popen',wraps=subprocess.Popen) as starts:
+            result=capture(self.root,destination,{'git_tree':candidate})
+        self.assertLessEqual(starts.call_count,2)
+        for name,data in contents.items():self.assertEqual((Path(result['root'])/name).read_bytes(),data)
+        # A new call must inspect new bytes, never reuse the earlier validation.
+        (self.root/'file 0').write_bytes(b'changed\n')
+        self.assertNotEqual(candidate_tree(self.root),candidate)
+
+    def test_blob_reader_rejects_missing_and_non_blob_objects_and_closes_on_error(self):
+        from .storage import git_blobs
+        original=subprocess.Popen;processes=[]
+        def start(*args,**kwargs):
+            process=original(*args,**kwargs);processes.append(process);return process
+        blob=self.git('rev-parse','HEAD:item')
+        for invalid in ('0'*len(blob),self.git('rev-parse','HEAD')):
+            with self.subTest(invalid=invalid),patch('subprocess.Popen',side_effect=start):
+                with self.assertRaisesRegex(Refused,'requested blob'):
+                    with git_blobs(self.root) as read:
+                        self.assertEqual(read(blob),b'original\n')
+                        read(invalid)
+                self.assertIsNotNone(processes[-1].poll())
+
     def test_git_configuration_agrees_and_inherited_selectors_cannot_choose_a_sibling(self):
         from .storage import git_env,git
         from .verification import tree,candidate_tree

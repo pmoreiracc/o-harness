@@ -172,6 +172,37 @@ def git(root, *args, raw=False):
     return output if raw else output.decode().strip()
 
 
+@contextlib.contextmanager
+def git_blobs(root):
+    """Read exact blobs through one Git process, retaining only one blob at a time."""
+    command=['git','-C',str(root),'cat-file','--batch']
+    # File-backed stderr cannot fill a pipe while we read the binary stdout protocol.
+    with tempfile.TemporaryFile() as errors, subprocess.Popen(command,env=git_env(),
+            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=errors) as process:
+        def read(oid):
+            if len(oid) not in (40,64) or any(c not in '0123456789abcdef' for c in oid):
+                raise Refused('Git blob reads require an exact object ID')
+            try:
+                process.stdin.write(oid.encode('ascii')+b'\n');process.stdin.flush()
+            except BrokenPipeError:
+                raise Refused('Git stopped before reading the candidate blob') from None
+            header=process.stdout.readline(200).split()
+            if (len(header)!=3 or header[:2]!=[oid.encode('ascii'),b'blob'] or not header[2].isdigit()):
+                raise Refused('Git did not return the requested blob: '+oid)
+            size=int(header[2]);data=process.stdout.read(size)
+            if len(data)!=size or process.stdout.read(1)!=b'\n':
+                raise Refused('Git returned incomplete blob contents: '+oid)
+            return data
+        try:
+            yield read
+            process.stdin.close()
+            if code:=process.wait():
+                errors.seek(0)
+                raise subprocess.CalledProcessError(code,command,stderr=errors.read())
+        finally:
+            if process.poll() is None:process.kill()
+
+
 def git_root(root):
     """Refuse a checkout redirected by Git configuration, including an inherited core.worktree."""
     if Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != Path(root).resolve():
