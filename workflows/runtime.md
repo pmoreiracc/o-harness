@@ -345,6 +345,13 @@ next task from external completion records, under the same finite task batch. At
 boundary ask whether to continue the projected next batch, publish completed work or
 stop through the completed-task checkpoint in `workflows/decisions.md`. Present every
 returned option and bind the chosen action from that same question; silence grants nothing.
+Follow the `next_action` in the returned `continuation`: use `decision-request continue`
+when a completed batch leaves tasks pending, or `decision-request publish` when all tasks
+are complete. Preparing that question does not publish anything. A request not to push
+or publish, or a checkout without a remote, still permits the final handoff choices.
+Do not end with only a commit summary while this checkpoint is pending. This applies to
+fresh and resumed work; private planning completion and standalone feedback retain their
+own endings, and a recorded Stop must not reopen the checkpoint automatically.
 If all design tracks have converged with completed tasks but the design is still approved,
 select its bounded `finalize` task and use the same candidate/check/review/completion path.
 Finish any requested completed-task re-review and its correction before publication;

@@ -27,7 +27,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -48,7 +48,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -71,7 +71,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -82,7 +82,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }

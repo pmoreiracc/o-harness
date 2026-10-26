@@ -2,7 +2,7 @@
 import hashlib
 from .system import Path
 import subprocess
-import tempfile
+from .system import temporary_directory
 from .storage import Journal, Refused, git, git_env
 
 
@@ -13,7 +13,7 @@ def contents(root,revision,path):
 
 def parsed(text):
     from .design_parse import plan, fm_value, US
-    with tempfile.TemporaryDirectory(prefix='oh-delivery-check-') as directory:
+    with temporary_directory(prefix='oh-delivery-check-') as directory:
         folder=Path(directory);path=folder/'0001-design.md';path.write_bytes(text.replace('\r\n','\n').encode())
         rows=[r.split(US) for r in plan(folder,'0001',{'designs':folder,'roadmap':folder/'roadmap.md'}).split('\n') if r]
         return fm_value(path,'status'),{r[0]:r for r in rows}

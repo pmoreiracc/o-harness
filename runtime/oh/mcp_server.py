@@ -54,7 +54,7 @@ TOOLS = [
          {'base':TEXT,'mode':{'type':'string','enum':['review','pre-push','ci']}}),
     tool('evidence', 'Attach evidence', 'Retain supplementary evidence references for implementation and review; grants no authority.',
          {'attachment':OBJECT}, ['attachment']),
-    tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate.',
+    tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate. Follow continuation.next_action and present the returned checkpoint before ending, including local-only work.',
          {'attempt':TEXT}, ['attempt']),
     tool('decision_request', 'Bind decision effect', 'Prepare native human choices. Use recover for delivery recovery: Continue, Start fresh, Stop and take over. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions. Bind the returned action from the same answer. Displays no menu and grants nothing.',
          {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1,

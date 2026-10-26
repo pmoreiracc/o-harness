@@ -37,6 +37,12 @@ saved records and adds Windows' extended-path prefix only for filesystem calls. 
 `str(path)` for saved identities and external process working directories; use
 `os.fspath(path)` for a filesystem API that requires a string.
 Use `system.file_uri` for SQLite file URIs so long paths and filename punctuation survive.
+Use `storage.state_mkdir` for state subdirectories: Windows children inherit the data
+root's existing host access, while Unix keeps private modes. `state_path` repairs only
+the old Python-private directory ACL on accessed paths below that root; custom ACLs,
+unrelated directories and the root policy are preserved. Do not reset permissions recursively.
+Use `system.temporary_directory` (or `make_temp_directory` for separately managed cleanup)
+for OH scratch directories so sandboxed Windows commands retain their parent's access too.
 
 Maintainers run an independent review of every PR before merging. Only maintainers merge.
 Maintainers decide when to publish releases. For local testing, see

@@ -433,6 +433,76 @@ class NativeWindowsTest(unittest.TestCase):
                     self.assertEqual(allowed,{'S-1-3-4','S-1-5-18','S-1-5-32-544'},str(path))
                 finally:system._kernel32.LocalFree(descriptor)
 
+    @unittest.skipUnless(os.name=='nt','Windows directory ACLs')
+    def test_state_directories_inherit_host_access_and_repair_only_legacy_paths(self):
+        import ctypes
+        from . import system
+        from .storage import state_home,state_path,atomic_json,read_json,lock,Journal,identifier
+        from .receipts import save
+        host_sid='S-1-5-32-545'  # A resolvable test-only principal standing in for the host's root grant.
+        def acl(path):
+            owner,dacl,descriptor=ctypes.c_void_p(),ctypes.c_void_p(),ctypes.c_void_p()
+            error=system._advapi32.GetNamedSecurityInfoW(str(path),1,5,ctypes.byref(owner),None,ctypes.byref(dacl),None,ctypes.byref(descriptor))
+            if error:raise ctypes.WinError(error)
+            try:
+                control=ctypes.c_ushort();revision=ctypes.c_ulong()
+                self.assertTrue(system._advapi32.GetSecurityDescriptorControl(descriptor,ctypes.byref(control),ctypes.byref(revision)))
+                entries=[]
+                for index in range(ctypes.cast(dacl.value+4,ctypes.POINTER(ctypes.c_ushort))[0]):
+                    ace=ctypes.c_void_p();self.assertTrue(system._advapi32.GetAce(dacl,index,ctypes.byref(ace)))
+                    entries.append((*ctypes.cast(ace,ctypes.POINTER(ctypes.c_ubyte))[0:2],
+                        ctypes.cast(ace.value+4,ctypes.POINTER(ctypes.c_ulong))[0],system._sid_text(ace.value+8)))
+                return bool(control.value&0x1000),entries
+            finally:system._kernel32.LocalFree(descriptor)
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
+            home=state_home()
+            subprocess.run(['icacls',str(home),'/grant',f'*{host_sid}:(OI)(CI)(M)'],check=True,capture_output=True)
+            root_acl=acl(home)
+            with system.temporary_directory(prefix='scratch-',dir=home) as scratch:
+                scratch=Path(scratch)
+                self.assertFalse(acl(scratch)[0]);self.assertIn(host_sid,{e[3] for e in acl(scratch)[1]})
+                readonly=scratch/'readonly.txt';readonly.write_text('scratch')
+                readonly.chmod(0o400)
+            self.assertFalse(scratch.exists())
+            legacy=home/'registry/checkouts';legacy.mkdir(parents=True,mode=0o700)
+            entry=legacy/'saved.json';entry.write_text('{"preserved":true}')
+            before=entry.read_bytes()
+            untouched=home/'unrelated';untouched.mkdir(mode=0o700);untouched_acl=acl(untouched)
+            custom=home/'custom';custom.mkdir(mode=0o700)
+            subprocess.run(['icacls',str(custom),'/deny',f'*{host_sid}:(WD)'],check=True,capture_output=True)
+            custom_acl=acl(custom)
+            # Existing reads repair ancestors before reading; no evidence is rewritten.
+            self.assertTrue(acl(legacy)[0]);self.assertEqual(read_json(entry),{'preserved':True})
+            self.assertFalse(acl(legacy)[0]);self.assertIn(host_sid,{e[3] for e in acl(entry)[1]})
+            self.assertEqual(entry.read_bytes(),before)
+            self.assertEqual(acl(home),root_acl);self.assertEqual(acl(untouched),untouched_acl)
+            state_path(custom,directory=True);self.assertEqual(acl(custom),custom_acl)
+            with self.assertRaises(FileExistsError):atomic_json(entry,{'preserved':False},immutable=True)
+            # New files, receipts and lock directories all inherit the host grant.
+            new=home/'new/nested/record.json';atomic_json(new,{'value':1});atomic_json(new,{'value':2})
+            save(home/'receipts/report.md','unchanged',immutable=True)
+            with lock(home/'locks/operation.lock'):pass
+            for path in (new,new.parent,home/'receipts/report.md',home/'locks/operation.lock'):
+                self.assertFalse(acl(path)[0]);self.assertIn(host_sid,{e[3] for e in acl(path)[1]})
+            self.assertEqual(read_json(new),{'value':2})
+            # A previously completed journal must be accessible when the next run discovers it.
+            journal=Journal(identifier(),identifier());record=journal.append('sample',{'old':True})
+            # Use Python's exact old creation policy for a second saved journal.
+            old=Journal(identifier(),identifier());old.path.mkdir(parents=True,mode=0o700)
+            (old.path/'000001.json').write_bytes((journal.path/'000001.json').read_bytes())
+            self.assertEqual(Journal(old.path.parent.parent.name,old.path.name).records(),[record])
+            self.assertFalse(acl(old.path)[0])
+            outside=Path(tmp)/'outside';outside.mkdir(mode=0o700)
+            external=outside/'record.json';external.write_text('{}');external_acl=acl(outside)
+            self.assertEqual(read_json(external),{});self.assertEqual(acl(outside),external_acl)
+            junction=home/'redirected'
+            subprocess.run(['cmd','/d','/c','mklink','/J',str(junction),str(outside)],check=True,capture_output=True)
+            try:
+                from .storage import Refused
+                with self.assertRaisesRegex(Refused,'reparse point'):state_path(junction/'record.json')
+                self.assertEqual(acl(outside),external_acl)
+            finally:os.rmdir(junction)
+
     def test_oh_never_runs_a_command_planted_in_the_checkout(self):
         checkout = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, checkout, ignore_errors=True)
         # A self-contained program as "git": whoami answers "git -C ..." with "Invalid argument/option".

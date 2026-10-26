@@ -4,7 +4,7 @@ from .storage import state_writer
 import json
 from .system import Path
 import os
-from .storage import Refused,atomic_json,digest,identifier,lock,now,read_json,state_home
+from .storage import Refused,atomic_json,digest,identifier,lock,now,read_json,state_home,state_path
 from .telemetry import emit
 
 KEYS={'input':'input_tokens','cached':'cached_input_tokens','output':'output_tokens','reasoning':'reasoning_output_tokens'}
@@ -46,7 +46,7 @@ def register(root,host,payload,run,project):
 
 @state_writer
 def poll():
-    home=state_home()/'sources'
+    home=state_path(state_home()/'sources',directory=True)
     if not home.exists():return
     for file in home.glob('*.json'):
         with lock(file.with_suffix('.lock')):
@@ -107,7 +107,7 @@ def poll():
 @state_writer
 def end_run(run):
     """Capture the byte boundary synchronously at the authority transition, never on idle."""
-    home=state_home()/'sources'
+    home=state_path(state_home()/'sources',directory=True)
     for file in home.glob('*.json'):
         with lock(file.with_suffix('.lock')):
             source=read_json(file)

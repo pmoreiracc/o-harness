@@ -3,7 +3,7 @@ import hashlib
 import json
 from .system import Path
 import shutil
-import tempfile
+from .system import make_temp_directory
 from .config import HOME, version
 from .storage import Refused, atomic_json, lock, read_json, state_home
 from .system import replace
@@ -68,8 +68,6 @@ def build(destination, host):
                     else 'agent-hook.cmd' if 'agent-launch.py' in hook['command'] else 'hook.cmd')
             if host=='codex':
                 hook['commandWindows']='cmd.exe /d /v:on /s /c "!PLUGIN_ROOT!\\scripts\\'+runner+'" codex'
-                if runner=='native-control.cmd' and event!='Interrupt':
-                    hook['timeout']=10  # Windows startup plus the bounded 2.5s helper; Interrupt keeps its own deadline.
     servers=destination/'codex-mcp.json'
     if host=='codex':
         # Both hosts ask native questions; Codex calls focused OH helpers through MCP.
@@ -126,7 +124,7 @@ def setup(*, development=False, if_newer=False):
                 raise Refused('Existing shared core is inconsistent; preserve it and reinstall into a clean version directory')
         else:
             destination.parent.mkdir(parents=True,exist_ok=True)
-            staging=Path(tempfile.mkdtemp(prefix='.install-',dir=destination.parent))
+            staging=Path(make_temp_directory(prefix='.install-',dir=destination.parent))
             try:
                 shutil.copytree(HOME,staging,dirs_exist_ok=True)
                 verify_package(staging)

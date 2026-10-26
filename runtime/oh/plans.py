@@ -952,14 +952,14 @@ def preview_proposal(root, value):
     person can approve it first: no plan file changes and no branch is cut. The same rules apply, so an answer OH
     could not write is refused here, before the person sees it."""
     import shutil
-    import tempfile
+    from .system import temporary_directory
     where = blocked(lambda: layout(root))
     with editing(root):
         value, shown = routed(root, where, value)
         if value['route'] in ('improvement', 'unclear'):return shown | {'intent': [], 'lines': [], 'writes': {}}
         paths, _ = route_paths(root, where, value)
         status = approval(root, where, value['design']) if value['route'] == 'task' else None
-        with tempfile.TemporaryDirectory(prefix='oh-preview-') as scratch:
+        with temporary_directory(prefix='oh-preview-') as scratch:
             copy = {}
             for key in ('roadmap', 'designs', 'decisions'):
                 source = Path(where[key]);copy[key] = target = Path(scratch) / source.relative_to(where['base'])
@@ -1130,8 +1130,8 @@ def finish_private(root, state, profile, journal, files):
             verify_design(root,where,number,approving=True)
             rows[spots[0]]='status: approved';body=(ending.join(rows)+ending).encode()
             # Validate the exact approved bytes before changing the document or recording authority.
-            import tempfile
-            with tempfile.TemporaryDirectory() as temporary:
+            from .system import temporary_directory
+            with temporary_directory() as temporary:
                 (Path(temporary)/path.name).write_bytes(body)
                 verify_design(root,where|{'designs':Path(temporary)},number,orphans=False)
             intent['write']={'path':str(path),'bytes':base64.b64encode(body).decode()}

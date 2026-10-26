@@ -662,6 +662,14 @@ class InstallationTest(unittest.TestCase):
                 for event in ('PreToolUse','PostToolUse','SubagentStart'):
                     self.assertTrue(any('native-control.py' in h['command']
                                         for group in hooks[event] for h in group['hooks']))
+                # Ordinary control callbacks need startup/contended-state headroom
+                # on both hosts; the separate Interrupt deadline stays short.
+                for event, groups in hooks.items():
+                    for hook in (h for group in groups for h in group['hooks']):
+                        if 'native-control.py' in hook['command']:
+                            self.assertEqual(hook['timeout'], 5 if event == 'Interrupt' else 10)
+            self.assertTrue(any('native-control.py' in h['command']
+                                for group in claude_hooks['PostToolUseFailure'] for h in group['hooks']))
             # Both hosts must receive the current shared interaction contract,
             # including the pending-question lifecycle, through the same resource.
             from .config import HOME

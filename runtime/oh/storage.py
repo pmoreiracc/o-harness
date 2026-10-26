@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
-from .system import lock_file, replace, sync_directory, unlock_file
+from .system import WINDOWS, inherit_private_directory, lock_file, replace, sync_directory, unlock_file
 
 
 NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)  # Windows has no O_NOFOLLOW
@@ -56,6 +56,31 @@ def state_home():
     return path.resolve()
 
 
+def state_path(path, *, directory=False):
+    """Repair only legacy directory ACLs on the requested OH path, never a store-wide reset."""
+    path=Path(path)
+    if not WINDOWS:return path
+    home=Path(os.environ.get('OH_DATA_HOME',str(Path.home()/'.local/share/o-harness'))).expanduser().absolute()
+    target=(path if directory else path.parent).absolute()
+    if not target.is_relative_to(home):return path
+    current=home
+    for part in ('',*target.relative_to(home).parts):
+        if part:current=current/part
+        try:info=current.lstat()
+        except FileNotFoundError:break
+        if info.st_file_attributes&0x400:raise Refused('OH storage path must not traverse a reparse point: '+str(current))
+        if current!=home:inherit_private_directory(current)
+    return path
+
+
+def state_mkdir(path):
+    path=state_path(path,directory=True)
+    home=Path(os.environ.get('OH_DATA_HOME',str(Path.home()/'.local/share/o-harness'))).expanduser().absolute()
+    # The root stays private. Descendants inherit its user/host permissions on Windows.
+    inherited=WINDOWS and path.absolute()!=home and path.absolute().is_relative_to(home)
+    path.mkdir(parents=True,exist_ok=True,mode=0o777 if inherited else 0o700)
+
+
 import functools
 import threading
 _snapshot_local=threading.local()
@@ -90,7 +115,7 @@ def state_writer(function):
 @state_writer
 def atomic_json(path, value, *, immutable=False):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    state_mkdir(path.parent)
     if path.is_symlink():
         raise Refused('State files must not be symlinks')
     fd, temporary = tempfile.mkstemp(prefix='.pending-', dir=path.parent)
@@ -111,7 +136,7 @@ def atomic_json(path, value, *, immutable=False):
 
 
 def read_json(path):
-    path = Path(path)
+    path = state_path(path)
     if path.is_symlink():
         raise Refused('State files must not be symlinks')
     return json.loads(path.read_text())
@@ -120,7 +145,7 @@ def read_json(path):
 @contextlib.contextmanager
 def lock(path, *, wait=True):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    state_mkdir(path.parent)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as stream:
         try:
@@ -216,7 +241,7 @@ def project(root):
 class Journal:
     """Authoritative immutable records. SQLite is deliberately not used here."""
     def __init__(self, project_id, run_id):
-        self.path = state_home() / 'projects' / validate_id(project_id) / 'runs' / validate_id(run_id)
+        self.path = state_path(state_home() / 'projects' / validate_id(project_id) / 'runs' / validate_id(run_id),directory=True)
 
     def records(self):
         previous = None

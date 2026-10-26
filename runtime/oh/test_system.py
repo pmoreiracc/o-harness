@@ -39,6 +39,11 @@ class SystemTest(unittest.TestCase):
             path=folder/'evidence.json'
             original={'path':str(path),'value':'original'}
             atomic_json(str(path),original,immutable=True)
+            with system.temporary_directory(dir=folder) as scratch:
+                scratch=system.Path(scratch)
+                (scratch/'probe').write_text('temporary')
+                self.assertEqual((scratch/'probe').read_text(),'temporary')
+            self.assertFalse(scratch.exists())
             self.assertEqual(read_json(str(path)),original)
             with self.assertRaises(FileExistsError):atomic_json(str(path),{'value':'replacement'},immutable=True)
             self.assertEqual(read_json(str(path)),original)

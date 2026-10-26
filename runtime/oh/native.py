@@ -273,9 +273,16 @@ def _continuation(state):
                 if latest.get('outcome')=='needs_resolution' and any(f['severity']=='concern' and not resolution.get('concerns_accepted') for f in latest.get('findings',[])):decision='review_findings'
                 elif state['workflow']=='design' and latest.get('outcome') in ('clean','needs_resolution') and state.get('plans',{}).get('location')=='private' and state.get('private_native_approval',{}).get('attempt')!=latest['id']:decision='private_approval'
     from .scope import followups
-    return {'phase':phase,'pending_decision':decision,'pending_attempts':[_pending_attempt(state,a) for a in pending],
+    result={'phase':phase,'pending_decision':decision,'pending_attempts':[_pending_attempt(state,a) for a in pending],
             'followup_count':sum(len(item['findings']) for item in followups(state)),
             'latest_result':({k:history[-1].get(k) for k in ('id','role','outcome','evidence')} if history else None)}
+    if state['status'] in ('checkpoint','completed') and decision in ('task_window','publication'):
+        kind='continue' if decision=='task_window' else 'publish'
+        result['next_action']={'tool':'decision_request','arguments':{'kind':kind,'run':state['id']},
+            'instruction':'Prepare and present the returned final or task-batch checkpoint before ending. '
+                          'This prepares choices; it does not push or publish. Local-only work still needs '
+                          'the available handoff choices. Bind the actual answer through decision.'}
+    return result
 
 
 def _saved_subject(state):

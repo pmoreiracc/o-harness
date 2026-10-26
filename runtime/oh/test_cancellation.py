@@ -644,6 +644,45 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         native.retain(self.root, self.attempt, {})
         self.assertTrue(load_run(self.root)[1]['attempts'][0]['finished'])
 
+    def test_failed_native_discovery_settles_retention_and_resume(self):
+        self.approve()
+        self.launch()
+        before = load_run(self.root)[1]
+        names = ('list_mcp_resources', 'list_mcp_resource_templates')
+        for name in names:
+            self.tool(name, {'server': 'unknown-server'}, use=name)
+        self.native_results[self.attempt] = {'status': 'completed', 'text': json.dumps({
+            'difficulty': 'simple', 'rationale': 'Read-only discovery failed; assessment completed.'})}
+
+        def completed(name, **changes):
+            item = {'type': 'McpToolCall', 'id': name, 'tool': name, 'status': 'failed',
+                    'error': {'message': 'resources/list failed: unknown MCP server'}}
+            thread = changes.pop('thread', self.worker)
+            with self.parent_path.open('a', newline='\n') as stream:
+                stream.write(json.dumps({'type': 'event_msg', 'payload': {
+                    'type': 'item_completed', 'thread_id': thread, 'item': item | changes}}) + '\n')
+
+        for name in names:
+            completed(name, thread='another-child')
+            completed(name, status='in_progress')
+            completed(name, tool='external_write')
+        with self.assertRaisesRegex(Refused, 'tools are still running'):
+            native.retain(self.root, self.attempt, {})
+        for name in names:
+            self.assertNotIn('ended', cancellation._read(self.root)['tools'][name])
+            completed(name)
+        retained = native.retain(self.root, self.attempt, {})
+        self.assertEqual(retained['outcome'], 'assessed')
+        native.retain(self.root, self.attempt, {})
+        native.resume(self.root, self.resume_choice())
+        after = load_run(self.root)[1]
+        for key in ('granted', 'scope_id', 'config'):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(len(after['attempts']), 1)
+        self.assertEqual(after['done'], [])
+        for name in names:
+            self.assertEqual(cancellation._read(self.root)['tools'][name]['completion_source'], 'native-record')
+
     def test_child_only_stop_rejects_older_resume_but_coordinator_cleanup_does_not(self):
         home = Path(self.temp.name) / 'host'
         parent = home / '.claude/projects/p/parent.jsonl'

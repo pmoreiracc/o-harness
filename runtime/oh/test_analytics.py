@@ -79,7 +79,16 @@ class AnalyticsTest(unittest.TestCase):
             target=Path(restored)/('a'*90)/('b'*90)/('restored # '+ 'c'*90)
             try:
                 with patch.dict(os.environ,{'OH_DATA_HOME':str(target)}):
+                    if os.name=='nt':
+                        import subprocess
+                        from .storage import state_home
+                        state_home()
+                        subprocess.run(['icacls',os.fspath(target),'/grant','*S-1-5-32-545:(OI)(CI)(M)'],check=True,capture_output=True)
                     restore(destination)
+                    if os.name=='nt':
+                        from .system import untrusted
+                        self.assertIn('S-1-5-32-545',untrusted(target,'folder'))
+                        self.assertIn('S-1-5-32-545',untrusted(target/'analytics.sqlite3','file'))
                     with connect(readonly=True) as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM tasks').fetchone()[0],28)
             finally:shutil.rmtree(Path(restored),ignore_errors=True)
 

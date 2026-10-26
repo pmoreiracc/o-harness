@@ -463,8 +463,8 @@ def _hook(root,host,payload):
                                  'Invocation format: ' + example)
                 if not use:
                     return _deny('The native host omitted the command identity; retry this same call after its records are saved.')
-                import tempfile
-                receipt = tempfile.mkdtemp(prefix='oh-command-')
+                from .system import make_temp_directory
+                receipt = make_temp_directory(prefix='oh-command-')
                 value['tools'][use] = {'attempt': actor, 'kind': 'command',
                                        'argv': digest(argv), 'started': now(), 'receipt': receipt}
                 return {}
@@ -680,9 +680,16 @@ def reconcile_tools(root, attempt, terminal=None):
             item = event.get('item') or {}
             # Code-mode nested tools use exec-* IDs in item_completed, not the
             # enclosing custom_tool_call_output's call_* ID. A returned MCP
-            # error is completion; a transport error or cancellation is not.
+            # error is completion. Discovery can also fail before a server is
+            # reached, leaving only an error. That ends the read-only discovery
+            # call, but an arbitrary MCP transport error cannot prove cleanup.
+            tool = value['tools'].get(item.get('id'), {})
+            discovery_failed = (tool.get('kind') == 'tool'
+                and tool.get('name') in ('list_mcp_resources', 'list_mcp_resource_templates')
+                and item.get('tool') == tool['name']
+                and item.get('status') == 'failed' and isinstance(item.get('error'), dict))
             item_terminal = (
-                item.get('type') == 'McpToolCall' and isinstance(item.get('result'), dict)
+                item.get('type') == 'McpToolCall' and (isinstance(item.get('result'), dict) or discovery_failed)
                 or item.get('type') == 'CommandExecution' and type(item.get('exit_code')) is int
                 or item.get('type') == 'FileChange')
             if (event.get('type') == 'item_completed'

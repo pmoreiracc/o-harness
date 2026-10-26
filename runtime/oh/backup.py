@@ -2,13 +2,13 @@ import contextlib
 from .system import Path, file_uri
 import shutil
 import sqlite3
-import tempfile
+from .system import make_temp_directory
 import hashlib
 import json
 import stat
 from .storage import Refused, state_home, snapshot_guard,atomic_json,read_json
 from .telemetry import connect
-from .system import replace, sync_directory, sync_file
+from .system import copy_directory_access, replace, sync_directory, sync_file
 
 
 def inventory(source):
@@ -65,7 +65,7 @@ def backup(destination):
     check_location()  # a process that looks for settings elsewhere would leave them out
     destination.parent.mkdir(parents=True,exist_ok=True)
     with snapshot_guard(exclusive=True):
-        temporary=Path(tempfile.mkdtemp(prefix='.oh-backup-',dir=destination.parent))
+        temporary=Path(make_temp_directory(prefix='.oh-backup-',dir=destination.parent))
         try:
             for path in home.rglob('*'):
                 if 'versions' not in path.relative_to(home).parts and path.relative_to(home).parts[0]!='python' and path.is_symlink():raise Refused('OH state contains a symlink; inspect it before backup')
@@ -122,11 +122,12 @@ def restore(source):
     with snapshot_guard(exclusive=True):
         if any(home.iterdir()):raise Refused('Restore requires an empty OH data directory; preserve your existing directory first')
         validate(source)
-        temporary=Path(tempfile.mkdtemp(prefix='.oh-restore-',dir=home.parent))
+        temporary=Path(make_temp_directory(prefix='.oh-restore-',dir=home.parent))
         try:
             shutil.copytree(source,temporary,dirs_exist_ok=True)
             validate(temporary);(temporary/'backup.json').unlink()
             settings=restore_settings(temporary);durable(temporary)
+            copy_directory_access(home,temporary)
             replace(temporary,home);sync_parent(home)
             from .config import check_location
             try:check_location()  # records where the restored settings are

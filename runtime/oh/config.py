@@ -196,9 +196,9 @@ def project_id(root):
 
 def registrations():
     """{project id: [checkout identities]} for current registrations; replaced or moved-away ones are left out."""
-    from .storage import state_home
+    from .storage import state_home, state_path
     result = {}
-    for path in (state_home() / 'registry/checkouts').glob('*.json'):
+    for path in state_path(state_home() / 'registry/checkouts',directory=True).glob('*.json'):
         try:value = read_json(path)
         except (OSError, ValueError, Refused):continue
         if isinstance(value, dict) and value.get('checkout') and isinstance(value.get('project'), str) \

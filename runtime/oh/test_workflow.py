@@ -758,6 +758,10 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(resumed['status'],'checkpoint')
         self.assertEqual(resumed['granted'],saved['granted'])
         self.assertEqual(resumed['continuation']['pending_decision'],'task_window')
+        next_action=completed['continuation']['next_action']
+        self.assertEqual(next_action['tool'],'decision_request')
+        self.assertEqual(next_action['arguments'],{'kind':'continue','run':saved['id']})
+        self.assertEqual(resumed['continuation']['next_action'],next_action)
         collect()
         with connect() as db:
             observations=analytics(db,{'from':'2000','to':'2100'})['summary']
@@ -837,6 +841,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         stop=self.human('Stop and take over',session='fresh-parent',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
         native.decision(self.root,'stop',stop);native.decision(self.root,'stop',stop)
         self.assertEqual(native.resume(self.root)['status'],'stopped')
+        self.assertNotIn('next_action',native.resume(self.root)['continuation'])
         self.assertIsNone(load_run(self.root)[1].get('publication'))
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
         with self.assertRaisesRegex(Refused,'checkpoint changed'):native.decision(self.root,'publish',publish)
@@ -851,11 +856,13 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assess();self.implement(edit=lambda:(self.root/'second.txt').write_text('Task two is complete.',newline='\n'))
         self.git('add','.');self.git('commit','-qm','checkpoint during second task')
         checkpoint=self.git('rev-parse','HEAD')
-        second=self.reviewed();native.complete(self.root,second['id'])
+        second=self.reviewed();last=native.complete(self.root,second['id'])
+        self.assertEqual(last['continuation']['next_action']['arguments'],{'kind':'publish','run':saved['id']})
         self.assertEqual(load_run(self.root)[1]['commit_intents']['2']['publication']['covers'],[checkpoint])
         final=decision_request(self.root,'publish')
         self.assertEqual(final['options'],['Open PR with completed tasks','Stop and take over'])
         self.git('remote','remove','origin')
+        self.assertEqual(native.resume(self.root)['continuation']['next_action'],last['continuation']['next_action'])
         final=decision_request(self.root,'publish')
         self.assertEqual(final['options'],['Stop and take over','Not now'])
         self.assertIn('PR unavailable',final['question'])

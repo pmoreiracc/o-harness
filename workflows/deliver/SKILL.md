@@ -110,11 +110,9 @@ active design with a combined quick-fix manifest: that starts separate work.
 
 ## 4. Continue or hand off
 
-At a real batch/allowance/concern boundary ask the native human decision once. Continue
-from the `continuation` returned by `complete`; a local commit alone does not finish a
-pending publication choice. A request not to push or publish still permits the final
-handoff checkpoint: show the returned choices and let the person select Stop or defer.
-Do not end with only a commit summary while that checkpoint is pending.
+At a real batch/allowance/concern boundary ask the native human decision once. Follow
+the shared completion checkpoint in `workflows/runtime.md` and the `continuation`
+returned by `complete`, including its `next_action` for local-only work.
 If PR preparation fails, repair it within the approved scope
 or report the concrete unresolved step; never hide it behind a completion claim.
 Continue approved work automatically inside its scope; routine failures need repair, not a

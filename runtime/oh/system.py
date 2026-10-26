@@ -1,5 +1,6 @@
 """The few operating-system differences in OH. Each has one POSIX and one Windows branch."""
 import errno
+import contextlib
 import functools
 import os
 import shutil
@@ -7,9 +8,37 @@ import signal
 import subprocess
 import sys
 import time
+import tempfile
+import uuid
 from pathlib import Path as _Path, WindowsPath as _WindowsPath
 
 WINDOWS=os.name=='nt'
+
+
+def make_temp_directory(*,prefix='oh-',dir=None):
+    """Own a fresh scratch directory without dropping the Windows parent's host access."""
+    if not WINDOWS:return tempfile.mkdtemp(prefix=prefix,dir=dir)
+    parent=Path(dir if dir is not None else tempfile.gettempdir())
+    for _ in range(100):
+        path=parent/(prefix+uuid.uuid4().hex)
+        try:path.mkdir()
+        except FileExistsError:continue
+        return str(path.absolute())
+    raise FileExistsError('Could not allocate a unique OH scratch directory')
+
+
+@contextlib.contextmanager
+def temporary_directory(*,prefix='oh-',dir=None):
+    if not WINDOWS:
+        with tempfile.TemporaryDirectory(prefix=prefix,dir=dir) as path:yield path
+        return
+    path=make_temp_directory(prefix=prefix,dir=dir)
+    def readonly(function,name,error):
+        if not isinstance(error,PermissionError):raise error
+        if not os.path.islink(name) and not os.path.isjunction(name):os.chmod(name,0o700)
+        function(name)
+    try:yield path
+    finally:shutil.rmtree(Path(path),onexc=readonly)
 
 
 if WINDOWS:
@@ -89,6 +118,10 @@ if WINDOWS:
     _advapi32=ctypes.WinDLL('advapi32',use_last_error=True)
     _advapi32.GetNamedSecurityInfoW.argtypes=[wintypes.LPCWSTR,ctypes.c_int,wintypes.DWORD]+[ctypes.POINTER(ctypes.c_void_p)]*5
     _advapi32.GetNamedSecurityInfoW.restype=wintypes.DWORD
+    _advapi32.GetSecurityDescriptorControl.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_ushort),ctypes.POINTER(wintypes.DWORD)]
+    _advapi32.GetSecurityDescriptorControl.restype=wintypes.BOOL
+    _advapi32.SetNamedSecurityInfoW.argtypes=[ctypes.c_wchar_p,ctypes.c_int,wintypes.DWORD]+[ctypes.c_void_p]*4
+    _advapi32.SetNamedSecurityInfoW.restype=wintypes.DWORD
     _advapi32.ConvertSidToStringSidW.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_wchar_p)];_advapi32.ConvertSidToStringSidW.restype=wintypes.BOOL
     _advapi32.GetAce.argtypes=[ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(ctypes.c_void_p)];_advapi32.GetAce.restype=wintypes.BOOL
     _advapi32.OpenProcessToken.argtypes=[wintypes.HANDLE,wintypes.DWORD,ctypes.POINTER(wintypes.HANDLE)];_advapi32.OpenProcessToken.restype=wintypes.BOOL
@@ -470,6 +503,56 @@ def _user_owned_objects():
 
 
 if WINDOWS:_user_owned_objects()
+
+
+def copy_directory_access(source,target):
+    """Preserve the empty data root's existing Windows policy across atomic restore."""
+    if not WINDOWS:return
+    dacl,descriptor=ctypes.c_void_p(),ctypes.c_void_p()
+    error=_advapi32.GetNamedSecurityInfoW(os.fspath(source),1,4,None,None,ctypes.byref(dacl),None,ctypes.byref(descriptor))
+    if error:raise ctypes.WinError(error)
+    try:
+        control=ctypes.c_ushort();revision=wintypes.DWORD()
+        if not _advapi32.GetSecurityDescriptorControl(descriptor,ctypes.byref(control),ctypes.byref(revision)):raise ctypes.WinError(ctypes.get_last_error())
+        flags=0x80000004 if control.value&0x1000 else 0x20000004
+        error=_advapi32.SetNamedSecurityInfoW(os.fspath(target),1,flags,None,None,dacl,None)
+        if error:raise ctypes.WinError(error)
+    finally:_kernel32.LocalFree(descriptor)
+
+
+def inherit_private_directory(path):
+    """Let a legacy Python-0700 directory inherit its parent's existing access.
+
+    Called only for directories below OH's data root. Never change the root, a
+    different owner, or a custom ACL; no users or access rights are invented here.
+    """
+    if not WINDOWS:return False
+    owner,dacl,descriptor=ctypes.c_void_p(),ctypes.c_void_p(),ctypes.c_void_p()
+    error=_advapi32.GetNamedSecurityInfoW(os.fspath(path),1,0x1|0x4,ctypes.byref(owner),None,ctypes.byref(dacl),None,ctypes.byref(descriptor))
+    if error==5:return False  # No ACL authority: leave it alone and let the actual I/O enforce access.
+    if error:raise ctypes.WinError(error)
+    try:
+        control=ctypes.c_ushort();revision=wintypes.DWORD()
+        get_control=_advapi32.GetSecurityDescriptorControl
+        if not get_control(descriptor,ctypes.byref(control),ctypes.byref(revision)):raise ctypes.WinError(ctypes.get_last_error())
+        if not control.value&0x1000 or not dacl.value or _sid_text(owner)!=_current_user():return False  # SE_DACL_PROTECTED
+        count=ctypes.cast(dacl.value+4,ctypes.POINTER(ctypes.c_ushort))[0]
+        if count!=3:return False
+        entries=set()
+        for index in range(count):
+            ace=ctypes.c_void_p()
+            if not _advapi32.GetAce(dacl,index,ctypes.byref(ace)):raise ctypes.WinError(ctypes.get_last_error())
+            kind,flags=ctypes.cast(ace,ctypes.POINTER(ctypes.c_ubyte))[0:2]
+            mask=ctypes.cast(ace.value+4,ctypes.POINTER(wintypes.DWORD))[0]
+            if (kind,flags,mask)!=(0,3,0x1f01ff):return False  # allow, object/container inherit, full control
+            entries.add(_sid_text(ace.value+8))
+        if entries!={'S-1-3-4','S-1-5-18','S-1-5-32-544'}:return False
+        set_security=_advapi32.SetNamedSecurityInfoW
+        # Keep the exact explicit DACL and enable inheritance; do not request SACL/owner privileges.
+        error=set_security(os.fspath(path),1,0x20000004,None,None,dacl,None)
+        if error:raise ctypes.WinError(error)
+        return True
+    finally:_kernel32.LocalFree(descriptor)
 
 
 def untrusted(path,kind):

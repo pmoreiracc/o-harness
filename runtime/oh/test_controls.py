@@ -341,6 +341,8 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         state.update(done=['1'],extra_review={'task':'1'},attempts=[{'id':'prior-review','task':'1','role':'review','finished':True,'outcome':'clean'}])
         hints=native._continuation(state)
         self.assertEqual(hints['phase'],'task_review')
+        self.assertNotIn('next_action',hints)
         self.assertEqual(hints['latest_result']['id'],'prior-review')
         state['correction']={'task':'1'}
         self.assertEqual(native._continuation(state)['phase'],'task_correction')
+        self.assertNotIn('next_action',native._continuation(state))

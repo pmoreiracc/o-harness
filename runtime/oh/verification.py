@@ -166,9 +166,9 @@ def check_env():
 
 def candidate_tree(root,replacements=None):
     """Build the exact committable subject without modifying the real index."""
-    import tempfile
+    from .system import temporary_directory
     git_root(root)
-    with tempfile.TemporaryDirectory(prefix='oh-index-') as tmp:
+    with temporary_directory(prefix='oh-index-') as tmp:
         env=git_env()
         env['GIT_INDEX_FILE']=str(Path(tmp)/'index')
         def command(*args):

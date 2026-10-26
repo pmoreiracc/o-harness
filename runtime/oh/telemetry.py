@@ -5,8 +5,8 @@ from .storage import state_writer, snapshot_guard
 import json
 import sqlite3
 import time
-from .system import Path, file_uri
-from .storage import atomic_json, encode, identifier, now, read_json, state_home, lock, Refused
+from .system import Path, file_uri, make_temp_directory
+from .storage import atomic_json, encode, identifier, now, read_json, state_home, state_mkdir, state_path, lock, Refused
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
@@ -188,8 +188,8 @@ def collect(limit=2000):
     home = state_home()
     with lock(home / 'collector.lock'):
         # Unprocessed files only; dashboard reads never visit transcripts or receipts.
-        paths = sorted((home / 'spool').glob('*.json'), key=lambda p: p.stat().st_mtime_ns)[:limit]
-        gaps=list((home/'gaps').glob('*.json'))
+        paths = sorted(state_path(home / 'spool',directory=True).glob('*.json'), key=lambda p: p.stat().st_mtime_ns)[:limit]
+        gaps=list(state_path(home/'gaps',directory=True).glob('*.json'))
         if not paths and not gaps:return 0
         with connect() as db:
             for gap in gaps:
@@ -207,9 +207,9 @@ def collect(limit=2000):
             db.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)', ('last_ingested', now()))
         # Archive only after committing. A crash here replays safely by ID.
         archive = home / 'events'
-        archive.mkdir(exist_ok=True, mode=0o700)
+        state_mkdir(archive)
         invalid_names={p.name for p,_ in invalid}
-        quarantine=home/'quarantine';quarantine.mkdir(exist_ok=True,mode=0o700)
+        quarantine=home/'quarantine';state_mkdir(quarantine)
         for path in paths:
             path.replace((quarantine if path.name in invalid_names else archive)/path.name)
         gap_archive=home/'gaps/retained';gap_archive.mkdir(parents=True,exist_ok=True)
@@ -316,9 +316,9 @@ def analytics(db, filters):
 
 def rebuild():
     """Recreate derived analytics from retained events without touching task authority."""
-    import os,tempfile,shutil
+    import os,shutil
     with snapshot_guard(exclusive=True):
-        home=state_home();temporary=Path(tempfile.mkdtemp(prefix='.rebuild-',dir=home))
+        home=state_home();temporary=Path(make_temp_directory(prefix='.rebuild-',dir=home))
         try:
             old=home/'analytics.sqlite3';recommendations=[]
             readable=False

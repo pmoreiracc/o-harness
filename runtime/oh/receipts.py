@@ -2,13 +2,13 @@
 import os
 from .system import Path
 import tempfile
-from .storage import Refused, digest, read_json, sync_directory
+from .storage import Refused, digest, read_json, state_mkdir, sync_directory
 from .system import replace
 
 
 def save(path, text, *, immutable=False):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    state_mkdir(path.parent)
     data = text.encode('utf-8')
     if path.is_symlink():raise Refused('A readable receipt cannot be a symlink')
     if immutable and path.exists():
