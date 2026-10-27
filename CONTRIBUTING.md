@@ -131,6 +131,14 @@ Start fresh host sessions after switching or refreshing. Finish active OH runs b
 selecting a different build; `off` restores plugin enablement but does not stop a run.
 Project-level plugin overrides take precedence; remove an OH override before testing there.
 
+Codex trusts each hook's current definition separately from enabling the plugin. A change
+to a hook timeout also requires new trust. `oh-dev on` and `oh-dev status --host codex`
+report OH DEV hook trust from a fresh CLI process. If review is needed, open Terminal in
+the project, run `codex`, enter `/hooks`, and review and trust the current OH DEV hooks.
+Then start fresh Codex sessions. This inventory does not prove that an existing desktop
+session loaded or executed the hooks. An unavailable inventory is reported as unknown;
+OH never writes hook trust on the person's behalf.
+
 Builds and switching state live in `~/.local/share/oh-dev`. No consumer files or
 OS services are installed. `oh-dev exec` uses the selected development runtime and data.
 

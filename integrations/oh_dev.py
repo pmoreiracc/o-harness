@@ -154,8 +154,8 @@ def marketplace(host):
                      for p in entries if p['name'] == MARKETPLACE), None)
 
 
-def codex_enable(plugin, enabled):
-    """Use Codex's config writer: preserve other settings, comments and concurrent edits."""
+def codex_request(method, params, *, timeout=30):
+    """Use the native app-server protocol; never starts a model or approves hooks."""
     environment = command_environment()
     executable = host_program('codex', environment)
     with system.spawn([executable, 'app-server'], cwd=home(), env=environment, stdin=subprocess.PIPE,
@@ -167,29 +167,63 @@ def codex_enable(plugin, enabled):
             replies.put(None)
         threading.Thread(target=receive, daemon=True).start()
         try:
+            initialize = {'clientInfo': {'name': 'oh-dev', 'version': '1'}}
+            if method == 'hooks/list':initialize['capabilities'] = {'experimentalApi': True}
             for message in (
-                {'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'oh-dev', 'version': '1'}}},
+                {'id': 1, 'method': 'initialize', 'params': initialize},
                 {'method': 'initialized'},
-                {'id': 2, 'method': 'config/value/write', 'params': {
-                    'keyPath': f'plugins.{json.dumps(plugin)}.enabled', 'value': enabled, 'mergeStrategy': 'replace'}},
+                {'id': 2, 'method': method, 'params': params},
             ):
                 process.stdin.write(json.dumps(message) + '\n')
             process.stdin.flush()
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + timeout
             while True:
                 line = replies.get(timeout=max(0, deadline - time.monotonic()))
-                if line is None:raise RuntimeError('Codex app-server exited before updating plugin settings. Run codex doctor, then retry.')
+                if line is None:raise RuntimeError(f'Codex app-server exited before {method} completed. Run codex doctor, then retry.')
                 with host_response('codex'):
                     reply = json.loads(line)
+                    if reply.get('id') == 1 and 'error' in reply:raise RuntimeError(reply['error']['message'])
                     if reply.get('id') != 2:continue
                     if 'error' in reply:raise RuntimeError(reply['error']['message'])
-                    if reply['result'].get('overriddenMetadata'):
-                        raise RuntimeError('A higher-priority Codex setting overrides OH enablement. Resolve it, then retry.')
-                    return
+                    if not isinstance(reply['result'], dict):raise ValueError('expected a native response object')
+                    return reply['result']
         except queue.Empty:
-            raise RuntimeError('Codex did not update plugin settings within 30 seconds. Run codex doctor, then retry.') from None
+            raise RuntimeError(f'Codex did not complete {method} within {timeout} seconds. Run codex doctor, then retry.') from None
         finally:
             system.stop(process, force=True)
+
+
+def codex_enable(plugin, enabled):
+    """Preserve other settings, comments and concurrent edits through Codex's writer."""
+    result = codex_request('config/value/write', {
+        'keyPath': f'plugins.{json.dumps(plugin)}.enabled', 'value': enabled, 'mergeStrategy': 'replace'})
+    if result.get('overriddenMetadata'):
+        raise RuntimeError('A higher-priority Codex setting overrides OH enablement. Resolve it, then retry.')
+
+
+def report_codex_hook_trust():
+    """Report current native definition trust separately from plugin installation."""
+    cwd = str(Path.cwd().resolve())
+    remedy = (f'In Terminal, open {cwd}, run codex, then enter /hooks. '
+              'Review the OH DEV definitions and trust them if approved; start fresh Codex sessions afterward.')
+    try:
+        with host_response('codex'):
+            result = codex_request('hooks/list', {'cwds': [cwd]}, timeout=10)
+            entries = [entry for entry in result['data'] if str(Path(entry['cwd']).resolve()) == cwd]
+            if len(entries) != 1:raise RuntimeError('Codex did not return the requested project hook inventory')
+            entry = entries[0]
+            if entry.get('errors'):raise RuntimeError('Codex reported hook discovery errors; inspect /hooks for details')
+            hooks = [hook for hook in entry['hooks'] if hook.get('pluginId') == PLUGIN]
+            if not hooks:raise RuntimeError('OH DEV hooks were not discovered in this project context')
+            pending = [hook for hook in hooks if not hook['enabled'] or hook['trustStatus'] not in ('trusted', 'managed')]
+            if pending:
+                states = ', '.join(f"{hook['eventName']} ({hook['trustStatus'] if hook['enabled'] else 'disabled'})" for hook in pending)
+                print(f'Codex OH hook trust needs attention: {states}. {remedy}')
+            else:
+                print('Codex OH hook definitions are enabled and trusted in a fresh CLI inventory.')
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(f'Codex OH hook trust could not be checked: {exc}. {remedy}')
+    print('This inspects a fresh CLI process; it does not verify callbacks in an already running desktop session.')
 
 
 def enable(host, plugin, value):
@@ -565,6 +599,7 @@ def switch(action, hosts, *, build_path=None, live=False, shared_data=None):
                 failures.append(f'{host}: {exc}\nRecover with oh-dev off --host {host}, then retry.')
         print('Start fresh sessions in the selected hosts. Existing sessions keep their loaded plugins.')
         if failures:raise RuntimeError('\n'.join(failures))
+        if action == 'on' and 'codex' in hosts:report_codex_hook_trust()
         show_dashboard(state, hosts, action)
 
 
@@ -622,6 +657,7 @@ def main(argv=None):
                                   'build': record.get('build') if record else None,
                                   'data': record.get('data',str(home() / 'data')) if record else None,
                                   'plugins': actual, 'marketplace': marketplace(host)}))
+                if host == 'codex' and record and record['phase'] == 'on':report_codex_hook_trust()
             print(f'Default shared data: {normal_data()}')
             print(f'Optional isolated data (--isolated-data): {home() / "data"}')
         else:switch(args.action, (args.host,) if args.host else HOSTS,

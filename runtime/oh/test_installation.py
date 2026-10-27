@@ -173,6 +173,36 @@ class InstallationTest(unittest.TestCase):
             for relative in icons.values():
                 self.assertEqual((skill / relative).read_bytes(), expected)
 
+    def test_development_hook_trust_reports_modified_definitions_without_granting_trust(self):
+        dev = self.development()
+        cwd = str(Path.cwd().resolve())
+        hook = {'pluginId': dev.PLUGIN, 'eventName': 'preToolUse', 'enabled': True,
+                'trustStatus': 'modified'}
+        result = {'data': [{'cwd': cwd, 'hooks': [hook], 'errors': []}]}
+        with patch.object(dev, 'codex_request', return_value=result) as request:
+            with contextlib.redirect_stdout(io.StringIO()) as output:dev.report_codex_hook_trust()
+            self.assertIn('preToolUse (modified)', output.getvalue())
+            self.assertIn('enter /hooks', output.getvalue())
+            self.assertIn(cwd, output.getvalue())
+            self.assertIn('already running desktop session', output.getvalue())
+            request.assert_called_once_with('hooks/list', {'cwds': [cwd]}, timeout=10)
+            # A genuine host trust update makes the same definition ready; the
+            # helper only reads the inventory and never writes a trusted hash.
+            hook['trustStatus'] = 'trusted'
+            with contextlib.redirect_stdout(io.StringIO()) as output:dev.report_codex_hook_trust()
+            self.assertIn('enabled and trusted in a fresh CLI inventory', output.getvalue())
+            hook['enabled'] = False
+            with contextlib.redirect_stdout(io.StringIO()) as output:dev.report_codex_hook_trust()
+            self.assertIn('preToolUse (disabled)', output.getvalue())
+            result['data'][0]['hooks'] = []
+            with contextlib.redirect_stdout(io.StringIO()) as output:dev.report_codex_hook_trust()
+            self.assertIn('could not be checked', output.getvalue())
+            request.side_effect = RuntimeError('hooks/list unsupported')
+            with contextlib.redirect_stdout(io.StringIO()) as output:dev.report_codex_hook_trust()
+            self.assertIn('hooks/list unsupported', output.getvalue())
+            self.assertIn('enter /hooks', output.getvalue())
+            self.assertTrue(all(call.args[0] == 'hooks/list' for call in request.call_args_list))
+
     def test_development_switch_restores_both_hosts_after_refresh_and_failure(self):
         """CONTRIBUTING: switching keeps releases installed and preserves their enabled state."""
         dev = self.development()
@@ -216,9 +246,11 @@ class InstallationTest(unittest.TestCase):
                     patch.object(dev, 'call', side_effect=command), patch.object(dev, 'enable', side_effect=enabled), \
                     patch.object(dev, 'marketplace', side_effect=lambda host: marketplaces.get(host)), \
                     patch.object(dev, 'build'), patch.object(dev, 'create_snapshot', return_value=snapshot) as packaged, \
+                    patch.object(dev, 'report_codex_hook_trust') as hook_trust, \
                     patch.object(dev, 'show_dashboard') as dashboard, \
                     contextlib.redirect_stdout(io.StringIO()):
                 dev.main(['on'])
+                hook_trust.assert_called_once()
                 self.assertEqual(dashboard.call_args.args[2], 'on')
                 packaged.assert_called_once_with(shared_data=True)  # the same snapshot powers both hosts
                 self.assertEqual({r['build'] for r in dev.read(dev.home() / 'switch.json').values()}, {str(snapshot[0])})
@@ -467,7 +499,7 @@ class InstallationTest(unittest.TestCase):
                 with patch.dict(os.environ, {'OH_DATA_HOME': str(frozen_data)}), \
                         patch.object(dev, 'version', side_effect=[revision, 'editor saved', revision, revision]):
                     first, metadata = dev.create_snapshot()
-                self.assertEqual(metadata['data'], str(frozen_data))
+                self.assertEqual(metadata['data'], str(frozen_data.resolve()))
                 self.assertNotEqual(frozen_data, dev.normal_data())
                 self.assertEqual(list((dev.home() / 'builds').iterdir()), [first])  # discarded partial copy was removed
                 workflow.write_text('later fixture workflow', encoding='utf-8')

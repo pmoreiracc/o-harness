@@ -33,7 +33,8 @@ class SystemTest(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         # Remove only this fixture, using the native filesystem spelling for deep children.
         self.addCleanup(system.shutil.rmtree,system.Path(temp.name))
-        folder=system.Path(temp.name)/('long data '+ 'a'*80)/('b'*90)/('c'*90)
+        # macOS may spell its temporary root through the /var -> /private/var alias.
+        folder=system.Path(temp.name).resolve()/('long data '+ 'a'*80)/('b'*90)/('c'*90)
         self.assertGreater(len(str(folder)),260)
         with patch.dict(os.environ,{'OH_DATA_HOME':str(folder)}):
             path=folder/'evidence.json'

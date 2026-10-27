@@ -86,6 +86,13 @@ Windows has been recorded yet, so treat Windows support as a preview.
 
 Merged changes reach you only when a new version is released.
 
+In Codex, installing or enabling a plugin does not trust changed hook definitions.
+Even changing a timeout invalidates the previous definition's trust. After an OH
+update, open Terminal in the project, run `codex`, and enter `/hooks` to review any
+new or modified OH hooks. Trust only the definitions you approve, then start fresh
+sessions. An enabled plugin or an old saved trust entry does not establish that
+the current callbacks can run. See [Codex hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
+
 Inside your session, run `/oh-update` in Claude Code or `$oh-update` in Codex to refresh
 the release marketplace and update OH in both installed hosts on Windows, macOS and Linux.
 To select one host, use `/oh-update codex` or `$oh-update claude`.

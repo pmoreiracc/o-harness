@@ -1,5 +1,17 @@
 # Saved work and recovery
 
+## A native command has no reservation
+
+Preserve the failed attempt and diagnose the callback before retrying it. In Codex,
+inspect the current hook definitions through the native CLI: open Terminal in the
+project, run `codex`, then enter `/hooks`. A plugin can be enabled while its changed
+control hooks are skipped because their saved trust belongs to an older definition.
+If that is the observed cause, show the exact changed hooks for human review and
+trust; never write trust hashes or infer approval from a plugin's enabled state.
+Use the same approved scope and remaining allowance after repairing the prerequisite.
+A missing reservation alone does not prove a trust problem: when hooks are trusted,
+inspect callback errors, actor identity and the exact formatted command instead.
+
 ## Delivery entry and recovery
 
 For an unfinished delivery, use `decision-request recover --run ID` (Codex
