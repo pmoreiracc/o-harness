@@ -38,8 +38,10 @@ For OH's standard plan format:
 
 Choose unused document numbers, preserve existing roadmap and decision-log links,
 and validate the changed documents with `plans check`. Do not run product tests.
-Do not change unrelated initiatives, decide open product questions or claim approval.
-Repository designs become approved through human merge; private designs need native
-human acceptance of the reviewed contents. Never require a merge for private plans.
+Do not change unrelated initiatives or decide open product questions.
+A repository design's approval is the human merge, so write it as the project's
+approved status (for example `status: approved`) when its rules say the merged document
+carries it, and never as `draft`; that is a proposal, not approval. Private designs need
+native human acceptance of the reviewed contents. Never require a merge for private plans.
 Return the artifact paths, a short account of the design, actual validation and any
 remaining decisions. Keep all original report evidence available for review.
