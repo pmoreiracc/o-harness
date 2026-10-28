@@ -82,7 +82,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         self.approve();self.launch()
         data = Path(os.environ['OH_DATA_HOME'])
         revision = json.loads((data / 'runtime/active.json').read_text())['revision']
-        home = patch('oh.config.HOME', data / 'versions' / revision);home.start();self.addCleanup(home.stop)
+        home = patch('oh.config.HOME', (data / 'versions' / revision).resolve());home.start();self.addCleanup(home.stop)
         shells = [[str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'),
                    '-NoProfile', '-Command']]
         if shutil.which('pwsh'):
