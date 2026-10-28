@@ -1,6 +1,6 @@
 """Delivery recovery decisions exercise real Git, journals and tool revocation."""
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from .system import Path
 import json
 import unittest
 from unittest.mock import patch
@@ -12,6 +12,9 @@ from .authority import coordinator as native_coordinator
 
 
 class RecoveryTest(NativeFixture, unittest.TestCase):
+    # Exercise existing recovery cases with old, ordinary path strings beyond MAX_PATH.
+    state_folder='/'.join(['long-state-'+'a'*80,'b'*90,'c'*90])
+
     def answer(self, gate, label, host='claude', session='new-parent'):
         at=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
         return self.human(label,host=host,session=session,decision=gate['decision'],
@@ -116,16 +119,69 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
             value['tools']['pending-edit']={'attempt':old['id'],'kind':'tool','name':'Edit','started':now()}
         with self.assertRaisesRegex(Refused,'still settling'):self.recover('resume')
         self.assertFalse(load_run(self.root)[1]['attempts'][0]['finished'])
+        # Continue keeps work written while the question was open or cleanup ran.
+        # Its already-selected effect does not authorize a reset of those files.
+        gate=decisions.prepare(self.root,'recover');answer=self.answer(gate,'Continue')
+        new_parent=Path(self.temp.name)/'new-parent.jsonl';new_parent.write_text('',newline='\n')
+        answer['transcript_path']=str(new_parent)
+        original_settle=recovery._settle
+        def settle(*args):
+            with cancellation._edit(self.root) as value:value['tools']['pending-edit']['ended']=now()
+            (self.root/'surprise.txt').write_text('final worker write',newline='\n')
+            return original_settle(*args)
+        with patch('oh.authority.native_result',side_effect=FileNotFoundError('deleted native transcript')), \
+                patch.object(recovery,'_settle',side_effect=settle):
+            native.decision(self.root,'resume',answer)
+        self.assertEqual((self.root/'surprise.txt').read_text(),'final worker write')
+        self.assertEqual(native.decision(self.root,'resume',answer)['status'],'running')
 
     def test_restart_keeps_review_spend_and_findings(self):
         self.approve();self.assess();self.implement()
         review=self.reviewed({'verdict':'blocking','findings':[{'severity':'blocking','description':'Repair this behavior'}]})
+        stale=decisions.prepare(self.root,'approve-repair',repair='An earlier proposed repair.')
+        subject=native._subject(self.root,load_run(self.root)[1])
+        gate=decisions.prepare(self.root,'approve-repair',repair='Repair the shared fixture needed by this task.')
+        native.decision(self.root,'approve-repair',self.answer(gate,gate['options'][0],host='codex',session='s'))
+        self.assertTrue(load_run(self.root)[1]['approved_repairs'])
         self.recover('restart')
         state=load_run(self.root)[1]
+        self.assertFalse(state['approved_repairs'])
+        (self.root/'output.txt').write_text('implemented\n',newline='\n')
+        self.assertEqual(native._subject(self.root,state),subject)
+        with self.assertRaisesRegex(Refused,'subject changed'):
+            native.decision(self.root,'approve-repair',self.answer(stale,stale['options'][0],host='claude'))
         self.assertEqual(state['attempts'][-1]['findings'][0]['description'],'Repair this behavior')
         self.assertTrue(state['attempts'][-1]['superseded'])
         self.assertEqual(sum(a['role']=='review' for a in state['attempts']),1)
         with self.assertRaisesRegex(Refused,'Recovery changed'):native.complete(self.root,review['id'])
+
+    def test_continue_clean_delivery_keeps_assessment_and_retries_reported_work(self):
+        from .test_delivery import DeliveryTest
+        from .storage import read_json
+        DeliveryTest.documents(self)
+        self.git('switch','-c','deliver/0001')
+        prepared=native.prepare_scope(self.root,doc='0001')
+        native.approve_scope(self.root,prepared['scope_id'],self.human())
+        assessed=self.assess()
+        text='Blocked before source inspection. No source edits, candidate, or verification.'
+        author=self.finish_attempt('implementation',text)
+        self.assertEqual(author['outcome'],'reported')
+        before=load_run(self.root)[1]
+        self.recover('resume')
+        journal,state=load_run(self.root)
+        self.assertEqual(state['branch'],before['branch'])
+        self.assertEqual(state['assessments']['1']['attempt'],assessed['id'])
+        self.assertFalse(any(a.get('superseded') for a in state['attempts']))
+        self.assertEqual(state['granted'],before['granted'])
+        self.assertFalse(any(r['kind']=='recovery.started' for r in journal.records()))
+        self.assertEqual(read_json(Path(author['evidence'])/'native-result.json')['text'],text)
+        # Old snapshots may already have superseded every attempt on a no-op Continue.
+        # The retained assessment still determines which role can be admitted.
+        legacy=dict(state,attempts=[dict(a,superseded=True) for a in state['attempts']])
+        self.assertEqual(native._continuation(legacy)['phase'],'implementation')
+        with self.assertRaisesRegex(Refused,'final configured checks'):native.admit(self.root,'review')
+        self.implement();review=self.reviewed();native.complete(self.root,review['id'])
+        self.assertIn('1',load_run(self.root)[1]['done'])
 
     def test_private_restart_restores_approved_plan_and_completes_with_valid_publication_evidence(self):
         from .test_delivery import DeliveryTest

@@ -52,8 +52,12 @@ Registering a project changes nothing in its repository.
 
 ## Windows
 
-CI runs the tests on a Windows Server runner, but no real Claude Code or Codex run on
-Windows has been recorded yet, so treat Windows support as a preview.
+Windows support remains a preview. Native Claude Code delivery and Stop/recovery
+passed on Windows 10 build 19045 with the compatibility candidate. An earlier native
+Codex continuation also completed, but native Windows Codex execution of the final
+combined candidate has not been tested. CI covers additional Windows behavior; see
+the [acceptance summary](plans/release-compatibility.md#acceptance-summary-2026-10-28)
+for the tested versions and remaining limits.
 
 - **Git for Windows**, which includes Git Bash: Claude Code runs OH's hooks through it.
 - Codex uses its default Windows `cmd` hook runner. A custom PowerShell hook shell is not
@@ -70,16 +74,28 @@ Windows has been recorded yet, so treat Windows support as a preview.
   in arguments, so pass JSON from a file: `oh.cmd config set checks @checks.json`.
 - Git for Windows converts line endings by default (`core.autocrlf`); OH accepts files whose
   only difference from what Git stores is their line endings.
+- OH uses Windows extended paths for its file operations, including saved evidence,
+  locks, recovery and backups. Existing saved path identities stay unchanged; no registry
+  change or data migration is needed. External tools retain their own path limits.
 - Native Claude and Codex agents use their host's available tools and permissions.
   OH does not remove Claude's shell or install a replacement Windows sandbox.
-  Real native Windows workflow and Stop validation are still required before claiming
-  support for this candidate.
+  Codex shell hooks accept both canonical `Bash` command payloads and native
+  `exec_command` payloads (`cmd`); both require the same owned-command reservation.
+  Native Claude workflow and Stop/recovery validation passed for the tested build;
+  that result does not establish every Windows host configuration or native Codex path.
 - `oh service-install` adds a Task Scheduler task that starts the dashboard at logon,
   without admin rights or a window; `oh service-uninstall` removes it.
 
 ## Update
 
 Merged changes reach you only when a new version is released.
+
+In Codex, installing or enabling a plugin does not trust changed hook definitions.
+Even changing a timeout invalidates the previous definition's trust. After an OH
+update, open Terminal in the project, run `codex`, and enter `/hooks` to review any
+new or modified OH hooks. Trust only the definitions you approve, then start fresh
+sessions. An enabled plugin or an old saved trust entry does not establish that
+the current callbacks can run. See [Codex hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 
 Inside your session, run `/oh-update` in Claude Code or `$oh-update` in Codex to refresh
 the release marketplace and update OH in both installed hosts on Windows, macOS and Linux.

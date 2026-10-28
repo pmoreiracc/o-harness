@@ -1,6 +1,6 @@
 """Portable configuration only: never sessions, host credentials, evidence or grants."""
 from copy import deepcopy
-from pathlib import Path
+from .system import Path
 import math
 import re
 import stat

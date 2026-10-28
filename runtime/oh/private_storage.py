@@ -1,5 +1,5 @@
 """Private document ownership lives in OH state, never in the document folder."""
-from pathlib import Path
+from .system import Path
 from contextlib import contextmanager, ExitStack
 import unicodedata
 from .storage import Refused, atomic_json, digest, lock, read_json, state_home, state_writer

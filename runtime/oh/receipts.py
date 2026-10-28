@@ -1,14 +1,14 @@
 """Readable, deterministic views of retained evidence; these views never grant authority."""
 import os
-from pathlib import Path
+from .system import Path
 import tempfile
-from .storage import Refused, digest, read_json, sync_directory
+from .storage import Refused, digest, read_json, state_mkdir, sync_directory
 from .system import replace
 
 
 def save(path, text, *, immutable=False):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    state_mkdir(path.parent)
     data = text.encode('utf-8')
     if path.is_symlink():raise Refused('A readable receipt cannot be a symlink')
     if immutable and path.exists():
@@ -69,7 +69,13 @@ def request(directory, admission):
                       'Review the original range `'+original['review_base']+'..'+original['head']+'` together with the task candidate.',
                       'Included original commits: '+', '.join(original.get('covers',[]))+'.',''])
     current = packet['current_work']
+    if current:
+        lines.extend([current['authority'],
+                      'This attempt was superseded; its report is historical evidence.' if current.get('superseded') else '', ''])
     lines.append(current['summary'] if current else 'No earlier author report for this task.')
+    for repair in packet.get('approved_repairs',[]):
+        lines.extend(['','## Approved supporting repair','',repair['instructions'],
+                      'Native decision: `'+repair['decision']+'`.',''])
     readiness = current.get('readiness') if current else None
     if isinstance(readiness, dict):
         labels = {'requirements':'Requirements covered', 'rules':'Rules checked', 'surfaces':'Affected surfaces',
@@ -165,7 +171,11 @@ def index(journal, state):
         lines.append('')
     for task in state['tasks']:
         attempts = [a for a in state['attempts'] if a['task'] == task['id']]
-        if not attempts:continue
+        repairs=state.get('approved_repairs',{}).get(task['id'],[])
+        if not attempts and not repairs:continue
+        for repair in repairs:
+            lines.extend(['### Approved supporting repair for task '+task['id'],'',repair['instructions'],
+                          'Native decision: `'+repair['decision']+'`.',''])
         lines.extend([('## Standalone review' if state.get('workflow')=='review' else f"## Task {task['id']}: {task['title']}"), '',
                       '| Attempt | Host / model | Outcome | Elapsed |', '|---|---|---|---|'])
         rounds = 0

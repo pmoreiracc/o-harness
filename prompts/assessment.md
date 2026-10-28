@@ -12,6 +12,17 @@ targeted reads. Do not edit files, run project checks, implement the task, deleg
 or make product decisions. The no-edit instruction is a behavioral restriction;
 this agent inherits the host's permissions.
 
+Read the verified `task_context` returned by admission. For Codex shell reads, use
+`command_format` and run its returned command unchanged with the native shell tool.
+If the hook supplies a corrected invocation format, retry that same read using the
+shown form and the same native tool permissions. A command-format correction is not
+a Stop or a reason to abandon the assessment. Do not retry an explicit Stop, revoked
+attempt, denied permission or exit 130.
+If an unresolved execution or access failure prevents the required source inspection, return
+`status: "blocked"` and a short `summary` identifying the failed operation and error;
+omit `difficulty`. Infrastructure failure is not task complexity. Preserve the failed
+attempt so the coordinator can repair the prerequisite within existing authority.
+
 Return a small JSON object with `difficulty` (simple, standard or complex), `rationale`,
 `references` and `uncertainty` (lists). Simple is a local bounded edit with known behavior and no
 consequential boundary. Standard is a contained change with understood interfaces.

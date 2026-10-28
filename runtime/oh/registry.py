@@ -1,9 +1,9 @@
 """External project profiles and checkout identities; consumers remain untouched."""
-from pathlib import Path
+from .system import Path
 from contextlib import ExitStack
 from subprocess import CalledProcessError
 from .storage import (Refused, atomic_json, digest, git, identifier, lock, read_json,
-                      state_home, state_writer, validate_id)
+                      state_home, state_path, state_writer, validate_id)
 
 
 def identity(root, revision='HEAD'):
@@ -78,7 +78,7 @@ def joinable(root):
 
 
 def index_path(root):
-    return state_home() / 'registry' / 'checkouts' / (digest(str(Path(root).resolve())) + '.json')
+    return state_path(state_home() / 'registry' / 'checkouts' / (digest(str(Path(root).resolve())) + '.json'))
 
 
 def lookup(root):
@@ -113,7 +113,7 @@ def profile(root):
 
 
 def checkout_state(root):
-    return state_home() / 'checkout-state' / lookup(root)['checkout']
+    return state_path(state_home() / 'checkout-state' / lookup(root)['checkout'],directory=True)
 
 
 def planning_settings(name):

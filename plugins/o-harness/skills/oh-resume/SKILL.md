@@ -12,7 +12,11 @@ for planning/review, before asking its returned question once. Delivery presents
 Start fresh and Stop and take over; bind the selected action from its returned `actions`
 map with `decision` and the same human locator. Never replace these choices with Not now.
 Do not ask a preliminary Resume question. Wait; this invocation alone does not answer it.
-After acceptance, continue the saved task or decision with its original scope, settings, findings and
+After acceptance, load the selected workflow's procedure (`workflows/deliver/SKILL.md`,
+`workflows/design/SKILL.md`, `workflows/propose/SKILL.md` or `workflows/review/SKILL.md`).
+Enter its saved phase, not its initial scope setup. Follow its remaining steps through
+the completion checkpoint; Resume is an entry into that workflow, not a separate ending.
+Continue the saved task or decision with its original scope, settings, findings and
 remaining allowances. Confirm old native work is quiescent before a fresh agent starts;
 never reuse a completed reviewer or renew allowances to switch hosts. Preserve useful
 unfinished edits. Report the actual resumed work, not a new implementation introduction

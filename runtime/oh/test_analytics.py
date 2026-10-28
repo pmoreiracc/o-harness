@@ -1,6 +1,6 @@
 import json
 import os
-from pathlib import Path
+from .system import Path
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -72,11 +72,25 @@ class AnalyticsTest(unittest.TestCase):
         self.assertGreater(data['comparison']['tasks_per_period'],9)
         destination=Path(self.tmp.name).parent/('oh-backup-test-'+identifier())
         import shutil
-        self.addCleanup(lambda:shutil.rmtree(destination,ignore_errors=True))
+        self.addCleanup(lambda path=destination:shutil.rmtree(path,ignore_errors=True))
+        destination=destination/('a'*90)/('b'*90)/('backup # '+ 'c'*90)
         backup(destination)
-        with tempfile.TemporaryDirectory() as restored,patch.dict(os.environ,{'OH_DATA_HOME':restored}):
-            restore(destination)
-            with connect() as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM tasks').fetchone()[0],28)
+        with tempfile.TemporaryDirectory() as restored:
+            target=Path(restored)/('a'*90)/('b'*90)/('restored # '+ 'c'*90)
+            try:
+                with patch.dict(os.environ,{'OH_DATA_HOME':str(target)}):
+                    if os.name=='nt':
+                        import subprocess
+                        from .storage import state_home
+                        state_home()
+                        subprocess.run(['icacls',os.fspath(target),'/grant','*S-1-5-32-545:(OI)(CI)(M)'],check=True,capture_output=True)
+                    restore(destination)
+                    if os.name=='nt':
+                        from .system import untrusted
+                        self.assertIn('S-1-5-32-545',untrusted(target,'folder'))
+                        self.assertIn('S-1-5-32-545',untrusted(target/'analytics.sqlite3','file'))
+                    with connect(readonly=True) as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM tasks').fetchone()[0],28)
+            finally:shutil.rmtree(Path(restored),ignore_errors=True)
 
     def test_missing_completion_evidence_remains_unknown_and_partial_usage_is_not_zero(self):
         with connect() as db:

@@ -2,7 +2,7 @@
 from .storage import state_writer
 """Durable issue routing. Offline or uncertain publication never loses finding provenance."""
 import json
-from pathlib import Path
+from .system import Path
 import re
 import subprocess
 from .storage import Refused,atomic_json,digest,git,read_json,state_home

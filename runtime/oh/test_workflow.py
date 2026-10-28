@@ -2,7 +2,7 @@ from .registry import register, profile_path
 import json
 import io
 import os
-from pathlib import Path
+from .system import Path
 import subprocess
 import sys
 import tempfile
@@ -53,9 +53,13 @@ def pull_request(state, *, head=None, number=144, status='open'):
 
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.temp=tempfile.TemporaryDirectory()
+        def cleanup():
+            self.temp.name=os.fspath(Path(self.temp.name))
+            self.temp.cleanup()
+        self.addCleanup(cleanup)
         self.root=Path(self.temp.name)/'project';self.root.mkdir()
-        self.env=patch.dict(os.environ,{'OH_DATA_HOME':str(Path(self.temp.name)/'state'),
+        self.env=patch.dict(os.environ,{'OH_DATA_HOME':str(Path(self.temp.name)/getattr(self,'state_folder','state')),
             'CODEX_THREAD_ID':'','CODEX_SESSION_ID':'','OH_CODEX_TURN_ID':''});self.env.start();self.addCleanup(self.env.stop)
         self.git('init','-q','-b','main');self.git('config','user.name','OH Test');self.git('config','user.email','test@example.invalid')
         self.project_id=identifier()
@@ -160,6 +164,9 @@ class NativeFixture:
                     'parent_session':state['human']['session'],'profile':attempt['profile'],
                     'transcript_path':str(self.parent_path),'record_hashes':['native-spawn']}
         def result(root,state,attempt,locator):
+            if attempt['id'] not in self.native_results:
+                from .authority import Saving
+                raise Saving('Native child result is not saved yet')
             value=self.native_results[attempt['id']]
             return {'text':value['text'],'status':value['status'],'profile':attempt['profile'] if attempt.get('native_child') else None,
                     'native_id':attempt.get('native_child',{}).get('child_session'),'record_hashes':['native-result'],'duration_ms':1}|value
@@ -208,6 +215,39 @@ class NativeFixture:
 
 
 class NativeWorkflowTest(NativeFixture,unittest.TestCase):
+    def test_repair_approval_invalidates_readiness_without_replenishing_authority(self):
+        from . import native,decisions,publication,handoff
+        from .storage import now
+        configure(self.root,review_rounds=1)
+        self.approve();self.assess();self.implement();review=self.reviewed()
+        def offer(text):return decisions.prepare(self.root,'approve-repair',repair=text)
+        def answer(gate,**extra):
+            return self.human(extra.pop('prompt',gate['options'][0]),decision=gate['decision'],question=gate['question'],question_at=now(),via='question',**extra)
+        gate=offer('Repair the shared fixture without changing product behavior.')
+        stale=offer('A different supporting repair.')
+        # The prepared scope is exact, even when the product tree later returns to the same contents.
+        (self.root/'unexpected.txt').write_text('later edit',newline='\n')
+        with self.assertRaisesRegex(Refused,'subject changed'):native.decision(self.root,'approve-repair',answer(gate))
+        (self.root/'unexpected.txt').unlink()
+        with self.assertRaises(Refused):native.decision(self.root,'approve-repair',answer(gate,prompt='Not now'))
+        accepted=answer(gate)
+        native.decision(self.root,'approve-repair',accepted)
+        journal,state=load_run(self.root)
+        self.assertTrue(state['attempts'][-1]['superseded'])
+        self.assertFalse(handoff.confirms_repairs(state,state['attempts'][-1]))
+        self.assertNotIn('1',state.get('verification',{}))
+        with self.assertRaises(Refused):native.complete(self.root,review['id'])
+        with self.assertRaisesRegex(Refused,'superseded'):
+            publication.task_evidence(self.root,state,state['tasks'][0],state['attempts'][-1],review['head'])
+        with self.assertRaisesRegex(Refused,'subject changed'):native.decision(self.root,'approve-repair',answer(stale))
+        newer=offer('Another supporting repair with separate approval.')
+        reused=answer(newer);reused['turn']=accepted['turn']
+        with self.assertRaisesRegex(Refused,'already used'):native.decision(self.root,'approve-repair',reused)
+        with self.assertRaisesRegex(Refused,'Finish the approved task'):native.admit(self.root,'review')
+        self.implement(edit=lambda:None);native.candidate(self.root);native.verify(self.root)
+        with self.assertRaisesRegex(Refused,'allowance is spent'):native.admit(self.root,'review')
+        self.assertEqual(sum(a['role']=='review' for a in load_run(self.root)[1]['attempts']),1)
+
     def test_scope_needs_native_approval_and_preserves_its_immutable_task_window(self):
         from . import native
         from .workflow import active_file
@@ -221,7 +261,13 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         with self.assertRaisesRegex(Refused,'starting contents changed'):
             native.approve_scope(self.root,prepared['scope_id'],self.human())
         self.assertEqual(unrelated.read_text(),'New work.')
-        prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:2]})
+        # An initiating human locator identifies the request, not scope approval.
+        # It must return the same bindable question as preparation without one.
+        prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:2]},
+                                      human=self.human('Fix the bounded fixture tasks.'))
+        self.assertFalse(prepared['approved'])
+        self.assertFalse(active_file(self.root).exists())
+        self.assertIn('approval',prepared)
         for text in ('Discuss the change.','stop','publish','Do not approve this scope.',
                      'Do not approve this scope; revise it.','Approve neither this scope nor publication.'):
             with self.subTest(text=text),self.assertRaises(Refused):
@@ -288,6 +334,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         packet_path=Path(admission['task_context']['path']);packet=json.loads(packet_path.read_text())
         self.assertLessEqual(len(packet_path.read_text()),load_run(self.root)[1]['config']['context']['handoff_chars'])
         details=json.loads((packet_path.parent/packet['details']['path']).read_text())
+        self.assertEqual(admission['admission_command'],details['native_commands']['admission'])
         self.assertEqual(details['task']['instructions'],instructions)
         self.assertEqual(details['task']['title'],title)
         self.assertEqual(details['scope_snapshot']['hash'],load_run(self.root)[1]['scope_id'])
@@ -312,11 +359,31 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         native.candidate(self.root)
         self.assertEqual(load_run(self.root)[1]['attempts'][-1]['native_child']['child_session'],'child-'+implement['id'])
 
+    def test_blocked_assessment_does_not_select_an_implementation_profile(self):
+        from . import native
+        self.approve()
+        before = load_run(self.root)[1]['granted']
+        for status in ('blocked', 'unfinished'):
+            result = self.finish_attempt('assessment', {'status': status, 'difficulty': 'complex',
+                'summary': 'Source inspection failed because the native hook could not run.'})
+            self.assertEqual(result['outcome'], status)
+            self.assertFalse(load_run(self.root)[1].get('assessments'))
+            with self.assertRaisesRegex(Refused, 'Retain one native assessment'):
+                native.admit(self.root, 'implementation')
+        # Infrastructure recovery keeps the original task authority and failed attempts.
+        self.assess()
+        state = load_run(self.root)[1]
+        self.assertEqual(state['granted'], before)
+        self.assertEqual([a['outcome'] for a in state['attempts']], ['blocked', 'unfinished', 'assessed'])
+        self.assertEqual(native.admit(self.root, 'implementation')['profile'],
+                         state['config']['models']['codex']['standard'])
+
     def test_blocked_resume_retains_parent_evidence_and_does_not_spend_review_allowance(self):
         from . import native
         self.approve();self.assess()
         measurement=Path(self.temp.name)/'measurement.txt';measurement.write_text('Required service denied access.\n',newline='\n')
-        native.attach_evidence(self.root,{'paths':[str(measurement)],'summary':'Observed required input failure.'})
+        source=self.root/'product.txt'
+        attached=native.attach_evidence(self.root,{'paths':[str(measurement),str(source)],'summary':'Observed required input failure.'})
         reason='Restore access to the service, then finish preview/save binding.'
         blocked=self.implement({'status':'blocked','summary':reason},lambda:(self.root/'partial.txt').write_text('keep this work',newline='\n'))
         initial=load_run(self.root)[1]
@@ -324,14 +391,33 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         with self.assertRaises(Refused):native.admit(self.root,'review')
         facts=native.resume(self.root)
         self.assertEqual(facts['reviews_used'],0);self.assertEqual(facts['granted'],initial['granted'])
+        source.write_text('Supporting repair before fresh admission.\n',newline='\n')
         resumed=native.admit(self.root,'implementation')
         packet=json.loads(Path(resumed['task_context']['path']).read_text())
         self.assertEqual(packet['current_work']['summary'],reason)
         self.assertEqual(packet['current_work']['outcome'],'blocked')
         self.assertEqual(packet['supplementary_evidence'][0]['files'][str(measurement.resolve())],
                          __import__('hashlib').sha256(measurement.read_bytes()).hexdigest())
+        self.assertEqual(packet['supplementary_evidence'][0]['file_status'],
+                         {str(measurement.resolve()):'unchanged',str(source.resolve()):'changed'})
         self.assertEqual((self.root/'partial.txt').read_text(),'keep this work')
         self.assertNotIn('recovery_grants',load_run(self.root)[1])
+        # Repairs after admission and expired diagnostic logs must not poison
+        # retention or the next review, including references saved by older OH.
+        source.write_text('Supporting repair completed.\n',newline='\n');measurement.unlink()
+        native.bind(self.root,resumed['id'],{'child_session':'child-'+resumed['id']})
+        self.native_results[resumed['id']]={'status':'completed','text':'Implemented the repair.'}
+        self.assertEqual(native.retain(self.root,resumed['id'],{})['outcome'],'reported')
+        self.assertEqual(load_run(self.root)[1]['supplementary'],[attached])
+        with self.assertRaises(Refused):native.admit(self.root,'review')  # Checks still required.
+        review=self.reviewed()
+        review_packet=json.loads((Path(review['evidence'])/'task-context.json').read_text())
+        self.assertEqual(review_packet['supplementary_evidence'][0]['file_status'],
+                         {str(measurement.resolve()):'unavailable',str(source.resolve()):'changed'})
+        self.assertEqual(review['outcome'],'clean')
+        native.complete(self.root,review['id'])
+        self.assertEqual(load_run(self.root)[1]['done'],['1'])
+        self.assertEqual(load_run(self.root)[1]['supplementary'],[attached])
 
     def test_review_requires_completed_work_and_passing_checks_for_the_final_candidate(self):
         from . import native
@@ -465,9 +551,11 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         # Exercise the same effect binding through actual saved Claude and Codex answers.
         # Host provenance is real here; only author/reviewer execution is synthetic.
         with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex')}):
-            for count,offered in ((2,default_offer),(1,offer)):
+            repair_offer=decision_request(self.root,'approve-repair',repair='Repair the additional shared fixture without changing assertions.')
+            for kind,field,expected,offered in (('approve-repair','repair','Repair the additional shared fixture without changing assertions.',repair_offer),
+                                               ('grant-review','rounds',2,default_offer),('grant-review','rounds',1,offer)):
                 for host in ('claude','codex'):
-                    call_at=now();answer_at=now();question=offered['question'];label=offered['options'][0]
+                    call_at=now();answer_at=now();question=offered['question'].replace('Work:','**Work:**').replace('Branch:','**Branch:**');label=offered['options'][0]
                     if host=='claude':
                         path=home/'.claude/projects/s.jsonl'
                         common={'sessionId':'s','cwd':str(self.root)}
@@ -484,12 +572,12 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
                     locator={'host':host,'session':'s','tool_use_id':'grant','transcript_path':str(path),'decision':offered['decision']}
                     source=self.native_human_original(self.root,locator)
                     self.assertNotIn('result.json',source['question'])
-                    self.assertEqual(verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source)['rounds'],count)
+                    self.assertEqual(verify_decision(self.root,load_run(self.root)[1],kind,locator,source)[field],expected)
                     for invalid in ('Not now','Do not allow another review.'):
-                        with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'prompt':invalid})
-                    with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],'grant-review',locator,source|{'question_at':'2000-01-01T00:00:00Z'})
-                    if host=='claude':
-                        hooked={'host':host,'session':'s','turn':'unsaved-hook-turn','transcript_path':str(path),'decision':offered['decision']}
+                        with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],kind,locator,source|{'prompt':invalid})
+                    with self.assertRaises(Refused):verify_decision(self.root,load_run(self.root)[1],kind,locator,source|{'question_at':'2000-01-01T00:00:00Z'})
+                    for path_hint in ({'transcript_path':str(path)},{}):
+                        hooked={'host':host,'session':'s','turn':'unsaved-hook-turn','decision':offered['decision'],**path_hint}
                         with patch('oh.authority.native_human',side_effect=self.native_human_original):
                             self.assertEqual(native._presented(self.root,hooked,load_run(self.root)[1])['tool_use_id'],'grant')
             # The hook's conversation locator plus the decision identity is enough: OH finds
@@ -636,9 +724,16 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(journal.records(),records)
         # The same checked fallback works when the host has no lifecycle hooks.
         author=native.admit(self.root,'implementation')
-        worker_checks.admission(Path(author['request']).parent)
+        validated=worker_checks.admission(Path(author['request']).parent)
+        packet_path=Path(author['task_context']['path'])
+        self.assertEqual(validated['task_context'],json.loads(packet_path.read_text()))
         self.assertTrue(load_run(self.root)[1]['attempts'][-1]['native_child'])
         self.assertEqual(len(load_run(self.root)[1]['attempts']),len(before['attempts'])+1)
+        import stat
+        packet_path.chmod(stat.S_IWRITE|stat.S_IREAD)
+        packet_path.write_text('{}',newline='\n')
+        with self.assertRaisesRegex(Refused,'task context changed'):
+            worker_checks.admission(Path(author['request']).parent)
 
     def test_completion_commits_exact_reviewed_tree_once_and_task_grants_do_not_expand(self):
         from . import native
@@ -663,6 +758,10 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(resumed['status'],'checkpoint')
         self.assertEqual(resumed['granted'],saved['granted'])
         self.assertEqual(resumed['continuation']['pending_decision'],'task_window')
+        next_action=completed['continuation']['next_action']
+        self.assertEqual(next_action['tool'],'decision_request')
+        self.assertEqual(next_action['arguments'],{'kind':'continue','run':saved['id']})
+        self.assertEqual(resumed['continuation']['next_action'],next_action)
         collect()
         with connect() as db:
             observations=analytics(db,{'from':'2000','to':'2100'})['summary']
@@ -742,6 +841,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         stop=self.human('Stop and take over',session='fresh-parent',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
         native.decision(self.root,'stop',stop);native.decision(self.root,'stop',stop)
         self.assertEqual(native.resume(self.root)['status'],'stopped')
+        self.assertNotIn('next_action',native.resume(self.root)['continuation'])
         self.assertIsNone(load_run(self.root)[1].get('publication'))
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
         with self.assertRaisesRegex(Refused,'checkpoint changed'):native.decision(self.root,'publish',publish)
@@ -754,10 +854,15 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(state['granted'],['2']);self.assertEqual(state['done'],['1'])
         self.assertEqual(native.resume(self.root)['task']['id'],'2')
         self.assess();self.implement(edit=lambda:(self.root/'second.txt').write_text('Task two is complete.',newline='\n'))
-        second=self.reviewed();native.complete(self.root,second['id'])
+        self.git('add','.');self.git('commit','-qm','checkpoint during second task')
+        checkpoint=self.git('rev-parse','HEAD')
+        second=self.reviewed();last=native.complete(self.root,second['id'])
+        self.assertEqual(last['continuation']['next_action']['arguments'],{'kind':'publish','run':saved['id']})
+        self.assertEqual(load_run(self.root)[1]['commit_intents']['2']['publication']['covers'],[checkpoint])
         final=decision_request(self.root,'publish')
         self.assertEqual(final['options'],['Open PR with completed tasks','Stop and take over'])
         self.git('remote','remove','origin')
+        self.assertEqual(native.resume(self.root)['continuation']['next_action'],last['continuation']['next_action'])
         final=decision_request(self.root,'publish')
         self.assertEqual(final['options'],['Stop and take over','Not now'])
         self.assertIn('PR unavailable',final['question'])
@@ -1015,7 +1120,9 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         provenance=Path(packet['original_scope_provenance']['path'])
         self.assertEqual(provenance,legacy.path/'000001.json')
         self.assertEqual(read_json(provenance),original[0])
-        with self.assertRaises(Refused):native.resume(self.root,self.resume_choice(session='other-session'))
+        from .authority import Saving
+        with patch('oh.authority.native_result',side_effect=Saving('Native result pending')),self.assertRaises(Refused):
+            native.resume(self.root,self.resume_choice(session='other-session'))
         self.assertEqual(load_run(self.root)[1]['attempts'][-1]['id'],live['id'])
 
     def test_publication_reuses_the_existing_pr_and_unknown_discovery_does_not_reopen_work(self):
@@ -1053,6 +1160,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
             'findings':[],'evidence':EVIDENCE})
         packet=json.loads((Path(review['evidence'])/'task-context.json').read_text())
         self.assertEqual(packet['included_original_work']['covers'],[manual])
+        self.assertEqual(packet['included_original_work']['url'],scope['pr_target']['url'])
         native.complete(self.root,review['id'])
         for text in ('approve','Do not publish. Keep the work local.','No, publish nothing.'):
             with self.assertRaises(Refused):native.decision(self.root,'publish',self.human(text))

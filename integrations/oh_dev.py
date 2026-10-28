@@ -31,6 +31,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(SOURCE / 'runtime'))
 from oh.storage import atomic_json, lock
 from oh import system
+Path = system.Path
+SOURCE = Path(SOURCE)
 from oh.config import version
 from oh.installation import build as package, inventory, verify_package
 
@@ -114,7 +116,7 @@ def host_program(host, environment):
 def call(host, *args):
     environment = command_environment()
     executable = host_program(host, environment)
-    done = subprocess.run([executable, *map(str, args)], cwd=home() if home().is_dir() else Path.home(), env=environment, capture_output=True,
+    done = subprocess.run([executable, *map(str, args)], cwd=str(home() if home().is_dir() else Path.home()), env=environment, capture_output=True,
                           text=True, encoding='utf-8', errors='replace', timeout=120)
     if done.returncode:
         raise RuntimeError(f'{host} {" ".join(map(str, args))}: {done.stderr.strip() or done.stdout.strip()}')
@@ -152,8 +154,8 @@ def marketplace(host):
                      for p in entries if p['name'] == MARKETPLACE), None)
 
 
-def codex_enable(plugin, enabled):
-    """Use Codex's config writer: preserve other settings, comments and concurrent edits."""
+def codex_request(method, params, *, timeout=30):
+    """Use the native app-server protocol; never starts a model or approves hooks."""
     environment = command_environment()
     executable = host_program('codex', environment)
     with system.spawn([executable, 'app-server'], cwd=home(), env=environment, stdin=subprocess.PIPE,
@@ -165,29 +167,63 @@ def codex_enable(plugin, enabled):
             replies.put(None)
         threading.Thread(target=receive, daemon=True).start()
         try:
+            initialize = {'clientInfo': {'name': 'oh-dev', 'version': '1'}}
+            if method == 'hooks/list':initialize['capabilities'] = {'experimentalApi': True}
             for message in (
-                {'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'oh-dev', 'version': '1'}}},
+                {'id': 1, 'method': 'initialize', 'params': initialize},
                 {'method': 'initialized'},
-                {'id': 2, 'method': 'config/value/write', 'params': {
-                    'keyPath': f'plugins.{json.dumps(plugin)}.enabled', 'value': enabled, 'mergeStrategy': 'replace'}},
+                {'id': 2, 'method': method, 'params': params},
             ):
                 process.stdin.write(json.dumps(message) + '\n')
             process.stdin.flush()
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + timeout
             while True:
                 line = replies.get(timeout=max(0, deadline - time.monotonic()))
-                if line is None:raise RuntimeError('Codex app-server exited before updating plugin settings. Run codex doctor, then retry.')
+                if line is None:raise RuntimeError(f'Codex app-server exited before {method} completed. Run codex doctor, then retry.')
                 with host_response('codex'):
                     reply = json.loads(line)
+                    if reply.get('id') == 1 and 'error' in reply:raise RuntimeError(reply['error']['message'])
                     if reply.get('id') != 2:continue
                     if 'error' in reply:raise RuntimeError(reply['error']['message'])
-                    if reply['result'].get('overriddenMetadata'):
-                        raise RuntimeError('A higher-priority Codex setting overrides OH enablement. Resolve it, then retry.')
-                    return
+                    if not isinstance(reply['result'], dict):raise ValueError('expected a native response object')
+                    return reply['result']
         except queue.Empty:
-            raise RuntimeError('Codex did not update plugin settings within 30 seconds. Run codex doctor, then retry.') from None
+            raise RuntimeError(f'Codex did not complete {method} within {timeout} seconds. Run codex doctor, then retry.') from None
         finally:
             system.stop(process, force=True)
+
+
+def codex_enable(plugin, enabled):
+    """Preserve other settings, comments and concurrent edits through Codex's writer."""
+    result = codex_request('config/value/write', {
+        'keyPath': f'plugins.{json.dumps(plugin)}.enabled', 'value': enabled, 'mergeStrategy': 'replace'})
+    if result.get('overriddenMetadata'):
+        raise RuntimeError('A higher-priority Codex setting overrides OH enablement. Resolve it, then retry.')
+
+
+def report_codex_hook_trust():
+    """Report current native definition trust separately from plugin installation."""
+    cwd = str(Path.cwd().resolve())
+    remedy = (f'In Terminal, open {cwd}, run codex, then enter /hooks. '
+              'Review the OH DEV definitions and trust them if approved; start fresh Codex sessions afterward.')
+    try:
+        with host_response('codex'):
+            result = codex_request('hooks/list', {'cwds': [cwd]}, timeout=10)
+            entries = [entry for entry in result['data'] if str(Path(entry['cwd']).resolve()) == cwd]
+            if len(entries) != 1:raise RuntimeError('Codex did not return the requested project hook inventory')
+            entry = entries[0]
+            if entry.get('errors'):raise RuntimeError('Codex reported hook discovery errors; inspect /hooks for details')
+            hooks = [hook for hook in entry['hooks'] if hook.get('pluginId') == PLUGIN]
+            if not hooks:raise RuntimeError('OH DEV hooks were not discovered in this project context')
+            pending = [hook for hook in hooks if not hook['enabled'] or hook['trustStatus'] not in ('trusted', 'managed')]
+            if pending:
+                states = ', '.join(f"{hook['eventName']} ({hook['trustStatus'] if hook['enabled'] else 'disabled'})" for hook in pending)
+                print(f'Codex OH hook trust needs attention: {states}. {remedy}')
+            else:
+                print('Codex OH hook definitions are enabled and trusted in a fresh CLI inventory.')
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(f'Codex OH hook trust could not be checked: {exc}. {remedy}')
+    print('This inspects a fresh CLI process; it does not verify callbacks in an already running desktop session.')
 
 
 def enable(host, plugin, value):
@@ -201,11 +237,11 @@ def host_home(host):
     return str(Path(os.environ.get(variable, Path.home() / fallback)).expanduser().resolve())
 
 
-def build(host, folder, source=SOURCE, snapshot_version=None):
+def build(host, folder, source=SOURCE, snapshot_version=None, *, shared_data=True):
     """Use the real packager, replacing entry points only in the generated development copy."""
     plugin = folder / 'plugins/o-harness'
     with development_data():package(plugin, host)
-    data = home() / 'data'
+    data = normal_data() if shared_data else home() / 'data'
     core = plugin / 'core'
     if snapshot_version:
         # Freeze the adapter and original hooks too: no entry point may import the live checkout.
@@ -226,11 +262,11 @@ def build(host, folder, source=SOURCE, snapshot_version=None):
     for name, kind in (('oh', 'cli'), ('mcp-server', 'mcp'), ('human-event.py', 'human-event')):
         selected = "Path(__file__).resolve().parents[1] / 'core'" if snapshot_version else f'Path({str(source)!r})'
         script = (preamble if name in ('oh', 'mcp-server') else '') + (
-            'import sys\nfrom pathlib import Path\n'
+            'import sys\nsys.dont_write_bytecode = True\nfrom pathlib import Path\n'
             f'source = {selected}\n'
             'sys.path.insert(0, str(source / "integrations"))\n'
             'from oh_dev import launch\n'
-            f'launch(source, Path({str(data)!r}), {kind!r}, Path(__file__))\n')
+            f'launch(source, Path({str(data)!r}), {kind!r}, Path(__file__), shared_data={shared_data!r})\n')
         (plugin / 'scripts' / name).write_text(script, encoding='utf-8', newline='\n')
     for kind in HOSTS:
         manifest = plugin / ('.' + kind + '-plugin/plugin.json')
@@ -252,7 +288,7 @@ def build(host, folder, source=SOURCE, snapshot_version=None):
     return plugin
 
 
-def create_snapshot():
+def create_snapshot(*, shared_data=True):
     """Package both hosts once; publish the selection record only after both packages are complete."""
     for retry in range(2):
         manifests = [read(SOURCE / f'plugins/o-harness/.{host}-plugin/plugin.json')['version'] for host in HOSTS]
@@ -263,11 +299,12 @@ def create_snapshot():
         folder = home() / 'builds' / label
         folder.mkdir(parents=True)
         try:
-            for host in HOSTS:build(host, folder / host, source=SOURCE, snapshot_version=label)
+            for host in HOSTS:build(host, folder / host, source=SOURCE, snapshot_version=label,shared_data=shared_data)
             if version() != revision or any(read(folder / host / 'plugins/o-harness/core/revision.json')['source_revision'] != revision for host in HOSTS):
                 if retry == 0:continue  # an editor saved during copying: rebuild from its completed changes
                 raise RuntimeError('The checkout kept changing during packaging. Finish saving, then retry oh-dev build.')
-            metadata = {'version': label, 'source': str(SOURCE), 'source_revision': revision}
+            metadata = {'version': label, 'source': str(SOURCE), 'source_revision': revision,
+                        'data':str(normal_data() if shared_data else home() / 'data')}
             write(folder / 'snapshot.json', metadata)
             return folder, metadata
         finally:
@@ -294,15 +331,17 @@ def read_snapshot(path):
 
 
 def selected_entry(host=None):
-    """Select the active development runtime; different host builds require an explicit host."""
-    state = read(home() / 'switch.json', {})
+    """Select one runtime and store; different host selections require an explicit host."""
+    location=home()
+    state = read(location / 'switch.json', {})
     for name, record in state.items():
         if (host is None or name == host) and record['phase'] not in ('on', 'off'):
             raise RuntimeError(f'An interrupted switch needs recovery. Run oh-dev off --host {name}, then retry.')
     selected = [(h, r) for h, r in state.items() if (host is None or h == host) and r['phase'] == 'on']
     if not selected:return None  # initial profile setup, before either host is enabled
-    if len({(r.get('mode', 'live'), r.get('build'), r['source']) for _, r in selected}) > 1:
-        raise RuntimeError('The hosts use different builds. Select oh-dev exec --host codex or --host claude.')
+    if len({(r.get('mode', 'live'), r.get('build'), r['source'],
+             Path(r.get('data',location/'data')).expanduser().resolve()) for _, r in selected}) > 1:
+        raise RuntimeError('The hosts use different builds or data stores. Select oh-dev exec --host codex or --host claude.')
     chosen, record = selected[0]
     if record['host_home'] != host_home(chosen):
         raise RuntimeError(f'{chosen} settings folder changed. Use {record["host_home"]} or turn development off there first.')
@@ -311,7 +350,7 @@ def selected_entry(host=None):
     return entry
 
 
-def launch(source, data, kind, entry):
+def launch(source, data, kind, entry, *, shared_data=None):
     """Development-only routing; execution and approval behavior remain owned by OH."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--root', type=Path)
@@ -319,9 +358,12 @@ def launch(source, data, kind, entry):
     selected, _ = parser.parse_known_args(sys.argv[1:] if kind == 'cli' else [])
     # Both releases use the same service name. Parse the command after global options/--.
     if kind == 'cli' and selected.command in ('setup', 'service-install', 'service-uninstall'):
-        raise SystemExit('Development is isolated. Select a build with oh-dev on; run the dashboard with oh-dev exec serve --port 4319.')
-    validate_storage(data.parent, data)
-    os.environ['OH_DEV_NORMAL_DATA_HOME'] = str(normal_data())
+        raise SystemExit('Development cannot install release services. Select a build with oh-dev on; run the dashboard with oh-dev exec serve --port 4319.')
+    # Generated entries freeze the storage mode as well as its path. Older live
+    # entries omit it and keep their original environment-based selection.
+    if shared_data is None:shared_data = data == normal_data()
+    if not shared_data:validate_storage(data.parent, data)
+    os.environ['OH_DEV_NORMAL_DATA_HOME'] = str(data if shared_data else normal_data())
     os.environ['OH_DATA_HOME'] = str(data)
     os.environ['OH_DASHBOARD_MODE'] = 'development'
     manifest = read(entry.parents[1] / '.codex-plugin/plugin.json', {})
@@ -372,12 +414,14 @@ def background_dashboard(entry, data, port, *, instance=None):
     logs = home() / 'logs';logs.mkdir(parents=True, exist_ok=True)
     with (logs / f'dashboard-{port}.log').open('ab') as output:
         return subprocess.Popen([sys.executable, '-I', str(entry), 'serve', '--port', str(port)],
-            cwd=home(), env=environment, stdin=subprocess.DEVNULL, stdout=output,
+            cwd=str(home()), env=environment, stdin=subprocess.DEVNULL, stdout=output,
             stderr=subprocess.STDOUT, close_fds=True, **options)
 
 
 def wait_dashboard(port, instance, child):
-    deadline = time.monotonic() + 5
+    # A healthy Windows launch can take several seconds under load. Keep polling
+    # the owned process instead of killing it before its first health response.
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         value = dashboard_health(port)
         if value and (instance is None or value.get('instance') == instance):return
@@ -452,7 +496,7 @@ def show_dashboard(state, preferred=(), action='on'):
     if not success:print(f'Open {url} in your browser.')
 
 
-def switch(action, hosts, *, build_path=None, live=False):
+def switch(action, hosts, *, build_path=None, live=False, shared_data=None):
     location = home()
     location.mkdir(parents=True, exist_ok=True)
     with lock(location / 'switch.lock'):
@@ -473,7 +517,11 @@ def switch(action, hosts, *, build_path=None, live=False):
                 raise RuntimeError(f'{host} has a different oh-dev marketplace at {registered}. Remove the conflicting oh-dev marketplace before switching.')
         selected = None
         if action == 'on' and not live:
-            selected = read_snapshot(build_path) if build_path else create_snapshot()
+            selected = read_snapshot(build_path) if build_path else create_snapshot(shared_data=shared_data is not False)
+            if build_path and shared_data is not None:
+                expected = normal_data() if shared_data else home() / 'data'
+                if Path(selected[1].get('data', str(home() / 'data'))) != expected:
+                    raise RuntimeError('This saved build uses a different data store. Omit --build to create a snapshot with the requested store.')
         failures = []
         for host in hosts:
             if action == 'off' and host not in state:
@@ -493,13 +541,14 @@ def switch(action, hosts, *, build_path=None, live=False):
                     if selected:
                         folder = selected[0] / host
                         record.update(mode='snapshot', build=str(selected[0]), version=selected[1]['version'],
-                                      source_revision=selected[1]['source_revision'], build_source=selected[1]['source'])
+                                      source_revision=selected[1]['source_revision'], build_source=selected[1]['source'],
+                                      data=selected[1].get('data',str(home() / 'data')))
                     else:
                         folder = location / 'builds' / host / str(time.time_ns())
-                        build(host, folder)
+                        build(host, folder,shared_data=shared_data is not False)
                         base_version = read(SOURCE / f'plugins/o-harness/.{host}-plugin/plugin.json')['version']
                         record.update(mode='live', build=None, version=base_version + '-SNAPSHOT.live.' + folder.name,
-                                      source_revision=version(), build_source=str(SOURCE))
+                                      source_revision=version(), build_source=str(SOURCE),data=str(normal_data() if shared_data is not False else home() / 'data'))
                     record['phase'] = 'switching'
                     state[host] = record
                     write(path, state)  # Recovery exists before the first host mutation.
@@ -550,6 +599,7 @@ def switch(action, hosts, *, build_path=None, live=False):
                 failures.append(f'{host}: {exc}\nRecover with oh-dev off --host {host}, then retry.')
         print('Start fresh sessions in the selected hosts. Existing sessions keep their loaded plugins.')
         if failures:raise RuntimeError('\n'.join(failures))
+        if action == 'on' and 'codex' in hosts:report_codex_hook_trust()
         show_dashboard(state, hosts, action)
 
 
@@ -563,6 +613,12 @@ def main(argv=None):
     mode.add_argument('--build', metavar='PATH', help='activate a snapshot previously made by oh-dev build')
     mode.add_argument('--live', action='store_true', help='read the changing checkout instead of a fixed snapshot')
     sub.add_parser('build', help='package both hosts without changing installed plugins')
+    for action in ('on', 'build'):
+        data = sub.choices[action].add_mutually_exclusive_group()
+        data.add_argument('--isolated-data', dest='shared_data', action='store_false', default=None,
+                          help='use separate development data instead of normal OH projects and history')
+        data.add_argument('--shared-data', dest='shared_data', action='store_true', default=None,
+                          help='use normal OH projects and history (default for new builds)')
     execute = sub.add_parser('exec', help='run an OH command with the selected development runtime')
     execute.add_argument('--host', choices=HOSTS, help='required when hosts use different builds')
     execute.add_argument('arguments', nargs=argparse.REMAINDER)
@@ -576,9 +632,9 @@ def main(argv=None):
             if entry := selected_entry(args.host):
                 raise SystemExit(subprocess.run([sys.executable, '-I', str(entry), *arguments]).returncode)
             sys.argv = [str(SOURCE / 'oh'), *arguments]
-            launch(SOURCE, home() / 'data', 'cli', SOURCE / 'oh')
+            launch(SOURCE, normal_data(), 'cli', SOURCE / 'oh')
         elif args.action == 'build':
-            folder, metadata = create_snapshot()
+            folder, metadata = create_snapshot(shared_data=args.shared_data is not False)
             print(f'Built {metadata["version"]}\n{folder}\nActivate: oh-dev on --build "{folder}"')
         elif args.action == 'dashboard':
             with lock(home() / 'switch.lock'):
@@ -599,10 +655,13 @@ def main(argv=None):
                                   'version': record.get('version') if record else None,
                                   'source_revision': record.get('source_revision') if record else None,
                                   'build': record.get('build') if record else None,
+                                  'data': record.get('data',str(home() / 'data')) if record else None,
                                   'plugins': actual, 'marketplace': marketplace(host)}))
-            print(f'Development data: {home() / "data"}')
+                if host == 'codex' and record and record['phase'] == 'on':report_codex_hook_trust()
+            print(f'Default shared data: {normal_data()}')
+            print(f'Optional isolated data (--isolated-data): {home() / "data"}')
         else:switch(args.action, (args.host,) if args.host else HOSTS,
-                    build_path=getattr(args, 'build', None), live=getattr(args, 'live', False))
+                    build_path=getattr(args, 'build', None), live=getattr(args, 'live', False), shared_data=getattr(args,'shared_data',None))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         parser.exit(1, f'oh-dev: {exc}\n')
 

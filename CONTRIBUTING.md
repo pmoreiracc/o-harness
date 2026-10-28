@@ -32,6 +32,18 @@ bash integrations/test.sh syntax   # Python, JavaScript and shell syntax
 5. Open a PR against `main` that explains the problem, the new behavior, how you checked it
    and any limits. Keep docs in sync with what the code actually does.
 
+Runtime filesystem paths use `oh.system.Path`: it preserves ordinary path strings in
+saved records and adds Windows' extended-path prefix only for filesystem calls. Use
+`str(path)` for saved identities and external process working directories; use
+`os.fspath(path)` for a filesystem API that requires a string.
+Use `system.file_uri` for SQLite file URIs so long paths and filename punctuation survive.
+Use `storage.state_mkdir` for state subdirectories: Windows children inherit the data
+root's existing host access, while Unix keeps private modes. `state_path` repairs only
+the old Python-private directory ACL on accessed paths below that root; custom ACLs,
+unrelated directories and the root policy are preserved. Do not reset permissions recursively.
+Use `system.temporary_directory` (or `make_temp_directory` for separately managed cleanup)
+for OH scratch directories so sandboxed Windows commands retain their parent's access too.
+
 Maintainers run an independent review of every PR before merging. Only maintainers merge.
 Maintainers decide when to publish releases. For local testing, see
 [local builds](docs/installation.md#local-build).
@@ -60,8 +72,10 @@ $ohDevScript = 'C:\absolute\path\to\o-harness\integrations\oh_dev.py'
 function oh-dev { & $ohDevPython -I $ohDevScript @args }
 ```
 
-Reload your profile or open a new terminal. Python 3.12+ and both host CLIs must be installed.
-Once, from that OH checkout, register its checks in the separate development data:
+Reload your profile (`. $PROFILE` in PowerShell) or open a new terminal. Windows PowerShell
+and PowerShell 7 have separate profiles; add the same function to each one you use.
+Python 3.12+ and both host CLIs must be installed.
+Once, from that OH checkout, register its checks in normal OH data if it is not already registered:
 
 ```sh
 oh-dev exec profile-import integrations/oh-profile.json
@@ -117,8 +131,29 @@ Start fresh host sessions after switching or refreshing. Finish active OH runs b
 selecting a different build; `off` restores plugin enablement but does not stop a run.
 Project-level plugin overrides take precedence; remove an OH override before testing there.
 
-State lives in `~/.local/share/oh-dev`, separate from normal OH data. No consumer files or
-OS services are installed. `oh-dev exec` uses the selected development runtime and data:
+Codex trusts each hook's current definition separately from enabling the plugin. A change
+to a hook timeout also requires new trust. `oh-dev on` and `oh-dev status --host codex`
+report OH DEV hook trust from a fresh CLI process. If review is needed, open Terminal in
+the project, run `codex`, enter `/hooks`, and review and trust the current OH DEV hooks.
+Then start fresh Codex sessions. This inventory does not prove that an existing desktop
+session loaded or executed the hooks. An unavailable inventory is reported as unknown;
+OH never writes hook trust on the person's behalf.
+
+Builds and switching state live in `~/.local/share/oh-dev`. No consumer files or
+OS services are installed. `oh-dev exec` uses the selected development runtime and data.
+
+`oh-dev on` and `oh-dev build` use **shared storage by default**: your normal OH projects,
+settings and history through every entry point, including
+MCP, native hooks and worker commands. This is real work: its history is updated in place.
+The installed release engine is not replaced. For disposable tests, use
+`oh-dev on --isolated-data` (or `oh-dev build --isolated-data`), which selects
+`~/.local/share/oh-dev/data`. The flag also works with `on --live` and `--host`.
+Each new build defaults to shared storage; isolation is not a persistent preference.
+`--shared-data` remains accepted for compatibility.
+The data location is frozen into each build; `on --build` reuses that choice, including
+older isolated builds. A conflicting explicit storage flag is rejected; omit `--build`
+to build with the requested store. `oh-dev status` reports the selected location.
+Do not mix release helpers with DEV in the same session.
 
 ```sh
 oh-dev exec status
@@ -126,9 +161,10 @@ oh-dev dashboard --host codex   # reopen/retry without rebuilding
 oh-dev exec serve             # foreground fallback; defaults to 4319
 ```
 
-If the hosts use different builds, select `oh-dev exec --host codex <command>` or
+If the hosts use different builds or data stores, select `oh-dev exec --host codex <command>` or
 `oh-dev exec --host claude <command>`. Before development is enabled, `exec` uses the source
-checkout so the one-time profile import still works.
+checkout with shared storage so the one-time profile import still works. To import a
+profile for an isolated test, first run `oh-dev on --isolated-data`, then `oh-dev exec profile-import ...`.
 
 Development launchers refuse `setup` and service installation/removal. If switching fails,
 run `oh-dev off --host <reported-host>`, fix the reported cause, and retry.

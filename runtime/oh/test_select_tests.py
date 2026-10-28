@@ -2,7 +2,7 @@ import importlib.util
 import unittest
 from .config import HOME
 
-spec = importlib.util.spec_from_file_location('select_tests', HOME / 'integrations/select_tests.py')
+spec = importlib.util.spec_from_file_location('select_tests', str(HOME / 'integrations/select_tests.py'))
 selector = importlib.util.module_from_spec(spec);spec.loader.exec_module(selector)
 
 
@@ -76,7 +76,7 @@ class SelectTestsTest(unittest.TestCase):
     def test_full_parallel_discovery_keeps_every_test_and_fails_closed(self):
         import contextlib, io, sys
         from unittest.mock import patch
-        spec = importlib.util.spec_from_file_location('full_tests', HOME / 'integrations/full_tests.py')
+        spec = importlib.util.spec_from_file_location('full_tests', str(HOME / 'integrations/full_tests.py'))
         full = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, select_tests=selector):spec.loader.exec_module(full)
         loader = unittest.TestLoader()

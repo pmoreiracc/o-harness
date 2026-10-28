@@ -15,10 +15,139 @@ class AuthorityTest(unittest.TestCase):
         # Evidence-delay tests advance the saved transcript, not the wall clock.
         delay=patch('oh.authority.sleep');delay.start();self.addCleanup(delay.stop)
 
+    def test_codex_chat_reply_uses_the_completed_native_question_display(self):
+        from copy import deepcopy
+        from .authority import native_human,presented_question_at
+        with tempfile.TemporaryDirectory() as name,patch('pathlib.Path.home',return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            path=home/'.codex/sessions/session.jsonl';path.parent.mkdir(parents=True)
+            question='Approve the shown scope.md?'
+            shown={'timestamp':'2026-10-23T18:30:01Z','type':'event_msg','payload':{
+                'type':'item_completed','thread_id':'session','turn_id':'turn',
+                'item':{'type':'AgentMessage','id':'question','content':[{'type':'Text','text':question}],
+                        'phase':'final_answer','delivery':'async'}}}
+            rows=[{'type':'session_meta','payload':{'id':'session','cwd':str(root),'source':'cli'}},
+                  {'timestamp':'2026-10-23T18:30:00Z','type':'response_item','payload':{
+                      'type':'message','role':'assistant','content':[{'type':'output_text','text':'Preparing the scope.'}]}},
+                  shown,{'timestamp':'2026-10-23T18:30:02Z','type':'event_msg','payload':{
+                      'type':'user_message','turn_id':'turn','message':'Approve this scope'}}]
+            locator={'host':'codex','session':'session','transcript_path':str(path)}
+            def read(records,subject='scope.md'):
+                path.write_text(''.join(json.dumps(r)+'\n' for r in records),newline='\n')
+                return native_human(root,locator,subject=subject)
+            answer=read(rows)
+            self.assertEqual((answer['prompt'],answer['question']),('Approve this scope',question))
+            self.assertEqual(answer['question_at'],shown['timestamp'])
+            # Native UI can put compact choices after the complete scope display.
+            # Bind the original full display, not only the last assistant message.
+            compact=deepcopy(shown);compact['timestamp']='2026-10-23T18:30:01.500Z'
+            compact['payload']['item']['id']='choices'
+            compact['payload']['item']['content'][0]['text']='Choose:\n- Approve this scope\n- Keep planning'
+            split=read([*rows[:-1],compact,rows[-1]])
+            self.assertEqual(presented_question_at(split,question),shown['timestamp'])
+            from .decisions import verify_scope
+            from .storage import digest
+            scope={'tasks':['bounded']}
+            prepared={'kind':'approve-scope','scope':digest(scope),'question':question,
+                      'created_at':'2026-10-23T18:30:00.500Z'}
+            (home/'decisions').mkdir()
+            def verify(display):
+                key=digest(prepared)
+                (home/'decisions'/(key+'.json')).write_text(json.dumps(prepared))
+                with patch('oh.native._home',return_value=home):
+                    verify_scope(root,scope,{'decision':key},display)
+            verify(split)
+            prepared['created_at']='2026-10-23T18:30:01.250Z'
+            with self.assertRaisesRegex(Refused,'predates'):verify(split)
+            # Intervening human input clears that display even within the same turn.
+            intervening=deepcopy(rows[-1]);intervening['timestamp']='2026-10-23T18:30:01.250Z'
+            intervening['payload']['message']='Change the requested scope first'
+            changed=[*rows[:-1],intervening,compact,rows[-1]]
+            with self.assertRaises(Refused):read(changed)
+            cleared=read(changed,subject=None)
+            self.assertIsNone(presented_question_at(cleared,question))
+            with self.assertRaises(Refused):verify(cleared)
+            # Claude ordinary-chat replies have the same split-display contract.
+            claude=home/'.claude/projects/p/session.jsonl';claude.parent.mkdir(parents=True)
+            common={'sessionId':'session','cwd':str(root),'entrypoint':'cli'}
+            displays=[common|{'type':'assistant','timestamp':part['timestamp'],
+                      'message':{'content':[{'type':'text','text':part['payload']['item']['content'][0]['text']}]}}
+                      for part in (shown,compact)]
+            reply=common|{'type':'user','promptId':'reply','timestamp':rows[-1]['timestamp'],
+                          'message':{'role':'user','content':'Approve this scope'}}
+            for intervened in (False,True):
+                content=[displays[0]]
+                if intervened:content.append(reply|{'promptId':'changed','timestamp':intervening['timestamp'],
+                                                   'message':{'role':'user','content':'Change the requested scope first'}})
+                content += [displays[1],reply]
+                claude.write_text(''.join(json.dumps(r)+'\n' for r in content),newline='\n')
+                found=native_human(root,{'host':'claude','session':'session','transcript_path':str(claude)})
+                self.assertEqual(presented_question_at(found,question),None if intervened else shown['timestamp'])
+            # Only the actual preceding display in this conversation supplies context.
+            for kind in ('other conversation','tool output','not completed','after reply','no human reply'):
+                with self.subTest(kind=kind):
+                    altered=deepcopy(rows)
+                    if kind=='other conversation':altered[2]['payload']['thread_id']='foreign'
+                    elif kind=='tool output':altered[2]['payload']['item']['type']='McpToolCall'
+                    elif kind=='not completed':altered[2]['payload']['type']='item_started'
+                    elif kind=='after reply':altered[2]['timestamp']='2026-10-23T18:30:03Z'
+                    else:altered.pop()
+                    with self.assertRaises(Refused):read(altered)
+
+    def test_codex_repeated_chat_answers_keep_their_message_identity_and_legacy_replay(self):
+        from .authority import native_human
+        from .native import _human_key
+        from .cancellation import owner_key
+        from .storage import Journal, atomic_json, identifier
+        with tempfile.TemporaryDirectory() as name,patch('pathlib.Path.home',return_value=Path(name)), \
+                patch.dict(os.environ,{'OH_DATA_HOME':str(Path(name)/'data')}):
+            root=Path(name)/'project';root.mkdir()
+            path=Path(name)/'.codex/sessions/session.jsonl';path.parent.mkdir(parents=True)
+            rows=[{'type':'session_meta','payload':{'id':'session','cwd':str(root),'source':'cli'}}]
+            def append(kind,text,at,message_id):
+                rows.append({'timestamp':at,'type':'event_msg','payload':{'type':'item_completed',
+                    'thread_id':'session','turn_id':'same-turn','item':{'type':kind,'id':message_id,
+                    'content':[{'type':'Text' if kind=='AgentMessage' else 'text','text':text}]}}})
+                path.write_text(''.join(json.dumps(r)+'\n' for r in rows),newline='\n')
+            locator={'host':'codex','session':'session','transcript_path':str(path)}
+            append('AgentMessage','First scope.md question','2026-10-23T18:30:01Z','q1')
+            append('UserMessage','Continue','2026-10-23T18:30:02Z','first')
+            first=native_human(root,locator)
+            append('AgentMessage','Second scope.md question','2026-10-23T18:30:03Z','q2')
+            append('UserMessage','Continue','2026-10-23T18:30:04Z','second')
+            # The legacy event form can coexist with the completed native item.
+            rows.append({'timestamp':'2026-10-23T18:30:04Z','type':'event_msg','payload':{
+                'type':'user_message','turn_id':'same-turn','message':'Continue'}})
+            path.write_text(''.join(json.dumps(r)+'\n' for r in rows),newline='\n')
+            second=native_human(root,locator)
+            self.assertEqual((second['message_id'],second['question'],second['at']),
+                             ('second','Second scope.md question','2026-10-23T18:30:04Z'))
+            old=locator|{'turn':'same-turn','message_id':'first'}
+            self.assertEqual(native_human(root,old,latest=False),first)
+            with self.assertRaises(Expired):native_human(root,old)
+            with self.assertRaises(Refused):native_human(root,locator|{'message_id':'invented'})
+            self.assertNotEqual(_human_key(first),_human_key(second))
+            self.assertNotEqual(owner_key({'id':'run','human':first}),owner_key({'id':'run','human':second}))
+            journal=Journal(identifier(),identifier())
+            legacy={k:v for k,v in first.items() if k!='message_id'}
+            key=_human_key(legacy)
+            journal.append('run.started',{'human':legacy})
+            state={'project':journal.path.parents[1].name,'id':journal.path.name,'source':key,'decisions':[key]}
+            self.assertEqual(_human_key(first,state),key)
+            self.assertEqual(_human_key(second,state),_human_key(second))
+            # Old decision receipts, as well as initial scope, remain consumed.
+            state['source']='another-source'
+            atomic_json(journal.path/'decisions'/(key+'.json'),{'human':legacy})
+            self.assertEqual(_human_key(first,state),key)
+            self.assertEqual(_human_key(second,state),_human_key(second))
+            # Incomplete old evidence cannot mint a second grant on upgrade.
+            atomic_json(journal.path/'decisions'/(key+'.json'),{'human':{}})
+            self.assertEqual(_human_key(first,state),key)
+
     def test_native_plan_retains_the_actual_human_accepted_scope(self):
         """The native plan viewer supplies approval once, without an OH menu identifier."""
         from copy import deepcopy
-        from .authority import native_human
+        from .authority import native_human, scope_human
         with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home', return_value=Path(name)):
             home=Path(name);root=home/'project';root.mkdir()
             path=home/'.claude/projects/session.jsonl';path.parent.mkdir(parents=True)
@@ -30,9 +159,17 @@ class AuthorityTest(unittest.TestCase):
             records=[base|{'type':'assistant','message':{'content':[call]}},
                      base|{'type':'user','toolUseResult':{'plan':plan,'filePath':'native.md','isAgent':False},'message':{'content':[reply]}}]
             locator={'host':'claude','session':'s','tool_use_id':'plan','transcript_path':str(path)}
+            conversation={k:v for k,v in locator.items() if k!='tool_use_id'}
+            conversation['turn']='hook-turn-not-a-plan-call'
+            def recover(value=conversation, latest=True):
+                return scope_human(root,value,since=since,subject='scope.md',latest=latest)
             def read(rows):
                 path.write_text(''.join(json.dumps(r)+'\n' for r in rows),newline='\n')
-                return native_human(root,locator,since=since)
+                found=native_human(root,locator,since=since)
+                recovered,resolved=recover()
+                self.assertEqual(recovered,found)
+                self.assertEqual(resolved['tool_use_id'],'plan')
+                return found
             found=read(records)
             self.assertEqual((found['prompt'],found['via'],found['accepted_plan']),('approve','plan',plan))
             self.assertEqual(found['accepted_plan_path'],'native.md')
@@ -40,7 +177,9 @@ class AuthorityTest(unittest.TestCase):
             cancelled=base|{'type':'user','entrypoint':'cli','promptId':'cancel','timestamp':'2026-10-13T20:00:03+00:00',
                 'message':{'role':'user','content':'No. Cancel that scope; do not implement it.'}}
             with self.assertRaises(Refused):read(records+[cancelled])
+            with self.assertRaises(Refused):recover()
             self.assertEqual(native_human(root,locator,since=since,latest=False),found)
+            self.assertEqual(recover(latest=False)[0],found)
             with self.assertRaises(Refused):read([records[0],cancelled,records[1]])
             edited=deepcopy(records);edited[1]['toolUseResult']['plan']+='The person amended this scope.\n'
             self.assertEqual(read(edited)['accepted_plan'],edited[1]['toolUseResult']['plan'])
@@ -65,6 +204,21 @@ class AuthorityTest(unittest.TestCase):
                     elif label=='sidechain':response['isSidechain']=True
                     elif label=='meta':response['isMeta']=True
                     with self.assertRaises(Refused):read(rows)
+                    with self.assertRaises(Refused):recover()
+            read(records)
+            with self.assertRaises(Refused):recover(conversation|{'tool_use_id':'wrong'})
+            # A later unresolved/denied plan must not recover an older acceptance.
+            later=deepcopy(records[0]);later['message']['content'][0]['id']='later'
+            later['timestamp']='2026-10-13T20:00:02+00:00'
+            path.write_text(''.join(json.dumps(r)+'\n' for r in records+[later]),newline='\n')
+            with self.assertRaises(Refused):recover()
+            denied=deepcopy(records[1]);denied['message']['content'][0].update(tool_use_id='later',is_error=True)
+            with path.open('a') as stream:stream.write(json.dumps(denied)+'\n')
+            with self.assertRaises(Refused):recover()
+            # Existing valid typed approval remains the selected source.
+            with patch('oh.authority.native_human',return_value={'via':'typed'}) as typed:
+                self.assertEqual(recover(),({'via':'typed'},conversation))
+                self.assertEqual(typed.call_count,1)
 
 
     def test_natural_language_and_slash_review_have_the_same_native_provenance(self):
@@ -178,6 +332,12 @@ class AuthorityTest(unittest.TestCase):
                 result=native_result(root,state,attempt|{'native_child':bound},locator)
                 if host=='codex':
                     self.assertEqual((result['text'],result['status']),('Complete public report.','completed'))
+                    timed=final|{'timestamp':'2026-10-15T12:00:03Z'}
+                    save(ch=children+[timed])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['completed_at'],timed['timestamp'])
+                    save(ch=children+[timed,{'type':'event_msg','timestamp':'2026-10-15T12:00:04Z',
+                        'payload':{'type':'item_started','thread_id':'child','item':{'type':'FileChange','id':'later-edit'}}}])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                     for empty in ('',None):
                         save(ch=children+[final|{'payload':final['payload']|{'last_agent_message':empty}}])
                         self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
@@ -753,6 +913,12 @@ class AuthorityTest(unittest.TestCase):
                 with patch('oh.authority.sleep') as pause,self.assertRaises(Refused):
                     attest(host,payload|{'prompt':'A different request'},root)
                 pause.assert_not_called()  # a fully saved mismatch is not a timing failure
+                if host=='claude':
+                    from .authority import coordinator
+                    child=path.parent/'subagents'/'session.jsonl'
+                    child.parent.mkdir();child.write_text('',newline='\n')
+                    with self.assertRaisesRegex(Refused,'delegated child'):
+                        coordinator(root,{'host':host,'human':{'session':'session','transcript_path':str(child)}})
                 if host=='codex':
                     for turn in ('','current'):
                         with patch.dict(os.environ,{'CODEX_THREAD_ID':'another-session','OH_CODEX_TURN_ID':turn}),self.assertRaisesRegex(Refused,'another conversation'):
