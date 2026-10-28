@@ -1,5 +1,5 @@
 """Git branch selection and history; OH writes no marker into a checkout."""
-from pathlib import Path
+from .system import Path
 from .storage import Refused,git, git_env
 
 
@@ -191,7 +191,7 @@ def merged_pulls(root,name):
     import shutil,subprocess
     if not shutil.which('gh'):return []
     try:found=subprocess.run(['gh','pr','list','--head',name,'--state','merged','--json','number','--jq','.[].number'],
-                             cwd=root,capture_output=True,text=True,timeout=30)
+                             cwd=str(root),capture_output=True,text=True,timeout=30)
     except (OSError,subprocess.SubprocessError):return []
     return [number for number in found.stdout.split() if number.isdigit()] if found.returncode==0 else []
 

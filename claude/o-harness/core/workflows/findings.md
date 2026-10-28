@@ -23,6 +23,12 @@ relationship instead of duplicating it. Adding executable tasks or expanding req
 goes through Design/Propose and the appropriate approval; it cannot alter the admitted
 task list, grant more tasks, or silently reopen a frozen design.
 
+For a supporting repair needed to finish the current unfinished delivery task, use
+the deliver skill's `approve-repair` decision only if existing authority does not cover
+it. This supplements that task without adding tasks or changing its product outcome.
+Retain the original finding and its classification; subsequent approval and fresh
+review establish what was authorized and addressed.
+
 During scoped blocker repair, the default tracking helper can append notes to the
 mutable delivery design before the next candidate/check/review. An already successful
 exact-candidate review is preserved: the default retains the follow-up externally

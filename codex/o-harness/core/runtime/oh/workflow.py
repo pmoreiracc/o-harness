@@ -1,5 +1,5 @@
 """Durable workflow facts and historical journal reader. Skills own execution."""
-from pathlib import Path
+from .system import Path
 from contextlib import contextmanager
 from .storage import Journal, Refused, checkout_file, checkout_id, digest, git, project, read_json, lock
 NO_RUN = 'No saved OH work in this checkout. Select a design or prepare bounded scope.'
@@ -83,6 +83,12 @@ def reduce(records):
             selected=next(t for t in state['tasks'] if t['id']==d['task'])
             selected.update(difficulty=d['difficulty'],difficulty_reason=d['rationale'])
         elif kind=='task.completed':state['done'].append(d['task']);state['summaries'].append(d)
+        elif kind=='task.repair-approved':
+            state.setdefault('approved_repairs',{}).setdefault(d['task'],[]).append(d)
+            state.get('verification',{}).pop(d['task'],None)
+            state.pop('candidate',None)
+            for attempt in state['attempts']:
+                if attempt['task']==d['task'] and attempt['role']!='assessment':attempt['superseded']=True
         elif kind=='publication.completed':
             grant=state.get('publication') or {}
             if state['status']!='pr' or d['run']!=state['id'] or (d['grant'],d['approved_head'])!=(grant.get('source'),grant.get('head')):
@@ -143,7 +149,9 @@ def reduce(records):
             for key in ('verification','candidate','extra_review','correction','rendered','delivery_render','private_native_approval','publication'):
                 state.pop(key,None)
             state['commit_intents']={key:intent for key,intent in state['commit_intents'].items() if intent['task'] in state['done']}
-            if d['restart']:state.pop('assessments',None)
+            if d['restart']:
+                state.pop('assessments',None)
+                state['approved_repairs']={task:repairs for task,repairs in state.get('approved_repairs',{}).items() if task in state['done']}
             for attempt in state['attempts']:
                 if attempt['task'] not in state['done']:attempt['superseded']=True
         elif kind=='delivery.continued':
@@ -199,7 +207,9 @@ def reduce(records):
             matches[0].update(outcome='verification_failed',summary=d['summary'],failed_at=record['at'])
         elif kind=='decision':
             state['decisions'].append(d['source'])
-            if d.get('recovery'):state.pop('recovery_intent',None)
+            if d.get('recovery'):
+                state.pop('recovery_intent',None)
+                state['recovery_decision']=d['recovery']
             if d['choice']=='pr':state['publication']=d
             if d['choice']=='handoff pr':state['review_handoff']=d
     return state

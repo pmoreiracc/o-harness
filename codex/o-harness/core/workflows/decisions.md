@@ -13,14 +13,18 @@ When combining this with a routine action such as creating an issue, `--also TEX
 includes that instruction in the same presented choice. The runtime grants only the
 bound consequential effect; the host carries out the accompanying authorized action.
 It binds the current subject and effect without granting anything. Present its returned
-question and positive choice through the native host, unchanged except for the
-completed-task checkpoint presentation described below; keep the returned
+question and positive choice through the native host, preserving its words and effect;
+Markdown emphasis, inline code and whitespace may change. Apart from those display changes,
+keep it unchanged except for the completed-task checkpoint presentation described below; keep the returned
 refine/cancel alternatives where relevant, or offer other non-granting alternatives; explanations and full previews
 belong in the surrounding conversation. Include its `decision` identity in the actual
 human locator when calling `decision` (or `resume`); OH locates the native question that
 showed it, so the conversation locator is enough. A direct Yes about this same shown
 question also works when a menu is unavailable. Preserve the prepared identity and actual
 answer across recoverable failures; do not regenerate the question after it was answered.
+The full plain-chat question and its compact choices may be separate assistant messages
+before the reply. OH checks that displayed context together; a following menu does not
+erase the question or require a second answer.
 If the person changes the requested scope/count, prepare that actual effect and ask only
 for the changed boundary. Do not infer grants from a model's paraphrase of free text.
 
@@ -50,7 +54,7 @@ returns one question with an `actions` map and all available choices:
 
 Show the completed work, next authorized task IDs, branch and publication destination
 in the surrounding conversation. Present every returned option unchanged in one native
-single-select question. The question's introductory prose may be concise: this checkpoint
+single-select question. When using a native single-select tool, its question's introductory prose may be concise: this checkpoint
 binds the complete native menu and selected action to the prepared saved-work boundary,
 not the wording of that introduction. This follows the golden reference's Claude task
 checkpoint without its post-answer grant hook. Both hosts use the same existing OH
@@ -58,6 +62,10 @@ decision validator; no new menu or presentation guard is involved. Do not reduce
 only in explanatory prose. If publication is unavailable, report the helper's actual
 prerequisite while retaining Continue/Stop as applicable. All-tasks-complete checkpoints
 omit Continue; private planning completion needs no PR checkpoint.
+For a plain-chat checkpoint, copy the returned `question` unchanged and show all
+returned options. The permission to shorten the introduction applies only to the
+native single-select tool, whose saved record carries the complete menu. A prose
+list of choices alone does not carry that evidence.
 
 After the native answer, use its label in the returned `actions` map to select the
 existing `decision` kind (`continue`, `publish` or `stop`). Bind the same decision ID
@@ -114,7 +122,11 @@ Preserve an existing valid answer; do not require exact wording, poll an OH menu
 synthesize an approval in an agent message.
 
 Consequential kinds are `continue`, `grant-review`, `accept-concerns`, `publish`, `pause`,
-`stop`, `resume`, `approve-proposal` and `approve-private`. Scope preparation returns its
+`stop`, `resume`, `approve-repair`, `approve-proposal` and `approve-private`. Use
+`approve-repair` with a bounded `--repair` description only when additional authority
+is needed for a supporting repair in the unfinished delivery task. Approval continues
+that task; Not now leaves it pending. Follow the deliver skill for the complete path.
+Scope preparation returns its
 own `approval` question for native quick-fix acceptance. Claude plan-viewer acceptance
 continues to bind the actual full plan directly, without an extra decision request.
 Native Pause/Stop commands remain immediately usable. Older already-presented canonical
@@ -129,9 +141,13 @@ An instruction to create an issue and allow another review needs only the review
 recorded as a grant; recording the authorized issue URL does not consume the human answer
 or require a second confirmation. The person controls publication, scope and allowances.
 
-Claude quick fixes use the native plan viewer's single Accept. Put the complete bounded
-scope preview in the plan file designated by `EnterPlanMode`, then call `ExitPlanMode` without an
-extra `AskUserQuestion`. Bind that actual acceptance with `scope approve`. This display
+Claude quick fixes use the native plan viewer's single Accept. Copy the returned scope
+preview unchanged into the plan file designated by `EnterPlanMode`; do not rewrite its
+heading, instructions or limits, or append workflow commentary. Explain execution in chat.
+Then call `ExitPlanMode` without an
+extra `AskUserQuestion`. Bind that actual acceptance with `scope approve` using the same
+conversation locator; OH resolves the saved plan acceptance. If supplying `tool_use_id`,
+use the `ExitPlanMode` call ID, not a human turn or result UUID. This display
 copy is not a consumer design. An edited preview needs refreshed scope and approval;
 rejection or interruption grants nothing. If native plan tools are unavailable, show
 the preview and obtain a direct human approval in chat. Codex uses a native question

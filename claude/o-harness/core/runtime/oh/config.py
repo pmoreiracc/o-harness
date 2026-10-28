@@ -5,7 +5,7 @@ import json
 import math
 import os
 import re
-from pathlib import Path
+from .system import Path
 from .storage import Refused, digest, git, read_json
 
 HOME = Path(__file__).resolve().parents[2]
@@ -196,9 +196,9 @@ def project_id(root):
 
 def registrations():
     """{project id: [checkout identities]} for current registrations; replaced or moved-away ones are left out."""
-    from .storage import state_home
+    from .storage import state_home, state_path
     result = {}
-    for path in (state_home() / 'registry/checkouts').glob('*.json'):
+    for path in state_path(state_home() / 'registry/checkouts',directory=True).glob('*.json'):
         try:value = read_json(path)
         except (OSError, ValueError, Refused):continue
         if isinstance(value, dict) and value.get('checkout') and isinstance(value.get('project'), str) \
@@ -586,7 +586,7 @@ def upgrade(*, creating=False):
                 target = folder / path.relative_to(state_home())
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.chmod(path, 0o600)  # retired files were read-only; Windows can't move them otherwise
-                shutil.move(str(path), target)
+                shutil.move(path, target)
         record.unlink(missing_ok=True)
         refresh_schema()
     return stuck

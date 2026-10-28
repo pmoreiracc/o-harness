@@ -1,6 +1,6 @@
 """Focused evidence/admissibility helpers. Native skills, never this module, run agents."""
 from contextlib import ExitStack, contextmanager, nullcontext
-from pathlib import Path
+from .system import Path
 import hashlib
 import json
 import os
@@ -25,6 +25,25 @@ def _immutable(path,value):
     try:atomic_json(path,value,immutable=True)
     except FileExistsError:
         if read_json(path)!=value:raise Refused('Immutable native evidence changed: '+str(path))
+
+
+def _human_key(source,state=None):
+    """Use native message identity; preserve already-consumed pre-ID receipts."""
+    identity={k:source[k] for k in ('host','session','turn','prompt')}
+    legacy=digest(identity)
+    if not source.get('message_id'):return legacy
+    current=digest(identity|{'message_id':source['message_id']})
+    if not state or (legacy!=state.get('source') and legacy not in state.get('decisions',[])):return current
+    journal=Journal(state['project'],state['id'])
+    if legacy==state.get('source'):
+        prior=journal.records()[0]['data'].get('human',{})
+    else:
+        path=journal.path/'decisions'/(legacy+'.json')
+        prior=read_json(path).get('human',{}) if path.exists() else {}
+    # Missing old evidence must not turn a consumed answer into a new grant.
+    old=set(prior.get('record_hashes',[]));new=set(source.get('record_hashes',[]))
+    if not old or not new or old & new or prior.get('at')==source.get('at'):return legacy
+    return current
 
 
 def _render_attempt(journal,state,attempt):
@@ -239,7 +258,8 @@ def _continuation(state):
            else 'publication' if state.get('publication') or state['status']=='pr'
            else 'completion' if len(state['done'])==len(state['tasks'])
            else 'task_window' if task['id'] not in state['granted']
-           else history[-1]['role']+'_result' if history else 'authoring' if state['workflow'] in ('design','propose') else 'review' if state['workflow']=='review' else 'assessment')
+           else history[-1]['role']+'_result' if history else 'authoring' if state['workflow'] in ('design','propose') else 'review' if state['workflow']=='review'
+           else 'implementation' if state.get('assessments',{}).get(task['id']) else 'assessment')
     decision=None
     if not pending and history and history[-1].get('outcome')=='abandoned':phase=history[-1]['role']
     if not pending:
@@ -253,9 +273,16 @@ def _continuation(state):
                 if latest.get('outcome')=='needs_resolution' and any(f['severity']=='concern' and not resolution.get('concerns_accepted') for f in latest.get('findings',[])):decision='review_findings'
                 elif state['workflow']=='design' and latest.get('outcome') in ('clean','needs_resolution') and state.get('plans',{}).get('location')=='private' and state.get('private_native_approval',{}).get('attempt')!=latest['id']:decision='private_approval'
     from .scope import followups
-    return {'phase':phase,'pending_decision':decision,'pending_attempts':[_pending_attempt(state,a) for a in pending],
+    result={'phase':phase,'pending_decision':decision,'pending_attempts':[_pending_attempt(state,a) for a in pending],
             'followup_count':sum(len(item['findings']) for item in followups(state)),
             'latest_result':({k:history[-1].get(k) for k in ('id','role','outcome','evidence')} if history else None)}
+    if state['status'] in ('checkpoint','completed') and decision in ('task_window','publication'):
+        kind='continue' if decision=='task_window' else 'publish'
+        result['next_action']={'tool':'decision_request','arguments':{'kind':kind,'run':state['id']},
+            'instruction':'Prepare and present the returned final or task-batch checkpoint before ending. '
+                          'This prepares choices; it does not push or publish. Local-only work still needs '
+                          'the available handoff choices. Bind the actual answer through decision.'}
+    return result
 
 
 def _saved_subject(state):
@@ -306,7 +333,7 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
         elif workflow=='review' and selected and all(selected.get(k)==state.get('standalone_subject',{}).get(k) for k in ('kind','head','branch','tree','base','revision','git_tree','paths','feedback_only')):matches.append(state)
     if len(matches)==1:
         state=matches[0]
-        key=digest({k:source[k] for k in ('host','session','turn','prompt')})
+        key=_human_key(source,state)
         if key==state.get('source') or state.get('published') or (state['status']=='completed' and state.get('plans',{}).get('location')=='private'):return select(root,state['id'])
         return _resume_offer(root,state)
     if len(matches)>1:raise Refused('More than one saved run matches; inspect status --saved and select the intended run with resume --run')
@@ -418,9 +445,6 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     from .receipts import save
     save(folder/'scope.md',preview,immutable=True)
     result={'scope_id':key,'preview':str(folder/'scope.md'),'tasks':[{k:t[k] for k in ('id','title')} for t in tasks],'config':value['config'],'approved':False}
-    if human is None and workflow=='deliver':
-        from .decisions import scope_request
-        result['approval']=scope_request(root,value)
     if human is not None:
         prompt=source['prompt'].strip()
         linked=re.fullmatch(r'\[(\$(?:o-harness:)?oh-[a-z]+)\]\([^\r\n]*SKILL\.md\)(.*)',prompt,re.S)
@@ -438,20 +462,24 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
                 contextual=source.get('via')=='question' and re.search(r'(?i)\b(?:deliver|implement)\b',source.get('question',''))
                 if not (direct or contextual) or not re.search(r'(?<![0-9])'+re.escape(doc)+r'(?![0-9])',text):raise Refused('Request delivery of this approved design explicitly before admitting its task batch')
         if workflow!='deliver' or doc is not None:return _start(root,key,source)|{'scope_id':key,'approved':True}
+    if workflow=='deliver':
+        from .decisions import scope_request
+        result['approval']=scope_request(root,value)
     return result
 
 
 def approve_scope(root, scope_id, locator):
     scope=_scope(root,scope_id)
     locator=_presented(root,locator)
+    subject=None if locator.get('decision') else _home(root)/'scopes'/scope_id/'scope.md'
     from .workflow import active_file
     if active_file(root).exists():
         _,current=load_run(root)
         if current.get('scope_id')==scope_id:
-            original=authority.native_human(root,locator,latest=False)
-            if digest({k:original[k] for k in ('host','session','turn','prompt')})==current.get('source'):
+            original,locator=authority.scope_human(root,locator,since=scope['created_at'],subject=subject,latest=False)
+            if _human_key(original,current)==current.get('source'):
                 return select(root)
-    source=authority.native_human(root,locator,since=scope['created_at'],subject=None if locator.get('decision') else _home(root)/'scopes'/scope_id/'scope.md')
+    source,locator=authority.scope_human(root,locator,since=scope['created_at'],subject=subject)
     if source.get('via')=='plan':
         preview=(_home(root)/'scopes'/scope_id/'scope.md').read_text()
         if source.get('accepted_plan','').replace('\r\n','\n')!=preview:
@@ -482,7 +510,7 @@ def _start(root,key,source):
             raise Refused('The included starting contents changed after scope preparation. Preserve the edits and prepare the same tasks again to show their current contents before approval.')
         from .branches import trunk
         if committed(scope) and scope['branch']==trunk(root,scope['config']):raise Refused('Create an execution branch from the selected base with native Git tools, then prepare scope on that branch')
-        source_key=digest({k:source[k] for k in ('host','session','turn','prompt')})
+        source_key=_human_key(source)
         p=project(root);run=identifier()
         data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],'checkout':checkout_id(root),
               'host':source['host'],'human':source,'source':source_key,'native_version':2,
@@ -516,7 +544,7 @@ def select(root,run=None):
     checked=state.get('verification',{}).get(current['id'])
     attempts=[]
     for attempt in history[-2:]:
-        item={k:attempt.get(k) for k in ('id','task','role','profile','outcome','finished','evidence','model_fallback')}
+        item={k:attempt.get(k) for k in ('id','task','role','profile','outcome','finished','superseded','evidence','model_fallback')}
         item['summary']=str(attempt.get('summary',''))[:800]
         if attempt.get('native_child'):item['native_child']={'child_session':attempt['native_child']['child_session']}
         attempts.append(item)
@@ -552,8 +580,9 @@ def select(root,run=None):
         if result.get('publication'):
             result['publication']={k:state['publication'].get(k) for k in ('head','branch','base_branch','destination','remote')}
     if len(encode(result))>state['config']['context']['result_chars']:
-        result={k:result[k] for k in ('run','status','task','report','attempt_count','reviews_used','reviews_allowed','done_count','granted_count','followups') if k in result}
-    if len(encode(result))>state['config']['context']['result_chars']:result={'run':state['id'],'status':state['status'],'attempt_count':len(state['attempts'])}
+        result['continuation']={k:result['continuation'][k] for k in ('phase','pending_decision')}
+        result={k:result[k] for k in ('run','status','task','report','attempt_count','reviews_used','reviews_allowed','done_count','granted_count','followups','continuation') if k in result}
+    if len(encode(result))>state['config']['context']['result_chars']:result={'run':state['id'],'status':state['status'],'attempt_count':len(state['attempts']),'continuation':result['continuation']}
     return result
 
 
@@ -590,7 +619,7 @@ def admit(root,role):
         subject=_subject(root,state)
         if role=='review' and state['workflow']!='review':
             authors=[a for a in state['attempts'] if a['task']==task['id'] and a['role'] in ('implementation','analysis') and a.get('finished') and not a.get('superseded')]
-            if not state.get('extra_review') and (not authors or authors[-1]['outcome']!='implemented'):
+            if not state.get('extra_review') and (not authors or authors[-1]['outcome'] not in ('reported','implemented')):
                 raise Refused('Finish the approved task before requesting its independent review')
             checked=state.get('verification',{}).get(task['id'])
             if not checked or any(checked.get(k)!=subject[k] for k in ('head','tree','git_tree','artifacts')) or any(check_failed(c) for c in checked['checks']):
@@ -611,6 +640,17 @@ def admit(root,role):
             admission['standalone_subject']={k:selected[k] for k in ('kind','base','revision','git_tree','description') if k in selected}
             admission['checkout_guard']=subject
         if fallback:admission['model_fallback']=fallback
+        if role=='review' and state['workflow']!='review' and committed(state):
+            # Snapshot branch history at review admission, not only at intake:
+            # the developer may have committed a checkpoint since then.
+            from .branches import main_ref
+            from .delivery import unreviewed
+            base=main_ref(root,state['config'])
+            if base:
+                fork=git(root,'merge-base','HEAD',base)
+                covers=unreviewed(root,fork,base)
+                admission['included_original_work']={'review_base':fork,'head':subject['head'],'covers':covers}
+                if url:=state.get('pr_target',{}).get('url'):admission['included_original_work']['url']=url
         # No native launch is authorized until every required artifact exists. Save the
         # charge and admission together, so construction failures cannot orphan a child.
         admission['started_at']=now()
@@ -637,7 +677,10 @@ def admit(root,role):
         if task['id'] not in state['task_started']:
             best_effort('task.started',state['project'],state['id'],task['id'],title=task['title'],difficulty=(assessment or {}).get('difficulty'),rubric=2)
         best_effort('attempt.started',state['project'],state['id'],task['id'],attempt_id,role=role,phase=role,host=state['host'],**profile)
-        return {k:admission[k] for k in ('id','task','role','profile','head','tree','git_tree','task_context','model_fallback','standalone_subject') if k in admission}|{'request':str(directory/'request.json'),'native_task_name':'oh_'+attempt_id.replace('-',''),'fresh_context':True,'fork_turns':'none'}
+        from .cancellation import command_prefix, shell_line
+        bootstrap=shell_line(command_prefix(root,attempt_id)[:-3]+['admission',str(directory)],
+                             windows=os.name=='nt' and state['host']=='codex')
+        return {k:admission[k] for k in ('id','task','role','profile','head','tree','git_tree','task_context','model_fallback','standalone_subject') if k in admission}|{'request':str(directory/'request.json'),'native_task_name':'oh_'+attempt_id.replace('-',''),'fresh_context':True,'fork_turns':'none','admission_command':bootstrap}
 
 
 def bind(root,attempt_id,locator):
@@ -704,7 +747,20 @@ def _retain_locked(root,attempt_id,locator,run=None):
             pass
     from .cancellation import interrupted, quiescent, reconcile_tools, unlaunched_stop, guarded
     stopped=interrupted(root,attempt=attempt_id)
-    reconcile_tools(root,attempt)
+    source=None
+    cleanup_attempt=attempt
+    if not attempt.get('native_child'):
+        try:source=authority.native_result(root,state,attempt,locator)
+        except authority.Saving:pass
+        if source and source.get('status')=='binding_failed' and source.get('rejected_child'):
+            # Attribution of a terminal rejected child permits callback reconciliation,
+            # never successful binding, accepted work, or waived command cleanup.
+            cleanup_attempt=attempt|{'native_child':source['rejected_child']}
+    pending_edits=reconcile_tools(root,cleanup_attempt)
+    if pending_edits:
+        try:source=authority.native_result(root,state,attempt,locator)
+        except authority.Saving:pass
+        if source:reconcile_tools(root,cleanup_attempt,terminal=source)
     if not quiescent(root,attempt_id):
         raise authority.Saving('Native Stop cleanup is still pending. Retry with the same Resume answer after the owned commands and tools finish.'
                                if stopped else 'Owned commands or tools are still running. Retain this same attempt after they finish; do not start another worker.')
@@ -713,7 +769,7 @@ def _retain_locked(root,attempt_id,locator,run=None):
     unlaunched=unlaunched_stop(root,attempt,stopped) if stopped and not attempt.get('native_child') else None
     try:
         if unlaunched:raise authority.Saving('Native Stop preceded launch')
-        source=read_json(directory/'revoked-result.json') if synthetic else authority.native_result(root,state,attempt,locator)
+        source=read_json(directory/'revoked-result.json') if synthetic else source or authority.native_result(root,state,attempt,locator)
     except authority.Saving:
         if not stopped or not (attempt.get('native_child') and guarded(root,attempt_id) or unlaunched):raise
         synthetic=True
@@ -748,15 +804,18 @@ def _retain_locked(root,attempt_id,locator,run=None):
     elif malformed and not findings:
         outcome='review_incomplete' if attempt['role']=='review' else 'unfinished'
     else:
-        outcome='implemented'
+        # Native completion proves that a report was returned, not that the task
+        # was implemented. Candidate checks and independent review prove readiness.
+        # Keep accepting legacy `implemented` records without rewriting history.
+        outcome='reported'
         if attempt['role']=='review':
             if any(f['severity']=='blocking' for f in findings):outcome='blocking'
             elif malformed or report.get('verdict')=='incomplete':outcome='review_incomplete'
             elif findings:outcome='needs_resolution'
             elif report.get('verdict')=='clean':outcome='clean'
             else:outcome='review_incomplete'
-        elif attempt['role']=='assessment':outcome='assessed' if report.get('difficulty') in ('simple','standard','complex') else 'unfinished'
         elif report.get('status') in ('blocked','unfinished'):outcome=report['status']
+        elif attempt['role']=='assessment':outcome='assessed' if report.get('difficulty') in ('simple','standard','complex') else 'unfinished'
     try:
         subject=_subject(root,state)
         packet=read_json(Path(attempt['evidence'])/'task-context.json')
@@ -765,7 +824,9 @@ def _retain_locked(root,attempt_id,locator,run=None):
             detail=read_json(Path(attempt['evidence'])/packet['details']['path'])
             if digest(detail)!=packet['details']['hash']:raise Refused('Admitted task details changed')
             packet=detail
-        for reference in packet.get('supplementary_evidence',[]) if isinstance(packet.get('supplementary_evidence'),list) else []:_unchanged(reference['files'])
+        # Supplementary diagnostics describe their attachment-time inputs. Those
+        # inputs may be repaired or removed; they are not immutable task artifacts.
+        # Candidate checks and fresh review establish current readiness instead.
     except Refused:
         subject={};outcome='binding_failed'
     if attempt['role'] in ('review','assessment') and any(subject.get(k)!=attempt[k] for k in ('head','tree','git_tree','artifacts')):
@@ -950,7 +1011,6 @@ def _presented(root,locator,state=None):
     comes only from the saved native answer, validated by the ordinary helpers."""
     key=locator.get('decision') if isinstance(locator,dict) else None
     if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key) or locator.get('tool_use_id'):return locator
-    if locator.get('turn') and not locator.get('transcript_path'):return locator
     try:prepared=read_json(_home(root)/'decisions'/(key+'.json'));question=prepared['question']
     except (OSError,ValueError,KeyError,TypeError):return locator
     env=os.environ.get('CODEX_THREAD_ID') or os.environ.get('OH_NATIVE_SESSION_ID')
@@ -967,7 +1027,7 @@ def _presented(root,locator,state=None):
             source=authority.native_human(root,candidate,latest=False)
             if not authority.newer(source.get('question_at'),prepared['created_at']):continue
             # Replay keeps a consumed answer; new authority still needs the latest input.
-            if digest({k:source[k] for k in ('host','session','turn','prompt')}) not in consumed:authority.native_human(root,candidate,retry_resume=prepared.get('kind')=='resume')
+            if _human_key(source,state) not in consumed:authority.native_human(root,candidate,retry_resume=prepared.get('kind')=='resume')
         except Refused:continue
         return candidate
     return locator
@@ -979,7 +1039,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
         if prepared.get('presentation')=='recovery-menu':
             from .recovery import apply
             return apply(root,kind,locator,run=run)
-    allowed={'continue','grant-review','accept-concerns','dismiss-scope','route-scope','publish','pause','stop','resume','approve-private','approve-proposal'}
+    allowed={'continue','grant-review','accept-concerns','dismiss-scope','route-scope','publish','pause','stop','resume','approve-private','approve-proposal','approve-repair'}
     if kind not in allowed:raise Refused('Unknown consequential decision')
     with _locked(root):
         journal,state=load_run(root,run)
@@ -1014,7 +1074,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .decisions import verify as verify_decision
             prepared=verify_decision(root,state,kind,locator,source,attempt,replay=True)
         elif not _affirmed(source['prompt'],kind,source.get('question','')):raise Refused('This reply needs its bound decision effect. Include the decision identity returned before the question in the same native locator and retry; do not ask the person to answer again.')
-        key=digest({k:source[k] for k in ('host','session','turn','prompt')})
+        key=_human_key(source,state)
         if kind=='resume':
             from .workflow import active_file
             if active_file(root).exists():
@@ -1027,12 +1087,16 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                         raise Refused('This continuation was superseded by another work selection; ask the Resume question for the intended saved work')
             _resume_binding(root,state)
         if key in state['decisions']:
+            if kind=='approve-repair':
+                if not any(r['source']==key and r['decision']==locator.get('decision')
+                           for repairs in state.get('approved_repairs',{}).values() for r in repairs):
+                    raise Refused('This human input was already used for another decision; retain its original result')
             if kind not in ('accept-concerns','dismiss-scope','route-scope'):
                 if kind=='resume':
                     resumed=any(e['kind']=='decision' and e['data'].get('choice')=='resume' and e['data'].get('source')==key
                                 for r in journal.records() for e in (r['data'].get('events',[]) if r['kind']=='transition' else [{'kind':r['kind'],'data':r['data']}]))
                     if not resumed:raise Refused('This human input was already used for another decision; keep its saved result')
-                    owner_key=digest({k:state['human'][k] for k in ('host','session','turn','prompt')})
+                    owner_key=_human_key(state['human'],state)
                     if key!=owner_key:raise Refused('This continuation was superseded; ask the current Resume question before continuing')
                     from .workflow import active_file
                     if read_json(active_file(root)).get('run')!=state['id']:
@@ -1076,6 +1140,12 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             used=sum(a['role']=='review' and a['task']==task['id'] for a in state['attempts'])
             if used<review_limit(state,task['id']):raise Refused('Existing review allowance is not spent')
             add('review.grant',{'task':task['id'],'rounds':prepared['rounds'] if prepared else state['config']['review_rounds'],'source':key})
+        elif kind=='approve-repair':
+            from .decisions import repair_task
+            task=repair_task(root,state)
+            if not prepared or prepared['task']!=task['id']:raise Refused('Use the prepared decision for this task repair')
+            add('task.repair-approved',{'task':task['id'],'instructions':prepared['repair'],
+                'source':key,'decision':locator['decision']})
         elif kind in ('accept-concerns','dismiss-scope','route-scope'):
             review=_attempt(state,attempt)
             if review['role']!='review' or review.get('purpose','workflow')!='workflow' or review['outcome'] not in ('blocking','needs_resolution'):
@@ -1168,7 +1238,8 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                 if interrupted(root,attempt=pending['id']):
                     _retain_locked(root,pending['id'],{},run=state['id'])
             journal,state=load_run(root,state['id'])
-            if _active(state):raise Refused('A native attempt has no retained terminal result; read resume --run recovery details, inspect its original host records, and retain the outcome before transfer')
+            from .recovery import _settle
+            state=_settle(root,journal,state,source|{'decision':locator.get('decision')})
             add('run.owner',{'human':source})
             status=state['status']
             if status=='completed' and state['workflow']=='review' and not _finished(state):status='running'
@@ -1196,7 +1267,7 @@ def complete(root,attempt_id):
         if review.get('superseded'):raise Refused('Recovery changed the reviewed subject; finish fresh checks and review before completion')
         task=next((t for t in state['tasks'] if t['id']==review['task']),None)
         existing=next((d for d in state['summaries'] if d.get('review')==attempt_id),None)
-        if existing:return existing
+        if existing:return existing|{'continuation':_continuation(state)}
         review=_reparse_review(root,journal,state,review)
         correction=state.get('correction')
         if state.get('extra_review') and not correction:
@@ -1207,7 +1278,7 @@ def complete(root,attempt_id):
             task_evidence(root,state,task,review,subject['head'])
             journal.append('review.checked',{'attempt':attempt_id})
             journal.append('run.status',{'status':state['extra_review']['return_status'],**({'head':subject['head'],'tree':subject['tree']} if state['extra_review']['return_status']=='paused' else {})})
-            return {'review':attempt_id,'outcome':review['outcome'],'committed':False}
+            return {'review':attempt_id,'outcome':review['outcome'],'committed':False,'continuation':_continuation(reduce(journal.records()))}
         if state['status']!='running' or _active(state) or not task or (not correction and (task['id'] not in state['granted'] or task['id'] in state['done'])):
             raise Refused('No remaining completion authority for this task')
         if review['role']!='review' or review.get('purpose')!='workflow':raise Refused('Standalone feedback cannot authorize completion')
@@ -1274,7 +1345,7 @@ def complete(root,attempt_id):
         best_effort('run.status',state['project'],state['id'],status=reduce(journal.records())['status'])
         from .receipts import index
         index(journal,reduce(journal.records()))
-        return value
+        return value|{'continuation':_continuation(reduce(journal.records()))}
 
 
 def resume(root,locator=None,run=None):
@@ -1341,7 +1412,7 @@ def review(root,arguments,human=None):
         p=project(root);run=identifier();config=snapshot(root);journal=Journal(p['id'],run)
         source=source or {'host':host,'session':session,'turn':identifier(),'prompt':arguments}
         data={'id':run,'project':p['id'],'name':p['name'],'work_kind':p['kind'],'checkout':checkout_id(root),'host':host,'human':source,
-              'source':digest({k:source[k] for k in ('host','session','turn','prompt')}),'workflow':'review','native_version':2,'branch':selected['branch'],'base':selected['head'],
+              'source':_human_key(source),'workflow':'review','native_version':2,'branch':selected['branch'],'base':selected['head'],
               'tasks':[{'id':'review','title':selected['description'],'instructions':'Inspect the exact selected subject; feedback only.'}],
               'checks':[],'project_checks':[],'standalone_subject':selected,**config}
         data['subject']=selected

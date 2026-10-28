@@ -1,6 +1,6 @@
 """Consumer-owned verification contracts; OH never imports a product toolchain."""
 import fnmatch
-from pathlib import Path
+from .system import Path
 from .storage import Refused,changes,git,project
 from .verification import verify
 

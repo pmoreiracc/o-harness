@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
-from pathlib import Path
+from .system import Path
 import secrets
 import threading
 import socketserver

@@ -4,11 +4,11 @@ import hashlib
 import json
 import os
 import re
-from pathlib import Path
+from .system import Path
 import stat
 import subprocess
 import time
-from .storage import Refused, atomic_json, digest, git, read_json, state_home, whole, worktrees, git_env, git_root
+from .storage import Refused, atomic_json, digest, git, git_blobs, read_json, state_home, whole, worktrees, git_env, git_root
 from .system import uname, executable
 
 
@@ -166,9 +166,9 @@ def check_env():
 
 def candidate_tree(root,replacements=None):
     """Build the exact committable subject without modifying the real index."""
-    import tempfile
+    from .system import temporary_directory
     git_root(root)
-    with tempfile.TemporaryDirectory(prefix='oh-index-') as tmp:
+    with temporary_directory(prefix='oh-index-') as tmp, git_blobs(root) as blob_bytes:
         env=git_env()
         env['GIT_INDEX_FILE']=str(Path(tmp)/'index')
         def command(*args):
@@ -183,7 +183,7 @@ def candidate_tree(root,replacements=None):
                 git_root(path)
                 if git(path,'status','--porcelain'):raise Refused('Commit submodule changes in their own reviewed repository first')
             elif mode=='120000':continue
-            elif (data:=path.read_bytes())!=(stored:=command('cat-file','blob',blob)) and data.replace(b'\r\n',b'\n')!=stored:
+            elif (data:=path.read_bytes())!=(stored:=blob_bytes(blob)) and data.replace(b'\r\n',b'\n')!=stored:
                 # Only line endings may differ (core.autocrlf, the Git for Windows default): the reviewed text is the committed text.
                 raise Refused(f'Git filters transform {os.fsdecode(name)} beyond line endings; normalize it before review so reviewed bytes equal committed bytes')
         for name,replacement in (replacements or {}).items():
@@ -193,7 +193,7 @@ def candidate_tree(root,replacements=None):
             # Apply this tracked path's Git attributes to the proposed bytes, just as
             # staging the published file will (including core.autocrlf on Windows).
             blob=command('hash-object','-w','--path='+name,'--',str(replacement)).decode().strip()
-            data=Path(replacement).read_bytes();stored=command('cat-file','blob',blob)
+            data=Path(replacement).read_bytes();stored=blob_bytes(blob)
             if data!=stored and data.replace(b'\r\n',b'\n')!=stored:
                 raise Refused(f'Git filters transform proposed {name} beyond line endings')
             command('update-index','--cacheinfo',info[0],blob,name)

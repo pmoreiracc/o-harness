@@ -1,5 +1,5 @@
 """Native lifecycle notifications reuse checked binding/retention; never launch work."""
-from pathlib import Path
+from .system import Path
 from subprocess import CalledProcessError
 from .storage import Refused, git
 from .workflow import load_run, NO_RUN

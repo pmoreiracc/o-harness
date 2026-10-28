@@ -1,5 +1,5 @@
 """Historical readable review rendering. Native hosts own every question."""
-from pathlib import Path
+from .system import Path
 from .storage import Refused
 
 
@@ -8,7 +8,7 @@ def finding_text(finding):
 
 def report_text(attempt):
     # A later failed check must stay visible even when the worker itself reported success.
-    if attempt.get('outcome') in ('implemented','clean','blocking','needs_resolution'):
+    if attempt.get('outcome') in ('reported','implemented','clean','blocking','needs_resolution'):
         return attempt.get('human_summary') or attempt.get('summary','')
     return attempt.get('summary','')
 

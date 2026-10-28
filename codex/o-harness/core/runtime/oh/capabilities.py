@@ -1,6 +1,6 @@
 from functools import lru_cache
 import json
-from pathlib import Path
+from .system import Path
 import queue
 import re
 import subprocess

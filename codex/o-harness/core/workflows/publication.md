@@ -2,6 +2,9 @@
 
 Read when reviewed work reaches publication, or when recovering an existing PR handoff.
 Read `workflows/decisions.md` before the publication question.
+Follow the `continuation` returned by `complete`: a local commit with a pending
+publication decision still needs that checkpoint. Repair recoverable preparation
+failures within scope; report any unresolved step instead of claiming the handoff finished.
 If the person already chose the checkpoint's PR option, bind that answer using its
 existing decision identity and proceed; do not request a second publication approval.
 

@@ -49,7 +49,7 @@ def followups(state):
 
 def track(root,attempt_id,destination=None):
     """Record tracking facts. This grants no implementation, issue-creation or review authority."""
-    from pathlib import Path
+    from .system import Path
     from .native import _locked, _owner, _attempt, _active, _subject, _idle
     from .workflow import load_run
     from .plans import write

@@ -69,10 +69,11 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Bind the launched native child | `attempt bind <attempt-id> <locator.json>` | `attempt_bind` |
 | Retain its original native result | `attempt retain <attempt-id> <locator.json>` | `attempt_retain` |
 | Validate review admission | `admission <attempt-directory>` | `admission` |
+| Format a worker command without executing it | `command-format ID --argv <JSON array>` | `command_format` with `attempt` and `argv` |
 | Check a draft review decision | `review-check --text <quoted-draft>` | `review_check` |
 | Prepare provisional candidate content | `candidate` | `candidate` |
 | Check the current candidate | `verify [base] [mode]` | `verify` |
-| Attach supplementary proof | `evidence <attachment.json>` | `evidence` |
+| Attach historical diagnostics | `evidence <attachment.json>` | `evidence` |
 | Complete the reviewed candidate | `complete <review-attempt-id>` | `complete` |
 | Bind the effect before a native question | `decision-request <kind> [--attempt ID] [--rounds N] [--run ID]` | `decision_request` |
 | Track retained outside-scope findings | `finding-track ID [--destination FILE]` | `finding_track` |
@@ -84,6 +85,12 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 
 Manifest JSON files belong in external writable scratch storage. Pass a locator either
 as one inline JSON argument or as such a file; never edit locator text with shell tools.
+
+Supplementary evidence preserves attachment-time file hashes and observations. Referenced
+source files may change during authorized repairs, and temporary logs may disappear.
+Packets label their availability and changes at admission; these references are historical
+context, not current verification or authority. Recheck relevant inputs when using them.
+Current candidate checks and fresh independent review remain required for completion.
 Codex tools receive the equivalent JSON objects. A locator names actual host evidence: `host`,
 `session`, and available `turn`, `transcript_path`, `tool_use_id` or `child_session`.
 Copy identities from native events; do not invent a human message, child ID or result.
@@ -165,7 +172,13 @@ Include the admitted attempt ID, its actual `request.json` path, bounded task-co
 path, role contract and absolute OH entry in the child prompt. Reference original
 scope/evidence files rather than pasting the parent history or full worker transcripts.
 Require admission validation before the first working tool. Every role follows the
-packet’s `native_commands`: native shell commands use the literal `owned-command`
+packet’s `native_commands`. Copy the returned `admission_command` unchanged into the
+child's launch prompt as its first command; the child cannot read the packet before
+validation. Do not substitute the coordinator's plugin launcher. The admission result includes the verified, bounded
+`task_context`; read it directly instead of bootstrapping another shell read. In Codex,
+use `command_format` with the executable/argument array and run its returned command
+unchanged through the corresponding native shell tool. The formatter executes nothing
+and grants no permissions. Native shell commands use the literal `owned-command`
 invocation with an explicit executable/argument array; focused OH helpers run directly.
 Pass an explicit shell inside that array when shell syntax is needed. Never append
 outer shell operators, nest OH helpers in the wrapper, or bypass a refused tool.
@@ -243,11 +256,37 @@ admitted implementation profile. Only a repeated blocking family in two independ
 reviewer receipts triggers implementation escalation; an author claim or first blocker
 is not that evidence.
 
-The implementation agent owns the bounded change, documentation, self-review and
-checks. Preserve earlier useful implementation and family repairs. Establish required
-behavior before correcting code, tests or the environment; a failing check is feedback
-to repair within scope, not a new Retry approval. Do not weaken production behavior or
-assertions to obtain a pass. Route unrelated observations instead of implementing them.
+### Failed required checks
+
+The implementation agent owns implementation, documentation, self-review and checks,
+including diagnosis and repairs covered by the approved task. Preserve useful earlier
+work. A failed check is feedback to investigate, not a new Retry or scope approval.
+
+1. Read the failure and relevant callers, test setup and execution environment. Separate
+   observed facts from suspected causes. An unchanged file, a timeout or the absence of
+   a direct call to changed code does not establish which repair is necessary.
+2. Choose the smallest useful diagnostic that answers a concrete unresolved question.
+   Use focused reproduction, timing, environment inspection or a baseline comparison
+   when it distinguishes plausible causes; none is mandatory for every failure.
+   Reuse retained evidence. Do not repeat a full suite unchanged merely because another
+   author started, or keep investigating without a useful next experiment.
+3. Repair regressions and verification problems needed to deliver the approved outcome,
+   including supporting test and environment corrections allowed by the project and
+   existing authorization. Scope follows the outcome, not a list of edited files or
+   whether a defect predates this task. Baseline reproduction informs diagnosis; it does
+   not decide authority or end the work. Preserve acceptance coverage and project rules;
+   do not weaken assertions, skip checks or hide a failure by merely raising deadlines.
+4. Continue while useful authorized diagnosis or repair remains. If a necessary repair
+   exceeds the task, report the evidence, smallest justified change and specific scope
+   boundary. If further progress needs permission or an external prerequisite, name it
+   and its remedy. If no useful authorized diagnostic remains, state what is known and
+   unknown and offer a handoff; do not invent a repair or claim certainty to obtain approval.
+
+The coordinator follows the additional-repair decision in the deliver skill
+at a real boundary. A possible repair is not proof that a new scope is needed. These
+steps do not grant additional scope, change required checks or renew review allowances.
+
+### Candidate verification and review
 
 The implementation agent prepares provisional task marks and lifecycle content with
 `candidate` before final
@@ -260,12 +299,15 @@ The coordinator retains candidate/check references and does not rerun passing fi
 Report what actually ran: planning document validation is not a pass of the consumer's
 registered checks. An empty `checks` list supports no claim that project checks passed.
 If an author finishes without the required candidate or passing verification, retain its
-terminal result, then admit a fresh author for that remaining work within the existing
-scope. Preserve its draft/implementation. Do not give missing checks to the coordinator,
+terminal result. If useful authorized diagnosis or repair remains, admit a fresh author
+with that specific next step and the retained evidence; otherwise handle the concrete
+boundary above instead of launching another unchanged attempt. Preserve its
+draft/implementation. Do not give missing checks to the coordinator,
 reuse the completed admission, or launch the invariant reviewer agent prematurely.
 
 Admit a fresh reviewer only after the final candidate and checks are ready. Supply the
-immutable original scope, current candidate, complete findings and relevant evidence.
+immutable original scope and any verified approved repairs, current candidate, complete
+findings and relevant evidence.
 The reviewer validates its supplied attempt directory with `admission` before reading
 the subject. A helper refusal means retain that attempt and repair its actual binding.
 The last task's review includes the accumulated branch and task interactions; do not
@@ -303,6 +345,13 @@ next task from external completion records, under the same finite task batch. At
 boundary ask whether to continue the projected next batch, publish completed work or
 stop through the completed-task checkpoint in `workflows/decisions.md`. Present every
 returned option and bind the chosen action from that same question; silence grants nothing.
+Follow the `next_action` in the returned `continuation`: use `decision-request continue`
+when a completed batch leaves tasks pending, or `decision-request publish` when all tasks
+are complete. Preparing that question does not publish anything. A request not to push
+or publish, or a checkout without a remote, still permits the final handoff choices.
+Do not end with only a commit summary while this checkpoint is pending. This applies to
+fresh and resumed work; private planning completion and standalone feedback retain their
+own endings, and a recorded Stop must not reopen the checkpoint automatically.
 If all design tracks have converged with completed tasks but the design is still approved,
 select its bounded `finalize` task and use the same candidate/check/review/completion path.
 Finish any requested completed-task re-review and its correction before publication;

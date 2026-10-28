@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+from .system import Path
 import signal
 import subprocess
 import threading
@@ -317,7 +317,7 @@ def authentication(host,root):
     binary=executable(host,root)
     command=[binary,'login','status'] if host=='codex' else [binary,'auth','status']
     # Native children inherit this host environment; do not mask API authentication for the probe.
-    result=subprocess.run(command,cwd=root,env=os.environ.copy(),capture_output=True,text=True,timeout=20)
+    result=subprocess.run(command,cwd=str(root),env=os.environ.copy(),capture_output=True,text=True,timeout=20)
     if host=='codex':
         valid=result.returncode==0 and 'Logged in using ChatGPT' in result.stdout+result.stderr
     else:

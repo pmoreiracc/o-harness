@@ -26,7 +26,7 @@ def observe_ci(root):
             value=read_json(file)
             if value.get('commit')==head:binding=(file.parents[2].name,value['task'])
     if binding is None:raise Refused('Current HEAD is not a recorded reviewed OH task commit')
-    result=subprocess.run(['gh','run','list','--commit',head,'--json','databaseId,conclusion,status,headSha,url'],cwd=root,capture_output=True,text=True,timeout=30,check=True)
+    result=subprocess.run(['gh','run','list','--commit',head,'--json','databaseId,conclusion,status,headSha,url'],cwd=str(root),capture_output=True,text=True,timeout=30,check=True)
     items=json.loads(result.stdout)
     for item in items:
         if item['headSha']==head:best_effort('ci.observed',p['id'],binding[0],binding[1],**item)

@@ -1,9 +1,9 @@
 """Immutable standalone review subjects and historical repair evidence."""
-from pathlib import Path
+from .system import Path
 import hashlib
 import shlex
 import subprocess
-from .storage import Refused, Journal, atomic_json, checkout_file, digest, git, git_env, project, read_json
+from .storage import Refused, Journal, atomic_json, checkout_file, digest, git, git_blobs, git_env, project, read_json
 
 
 def workflow_reviews(state, task):
@@ -39,6 +39,11 @@ def subject(root, arguments):
 
 def capture(root, directory, selected):
     """Export exact Git blobs for both hosts; never check out a historical revision."""
+    with git_blobs(root) as blob_bytes:
+        return _capture(root,directory,selected,blob_bytes)
+
+
+def _capture(root,directory,selected,blob_bytes):
     folder=Path(directory)/'subject';folder.mkdir(parents=True,exist_ok=True)
     files={};links=[]
     for entry in git(root,'ls-tree','-rz',selected['git_tree'],raw=True).split(b'\0'):
@@ -51,7 +56,7 @@ def capture(root, directory, selected):
             links.append(name+' (Git submodule; inspect its bound commit separately)');continue
         if mode==b'120000':
             links.append(name+' (symbolic link; not followed in the exported subject)');continue
-        data=git(root,'cat-file','blob',oid.decode(),raw=True)
+        data=blob_bytes(oid.decode())
         destination=folder/path;destination.parent.mkdir(parents=True,exist_ok=True);destination.write_bytes(data)
         files[str(destination)]=hashlib.sha256(data).hexdigest()
     from .plans import file_identity

@@ -1,9 +1,9 @@
 """Explicit, local plugin packaging and shared-core installation. No consumer writes."""
 import hashlib
 import json
-from pathlib import Path
+from .system import Path
 import shutil
-import tempfile
+from .system import make_temp_directory
 from .config import HOME, version
 from .storage import Refused, atomic_json, lock, read_json, state_home
 from .system import replace
@@ -58,14 +58,16 @@ def build(destination, host):
             if not hooks['hooks'][event]:hooks['hooks'].pop(event)
     else:
         hooks['hooks'].pop('Interrupt',None)
-    for groups in hooks['hooks'].values():
+    for event,groups in hooks['hooks'].items():
         for hook in (hook for group in groups for hook in group['hooks']):
             hook['command']=hook['command'].rsplit(' ',1)[0]+' '+host
-            # Codex's default Windows runner supplies cmd /C and its outer quote pair.
-            # Keep the quoted executable first, avoiding a redundant nested shell.
+            # Codex uses the session's shell, which can be PowerShell or cmd.
+            # Expand the plugin path inside cmd, after metacharacter parsing, without
+            # starting another PowerShell. The batch entry disables delayed expansion.
             runner=('native-control.cmd' if 'native-control.py' in hook['command']
                     else 'agent-hook.cmd' if 'agent-launch.py' in hook['command'] else 'hook.cmd')
-            if host=='codex':hook['commandWindows']='"%PLUGIN_ROOT%\\scripts\\'+runner+'" codex'
+            if host=='codex':
+                hook['commandWindows']='cmd.exe /d /v:on /s /c "!PLUGIN_ROOT!\\scripts\\'+runner+'" codex'
     servers=destination/'codex-mcp.json'
     if host=='codex':
         # Both hosts ask native questions; Codex calls focused OH helpers through MCP.
@@ -76,7 +78,7 @@ def build(destination, host):
     atomic_json(destination/'hooks/hooks.json',hooks)
     if host=='codex':
         for path in (destination/'skills').glob('*/SKILL.md'):
-            path.write_text(path.read_text().replace('disable-model-invocation: true\n',''))
+            path.write_text(path.read_text(encoding='utf-8').replace('disable-model-invocation: true\n',''),encoding='utf-8',newline='\n')
     return {'plugin':str(destination),'host':host,'revision':revision}
 
 
@@ -122,7 +124,7 @@ def setup(*, development=False, if_newer=False):
                 raise Refused('Existing shared core is inconsistent; preserve it and reinstall into a clean version directory')
         else:
             destination.parent.mkdir(parents=True,exist_ok=True)
-            staging=Path(tempfile.mkdtemp(prefix='.install-',dir=destination.parent))
+            staging=Path(make_temp_directory(prefix='.install-',dir=destination.parent))
             try:
                 shutil.copytree(HOME,staging,dirs_exist_ok=True)
                 verify_package(staging)

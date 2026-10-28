@@ -8,21 +8,24 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import json
 import os
-from pathlib import Path
+from .system import Path
 import shlex
 import sys
 from .storage import Refused, atomic_json, checkout_file, digest, identifier, lock, now, read_json, state_home
 
 _execution = ContextVar('oh_execution', default=None)
+_hook_checkout = ContextVar('oh_hook_checkout', default=None)
 
 
 def _path(root):
+    bound=_hook_checkout.get()
+    if bound and Path(root)==bound[0]:return bound[1]
     return checkout_file(root, 'oh-native-execution.json')
 
 
 @contextmanager
 def _edit(root):
-    with lock(checkout_file(root, 'oh-native-execution.lock')):
+    with lock(_path(root).with_suffix('.lock')):
         path = _path(root)
         value = read_json(path) if path.exists() else {'owners': {}, 'attempts': {}, 'tools': {}, 'commands': {}}
         before = digest(value) if path.exists() else None
@@ -37,7 +40,9 @@ def _read(root):
 
 
 def owner_key(state):
-    return digest({'run': state['id'], **{k: state['human'].get(k) for k in ('host', 'session', 'turn', 'prompt')}})
+    human=state['human']
+    return digest({'run': state['id'], **{k: human.get(k) for k in ('host', 'session', 'turn', 'prompt')},
+                   **({'message_id':human['message_id']} if human.get('message_id') else {})})
 
 
 def register_owner(root, state, *, active=True):
@@ -245,11 +250,29 @@ def command_prefix(root, attempt):
             'owned-command', attempt, '--argv']
 
 
-def command_line(root, attempt, argv, *, windows=False):
-    words = command_prefix(root, attempt) + [json.dumps(argv, ensure_ascii=False)]
+def shell_line(words, *, windows=False):
+    """Literal helper invocation for the selected shell, independent of host OS."""
     if windows:
-        return '& ' + ' '.join("'" + word.replace("'", "''") + "'" for word in words) + '; exit $LASTEXITCODE'
+        import subprocess
+        quote=lambda value:"'"+value.replace("'","''")+"'"
+        # Windows PowerShell strips embedded quotes from direct native arguments.
+        # Start-Process forwards this single, Windows-quoted argument string on
+        # both PowerShell versions, without changing permissions or interpreting it.
+        return ('exit (Start-Process -FilePath '+quote(words[0])+' -ArgumentList '
+                +quote(subprocess.list2cmdline(words[1:]))+' -NoNewWindow -Wait -PassThru -ErrorAction Stop).ExitCode')
     return shlex.join(words)
+
+
+def command_line(root, attempt, argv, *, windows=False):
+    return shell_line(command_prefix(root, attempt) + [json.dumps(argv, ensure_ascii=False)], windows=windows)
+
+
+def _shell_guidance(words, host, name):
+    if name == 'PowerShell':return 'PowerShell: ' + shell_line(words, windows=True)
+    if host == 'claude' or os.name != 'nt':return 'Bash: ' + shell_line(words)
+    # Codex may call its Windows shell tool Bash even when it executes PowerShell.
+    # Its callback does not reliably identify the selected shell. Label both forms.
+    return 'Bash: ' + shell_line(words) + '\nPowerShell: ' + shell_line(words, windows=True)
 
 
 def _literal_words(command):
@@ -262,6 +285,14 @@ def _literal_words(command):
         pass
     # PowerShell's quoted native invocation, with its explicit exit-code propagation.
     import re
+    process=re.fullmatch(r"exit \(Start-Process -FilePath '((?:[^']|'')*)' -ArgumentList '((?:[^']|'')*)' -NoNewWindow -Wait -PassThru -ErrorAction Stop\)\.ExitCode",command,re.S)
+    if process:
+        from .system import windows_command_words
+        import subprocess
+        program,arguments=(part.replace("''", "'") for part in process.groups())
+        words=windows_command_words(subprocess.list2cmdline([program])+' '+arguments)
+        # Accept the exact literal renderer, not additional switches or shell code.
+        return words if words and shell_line(words,windows=True)==command else None
     if command.startswith('& ') and command.endswith('; exit $LASTEXITCODE'):
         body = command[2:-len('; exit $LASTEXITCODE')]
         matches = list(re.finditer(r"'((?:[^']|'')*)'(?: |$)", body))
@@ -270,10 +301,17 @@ def _literal_words(command):
     return None
 
 
+def _same_words(actual, expected):
+    # Both separators name the same Windows path. Keep all non-path arguments,
+    # casing, executable identity and command structure exact.
+    return len(actual)==len(expected) and all(a==b or os.name=='nt' and os.path.isabs(b)
+        and a.replace('/', '\\')==b.replace('/', '\\') for a,b in zip(actual,expected))
+
+
 def _owned_argv(root, attempt, command):
     words = _literal_words(command.strip())
     prefix = command_prefix(root, attempt)
-    if not words or words[:-1] != prefix:
+    if not words or not _same_words(words[:-1],prefix):
         return None
     try:
         argv = json.loads(words[-1])
@@ -287,13 +325,22 @@ def _owned_argv(root, attempt, command):
 def _focused_helper(root, attempt, record, command):
     words = _literal_words(command.strip())
     prefix = command_prefix(root, attempt)[:-3]
-    if not words or words[:len(prefix)] != prefix or len(words) <= len(prefix):
+    if not words or not _same_words(words[:len(prefix)],prefix) or len(words) <= len(prefix):
         return False
     action, *args = words[len(prefix):]
     if action == 'admission':
-        return action if args == [record['directory']] else False
-    return action if action in ('candidate', 'verify', 'review-check', 'resource', 'status', 'config', 'plans') and (
+        return action if _same_words(args,[record['directory']]) else False
+    return action if action in ('candidate', 'verify', 'review-check', 'resource', 'command-format', 'status', 'config', 'plans') and (
         action != 'config' or not args) else False
+
+
+def _shell_command(host, name, args):
+    """Accept canonical shell hooks and Codex's native unified-exec payload."""
+    if name in ('Bash', 'PowerShell'):
+        return True, args.get('command')
+    if host == 'codex' and name in ('exec_command', 'functions.exec_command'):
+        return True, args.get('cmd')
+    return False, None
 
 
 def _deny(reason):
@@ -317,6 +364,14 @@ def hook(root, host, payload):
         raise
     if not path.exists():
         return {}
+    # Resolve registration once for this synchronous callback. Repeated Git
+    # identity checks in poll/read/edit can otherwise exhaust the host deadline.
+    token=_hook_checkout.set((root,path))
+    try:return _hook(root,host,payload)
+    finally:_hook_checkout.reset(token)
+
+
+def _hook(root,host,payload):
     event = payload.get('hook_event_name')
     caught_up = poll(root) if event == 'PreToolUse' else True
     use = payload.get('tool_use_id')
@@ -355,6 +410,7 @@ def hook(root, host, payload):
             return {}
         name = payload.get('tool_name', '')
         args = payload.get('tool_input') or {}
+        shell, command = _shell_command(host, name, args)
         if not actor and turn and any(o['host'] == host and o['session'] == session
                                      and _turn_stopped(o, turn)
                                      for o in value['owners'].values()):
@@ -371,18 +427,16 @@ def hook(root, host, payload):
             if not use:
                 return _deny('The native host omitted this tool’s identity. Retry the same call after its records are saved; OH cannot track an unidentified operation.')
             admission_call = (name.endswith('admission') and args.get('attempt_directory') == record['directory'])
-            admission_shell = (name in ('Bash', 'PowerShell') and isinstance(args.get('command'), str)
-                               and _focused_helper(root, actor, record, args['command'])
-                               and 'admission' in (_literal_words(args['command'].strip()) or []))
+            admission_shell = (shell and isinstance(command, str)
+                               and _focused_helper(root, actor, record, command)
+                               and 'admission' in (_literal_words(command.strip()) or []))
             if not record.get('verified') and not (admission_call or admission_shell):
                 words = command_prefix(root, actor)[:-3] + ['admission', record['directory']]
-                invocation = ('& ' + ' '.join("'" + w.replace("'", "''") + "'" for w in words)
-                              + '; exit $LASTEXITCODE') if os.name == 'nt' else shlex.join(words)
-                return _deny('OH is still binding this native child. Use the packet’s admission helper, '
-                             'then retry this same operation. Do not launch a replacement or ask for approval again. '
+                invocation = _shell_guidance(words, host, name)
+                return _deny('This worker has not validated its admission. Run the exact admission command below, '
+                             'then retry this operation. Do not launch a replacement or ask for approval again. '
                              'Native shell invocation: ' + invocation)
-            if name in ('Bash', 'PowerShell'):
-                command = args.get('command', '')
+            if shell:
                 if not isinstance(command, str):
                     return _deny('The native host did not provide this command as text.')
                 helper = _focused_helper(root, actor, record, command)
@@ -392,8 +446,7 @@ def hook(root, host, payload):
                         args = words[len(command_prefix(root, actor)[:-3]) + 1:]
                         if args[:2] != ['--attempt', actor] or len(args) > 4 or any(v.startswith('-') for v in args[2:]):
                             prefix = command_prefix(root, actor)[:-3] + ['verify', '--attempt', actor]
-                            invocation = ('& ' + ' '.join("'" + w.replace("'", "''") + "'" for w in prefix)
-                                          + '; exit $LASTEXITCODE') if name == 'PowerShell' else shlex.join(prefix)
+                            invocation = _shell_guidance(prefix, host, name)
                             return _deny('Bind this check to its admitted attempt, then retry the same native shell call: ' + invocation)
                     if use:
                         value['tools'][use] = {'attempt': actor, 'kind': 'tool', 'name': 'OH helper',
@@ -401,16 +454,17 @@ def hook(root, host, payload):
                     return {}
                 argv = _owned_argv(root, actor, command)
                 if argv is None:
-                    example = command_line(root, actor, ['executable', 'argument'], windows=name == 'PowerShell')
+                    example = _shell_guidance(command_prefix(root, actor) + [json.dumps(['executable', 'argument'])], host, name)
                     return _deny('For OH helpers, use the exact native_commands.helper_prefix from the packet directly. '
+                                 'In Codex, use command_format with this attempt ID and the executable/argument array, then run its returned command unchanged. '
                                  'For ordinary project commands, use OH’s owned-command helper with the same native shell tool '
                                  'and its normal permissions. Pass the executable and arguments as a JSON array; '
                                  'for shell syntax, include the explicit original shell and its command argument. '
                                  'Invocation format: ' + example)
                 if not use:
                     return _deny('The native host omitted the command identity; retry this same call after its records are saved.')
-                import tempfile
-                receipt = tempfile.mkdtemp(prefix='oh-command-')
+                from .system import make_temp_directory
+                receipt = make_temp_directory(prefix='oh-command-')
                 value['tools'][use] = {'attempt': actor, 'kind': 'command',
                                        'argv': digest(argv), 'started': now(), 'receipt': receipt}
                 return {}
@@ -505,6 +559,11 @@ def _quiescent(value, attempt):
     for tool in value['tools'].values():
         if tool['attempt'] != attempt:
             continue
+        # Cancelled parallel code-mode calls can lose their completion callback.
+        # These focused reads cannot edit the consumer or grant execution.
+        # Their missing replies must not prevent retention of a terminal worker.
+        if tool['kind']=='tool' and tool.get('name') in ('mcp__o_harness__resource','mcp__o_harness__command_format'):
+            continue
         if tool.get('receipt'):
             if tool.get('cleanup', {}).get('source') == 'kernel-reboot':
                 continue
@@ -540,8 +599,8 @@ def settlement(root, attempt):
             value['attempts'][attempt]['finished'] = True
 
 
-def reconcile_tools(root, attempt):
-    """Reconcile under native's control lock, before retention/ownership transfer."""
+def reconcile_tools(root, attempt, terminal=None):
+    """Reconcile under the control lock; report edits needing native completion."""
     value = _read(root)
     control = value['attempts'].get(attempt['id']) if value else None
     launches = {key for key, tool in value['tools'].items()
@@ -621,15 +680,22 @@ def reconcile_tools(root, attempt):
             item = event.get('item') or {}
             # Code-mode nested tools use exec-* IDs in item_completed, not the
             # enclosing custom_tool_call_output's call_* ID. A returned MCP
-            # error is completion; a transport error or cancellation is not.
-            terminal = (
-                item.get('type') == 'McpToolCall' and isinstance(item.get('result'), dict)
+            # error is completion. Discovery can also fail before a server is
+            # reached, leaving only an error. That ends the read-only discovery
+            # call, but an arbitrary MCP transport error cannot prove cleanup.
+            tool = value['tools'].get(item.get('id'), {})
+            discovery_failed = (tool.get('kind') == 'tool'
+                and tool.get('name') in ('list_mcp_resources', 'list_mcp_resource_templates')
+                and item.get('tool') == tool['name']
+                and item.get('status') == 'failed' and isinstance(item.get('error'), dict))
+            item_terminal = (
+                item.get('type') == 'McpToolCall' and (isinstance(item.get('result'), dict) or discovery_failed)
                 or item.get('type') == 'CommandExecution' and type(item.get('exit_code')) is int
                 or item.get('type') == 'FileChange')
             if (event.get('type') == 'item_completed'
                     and event.get('thread_id') == bound['child_session']
                     and item.get('id') in pending
-                    and item.get('status') in ('completed', 'failed') and terminal):
+                    and item.get('status') in ('completed', 'failed') and item_terminal):
                 ended[item['id']] = 'native-record'
         if record.get('type') == 'user':
             content = (record.get('message') or {}).get('content')
@@ -637,6 +703,17 @@ def reconcile_tools(root, attempt):
                 if isinstance(item, dict) and item.get('type') == 'tool_result' and item.get('tool_use_id') in pending:
                     ended[item['tool_use_id']] = 'native-record'
     owner = value['owners'][value['attempts'][attempt['id']]['owner']]
+    # Codex may omit the inner FileChange/post-hook when apply_patch fails before
+    # execution. Its native completed child is the lifecycle boundary for this
+    # built-in edit, not for commands, helpers or arbitrary external tools.
+    from .authority import newer
+    if (owner['host']=='codex' and terminal and terminal.get('status')=='completed'
+            and terminal.get('native_id')==bound['child_session']):
+        for key in pending-ended.keys():
+            tool=value['tools'][key]
+            if (tool['kind']=='tool' and tool.get('name')=='apply_patch'
+                    and newer(terminal.get('completed_at'),tool.get('started'))):
+                ended[key]='native-child-completed'
     if Path(owner['marker']).exists():
         from .controls import busy
         # verify holds oh-runner.lock across every check and its final journal
@@ -654,6 +731,8 @@ def reconcile_tools(root, attempt):
             for key, source in ended.items():
                 value['tools'][key]['ended'] = now()
                 value['tools'][key]['completion_source'] = source
+    return owner['host']=='codex' and any(value['tools'][key]['kind']=='tool'
+        and value['tools'][key].get('name')=='apply_patch' for key in pending-ended.keys())
 
 
 def unlaunched_stop(root, attempt, stopped):
@@ -745,7 +824,9 @@ def owned_command(root, attempt, argv):
                       and v.get('argv') == digest(argv) and not v.get('ended') and v.get('receipt')
                       and Path(v['receipt']).is_dir() and not (Path(v['receipt']) / 'claimed.json').exists()]
         if not candidates:
-            raise Refused('OH has no native hook reservation for this command. Enable/trust the OH hooks and retry the same native call.')
+            raise Refused('OH has no native hook reservation for this command. The callback may not have run or matched this invocation. '
+                          'Check the host hook execution error and the packet command prefix; repair the cause before retrying the same native call. '
+                          'This does not establish that hook trust is missing.')
         receipt = Path(candidates[0]['receipt'])
         atomic_json(receipt / 'claimed.json', {'attempt': attempt, 'argv': digest(argv), 'at': now()}, immutable=True)
     from .processes import interruptible, launch

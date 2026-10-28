@@ -1,5 +1,17 @@
 # Saved work and recovery
 
+## A native command has no reservation
+
+Preserve the failed attempt and diagnose the callback before retrying it. In Codex,
+inspect the current hook definitions through the native CLI: open Terminal in the
+project, run `codex`, then enter `/hooks`. A plugin can be enabled while its changed
+control hooks are skipped because their saved trust belongs to an older definition.
+If that is the observed cause, show the exact changed hooks for human review and
+trust; never write trust hashes or infer approval from a plugin's enabled state.
+Use the same approved scope and remaining allowance after repairing the prerequisite.
+A missing reservation alone does not prove a trust problem: when hooks are trusted,
+inspect callback errors, actor identity and the exact formatted command instead.
+
 ## Delivery entry and recovery
 
 For an unfinished delivery, use `decision-request recover --run ID` (Codex
@@ -17,13 +29,19 @@ owner. A deleted chat does not require recreating its transcript: missing result
 are abandoned, never counted as successful. Preserve the answer through bounded
 cleanup retries; do not ask again or make the person manage worker IDs.
 
-Continue preserves existing changes and usable evidence. When the old branch is
+Continue preserves approved supporting repairs, existing changes and usable evidence, including checkpoint commits
+and writes that finish during cleanup. Keep the same Resume answer for that work;
+changed files require current checks and review, not another continuation approval.
+Missing review evidence is remaining work to complete, not a requirement that the
+person repair OH records. The next review includes unreviewed branch commits.
+When the old branch is
 already merged and has no extra changes, it starts from the refreshed base on the
 delivery branch. Start fresh discards precisely the changes and branch work shown
 in the question, starts from its displayed base, and authorizes the displayed
 bounded task batch. No backup is made; ignored files and other branches are not
-discarded. Existing review usage and findings remain. Stop and take over revokes
-OH execution and leaves files untouched. If files changed after the question,
+discarded. Repair approvals for restarted tasks are discarded with that work; their
+history, existing review usage and findings remain. Stop and take over revokes
+OH execution and leaves files untouched. For Start fresh, if files changed after the question,
 inspect those changes before presenting the updated effect; the old answer cannot
 authorize discarding unseen work.
 
@@ -32,6 +50,12 @@ assessment, implementation, checks, independent review and completion. Do not
 reprepare the same scope or reset allowances. Missing credentials, required project
 checks, scope changes and operations whose cleanup is unverified still need their
 specific remedy; recovery does not bypass these prerequisites.
+
+An author result marked `reported` means the native agent returned its report;
+it does not establish successful implementation. Older `implemented` labels also
+need candidate, check and review evidence. Historical reports describe their own
+attempts. After recovery or a runtime update, recheck a reported execution failure
+through the newly admitted worker before claiming it still blocks the current run.
 
 For new design delivery, `scope prepare --doc` refreshes the base, checks actual
 Git ancestry, selects approved pending work and creates its delivery branch. It

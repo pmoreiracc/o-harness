@@ -4,7 +4,7 @@ import csv
 import io
 import json
 import os
-from pathlib import Path
+from .system import Path
 import plistlib
 import subprocess
 import sys
@@ -35,7 +35,7 @@ if not (job and kernel32.SetInformationJobObject(job,9,ctypes.byref(limits),ctyp
     # Without the job an ended task would leave its server holding the port: refuse to start instead.
     open(CONFIG['errors'],'a').write('OH dashboard: could not set up its job object (error %%d)\\n'%%ctypes.get_last_error())
     raise SystemExit(1)
-data=CONFIG['env']['OH_DATA_HOME']
+data=CONFIG['data']
 while True:
     revision=json.loads(open(os.path.join(data,'runtime','active.json'),'rb').read())['revision']
     with open(CONFIG['log'],'ab') as out,open(CONFIG['errors'],'ab') as errors:
@@ -84,7 +84,8 @@ def install_windows():
     if not (state_home()/'bin/oh').is_file():raise Refused('OH is not set up. Run the plugin scripts/oh setup first.')
     logs=state_home()/'logs';logs.mkdir(exist_ok=True)
     python=Path(sys.executable);windowless=python.with_name('pythonw.exe')
-    config={'python':str(python),'log':str(logs/'dashboard.log'),'errors':str(logs/'dashboard-error.log'),
+    config={'python':str(python),'data':os.fspath(state_home()),
+            'log':os.fspath(logs/'dashboard.log'),'errors':os.fspath(logs/'dashboard-error.log'),
             'env':{'OH_DATA_HOME':str(state_home()),'OH_SERVICE_FOLLOWS_ACTIVE':'1','PATH':os.environ.get('PATH','')}|(
                 {'XDG_CONFIG_HOME':os.environ['XDG_CONFIG_HOME']} if os.environ.get('XDG_CONFIG_HOME') else {})}
     from .config import write_text

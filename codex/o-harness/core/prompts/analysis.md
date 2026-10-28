@@ -2,6 +2,8 @@
 
 Validate the supplied immutable admission before working. Follow the packet's
 `native_commands` for shell execution, using the native tool's normal permissions.
+Read the verified `task_context` returned by admission. In Codex, use `command_format`
+for shell quoting and run its returned command unchanged with the native shell tool.
 Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,
 never inside `owned-command`. Do not substitute the coordinator's plugin launcher.
 Do not detach work or switch execution tools to bypass cancellation. A Stop refusal or exit 130 ends

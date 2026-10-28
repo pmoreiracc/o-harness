@@ -11,7 +11,21 @@ def boundary(root,state,kind,attempt=None):
         value.update(_subject(root,state),done=state['done'],granted=state['granted'],
                      reviews=[a['id'] for a in state['attempts'] if a['role']=='review'],
                      grants=state.get('review_grants',[]),attempt=attempt)
+        if kind=='approve-repair':value['recovery_decision']=state.get('recovery_decision')
+    if state.get('approved_repairs') and kind not in ('pause','stop'):value['approved_repairs']=state['approved_repairs']
     return value
+
+
+def repair_task(root,state):
+    """Additional repair authority supplements one unfinished delivery task."""
+    from .native import _active, _idle
+    task=next_task(state)
+    if state.get('workflow')!='deliver' or not task or task['id'] in state['done'] or state.get('extra_review') or state.get('correction'):
+        raise Refused('Resume the unfinished delivery task before proposing its supporting repair')
+    _idle(root)
+    if _active(state):raise Refused('Retain the current worker result before proposing the additional repair')
+    if state['commit_intents'].get(task['id']):raise Refused('Settle the existing reviewed commit with complete before selecting further work')
+    return task
 
 
 def _checkpoint(root,state,kind,details):
@@ -51,10 +65,11 @@ def _checkpoint(root,state,kind,details):
             'checkpoint_status':state['status'],'publication_destination':dest,'unavailable':unavailable}
 
 
-def prepare(root,kind,attempt=None,rounds=None,run=None,also=None):
+def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None):
     from .native import _locked, _home, _immutable, _attempt, _saved_subject, _active
     with _locked(root):
         journal,state=load_run(root,run)
+        if repair is not None and kind!='approve-repair':raise Refused('A repair description belongs to approve-repair')
         if kind=='recover':
             from .recovery import prepare
             return prepare(root,state)
@@ -72,6 +87,13 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None):
                       f'\nConfigured renewal window: {state["config"]["review_rounds"]} review rounds.'
                       f'\nThis adds exactly {count} review round'+('s.' if count!=1 else '.'))
         elif rounds is not None:raise Refused('A review count belongs only to a review allowance decision')
+        elif kind=='approve-repair':
+            task=repair_task(root,state)
+            if attempt is not None or also is not None:raise Refused('Present the supporting repair as one complete decision')
+            if not isinstance(repair,str) or not repair.strip():raise Refused('Describe the bounded supporting repair and why it needs additional approval')
+            label='Approve repair and continue'
+            details+=(f'\nTask: {task["id"]} — {task["title"]}\nSupporting repair: {repair.strip()}'
+                      '\nContinue this same task with the repair included. Original tasks, required checks, remaining review allowance and publication authority stay unchanged.')
         elif kind=='continue':
             ids=[t['id'] for t in state['tasks'] if t['id'] not in state['done']][:state['config']['tasks_per_batch']]
             if not ids or any(t in state['granted'] for t in ids):raise Refused('Use existing task authority before asking for another batch')
@@ -104,6 +126,7 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None):
         value={'kind':kind,'run':state['id'],'attempt':attempt,'boundary':boundary(root,state,kind,attempt),
                'question':details+'\n\n'+label+'?','label':label,'created_at':now()}
         if kind=='grant-review':value['rounds']=count
+        if kind=='approve-repair':value.update(task=task['id'],repair=repair.strip())
         checkpoint=_checkpoint(root,state,kind,f'Work: {subject}\nBranch: {state["branch"]}') if also is None and attempt is None else None
         if checkpoint:value.update(checkpoint)
         elif kind=='publish' and not dest:destination(root,required=True)
@@ -132,7 +155,9 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     if (digest(value)!=key or (kind not in choices if choices else value['kind']!=kind)
             or value['run']!=state['id'] or value['attempt']!=attempt):
         raise Refused('This answer belongs to a different decision')
-    question=source.get('question','')
+    from .authority import question_text,presented_question_at
+    question=question_text(source.get('question',''))
+    shown_at=source.get('question_at')
     if value.get('presentation') in ('checkpoint-menu','recovery-menu') and source.get('via')=='question':
         if value['presentation']=='checkpoint-menu' and {k:source.get(k) for k in ('host','session')}!=value['coordinator']:
             raise Refused('This checkpoint belongs to its saved coordinator; resume the work before presenting a new checkpoint')
@@ -140,15 +165,19 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
         expected=value['menu_options']
         if not isinstance(shown,list) or len(shown)!=len(expected) or set(shown)!=set(expected):
             raise Refused('Use the complete single-select checkpoint menu; retain the prepared decision and all its choices')
-    elif (question!=value['question'] if source.get('via')=='question' else value['question'] not in question):
+    elif source.get('via')=='question' and question!=question_text(value['question']):
         raise Refused('Use the actual native question for this prepared decision')
+    elif source.get('via')!='question':
+        shown_at=presented_question_at(source,value['question'])
+        if shown_at is None:raise Refused('Use the actual native question for this prepared decision')
     # A short ordinary-chat Yes is valid only about this exact, already-bound question.
     label=choices[kind] if choices else value['label']
     accepted=(label.casefold(),) if choices else (label.casefold(),'yes','yes please')
+    if kind=='resume':accepted+=('resume','resume the saved work','yes, resume saved work','please resume saved work')
     if source['prompt'].strip().casefold().rstrip('.!') not in accepted:
         raise Refused('This native answer does not accept the presented effect; preserve it and resolve the actual choice')
     from .authority import newer
-    if not source.get('question_at') or not newer(source['question_at'],value['created_at']):
+    if not newer(shown_at,value['created_at']):
         raise Refused('This native question predates the prepared decision')
     if not replay:
         if value.get('presentation')=='checkpoint-menu' and {k:state['human'].get(k) for k in ('host','session')}!=value['coordinator']:
@@ -182,8 +211,10 @@ def verify_scope(root,scope,locator,source):
     if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key):raise Refused('Use the prepared scope approval question')
     value=read_json(_home(root)/'decisions'/(key+'.json'))
     if digest(value)!=key or value.get('kind')!='approve-scope' or value['scope']!=digest(scope):raise Refused('This answer belongs to another scope')
-    question=source.get('question','')
-    if (question!=value['question'] if source.get('via')=='question' else value['question'] not in question) or source['prompt'].strip().casefold().rstrip('.!') not in ('approve this scope','yes','yes please'):
+    from .authority import question_text,presented_question_at
+    question=question_text(source.get('question',''))
+    shown_at=source.get('question_at') if source.get('via')=='question' else presented_question_at(source,value['question'])
+    if (question!=question_text(value['question']) if source.get('via')=='question' else shown_at is None) or source['prompt'].strip().casefold().rstrip('.!') not in ('approve this scope','yes','yes please'):
         raise Refused('This answer does not approve the presented scope')
     from .authority import newer
-    if not source.get('question_at') or not newer(source['question_at'],value['created_at']):raise Refused('This question predates the prepared scope')
+    if not newer(shown_at,value['created_at']):raise Refused('This question predates the prepared scope')

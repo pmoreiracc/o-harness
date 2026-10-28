@@ -1,5 +1,5 @@
 """Prepare immutable bounded scope without granting it or launching an agent."""
-from pathlib import Path
+from .system import Path
 from .storage import Refused, project, state_home, read_json
 
 
