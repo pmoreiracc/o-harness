@@ -52,8 +52,12 @@ Registering a project changes nothing in its repository.
 
 ## Windows
 
-CI runs the tests on a Windows Server runner, but no real Claude Code or Codex run on
-Windows has been recorded yet, so treat Windows support as a preview.
+Windows support remains a preview. Native Claude Code delivery and Stop/recovery
+passed on Windows 10 build 19045 with the compatibility candidate. An earlier native
+Codex continuation also completed, but native Windows Codex execution of the final
+combined candidate has not been tested. CI covers additional Windows behavior; see
+the [acceptance summary](plans/release-compatibility.md#acceptance-summary-2026-10-28)
+for the tested versions and remaining limits.
 
 - **Git for Windows**, which includes Git Bash: Claude Code runs OH's hooks through it.
 - Codex uses its default Windows `cmd` hook runner. A custom PowerShell hook shell is not
@@ -77,8 +81,8 @@ Windows has been recorded yet, so treat Windows support as a preview.
   OH does not remove Claude's shell or install a replacement Windows sandbox.
   Codex shell hooks accept both canonical `Bash` command payloads and native
   `exec_command` payloads (`cmd`); both require the same owned-command reservation.
-  Real native Windows workflow and Stop validation are still required before claiming
-  support for this candidate.
+  Native Claude workflow and Stop/recovery validation passed for the tested build;
+  that result does not establish every Windows host configuration or native Codex path.
 - `oh service-install` adds a Task Scheduler task that starts the dashboard at logon,
   without admin rights or a window; `oh service-uninstall` removes it.
 

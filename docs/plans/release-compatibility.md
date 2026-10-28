@@ -1,10 +1,83 @@
 # Release compatibility and native acceptance audit
 
-Status: checkpoint prepared for final validation and fresh independent review. This
-document preserves the audit history; older status entries describe the candidate at
-that time and do not override the current summary below. It is not a release-readiness
-claim. The developer requested automated acceptance; fixture results remain distinct
-from native-host acceptance.
+This document records acceptance evidence for the compatibility branch. Native
+acceptance below is complete for the listed scenarios. It does not replace review of
+the final PR candidate, PR CI or the release workflow's checks. Older entries are historical
+observations, not current blockers or authority.
+
+## Acceptance summary 2026-10-28
+
+The compatibility history through `4570a34` and the hook-readiness correction
+`ac8c917` were preserved together. The production icon supplied by the maintainer
+was included in the tested development snapshots and is included in this PR.
+
+### Native host evidence
+
+| Host | Observed result | Coverage limit |
+| --- | --- | --- |
+| macOS Codex Desktop 26.1016.61520 (21421), bundled runtime 0.163.0-alpha.11.1 | Fresh delivery passed assessment, implementation, registered checks, independent review and local completion. Actual parent Stop terminated an owned check and its descendant; genuine Continue preserved the candidate and allowance and reached reviewed completion. | This validates OH-owned commands on this host build, not all native or detached child workloads. |
+| macOS Claude Code 2.1.311 | Fresh delivery and a separate native background-worker Stop/Continue scenario passed through checks, independent review and local completion. The interrupted attempt remained recorded, with no additional grant or review allowance. | Manual permission mode was used after the host's auto-mode reviewer rejected scope binding. |
+| Windows 10 build 19045, Claude Code 2.1.308 | The exact candidate tree was packaged and loaded for one session. Native Stop terminated the live checker and its child. Genuine Continue, the required check, independent review and local completion passed. The working Windows plugin activation stayed unchanged. | A review finding about universal-newline handling in the disposable checker was retained as a follow-up; the delivered file's exact LF bytes were independently verified. |
+| Windows Codex | An earlier compatibility continuation completed with review, commit, publication and successful CI. | Native execution of the final combined candidate was not run. Earlier continuation evidence is not final-build acceptance. |
+| Linux | Earlier focused fixture and helper tests passed. | No fresh native subscription delivery on the final combined candidate was run. |
+
+Mac acceptance used frozen snapshot `0.8.0-SNAPSHOT.1793065294176252000`; the
+Windows candidate used `0.8.0-SNAPSHOT.1793068982363834900`. The later Mac
+shared-store snapshot `0.8.0-SNAPSHOT.1793074438568994000` ran the same corrected
+code in real Geoffrey deliveries. Design 0008 task 4 completed, and
+[PR #183](https://github.com/pmoreiracc/my-geoffrey/pull/183) merged with all checks
+passing. The next run completed tasks 5 and 6 with all four configured checks and
+clean first-round reviews, then published
+[PR #188](https://github.com/pmoreiracc/my-geoffrey/pull/188). Six native agents in
+that run recorded the guard, and all 122 command records completed. The local
+run's success does not substitute for that PR's separate CI result.
+
+### Mac missing-reservation cause and correction
+
+Changing the control-hook timeout from three to ten seconds changed Codex's native
+hook-definition hashes. Saved trust matched the old definitions, while the native
+inventory showed the new controls as modified and untrusted. They were skipped
+before launcher entry, leaving no guard observation or command reservation.
+
+A genuine disposable native workflow reproduced the failure after an already-trusted
+definition was changed from ten to eleven seconds. An independently validated entry
+logger still observed the child tool calls, while the control callback did not enter.
+Restoring the approved definition restored reservations and reviewed completion.
+The original historical payload was not recovered. The internal POSIX 2.5-second
+subprocess deadline was not implicated by this evidence; the earlier release-runtime
+skew hypothesis was incorrect because DEV launchers use their frozen core.
+
+The correction reports native hook trust after `oh-dev on` and during `status`, with
+an actionable human `/hooks` review step. It does not write trust, invent command
+reservations or change execution authority. Fresh CLI inventory remains distinct from
+callback execution in an already-running desktop session.
+
+### Checks, review and release limits
+
+- All 25 affected Mac test modules and syntax passed during PR preparation, including
+  the corrected `/var` versus `/private/var` fixture assumptions. Focused Windows installation and platform
+  modules passed 19 tests with one platform skip; Git Bash syntax, Windows risk,
+  Python compilation and JavaScript syntax checks passed.
+- The six-path hook-readiness correction received a fresh bound independent review
+  with no findings. Publication requires review of the full compatibility candidate
+  and green PR CI; that narrower receipt is not a full-branch review.
+- [Issue #81](https://github.com/pmoreiracc/o-harness/issues/81) remains open for native
+  Codex Stop behavior. The successful OH-owned command cleanup above does not prove
+  that the host terminates every arbitrary child workload. The maintainer's decision
+  that this known host limitation does not block release remains unchanged.
+- Test orchestration caused avoidable friction: hidden terminal sessions, repeated
+  manual command prompts, and a handoff that recorded another Stop. A later Stop
+  correctly required a new native Continue. Shortened decision questions were rejected
+  and had to be presented completely. These observations are not hidden by the successful
+  completion results and do not authorize weakening the native approval checks.
+- Raw transcripts, receipts, approvals and local diagnostic records remain outside
+  the repository. The existing release workflow gates publication on full Windows
+  behavior tests and packaged installation checks on Linux, macOS and Windows.
+
+## Historical audit record
+
+All progress entries below refer to their then-current source and host state. Their
+pending or unavailable labels do not supersede the acceptance summary above.
 
 ## Checkpoint status 2026-10-26
 
@@ -43,10 +116,6 @@ from native-host acceptance.
   and obtain PR CI results. Final-build native Claude, macOS and Linux delivery coverage
   is not established. Earlier subscription/access limitations are historical observations,
   not a claim about their current availability.
-
-## Historical audit record
-
-All following progress entries refer to their then-current source and host state.
 
 ## Baseline and scope
 

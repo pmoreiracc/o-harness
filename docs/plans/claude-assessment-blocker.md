@@ -4,7 +4,7 @@ Historical investigation notes, preserved on 2026-10-26. Status and authorizatio
 statements below describe their original investigation stages, not current authority
 or current release readiness. The synchronous and background result readers now
 contain the described handback and TaskStop handling. See
-[the current acceptance summary](release-compatibility.md#checkpoint-status-2026-10-26)
+[the current acceptance summary](release-compatibility.md#acceptance-summary-2026-10-28)
 for verification limits; these notes are not proof of native acceptance of the final build.
 
 Read-only investigation of the current native Claude Deliver trial confirmed that the assessment completed before OH first refused retention. The native synchronous Agent result already contained completion status and the handback report. The acknowledged child handback had no outstanding tool calls.
