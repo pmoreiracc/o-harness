@@ -48,21 +48,39 @@ def validate_id(value):
     return value
 
 
+def _check_state_root(path):
+    try:info=path.lstat()
+    except FileNotFoundError:return  # state_path may inspect the root before state_home creates it.
+    if path.is_symlink() or WINDOWS and info.st_file_attributes&0x400:
+        raise Refused('OH data directory must not be a symlink or reparse point')
+
+
 def state_home():
     path = Path(os.environ.get('OH_DATA_HOME', str(Path.home() / '.local/share/o-harness'))).expanduser()
     if not path.exists():path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if path.is_symlink():
-        raise Refused('OH data directory must not be a symlink')
+    _check_state_root(path)
     return path.resolve()
+
+
+def _state_root(path):
+    """Match either the configured or resolved root without following a child path."""
+    configured_home=Path(os.environ.get('OH_DATA_HOME',str(Path.home()/'.local/share/o-harness'))).expanduser().absolute()
+    _check_state_root(configured_home)
+    target=Path(path).absolute()
+    if target.is_relative_to(configured_home) and '..' not in target.relative_to(configured_home).parts:
+        return configured_home
+    home=configured_home.resolve()
+    if target.is_relative_to(home) and '..' not in target.relative_to(home).parts:return home
+    return None
 
 
 def state_path(path, *, directory=False):
     """Repair only legacy directory ACLs on the requested OH path, never a store-wide reset."""
     path=Path(path)
     if not WINDOWS:return path
-    home=Path(os.environ.get('OH_DATA_HOME',str(Path.home()/'.local/share/o-harness'))).expanduser().absolute()
     target=(path if directory else path.parent).absolute()
-    if not target.is_relative_to(home):return path
+    home=_state_root(target)
+    if home is None:return path
     current=home
     for part in ('',*target.relative_to(home).parts):
         if part:current=current/part
@@ -75,9 +93,9 @@ def state_path(path, *, directory=False):
 
 def state_mkdir(path):
     path=state_path(path,directory=True)
-    home=Path(os.environ.get('OH_DATA_HOME',str(Path.home()/'.local/share/o-harness'))).expanduser().absolute()
     # The root stays private. Descendants inherit its user/host permissions on Windows.
-    inherited=WINDOWS and path.absolute()!=home and path.absolute().is_relative_to(home)
+    home=_state_root(path) if WINDOWS else None
+    inherited=home is not None and path.absolute()!=home
     path.mkdir(parents=True,exist_ok=True,mode=0o777 if inherited else 0o700)
 
 

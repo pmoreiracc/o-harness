@@ -69,6 +69,15 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         installed = subprocess.run([sys.executable, '-I', str(plugin / 'core/oh'),
                                     'setup', '--development'], capture_output=True, text=True)
         self.assertEqual(installed.returncode, 0, installed.stderr)
+        # The packaged hook uses python.cmd, which may select python3.exe while
+        # the unittest runner uses python.exe. Reserve the hook's real prefix.
+        probe = plugin / 'scripts/probe-python.cmd'
+        probe.write_bytes(b'@echo off\r\n@call ".\\python.cmd"\r\n@echo %OH_PY%\r\n')
+        selected = subprocess.run(['cmd', '/d', '/c', '.\\probe-python.cmd'],
+                                  cwd=probe.parent, capture_output=True, text=True)
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        hook_python = selected.stdout.strip().splitlines()[-1]
+        self.assertTrue(Path(hook_python).is_file(), selected.stdout)
         hooks = json.loads((plugin / 'hooks/hooks.json').read_text())['hooks']
         self.approve();self.launch()
         data = Path(os.environ['OH_DATA_HOME'])
@@ -92,9 +101,11 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         for index, shell in enumerate(shells):
             with self.subTest(shell=shell):
                 argv = [sys.executable, '-c', f'print("reserved-{index}")']
+                with patch('oh.cancellation.sys.executable', hook_python):
+                    command = cancellation.command_line(self.root, self.attempt, argv, windows=True)
                 payload = {'session_id': 's', 'agent_id': self.worker, 'turn_id': 'worker-turn',
                            'tool_use_id': f'windows-command-{index}', 'tool_name': 'Bash',
-                           'tool_input': {'command': cancellation.command_line(self.root, self.attempt, argv, windows=True)}}
+                           'tool_input': {'command': command}}
                 result = invoke(shell, 'PreToolUse', payload)
                 self.assertEqual(result, {}, result)
                 # Execute the exact suggested worker command too, not just its

@@ -54,6 +54,16 @@ callback execution in an already-running desktop session.
 
 ### Checks, review and release limits
 
+- PR CI exposed two Windows cases that were then reproduced on Windows with Python
+  3.12.10. A distinct `python3.exe` selected by the packaged launcher differed from
+  the test runner's interpreter; the fixture now uses the launcher's selection,
+  preserving strict production command matching. A real 8.3 data-root alias and a
+  root containing `..` each caused legacy ACL repair to be skipped. The correction
+  recognizes configured and resolved root spellings for repair and new-directory
+  inheritance, without resolving child paths. Both cases passed after correction;
+  configured-root and child junctions are refused, and existing root, custom and
+  unrelated ACL protections passed focused checks. These are Windows OS fixtures,
+  not additional native subscription deliveries or a replacement for green PR CI.
 - All 25 affected Mac test modules and syntax passed during PR preparation, including
   the corrected `/var` versus `/private/var` fixture assumptions. Focused Windows installation and platform
   modules passed 19 tests with one platform skip; Git Bash syntax, Windows risk,

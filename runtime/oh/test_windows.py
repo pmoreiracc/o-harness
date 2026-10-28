@@ -503,6 +503,58 @@ class NativeWindowsTest(unittest.TestCase):
                 self.assertEqual(acl(outside),external_acl)
             finally:os.rmdir(junction)
 
+    @unittest.skipUnless(os.name=='nt','Windows directory ACLs')
+    def test_legacy_acl_repair_with_noncanonical_data_home(self):
+        import ctypes
+        from . import system
+        from .storage import Refused,state_home,state_mkdir,state_path,read_json
+        def protected(path):
+            descriptor=ctypes.c_void_p()
+            error=system._advapi32.GetNamedSecurityInfoW(str(path),1,4,None,None,None,None,ctypes.byref(descriptor))
+            if error:raise ctypes.WinError(error)
+            try:
+                control=ctypes.c_ushort();revision=ctypes.c_ulong()
+                self.assertTrue(system._advapi32.GetSecurityDescriptorControl(descriptor,ctypes.byref(control),ctypes.byref(revision)))
+                return bool(control.value&0x1000)
+            finally:system._kernel32.LocalFree(descriptor)
+        with tempfile.TemporaryDirectory(prefix='OH Long Folder Alias ') as tmp:
+            (Path(tmp)/'alias').mkdir()
+            short_buffer=ctypes.create_unicode_buffer(32768)
+            size=ctypes.windll.kernel32.GetShortPathNameW(tmp,short_buffer,len(short_buffer))
+            self.assertTrue(size and size<len(short_buffer))
+            roots=[tmp+'/alias/../state-relative']
+            if short_buffer.value!=tmp:roots.append(short_buffer.value+'/state-short')
+            for index,configured in enumerate(roots):
+                with self.subTest(configured=configured),patch.dict(os.environ,{'OH_DATA_HOME':configured}):
+                    home=state_home()
+                    legacy=home/'registry/checkouts';legacy.mkdir(parents=True,mode=0o700)
+                    entry=legacy/'saved.json';entry.write_text('{"preserved":true}')
+                    self.assertTrue(protected(legacy))
+                    self.assertEqual(read_json(entry),{'preserved':True})
+                    self.assertFalse(protected(legacy))
+                    new=home/'new/nested';state_mkdir(new)
+                    self.assertFalse(protected(new))
+                    outside_child=Path(tmp)/f'outside-child-{index}';outside_child.mkdir(mode=0o700)
+                    child=home/'redirected'
+                    subprocess.run(['cmd','/d','/c','mklink','/J',str(child),str(outside_child)],check=True,capture_output=True)
+                    try:
+                        before=protected(outside_child)
+                        with self.assertRaisesRegex(Refused,'reparse point'):state_path(child/'record.json')
+                        self.assertEqual(protected(outside_child),before)
+                    finally:os.rmdir(child)
+            outside=Path(tmp)/'outside';outside.mkdir(mode=0o700)
+            external=outside/'registry/checkouts';external.mkdir(parents=True,mode=0o700)
+            external_entry=external/'saved.json';external_entry.write_text('{"preserved":true}')
+            junction=Path(tmp)/'state-junction'
+            subprocess.run(['cmd','/d','/c','mklink','/J',str(junction),str(outside)],check=True,capture_output=True)
+            try:
+                with patch.dict(os.environ,{'OH_DATA_HOME':str(junction)}):
+                    self.assertTrue(protected(external))
+                    with self.assertRaisesRegex(Refused,'reparse point'):state_home()
+                    with self.assertRaisesRegex(Refused,'reparse point'):read_json(external_entry)
+                    self.assertTrue(protected(external))
+            finally:os.rmdir(junction)
+
     def test_oh_never_runs_a_command_planted_in_the_checkout(self):
         checkout = Path(tempfile.mkdtemp());self.addCleanup(shutil.rmtree, checkout, ignore_errors=True)
         # A self-contained program as "git": whoami answers "git -C ..." with "Invalid argument/option".
