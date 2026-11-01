@@ -1073,6 +1073,20 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         feedback=Journal(self.project_id,standalone['run']);feedback_records=feedback.records()
         from .storage import checkout_file
         pointer=checkout_file(self.root,'oh-active-review.json');binding=pointer.read_bytes()
+        # Upgrading registration must preserve a stopped delivery, completed feedback,
+        # and the spent review round before either host's saved-work discovery runs.
+        from .test_registry import legacy_registration
+        legacy_registration(self.root,remounted=True,birth=False)
+        from .cli import main
+        from .mcp_server import command
+        import contextlib
+        for arguments in (['status','--saved'],command('status',{'saved':True},self.root)):
+            output=io.StringIO()
+            with contextlib.redirect_stdout(output):main(['--root',str(self.root),*arguments])
+            saved=json.loads(output.getvalue())['saved_work']
+            self.assertEqual({item['run'] for item in saved},{original['id'],standalone['run']})
+        self.assertEqual(original_journal.records(),records)
+        self.assertEqual(feedback.records(),feedback_records)
         self.assertEqual(native.resume(self.root)['run'],original['id'])
         self.assertEqual(pointer.read_bytes(),binding)
         discovered=native.saved_work(self.root)['saved_work']

@@ -1,4 +1,5 @@
 {
+  "description": "OH hooks provide conversation references for workflow decisions, check agent launch settings, track agent and tool activity, and honor requests to stop OH work.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -6,6 +7,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/human-event.py\" claude",
+            "statusMessage": "OH: providing the conversation reference for workflow decisions",
             "timeout": 15
           }
         ]
@@ -18,6 +20,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/agent-launch.py\" claude",
+            "statusMessage": "OH: checking agent settings before launch",
             "timeout": 15
           }
         ]
@@ -27,6 +30,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "statusMessage": "OH: checking whether work may continue before a tool runs",
             "timeout": 10
           }
         ]
@@ -39,6 +43,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/agent-event.py\" claude",
+            "statusMessage": "OH: recording agent lifecycle evidence",
             "timeout": 15
           }
         ]
@@ -48,6 +53,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "statusMessage": "OH: recording completed tool activity",
             "timeout": 10
           }
         ]
@@ -60,6 +66,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/agent-event.py\" claude",
+            "statusMessage": "OH: recording finished agents",
             "timeout": 15
           }
         ]
@@ -71,6 +78,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "statusMessage": "OH: recording failed tool activity",
             "timeout": 10
           }
         ]
@@ -82,6 +90,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "statusMessage": "OH: tracking a started agent",
             "timeout": 10
           }
         ]
@@ -93,6 +102,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" --hook \"${CLAUDE_PLUGIN_ROOT}/scripts/native-control.py\" claude",
+            "statusMessage": "OH: recording your request to stop work",
             "timeout": 5
           }
         ]

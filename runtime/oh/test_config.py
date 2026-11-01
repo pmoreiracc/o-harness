@@ -195,6 +195,41 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(list(kept.glob('*-unused-project-settings/projects/retired-project/config.json')))
         self.assertEqual(len(list(kept.glob('*-unused-project-settings/projects/*/checks.json'))),1)
 
+    def test_historical_worktree_profiles_share_only_compatible_legacy_settings(self):
+        from .storage import identifier
+        from .registry import lookup
+        sibling=self.temp/'sibling'
+        subprocess.run(['git','-C',str(self.root),'worktree','add','-qb','sibling',str(sibling)],check=True,capture_output=True)
+        with patch('oh.registry.free'),patch('oh.registry.repository_projects',return_value=set()):
+            register(sibling,'Fixture',imported={'id':identifier()})
+        before=[lookup(root) for root in (self.root,sibling)]
+        for root in (self.root,sibling):
+            (self.legacy_by(root)/'config.json').write_text('{"review_rounds": 5}')
+        self.assertEqual((load(self.root)['review_rounds'],load(sibling)['review_rounds']),(5,5))
+        conflict=self.legacy_by(sibling)/'config.json'
+        conflict.write_text('{"review_rounds": 6}')
+        with self.assertRaisesRegex(Refused,'differs|differently'):load(self.root)
+        self.assertTrue(conflict.exists())
+        self.assertEqual([lookup(root) for root in (self.root,sibling)],before)
+
+    def test_unverified_legacy_registration_keeps_settings_until_identity_is_restored(self):
+        from .registry import index_path,lookup
+        from .storage import atomic_json
+        from .test_registry import legacy_registration
+        original=lookup(self.root);folder=self.legacy_by(self.root)
+        settings=folder/'config.json';checks=folder/'checks.json'
+        settings.write_text('{"review_rounds":7}')
+        checks.write_text('[{"name":"retained","command":["true"]}]')
+        before={p:p.read_bytes() for p in (settings,checks)}
+        valid=legacy_registration(self.root,birth=False)
+        legacy_registration(self.root,remounted=True,birth=False)
+        with self.assertRaisesRegex(Refused,'could not verify'):load(self.root)
+        self.assertEqual({p:p.read_bytes() for p in before},before)
+        atomic_json(index_path(self.root),valid)
+        self.assertEqual(load(self.root)['review_rounds'],7)
+        self.assertEqual(project_checks(self.root),[{'name':'retained','command':['true']}])
+        self.assertEqual(lookup(self.root),original)
+
     def test_rename_never_takes_over_other_settings(self):
         change(self.root,'review_rounds','7')
         self.write(self.read()|{'projects':self.read()['projects']|{'Site':{'tasks_per_batch':40,'checks':[{'name':'x','command':['rm','-rf','build']}]},

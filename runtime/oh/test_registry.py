@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -7,6 +8,21 @@ import unittest
 from unittest.mock import patch
 from .registry import register, lookup, checkout_state, profile
 from .storage import Refused
+
+
+def legacy_registration(root, *, remounted=False, birth=True):
+    """A schema-1 registration from before Git-history checkout identity."""
+    from .registry import index_path
+    from .storage import read_json, atomic_json
+    old=read_json(index_path(root))
+    legacy=old | {'schema_version':1,'identity':{k:v for k,v in old['identity'].items() if k!='commit'}}
+    for key in ('root','admin','common'):
+        st=Path(legacy['identity'][key]).stat()
+        stamp={'device':st.st_dev+int(remounted),'inode':st.st_ino}
+        if birth and hasattr(st,'st_birthtime'):stamp['birth']=st.st_birthtime
+        legacy['identity'][key+'_identity']=stamp
+    atomic_json(index_path(root),legacy)
+    return legacy
 
 
 class RegistryTests(unittest.TestCase):
@@ -68,6 +84,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_clones_and_sibling_worktrees_cannot_borrow_checkout_authority(self):
         original = register(self.root, 'Fixture')
+        legacy_registration(self.root)
         clone = self.base / 'clone'
         self.git('clone', '-q', str(self.root), str(clone))
         from .registry import index_path
@@ -82,6 +99,8 @@ class RegistryTests(unittest.TestCase):
         self.assertNotEqual(original['id'], other['id'])
         sibling = self.base / 'sibling with spaces'
         self.git('worktree', 'add', '-qb', 'sibling', str(sibling))
+        from .storage import read_json
+        self.assertEqual(read_json(index_path(self.root))['schema_version'],1)
         register(sibling, 'Fixture', attach=original['id'])
         from .registry import identity
         current = identity(sibling)
@@ -167,28 +186,131 @@ class RegistryTests(unittest.TestCase):
         clone=self.base/('clone-'+sibling.name);self.git('clone','-q',str(main),str(clone),root=self.base)
         with self.assertRaisesRegex(Refused,'already named'):register(clone,name)  # another repository never joins
 
-    def test_legacy_registration_requires_fresh_setup_and_preserves_settings_and_files(self):
+    def test_legacy_registration_upgrades_in_place_and_preserves_settings_and_files(self):
         from .registry import index_path
         from .storage import read_json, atomic_json
         from .config import change, project_checks
-        original=register(self.root,'Fixture');old=lookup(self.root)
+        original=register(self.root,'Fixture',kind='harness');old=lookup(self.root)
         change(self.root,'checks','[{"name":"tests","command":["true"]}]')
-        legacy=old | {'schema_version':1,'identity':{k:v for k,v in old['identity'].items() if k!='commit'}}
-        for key in ('root','admin','common'):legacy['identity'][key+'_identity']={'device':1,'inode':1}
-        atomic_json(index_path(self.root),legacy)
+        legacy=legacy_registration(self.root)
         (checkout_state_path:=self.base/'state/checkout-state'/old['checkout']).mkdir(parents=True)
         (checkout_state_path/'oh-active-run.json').write_text('{"old":"saved evidence"}')
         before=self.inventory()
-        with self.assertRaisesRegex(Refused,'older filesystem registration'):lookup(self.root)
-        fresh=register(self.root,'Fixture',replace=True)
-        self.assertNotEqual(fresh['id'],original['id'])
-        self.assertNotEqual(lookup(self.root)['checkout'],old['checkout'])
-        self.assertFalse((checkout_state(self.root)/'oh-active-run.json').exists())
+        self.assertEqual(lookup(self.root),old)
+        self.assertEqual(register(self.root,'Fixture'),original)
+        self.assertEqual(profile(self.root),original)
+        self.assertEqual(checkout_state(self.root),checkout_state_path)
         self.assertTrue((checkout_state_path/'oh-active-run.json').is_file())
         self.assertEqual(project_checks(self.root),[{'name':'tests','command':['true']}])
         self.assertEqual(self.inventory(),before)
-        retired=list((self.base/'state/registry/retired').glob('*.json'))
-        self.assertEqual([read_json(p) for p in retired],[legacy])
+        upgrades=list((self.base/'state/registry/upgrades').glob('*.json'))
+        self.assertEqual([read_json(p) for p in upgrades],[legacy])
+        self.assertFalse((self.base/'state/registry/retired').exists())
+
+    def test_registration_upgrade_retries_after_interruption_and_concurrent_readers(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from .registry import index_path
+        from .storage import atomic_json,read_json
+        register(self.root,'Fixture');old=lookup(self.root)
+        legacy=legacy_registration(self.root,birth=False)
+        path=index_path(self.root)
+        def interrupted(destination,value,**kwargs):
+            if destination==path:raise OSError('interrupted before publishing registration')
+            return atomic_json(destination,value,**kwargs)
+        with patch('oh.registry.atomic_json',side_effect=interrupted):
+            with self.assertRaisesRegex(OSError,'interrupted'):lookup(self.root)
+        self.assertEqual(read_json(path),legacy)
+        with ThreadPoolExecutor(max_workers=2) as readers:
+            self.assertEqual(list(readers.map(lookup,[self.root,self.root])),[old,old])
+        backups=list((self.base/'state/registry/upgrades').glob('*.json'))
+        self.assertEqual([read_json(p) for p in backups],[legacy])
+        self.assertEqual(read_json(path),old)
+
+    def test_legacy_worktree_join_and_settings_edit_do_not_require_registration_reset(self):
+        from .config import change,project_checks,load
+        from .storage import identifier
+        from .registry import rename
+        original=register(self.root,'Fixture',kind='harness')
+        legacy_registration(self.root)
+        sibling=self.base/'sibling';self.git('worktree','add','-qb','sibling',str(sibling))
+        # Earlier runtimes treated the legacy main checkout as absent and created
+        # a second profile. Recovery must not merge their histories or grants.
+        with patch('oh.registry.free'),patch('oh.registry.repository_projects',return_value=set()):
+            separate=register(sibling,'Fixture',imported={'id':identifier()})
+        sibling_id=lookup(sibling)['checkout']
+        self.assertNotEqual(separate['id'],original['id'])
+        change(self.root,'checks','[{"name":"tests","command":["true"]}]')
+        self.assertEqual(profile(self.root),original)
+        self.assertEqual(project_checks(sibling),[{'name':'tests','command':['true']}])
+        self.assertEqual(profile(sibling),separate)
+        fresh=self.base/'fresh';self.git('worktree','add','-qb','fresh',str(fresh))
+        self.assertEqual(register(fresh)['id'],original['id'])
+        change(sibling,'review_rounds','7')
+        # Historical profiles can share private settings while only the main
+        # profile owns the folder. Renaming the sibling must select its own name.
+        from .config import settings_file
+        from .private_storage import reserve,owned
+        from .plans import layout
+        folder=self.base/'private';main_plans=folder/'Fixture'
+        reserve(main_plans,original);main_plans.mkdir(parents=True)
+        document=main_plans/'notes.md';document.write_text('original plans')
+        data=json.loads(settings_file().read_text())
+        data['projects']['Fixture']['plans']={'location':'private','private_folder':str(folder)}
+        settings_file().write_text(json.dumps(data))
+        rename(sibling,'Separate')
+        self.assertEqual((load(self.root)['review_rounds'],load(sibling)['review_rounds']),(7,7))
+        self.assertEqual(project_checks(sibling),project_checks(self.root))
+        self.assertEqual((profile(sibling)['id'],lookup(sibling)['checkout']),(separate['id'],sibling_id))
+        self.assertEqual(layout(self.root)['base'],main_plans)
+        self.assertEqual(layout(sibling)['base'],folder/'Separate')
+        self.assertTrue(owned(main_plans,original))
+        self.assertTrue(owned(folder/'Separate',profile(sibling)))
+        self.assertEqual(document.read_text(),'original plans')
+        # A profile with its own legacy documents keeps those, even when its
+        # shared-name folder belongs to the main profile. Later explicit paths
+        # retain the same location across another rename.
+        from .registry import profile_path
+        from .storage import atomic_json
+        atomic_json(profile_path(sibling),separate)
+        legacy=self.base/'state/projects'/separate['id']/'plans';legacy.mkdir()
+        (legacy/'notes.md').write_text('sibling plans')
+        for name in ('WithLegacy','WithExplicitPath'):
+            rename(sibling,name)
+            self.assertEqual(layout(sibling)['base'],legacy)
+            self.assertTrue(owned(legacy,profile(sibling)))
+            self.assertEqual((legacy/'notes.md').read_text(),'sibling plans')
+            self.assertEqual(document.read_text(),'original plans')
+
+    def test_unverifiable_legacy_registration_and_future_versions_are_not_reset(self):
+        from .registry import index_path
+        from .storage import atomic_json,read_json
+        register(self.root,'Fixture');legacy=legacy_registration(self.root)
+        path=index_path(self.root)
+        (self.root/'.git').rename(self.base/'old-git');self.git('init','-q')
+        with self.assertRaisesRegex(Refused,'could not verify'):lookup(self.root)
+        self.assertEqual(read_json(path),legacy)
+        future=legacy | {'schema_version':99}
+        atomic_json(path,future)
+        with self.assertRaisesRegex(Refused,'Update OH'):lookup(self.root)
+        self.assertEqual(read_json(path),future)
+        self.assertFalse((self.base/'state/registry/upgrades').exists())
+
+    def test_legacy_history_must_be_verified_and_registration_cannot_move_to_a_clone(self):
+        from .registry import index_path
+        from .storage import Journal,identifier,read_json
+        register(self.root,'Fixture');old=lookup(self.root)
+        run=identifier();journal=Journal(old['project'],run)
+        journal.append('run.started',{'id':run,'project':old['project'],'checkout':old['checkout'],
+                                     'base':old['identity']['commit']})
+        legacy=legacy_registration(self.root,remounted=True,birth=False)
+        clone=self.base/'clone';self.git('clone','-q',str(self.root),str(clone))
+        index_path(clone).write_bytes(index_path(self.root).read_bytes())
+        with self.assertRaisesRegex(Refused,'another checkout'):lookup(clone)
+        # A valid prior record cannot authorize a different Git history at the old path.
+        (self.root/'.git').rename(self.base/'old-git');self.git('init','-q')
+        with self.assertRaisesRegex(Refused,'recorded Git history'):lookup(self.root)
+        self.assertEqual(read_json(index_path(self.root)),legacy)
+        self.assertFalse((self.base/'state/registry/upgrades').exists())
 
     def test_empty_repository_binds_its_first_commit_before_work(self):
         from .entry import enroll

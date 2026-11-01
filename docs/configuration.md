@@ -45,14 +45,19 @@ Each layer overrides the one before it, key by key:
 2. Your top-level settings, for every project
 3. The project's section, `projects.<name>`
 
-A section belongs to one project, so two projects can't have the same name: `oh init` asks
-for another one, except in a checkout of that project's Git repository (a worktree, or a
-worktree recreated at its old path with `--replace`), which joins that project; `oh config`
-in an unregistered checkout names the project it would join. A registration whose checkout
-was deleted, recreated or restored from a copy doesn't hold its name.
+A section belongs to one repository: `oh init` asks unrelated repositories for different
+names, while sibling worktrees join their repository's project. Historical same-name
+profiles of a verified Git repository can share the section without merging their IDs,
+work or approvals. New worktrees prefer the present main checkout's profile when these
+records coexist; `oh config` names the project an unregistered checkout would join.
+A same-path restore retaining the saved Git history keeps its registration and name.
 `oh rename <new name>` renames a project and its section; it refuses a name whose section
 already holds other settings. If a section is left from an earlier project with that name,
 `oh init` says which settings in it apply.
+Renaming a historical same-repository profile copies its shared settings and leaves the
+original section for its peers. Private documents owned by that profile retain their
+location; a folder owned by a sibling is left untouched and the new name gets its own
+folder. Conflicting explicit private locations still require resolution.
 
 ## Changing settings
 
@@ -77,9 +82,11 @@ files from older versions of OH (`checks.json`, `config.json` and `config.local.
 project's OH folder, and `settings/defaults.json`) are moved into `settings.json` the same
 way, and each project keeps the values it had. A file OH can't move (a value it doesn't
 accept, or a value its section already sets differently) stays where it is and stops only
-its own project (the shared `settings/defaults.json` stops every project), with the reason
-named. Projects registered under the same name before this version stop until you give one
-of them another name with `oh rename`. Files of registrations that were replaced, or of
+its own project, or all historical profiles sharing that repository's section (the shared
+`settings/defaults.json` stops every project), with the reason named. Same-name profiles
+from unrelated repositories still need distinct names through `oh rename`.
+An unverifiable legacy registration keeps its settings files in place until identity
+is restored; a failed verification does not retire its settings. Files of registrations that were replaced, or of
 deleted checkouts whose name another project now uses, are kept in `backups/` without being
 applied.
 
