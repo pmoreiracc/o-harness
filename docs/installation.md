@@ -137,6 +137,18 @@ You can also use the host commands directly:
   The marketplace refresh also updates installed plugins.
 
 Start a new session afterwards. The first OH command you run switches to the new version.
+Older filesystem-based checkout registrations upgrade automatically when OH can verify
+the same Git layout and saved history, or the original directories before work was saved.
+The upgrade preserves project and checkout IDs, settings, plans, saved work and spent
+allowances, and keeps the original registration under `registry/upgrades` in OH's data
+folder. Saved-work discovery performs the same upgrade; no `init --replace` or repeated
+scope approval is needed for a format change. Interrupted upgrades retry safely.
+Historical project records for worktrees of the same verified Git repository can
+use their existing named settings while keeping separate IDs and work histories.
+New worktrees join the present main checkout's project when these records coexist.
+Different repositories or contradictory legacy settings still require resolution.
+If identity cannot be verified, OH preserves the registration and explains how to restore
+the checkout or its Git history. Use `init --replace` only for an intentional replacement.
 Updates only go forward: versions with Windows support install an `oh` command that older
 versions' `setup` refuses to replace, so go back to an older version only with a fresh OH
 data folder.

@@ -275,9 +275,12 @@ containing that commit is the same logical workspace; another clone or sibling w
 has its own checkout authority. Missing saved history must be restored before reuse.
 The usual Resume, branch, scope, exact-review and publication checks still apply.
 
-Older filesystem registrations require a one-time fresh `oh init --replace` at the
-checkout. This preserves project files and named settings and archives the old binding;
-it does not migrate old runs or their approvals. An empty repository records its first
+Older filesystem registrations upgrade automatically when Git layout and saved history,
+or the original directory identity, verify continuity. IDs, saved work, approvals and
+spent allowances are preserved; the original registration is backed up. If verification
+fails, restore the checkout or its Git history and retry; legacy settings remain in place.
+Use `oh init --replace` only for an intentional replacement, which starts fresh authority.
+An empty repository records its first
 commit when a workflow is explicitly invoked. Git reflogs are not required.
 
 `oh config` shows the effective settings and their sources. The base branch is detected

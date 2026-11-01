@@ -42,7 +42,10 @@ remain separate checkout identities. A same-path restore with the saved commit i
 same logical workspace, while unrelated Git history cannot reuse its registration.
 Empty repositories acquire their first commit during explicit workflow enrollment,
 before scope approval. Branch reflog file identity is not an execution requirement.
-Legacy filesystem registrations use explicit fresh replacement, not an approval migration.
+Verified legacy filesystem registrations upgrade in place under the registry lock,
+with an immutable backup before publication. IDs, journals and spent allowances remain
+unchanged; migration grants no work. Unverifiable bindings retain their legacy settings
+for restoration. Intentional replacement remains a separate fresh-authority operation.
 
 The coordinating skill selects work and launches one fresh native agent at a time.
 Codex uses its default native role with no parent-history fork and explicit model and
