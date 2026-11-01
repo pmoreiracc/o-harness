@@ -177,12 +177,13 @@ def protected_paths():
 def project_name(root, required=True):
     """The section of settings.json that holds this project's settings: projects.<name>. None only for
     a checkout that was never registered; any other registry problem is reported. A section belongs to
-    one project, so a name two projects share is refused until one is renamed."""
+    one repository; historical same-name worktree profiles keep separate IDs and
+    may use that section. A collision between repositories needs an explicit rename."""
     from .registry import index_path, profile
     if not required and not index_path(root).exists():return None
     value = profile(root)
     others = projects_named(value['name']) - {value['id']}
-    if others:
+    if others and not share_repository(others | {value['id']}):
         raise Refused(f'More than one OH project is named {value["name"]}, so OH can\'t tell whose settings projects.{value["name"]} '
                       f'holds. Give one of them its own name: oh --root <checkout> rename <new name> (the others: '
                       f'{", ".join(sorted(e["root"] for p in others for e in registrations()[p]))})')
@@ -197,10 +198,17 @@ def project_id(root):
 def registrations():
     """{project id: [checkout identities]} for current registrations; replaced or moved-away ones are left out."""
     from .storage import state_home, state_path
+    from .registry import compatible_entry
+    from subprocess import CalledProcessError
     result = {}
     for path in state_path(state_home() / 'registry/checkouts',directory=True).glob('*.json'):
         try:value = read_json(path)
         except (OSError, ValueError, Refused):continue
+        try:value = compatible_entry(value)
+        except (OSError, ValueError, KeyError, TypeError, Refused, CalledProcessError):
+            # Unverified is not retired: retain ownership evidence so settings
+            # migration cannot archive it while the checkout awaits restoration.
+            pass
         if isinstance(value, dict) and value.get('checkout') and isinstance(value.get('project'), str) \
                 and isinstance(value.get('identity'), dict) and isinstance(value['identity'].get('root'), str):
             result.setdefault(value['project'], []).append(value['identity'])
@@ -222,6 +230,22 @@ def present_projects(excluding_root=None):
 
 def projects_named(name, excluding_root=None):
     return {p for p in present_projects(excluding_root) if name_of(p) == name}
+
+
+def share_repository(projects):
+    """Historical profiles may share named settings, never checkout authority.
+
+    Every present checkout must resolve to the same Git store. Clones and missing
+    identity evidence cannot make independent repositories share settings.
+    """
+    from .registry import verified
+    entries=registrations()
+    stores=[]
+    for project in projects:
+        found={e['common'] for e in entries.get(project,[]) if verified(e)}
+        if len(found)!=1:return False
+        stores.extend(found)
+    return bool(stores) and len(set(stores))==1
 
 
 def strict_json(text):
@@ -561,17 +585,25 @@ def upgrade(*, creating=False):
             key = folder.name if folder else ''
             if key in done:moved[key] = files;continue
             name = name_of(key) if folder else None
+            if (folder is not None and key in registered and key not in present and
+                    any('commit' not in entry for entry in registered[key])):
+                stuck[key]='Legacy settings are preserved until OH can verify their checkout. Restore its identity or Git history and retry.'
+                continue
             # A replaced or removed registration, or a deleted checkout whose name a present project now uses.
             if folder is not None and (key not in registered or (key not in present and projects_named(name))):
                 unused += files;continue
             try:
-                if folder is not None and len(projects_named(name) | {key}) > 1:
+                if folder is not None and len(named:=projects_named(name) | {key}) > 1 and not share_repository(named):
                     raise Refused(f'More than one OH project is named {name}, so OH can\'t tell which one {", ".join(map(str, files))} '
                                   f'belongs in. Give one of them its own name: oh --root <checkout> rename <new name>')
                 candidate = deepcopy(data);absorb(candidate, folder, files)
                 data = candidate;moved[key] = files
             except Refused as exc:
                 stuck[key] = str(exc)
+                if folder is not None and len(named)>1 and share_repository(named):
+                    # All these profiles read one section; a conflicting legacy
+                    # value must block every reader of it, not just its old owner.
+                    stuck.update({project:str(exc) for project in named})
                 if folder is None:break  # projects are compared with the shared settings, so they wait for them
         if data != before:
             if settings_file().exists():shutil.copy2(settings_file(), backup_folder('settings') / 'settings.json')
@@ -624,6 +656,10 @@ def edit(root, scope, apply, *, creating=False, reserve_plans=False):
     change you ask for (`creating`) may start a new file where a recorded one went missing."""
     from .storage import lock
     upgrade(creating=creating)
+    if scope!='global':
+        from .registry import index_path,upgrade_registration
+        path=index_path(root)
+        if path.is_file() and read_json(path).get('schema_version')==1:upgrade_registration(root)
     with lock(config_home() / '.lock'):
         data = read_file(upgrade_first=False, creating=creating)
         before = deepcopy(data)

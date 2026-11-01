@@ -1,6 +1,7 @@
 """External project profiles and checkout identities; consumers remain untouched."""
 from .system import Path
 from contextlib import ExitStack
+import re
 from subprocess import CalledProcessError
 from .storage import (Refused, atomic_json, digest, git, identifier, lock, read_json,
                       state_home, state_path, state_writer, validate_id)
@@ -60,6 +61,13 @@ def join_candidates(current, name, here, *, replacing=False):
     from .config import name_of, projects_named
     holders = projects_named(name, excluding_root=here)
     same = {p for p in repository_projects(current, excluding_root=here if replacing else None) if name_of(p) == name}
+    # Old registrations can have separate profiles for sibling worktrees. Keep
+    # those IDs intact; new worktrees join the present main checkout's profile.
+    if len(holders)>1 and holders<=same:
+        from .config import registrations
+        primary={p for p,entries in registrations().items() if p in holders and
+                 any(e['admin']==e['common'] and verified(e) for e in entries)}
+        if len(primary)==1:return primary,primary
     return holders, (holders & same if holders else same)
 
 
@@ -81,17 +89,88 @@ def index_path(root):
     return state_path(state_home() / 'registry' / 'checkouts' / (digest(str(Path(root).resolve())) + '.json'))
 
 
+def compatible_entry(value):
+    """Read an older registration without granting work or changing its durable IDs.
+
+    Git history is the continuity proof used by current registrations. Before any
+    work was recorded, use the old directory stamps; birth times allow a remounted
+    volume's device number to change. Paths alone never prove continuity.
+    """
+    if not isinstance(value,dict):raise Refused('Invalid checkout registration')
+    if value.get('schema_version') != 1:return value
+    validate_id(value['checkout']);validate_id(value['project'])
+    recorded=value['identity']
+    current=identity(recorded['root'])
+    if any(recorded.get(k)!=current[k] for k in ('root','admin','common')):
+        raise Refused('The checkout no longer has its recorded Git layout')
+    from .storage import Journal
+    history=False
+    runs=state_home()/'projects'/value['project']/'runs'
+    for path in sorted(runs.iterdir()) if runs.is_dir() else ():
+        if not path.is_dir():continue
+        records=Journal(value['project'],path.name).records()
+        if not records:continue
+        start=records[0]
+        data=start['data']
+        if data.get('checkout')!=value['checkout']:continue
+        if start['kind']!='run.started' or data.get('project')!=value['project'] or data.get('id')!=path.name:
+            raise Refused('Saved work does not match its registration')
+        base=data.get('base')
+        # A ref such as origin/main can move. Only a saved object ID is evidence.
+        if not isinstance(base,str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',base):continue
+        history=True
+        if same_repository({'common':recorded['common'],'commit':base},current):
+            return value | {'schema_version':2,'identity':current | {'commit':base}}
+    if history:raise Refused('The checkout no longer contains its recorded Git history')
+    for key in ('root','admin','common'):
+        old=recorded.get(key+'_identity',{})
+        stat=Path(current[key]).stat()
+        birth=old.get('birth')
+        same_birth=birth is not None and birth==getattr(stat,'st_birthtime',None)
+        if (not old.get('inode') or old['inode']!=stat.st_ino or
+                (birth is not None and not same_birth) or
+                (not same_birth and old.get('device')!=stat.st_dev)):
+            raise Refused('The checkout has neither matching directory identity nor verified saved Git history')
+    return value | {'schema_version':2,'identity':current}
+
+
+@state_writer
+def upgrade_registration(root):
+    """Publish one recoverable format upgrade, before taking settings/workflow locks."""
+    path=index_path(root)
+    with lock(state_home()/'registry/.lock'):
+        before=read_json(path)
+        if before.get('schema_version')!=1:return before
+        if before.get('identity',{}).get('root')!=str(Path(root).resolve()):
+            raise Refused('Saved registration belongs to another checkout')
+        try:after=compatible_entry(before)
+        except (Refused,OSError,ValueError,KeyError,TypeError,CalledProcessError) as exc:
+            raise Refused('OH could not verify this older registration: '+str(exc)+
+                          '. Restore the original checkout or its recorded Git history and retry. '
+                          'If you intentionally replaced the repository, use oh init --replace; '
+                          'that starts a fresh binding without reusing old grants.') from None
+        backup=state_home()/'registry/upgrades'/(digest(before)+'.json')
+        if backup.exists():
+            if read_json(backup)!=before:raise Refused('Registration upgrade backup differs; restore it before retrying')
+        else:atomic_json(backup,before,immutable=True)
+        atomic_json(path,after)
+        return after
+
+
 def lookup(root):
     path = index_path(root)
     if not path.is_file():
         raise Refused('Project is not registered. Run oh init once for this checkout.')
     value = read_json(path)
+    if value.get('schema_version')==1:value=upgrade_registration(root)
+    if value.get('schema_version')!=2:
+        raise Refused('Unsupported checkout registration version. Update OH to a compatible version and retry; '
+                      'the existing registration and saved work have not been reset.')
     if (value.get('schema_version') != 2 or value.get('identity', {}).get('root') != str(Path(root).resolve())
             or not verified(value.get('identity', {}))):
         from .config import name_of
         name = name_of(value.get('project', '')) if isinstance(value.get('project'), str) else None
-        reason = ('This checkout uses the older filesystem registration. Start fresh with '
-                  if value.get('schema_version') == 1 else 'The registered Git checkout or saved commit is unavailable. Restore it, or start fresh with ')
+        reason = 'The registered Git checkout or saved commit is unavailable. Restore it, or start fresh with '
         raise Refused(reason + f'oh init --name "{name or "<name>"}" --replace. '
                       'Fresh registration archives the old binding and does not reuse its grants; moved Git registrations can use --reattach.')
     validate_id(value['checkout']); validate_id(value['project'])
@@ -129,6 +208,9 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
     """Onboarding grants no work. Reattachment is explicit and identity-checked. Without a name, a
     checkout joins the project of its Git repository, or starts one named after the repository."""
     current = identity(root)
+    # lookup can upgrade legacy state; do it before acquiring the registry lock.
+    if not replace and index_path(root).is_file() and read_json(index_path(root)).get('schema_version')==1:
+        upgrade_registration(root)
     if name is None and not (attach or reattach or imported) and (replace or not index_path(root).is_file()):
         # A replaced checkout keeps its project's name, so its settings and checks still apply, unless
         # the checkout now belongs to a repository with other OH projects.
@@ -228,8 +310,8 @@ def register(root, name=None, kind='product', *, attach=None, reattach=None, imp
         destination = home / 'projects' / project_id / 'profile.json'
         if attach:
             value = read_json(destination)
-            known = [read_json(p) for p in (home / 'registry/checkouts').glob('*.json')]
-            if not joined and not any(v.get('project') == attach and same_repository(v['identity'], current) for v in known):
+            from .config import registrations
+            if not joined and not any(same_repository(entry,current) for entry in registrations().get(attach,[])):
                 raise Refused('Automatic project attachment is limited to sibling worktrees; clones need separate registration')
         else:
             value = (dict(imported) if imported else {}) | preserved_plans | {'schema_version': 1, 'id': project_id, 'name': name, 'kind': kind}
@@ -267,9 +349,11 @@ def free(name, project=None, excluding_root=None):
 def rename(root, name):
     """Gives a project a new name, and its section of the settings file with it. Refuses to take over a
     section that already holds other settings; when another project still has the old name (from before
-    names were unique), the section stays theirs and this project starts from an empty one."""
-    from .config import edit, load_global, projects_named, section_differences
+    names were unique), the section stays theirs. Same-repository worktrees keep
+    a copy of their shared settings; unrelated projects start from an empty one."""
+    from .config import edit, load_global, projects_named, section_differences, share_repository
     if not isinstance(name, str) or not name.strip() or name != name.strip():raise Refused('A project name needs text without surrounding spaces')
+    if index_path(root).is_file() and read_json(index_path(root)).get('schema_version')==1:upgrade_registration(root)
     with lock(state_home() / 'registry' / '.lock'), ExitStack() as transaction:
         value = profile(root)
         if value['name'] == name:return value
@@ -278,27 +362,33 @@ def rename(root, name):
         def move(data):
             projects = data.setdefault('projects', {})
             if not isinstance(projects, dict):raise Refused('projects in the settings file must be an object; fix it with oh config open')
-            shared = bool(projects_named(old) - {value['id']})
-            mine, theirs = ({} if shared else projects.get(old) or {}), projects.get(name) or {}
+            peers=projects_named(old) - {value['id']}
+            shared=bool(peers)
+            related=shared and share_repository(peers | {value['id']})
+            mine, theirs = ({} if shared and not related else projects.get(old) or {}), projects.get(name) or {}
             if theirs and (not mine or section_differences(theirs, mine, base)):
                 raise Refused(f'projects.{name} already holds settings of an earlier project named {name}'
                               + (f' ({", ".join(section_differences(theirs, mine, base))} differ)' if mine else '')
                               + '; remove them with oh config open, or choose another name')
-            if mine or not shared:projects.pop(old, None)
+            if not shared:projects.pop(old, None)
             projects[name] = theirs or mine
-            outcome['section'] = (f'projects.{old} stays with the other project named {old}; projects.{name} starts empty'
+            outcome['section'] = (f'projects.{old} stays with the other project named {old}; projects.{name} '
+                                  + ('keeps the same settings' if related else 'starts empty')
                                   if shared else f'projects.{old} is now projects.{name}')
             from .plans import private_base
             from .private_storage import owned, reservation
             folder_name=value.get('private_plans_name',old)
+            legacy=state_home()/'projects'/value.get('private_plans_legacy',value['id'])/'plans'
+            retained=Path(value['private_plans_path']) if value.get('private_plans_path') else legacy if legacy.is_dir() else None
             try:
                 folder=mine.get('plans',{}).get('private_folder',base['plans']['private_folder'])
                 previous_folder=private_base(folder,folder_name)
-                if not previous_folder.is_dir() and not owned(previous_folder,value):folder_name=name
+                if retained is None and not owned(previous_folder,value) and (related or not previous_folder.is_dir()):folder_name=name
             except Refused:folder_name=name  # renaming can repair a nonportable old name
             updated=value | {'name': name, 'private_plans_name': folder_name}
+            if retained is not None:updated['private_plans_path']=str(retained)
             if mine.get('plans',{}).get('location',base['plans']['location'])=='private':
-                candidate=Path(value['private_plans_path']) if value.get('private_plans_path') else private_base(folder,folder_name)
+                candidate=retained if retained is not None else private_base(folder,folder_name)
                 transaction.enter_context(reservation(candidate,updated))
             atomic_json(path, updated)
         try:edit(root, 'global', move)
