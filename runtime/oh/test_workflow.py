@@ -103,11 +103,53 @@ class WorkflowTest(unittest.TestCase):
 
     def test_verification_cache_invalidates_actual_dependencies(self):
         (self.root/'value').write_text('one',newline='\n')
-        checks=[{'name':'read','command':['python3','-c','print("verified")'],'inputs':['value'],'toolchain':[['python3','--version']]}]
+        # A version change outside the bounded tail must still invalidate reuse.
+        probe=Path(self.temp.name)/'version.py'
+        probe.write_text('print("first");print("v"*2000)',newline='\n')
+        checks=[{'name':'read','command':[sys.executable,'-c','print("verified")'],'inputs':['value'],
+                 'toolchain':[[sys.executable,str(probe)]]}]
+        first=verify(self.root,checks,self.project_id)[0]
+        self.assertFalse(first['reused'])
+        reused=verify(self.root,checks,self.project_id)[0]
+        self.assertTrue(reused['reused'])
+        self.assertEqual(reused['logs'],first['logs'])
+        from .storage import read_json
+        self.assertIn('verified',Path(read_json(reused['logs'][-1])['stdout']['path']).read_text())
+        probe.write_text('print("second");print("v"*2000)',newline='\n')
         self.assertFalse(verify(self.root,checks,self.project_id)[0]['reused'])
-        self.assertTrue(verify(self.root,checks,self.project_id)[0]['reused'])
         (self.root/'value').write_text('two',newline='\n')
         self.assertFalse(verify(self.root,checks,self.project_id)[0]['reused'])
+
+    def test_failed_checks_and_probes_retain_complete_bytes_with_bounded_feedback(self):
+        import hashlib
+        from .storage import read_json
+        from .verification import check_failed,failure_summary
+        stdout=b'AssertionError: ORIGINAL_CAUSE\n'+b'x'*20000+b'\xff\x00stdout-tail'
+        stderr=b'ORIGINAL_STDERR\n'+b'e'*20000+b'stderr-tail'
+        script=Path(self.temp.name)/'noisy.py'
+        script.write_text('import sys\nsys.stdout.buffer.write('+repr(stdout)+')\nsys.stderr.buffer.write('+repr(stderr)+')\nsys.exit(3)\n',newline='\n')
+        noisy=[sys.executable,str(script)]
+        for probe in (False,True):
+            with self.subTest(probe=probe):
+                check={'name':'noisy','command':noisy}
+                if probe:check.update(command=[sys.executable,'-c','raise AssertionError("must not run")'],toolchain=[noisy])
+                result=verify(self.root,[check],self.project_id)[0]
+                self.assertTrue(check_failed(result));self.assertEqual(result['returncode'],3)
+                self.assertEqual(result.get('unavailable',False),probe)
+                self.assertLessEqual(len(result['output']),12000)
+                self.assertNotIn('ORIGINAL_CAUSE',result['output'])
+                record=read_json(result['logs'][-1])
+                self.assertEqual(record['command'],noisy)
+                self.assertEqual(record['returncode'],3);self.assertIsNotNone(record['finished'])
+                for name,expected in (('stdout',stdout),('stderr',stderr)):
+                    stream=record[name];path=Path(stream['path'])
+                    self.assertFalse(path.is_relative_to(self.root))
+                    self.assertEqual(path.read_bytes(),expected)
+                    self.assertEqual(stream['bytes'],len(expected))
+                    self.assertEqual(stream['sha256'],hashlib.sha256(expected).hexdigest())
+                summary=failure_summary([result],1000)
+                self.assertLessEqual(len(summary),1000)
+                self.assertIn(result['logs'][-1],summary)
 
     def test_dot_dependency_tracks_all_files_and_unknown_path_refused(self):
         check={'name':'all','command':['python3','-c','pass'],'inputs':['.'],'toolchain':[['python3','--version']]}
@@ -215,6 +257,26 @@ class NativeFixture:
 
 
 class NativeWorkflowTest(NativeFixture,unittest.TestCase):
+    def test_failed_verification_log_references_survive_journal_status_and_handoff(self):
+        from . import native
+        from .storage import read_json
+        script=Path(self.temp.name)/'failed-check.py'
+        script.write_text('import sys\nprint("original failure");print("x"*20000);sys.exit(1)\n',newline='\n')
+        configure(self.root,checks=[{'name':'noisy','command':[sys.executable,str(script)]}])
+        self.approve()
+        proof=native.verify(self.root)
+        checked=proof['checks'][0]
+        self.assertEqual(load_run(self.root)[1]['verification']['1'],proof)
+        selected=native.select(self.root)['verification']
+        self.assertFalse(selected['passed'])
+        self.assertEqual(selected['checks'][0]['logs'],checked['logs'])
+        admitted=native.admit(self.root,'assessment')
+        packet=read_json(admitted['task_context']['path'])
+        self.assertEqual(packet['verification']['checks'][0]['logs'],checked['logs'])
+        self.assertNotIn('output',packet['verification']['checks'][0])
+        record=read_json(checked['logs'][0])
+        self.assertIn('original failure',Path(record['stdout']['path']).read_text())
+
     def test_repair_approval_invalidates_readiness_without_replenishing_authority(self):
         from . import native,decisions,publication,handoff
         from .storage import now

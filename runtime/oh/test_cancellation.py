@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from . import authority, cancellation, native
 from .authority import coordinator as native_coordinator
-from .storage import Refused, identifier, now
+from .storage import Refused, identifier, now, read_json
 from .test_workflow import NativeFixture, configure
 from .workflow import load_run
 
@@ -386,7 +386,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
     def test_native_stop_cancels_configured_checks_without_recording_a_pass(self):
         heartbeat = Path(self.temp.name) / 'checking'
         command = [sys.executable, '-c',
-                   'import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text("running");time.sleep(30)',
+                   'import pathlib,sys,time;print("before native stop",flush=True);pathlib.Path(sys.argv[1]).write_text("running");time.sleep(30)',
                    str(heartbeat)]
         configure(self.root, checks=[{'name': 'long-check', 'command': command}])
         self.approve()
@@ -448,6 +448,12 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(outcomes), 1)
         self.assertIn('Native Stop ended', outcomes[0])
+        logs=list((Path(os.environ['OH_DATA_HOME'])/'verification').glob('*/logs/*/capture.json'))
+        self.assertEqual(len(logs),1)
+        recorded=read_json(logs[0])
+        self.assertEqual(recorded['attempt'],self.attempt)
+        self.assertEqual(recorded['cancellation'],['native_stop'])
+        self.assertIn('before native stop',Path(recorded['stdout']['path']).read_text())
         # The interrupted MCP call has no completion callback or output record.
         with cancellation._edit(self.root) as value:
             value['commands']['uncertain-cleanup'] = {'attempt': self.attempt, 'started': now()}
@@ -499,7 +505,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
     def test_native_shell_termination_cleans_configured_check_before_exit(self):
         import signal
         heartbeat = Path(self.temp.name) / 'signal-check'
-        child_code = 'import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text("started");time.sleep(30)'
+        child_code = 'import pathlib,sys,time;print("before shell termination",flush=True);pathlib.Path(sys.argv[1]).write_text("started");time.sleep(30)'
         command = [sys.executable, '-c', child_code, str(heartbeat)]
         configure(self.root, checks=[{'name': 'signal-check', 'command': command}])
         self.approve(); self.assess()
@@ -521,6 +527,17 @@ class CancellationTest(NativeFixture, unittest.TestCase):
                     self.assertEqual(len(records), 1)
                     self.assertEqual(bool(records[0].get('ended')), number == signal.SIGTERM)
                     self.assertFalse(load_run(self.root)[1].get('verification'))
+                    logs=list((Path(os.environ['OH_DATA_HOME'])/'verification').glob('*/logs/*/capture.json'))
+                    matching=[read_json(path) for path in logs if read_json(path).get('attempt')==self.attempt]
+                    self.assertEqual(len(matching),1)
+                    recorded=matching[0]
+                    self.assertIn('before shell termination',Path(recorded['stdout']['path']).read_text())
+                    if number==signal.SIGTERM:
+                        self.assertEqual(recorded['error']['type'],'KeyboardInterrupt')
+                        self.assertIsNotNone(recorded['finished'])
+                    else:
+                        self.assertIsNone(recorded['finished'])
+                        self.assertIsNone(recorded['returncode'])
                     self.stop('signal-' + str(number), session=load_run(self.root)[1]['human']['session'])
                     self.native_results[self.attempt] = {'status': 'cancelled', 'text': ''}
                     native.resume(self.root, self.resume_choice(session='new-parent'))
