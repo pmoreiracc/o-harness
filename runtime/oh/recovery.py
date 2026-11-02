@@ -47,11 +47,11 @@ def _private_restart(root, state, base):
 def prepare(root, state):
     from . import native
     from .decisions import boundary
-    from .branches import fetched, trunk
+    from .branches import fetch_base, trunk
     if state['workflow'] != 'deliver' or state.get('published'):
         raise Refused('This recovery gate is for unpublished delivery; use the saved planning or publication step')
     name = trunk(root, state['config'])
-    if name: fetched(root, name)
+    observed=fetch_base(root,name)
     subject = facts(root, state)
     paths = set(subject['paths'])
     paths.update(path for path in subject['artifacts'] if path != 'approval')
@@ -59,6 +59,7 @@ def prepare(root, state):
         paths.update(git(root, 'diff', '--name-only', '-z', subject['base']+'...HEAD').split('\0'))
     paths.discard('')
     details = (f'Work: {native._saved_subject(state)}\nBranch: {subject["branch"]}\n'
+               'Base freshness: '+observed['freshness']+(' — '+observed['reason'] if observed['reason'] else '')+'\n'
                'Continue keeps existing changes and finishes the approved delivery.\n'
                'Start fresh discards the listed local changes and this branch’s unmerged delivery work; no backup is made.\n'
                'Stop and take over ends OH execution and leaves the files unchanged.\n'
@@ -77,12 +78,13 @@ def prepare(root, state):
     details += '\nHow would you like OH to proceed with this delivery?'
     value = {'kind': 'recover', 'run': state['id'], 'attempt': None, 'presentation': 'recovery-menu',
              'boundary': boundary(root,state,'resume'),
-             'subject': subject, 'question': details, 'choices': choices,
+             'subject': subject, 'base_observation':observed, 'question': details, 'choices': choices,
              'menu_options': list(choices.values()), 'created_at': now()}
     if 'restart' in choices:value['private_restart'] = _private_restart(root,state,subject['base'])
     key = digest(value)
     native._immutable(native._home(root)/'decisions'/(key+'.json'), value)
     return {'decision': key, 'question': details, 'options': value['menu_options'],
+            'base_observation':observed,
             'actions': {label: action for action, label in choices.items()},
             'human_locator': 'Bind the selected action from this one native question with decision.'}
 

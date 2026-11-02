@@ -28,6 +28,7 @@ def tool(name, title, description, properties=None, required=(), read_only=False
 OBJECT = {'type': 'object'}
 TOOLS = [
     tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; saved lists both workflow and review without selection.', {'saved':{'type':'boolean'}}, read_only=True),
+    tool('entry', 'Inspect entry facts', 'Fetch the configured origin base and report saved/local/base facts before readiness advice. Does not change the checkout, select a workflow or grant authority.'),
     tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
     tool('admission', 'Validate review admission', 'Validate the immutable subject and request, recovering a missing native child binding when needed.', {'attempt_directory':TEXT}, ['attempt_directory']),
     tool('command_format', 'Format native shell command', 'Return exact Bash and PowerShell quoting for an admitted worker command. Does not execute or authorize it. Pass an executable/argument array, then run the returned string unchanged with the native shell tool and its normal permissions.',
@@ -38,7 +39,8 @@ TOOLS = [
          {'action': {'type':'string','enum':['path','check','list']}}, ['action'], read_only=True),
     tool('resource', 'OH workflow', 'Read a packaged workflow or role reference.', {'path':TEXT}, ['path'], read_only=True),
     tool('scope_prepare', 'Prepare scope', 'Retain the scope to present through native host tools. Grants no implementation authority.',
-         {'manifest':OBJECT,'workflow':{'type':'string','enum':['deliver','design','propose']},'doc':TEXT,'track':TEXT,'human':OBJECT}),
+         {'manifest':OBJECT,'workflow':{'type':'string','enum':['deliver','design','propose']},'doc':TEXT,'track':TEXT,'human':OBJECT,
+          'keep_checkout':{'type':'boolean','description':'Keep the checkout deliberately selected after inspecting entry facts; all scope/approval/ownership checks still apply.'}}),
     tool('scope_approve', 'Record scope approval', 'Verify a native human reply for the identified scope; model claims cannot approve it.',
          {'scope':TEXT,'human':OBJECT}, ['scope','human']),
     tool('attempt_admit', 'Admit native agent', 'Bind a fresh agent attempt and its packet; review admission consumes its allowance once.',
@@ -98,7 +100,7 @@ def command(name, arguments, root):
     if name=='status':
         if 'saved' in arguments and not isinstance(arguments['saved'],bool):raise Refused('saved must be boolean')
         return ['status']+(['--saved'] if arguments.get('saved') else [])
-    if name in ('config','candidate'):return [name]
+    if name in ('config','candidate','entry'):return [name]
     if name=='resume':return ['resume']+(['--run',text('run')] if text('run') else [])+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
     if name=='admission':return ['admission','--',text('attempt_directory',True)]
     if name=='command_format':
@@ -114,6 +116,8 @@ def command(name, arguments, root):
         workflow=arguments.get('workflow','deliver')
         if workflow not in ('deliver','design','propose'):raise Refused('Invalid workflow')
         args=['scope','prepare','--workflow',workflow]
+        if 'keep_checkout' in arguments and not isinstance(arguments['keep_checkout'],bool):raise Refused('keep_checkout must be boolean')
+        if arguments.get('keep_checkout'):args+=['--keep-checkout']
         for key in ('doc','track'):
             if text(key):args+=[f'--{key}',text(key)]
         if arguments.get('human') is not None:args+=['--human',payload(root,arguments['human'])]

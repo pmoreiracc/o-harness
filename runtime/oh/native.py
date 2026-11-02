@@ -357,7 +357,7 @@ def _resume_binding(root,state,*,write=False):
         if review.exists():atomic_json(review,read_json(review)|{'selected':False})
 
 
-def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', human=None):
+def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', human=None, keep_checkout=False):
     """Snapshot an explicit scope. Preparing delivery is never its approval."""
     from .entry import enroll
     if blocked:=enroll(root):raise Refused(blocked['onboarding'])
@@ -375,7 +375,7 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
         # New delivery starts on the selected delivery branch, never whichever
         # merged branch the host happened to leave open. Saved runs recover first.
         new_branch=False
-        if not any(s['status'] not in ('stopped','completed','pr') for _,s in _saved_runs(root)):
+        if not keep_checkout and not any(s['status'] not in ('stopped','completed','pr') for _,s in _saved_runs(root)):
             from .branches import delivery_branch,to_delivery,refresh,contained,fetched,trunk,from_main,holder
             if not changes(root):
                 main=trunk(root)
@@ -395,7 +395,7 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     if not isinstance(manifest,dict):raise Refused('Supply a task manifest or approved design number')
     tasks=validate_tasks(manifest.get('tasks'));config=snapshot(root)
     if workflow=='deliver' and not project_checks(root):raise Refused('Register this project’s existing verification checks before delivery')
-    if workflow=='deliver' and doc is None and not _saved_runs(root):
+    if workflow=='deliver' and doc is None and not keep_checkout and not _saved_runs(root):
         from .branches import main_ref,trunk,contained,from_main,execution_branch
         current=git(root,'branch','--show-current');base=main_ref(root,config)
         if not changes(root) and base and (current==trunk(root,config) or

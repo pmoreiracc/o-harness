@@ -83,15 +83,42 @@ def untouched(root):
     from .storage import changes
     if edited:=changes(root):
         shown=', '.join(edited[:5])+(f' and {len(edited)-5} more' if len(edited)>5 else '')
-        raise Refused(f'This checkout has uncommitted changes that OH did not make ({shown}). They are yours, so '
-                      'OH leaves them alone: commit, stash or discard them, then OH carries on with your command.')
+        raise Refused(f'This checkout has uncommitted changes ({shown}). Inspect their full diff and saved ownership. '
+                      'Preserve or include relevant work, or use another checkout. If discarding is appropriate, show the '
+                      'exact affected files/commits and target base, obtain native human approval, recheck the shown work, '
+                      'then perform only the approved Git action and continue the original request. Do not ask the person to run routine Git repairs.')
+
+
+def fetch_base(root,name):
+    """Observe origin without changing the checkout; failure never proves a cached ref current."""
+    from .storage import now
+    value={'name':name,'ref':None,'commit':None,'freshness':'unavailable','reason':None}
+    if not name:return value|{'at':now(),'reason':'No configured base is available yet'}
+    remotes=run_git(root,'remote')
+    if remotes.returncode:return value|{'at':now(),'reason':remotes.stderr.strip() or 'Could not inspect Git remotes'}
+    origin='origin' in remotes.stdout.splitlines()
+    if origin:
+        fetched=run_git(root,'fetch','--quiet','origin',f'+refs/heads/{name}:refs/remotes/origin/{name}',timeout=60)
+        value.update(freshness='fetched' if fetched.returncode==0 else 'unavailable',
+                     reason=None if fetched.returncode==0 else (fetched.stderr.strip() or 'Git fetch failed'))
+    else:value.update(freshness='local_only',reason='This repository has no origin remote')
+    for ref in ('origin/'+name,name):
+        head=run_git(root,'rev-parse','--verify','--quiet',ref+'^{commit}')
+        if head.returncode==0:
+            value.update(ref=ref,commit=head.stdout.strip());break
+    if value['commit'] is None:
+        value.update(freshness='unavailable',reason=value['reason'] or 'The configured base has no available commit')
+    return value|{'at':now()}
 
 
 def fetched(root,name):
-    """Fetch the base branch `name` and return the ref new work starts from: origin/<name>, or the local branch
-    when the repository has no origin. Offline, the last fetched origin/<name> serves."""
-    if run_git(root,'remote','get-url','origin').returncode==0:run_git(root,'fetch','--quiet','origin',name,timeout=60)
-    return 'origin/'+name if run_git(root,'rev-parse','--verify','--quiet','refs/remotes/origin/'+name).returncode==0 else name
+    """Automatic checkout updates require an observed fetch, or a repository without origin."""
+    observed=fetch_base(root,name)
+    if observed['freshness']=='unavailable':
+        raise Refused('Could not refresh the configured origin base: '+observed['reason']+
+                      '. Use entry to inspect saved/local/base facts. Preserve local work; if the available evidence '
+                      'supports continuing on your selected checkout, use scope prepare --keep-checkout and report the freshness limit.')
+    return observed['ref']
 
 
 def holder(root,branch):
@@ -127,7 +154,9 @@ def from_main(root, *, base=None):
             raise Refused(f'OH starts new work from {name}, but Git could not switch this checkout to it: {switched.stderr.strip()}')
     if base!=name and (run_git(root,'merge','--ff-only','--quiet',base).returncode or git(root,'rev-parse','HEAD')!=git(root,'rev-parse',base)):
         raise Refused(f'Your local {name} has commits that are not on {base}, so new work would carry them. '
-                      f'Push them, or reset {name} to {base}, then OH carries on with your command.')
+                      'Inspect those commits before deciding whether to retain, integrate or discard them. '
+                      'For discard, show the exact commits, local changes and target commit, obtain native human approval, '
+                      'recheck that state, then execute the approved Git operation and continue the original request.')
 
 
 def delivery_branch(doc,track=''):
@@ -218,11 +247,8 @@ def refresh(root,name,base):
         conflicted=git(root,'diff','--name-only','--diff-filter=U').splitlines()
         run_git(root,'merge','--abort')
         if not conflicted:raise Refused(f'Git could not merge {base} into {name}: {merging.stderr.strip()}')
-        args=' '.join(name[len('deliver/'):].split('-',1))
         raise Refused(f'{name} holds unfinished work that conflicts with {base} in {", ".join(conflicted[:5])}. Ask the '
-            f'person with a menu: start over from {base} and discard this branch (run `conflict fresh {args}`, then '
-            f'`run`); finish from here without {base}\'s changes, resolving the conflicts when the pull request merges '
-            f'(run `conflict keep {args}`, then `run`); or let you resolve it. For that, study both sides and why each '
-            f'changed, show the person your plan with a menu to approve it or handle it themselves, and on approval '
-            f'merge {base} into {name}, resolve it as planned, commit the merge and run `run`: the next task\'s review '
-            'covers your resolution.')
+            'person only for the concrete unresolved choice after inspecting both sides. Use the existing delivery '
+            'recovery decision for saved delivery, or native Git under a specifically approved resolution/discard effect. '
+            'Recheck the shown files, commits and target before acting; preserve other work and continue the original request. '
+            'Changed resolution contents need their configured checks and fresh review.')

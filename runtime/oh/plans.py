@@ -1089,7 +1089,8 @@ def listing(root):
         item = {'slug': slug, 'milestone': milestone, 'depends': [d for d in depends.split(',') if d]}
         if design:item |= {'design': design, 'status': approval(root, where, design), 'path': str(design_file(root, design, where))}
         result.append(item)
-    return {'location': where['location'], 'roadmap': str(where['roadmap']), 'initiatives': result}
+    return {'location': where['location'], 'roadmap': str(where['roadmap']), 'initiatives': result,
+            'source':'checkout','freshness':'Use entry to reconcile this local plan view with the configured origin before current-readiness claims.'}
 
 
 def current_files(root, files):

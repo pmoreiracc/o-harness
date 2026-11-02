@@ -263,6 +263,23 @@ You can still code, commit and open PRs without OH.
 
 ## Projects, checks and visibility
 
+Before current planning/delivery advice, OH's `entry` operation gathers saved work,
+local edits/commits and the configured origin base. Fetching those facts does not
+pull, switch branches or discard files. It reports the observed base commit and
+whether the fetch succeeded, failed or the repository has no origin. Local plan
+and delivery listings identify their checkout source; material differences need
+reconciliation before treating their tasks/blockers as current.
+
+The agent can preserve/integrate local work, safely update its base or propose a
+specific discard. Discard approval names the affected paths/commits and target
+commit; the agent rechecks and executes that effect. Other work, ignored files and
+nested worktrees remain protected. Workflow entry after a prerequisite still requires
+valid native request/scope provenance; checkout reconciliation itself does not resolve
+saved-run lifecycle or preserve requests across intervening decisions. Use
+`scope prepare --keep-checkout` (Codex `keep_checkout: true`) when preserving a
+checkout deliberately selected after reconciliation; normal scope and approval
+checks still apply. Offline information stays labelled with its freshness limit.
+
 Register a checkout with `oh init`; registration grants no work. Use `--name` to choose
 a project name, `--attach <project-id>` for another worktree, `--reattach <checkout-id>`
 for a moved checkout, and `--replace` for a new checkout at an old path. Configuration,

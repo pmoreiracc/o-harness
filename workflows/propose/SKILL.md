@@ -9,6 +9,9 @@ If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Prepare the idea
 
+Read `workflows/entry.md` before current plan/readiness claims or branch selection.
+Reconcile the relevant saved/local/origin evidence before judging existing work.
+
 Read `plans path`, resolve an undecided repo/private location once and show its actual
 folder. Respect project policy; planning alone does not authorize product implementation.
 

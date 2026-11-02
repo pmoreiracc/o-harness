@@ -1,5 +1,10 @@
 # Saved work and recovery
 
+Before current recovery/readiness advice, read `workflows/entry.md` and reconcile
+saved/local/origin facts. Preserve local work while gathering information. Delivery
+recovery questions report their observed base freshness separately from the selected
+discard/continuation effect; a cached base is not verified current origin.
+
 ## A native command has no reservation
 
 Preserve the failed attempt and diagnose the callback before retrying it. In Codex,

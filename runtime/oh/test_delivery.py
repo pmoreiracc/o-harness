@@ -106,10 +106,27 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
         registry=state_home()/'registry/private-plans.json'
         registry.unlink(missing_ok=True)
         self.assertEqual(delivery.listing(self.root)['ready'],[])
+        self.assertEqual(delivery.listing(self.root)['source'],'checkout')
         self.assertFalse(registry.exists())
         self.documents('private');before=registry.read_bytes()
         self.assertEqual(len(delivery.listing(self.root)['ready']),1)
         self.assertEqual(registry.read_bytes(),before)
+
+    def test_deliberately_selected_checkout_skips_updates_but_preserves_approval_checks(self):
+        from . import native
+        from unittest.mock import patch
+        _,path=self.documents()
+        self.git('switch','-c','deliver/0001')
+        (self.root/'notes.txt').write_text('keep my work',newline='\n')
+        head=self.git('rev-parse','HEAD');before=self.git('status','--porcelain')
+        with patch('oh.branches.fetched',side_effect=AssertionError('the chosen checkout must stay selected')):
+            prepared=native.prepare_scope(self.root,doc='0001',keep_checkout=True)
+            self.assertFalse(prepared['approved'])
+            self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
+            self.assertEqual(self.git('rev-parse','HEAD'),head)
+            self.assertEqual(self.git('status','--porcelain'),before)
+            with self.assertRaisesRegex(Refused,'Request delivery of this approved design explicitly'):
+                native.prepare_scope(self.root,doc='0001',keep_checkout=True,human=self.human('Stop the work'))
 
     def test_new_delivery_leaves_merged_branch_and_selects_remaining_task_from_main(self):
         from . import native
@@ -126,6 +143,28 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(self.git('rev-parse','HEAD'),main)
         self.assertEqual(selected['task']['id'],'2')
+
+    def test_entry_discovers_merged_progress_before_reconciled_delivery_selection(self):
+        from . import native
+        from .entry import inspect
+        _,path=self.documents();old=self.git('rev-parse','HEAD')
+        origin=Path(self.temp.name)/'origin.git'
+        self.git('clone','--bare',str(self.root),str(origin));self.git('remote','add','origin',str(origin))
+        path.write_text(path.read_text().replace('- [ ] **1.**','- [x] **1.**'),newline='\n')
+        self.git('commit','-qam','merged decisions and task progress')
+        current=self.git('rev-parse','HEAD');self.git('push','origin','HEAD:main')
+        self.git('reset','--hard',old);self.git('update-ref','refs/remotes/origin/main',old)
+        self.assertFalse(self.git('status','--porcelain'))
+        facts=inspect(self.root)
+        self.assertEqual(facts['base']['commit'],current)
+        self.assertEqual(self.git('rev-parse','HEAD'),old)
+        self.assertIn('- [ ] **1.**',path.read_text())
+        self.assertEqual(delivery.listing(self.root)['source'],'checkout')
+        # Native Git applies the chosen lossless update; observation never does it.
+        self.git('merge','--ff-only','origin/main');self.git('switch','-c','deliver/0001')
+        selected=native.prepare_scope(self.root,doc='0001',keep_checkout=True,human=self.human('/oh-deliver 0001'))
+        self.assertEqual(selected['task']['id'],'2')
+        self.assertEqual(self.git('rev-parse','HEAD'),current)
 
     def test_original_manual_work_is_in_both_delivery_intakes_and_publication(self):
         from . import native,publication
