@@ -6,6 +6,7 @@ from . import delivery,plans
 from .config import change
 from .storage import digest,Refused,read_json
 from .workflow import load_run
+from .authority import coordinator as native_coordinator
 from . import test_workflow as fixtures
 from .test_design import BODY
 
@@ -127,6 +128,237 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
             self.assertEqual(self.git('status','--porcelain'),before)
             with self.assertRaisesRegex(Refused,'Request delivery of this approved design explicitly'):
                 native.prepare_scope(self.root,doc='0001',keep_checkout=True,human=self.human('Stop the work'))
+
+    def test_interrupted_idle_design_with_missing_branch_does_not_reserve_new_delivery(self):
+        import io
+        from . import native,cancellation
+        from .cli import main
+        from .mcp_server import command
+        self.documents();self.git('switch','-c','design/old-auth')
+        native.prepare_scope(self.root,{'tasks':[{'id':'decisions','title':'Record auth decisions',
+                             'instructions':'Record the chosen auth decisions.'}]},workflow='design',
+                             human=self.human('/oh-design auth'))
+        self.finish_attempt('analysis',{'status':'completed','summary':'Decision text retained.'})
+        journal,old=load_run(self.root)
+        cancellation.hook(self.root,'codex',{'hook_event_name':'Interrupt','session_id':'s','turn_id':old['human']['turn']})
+        self.git('switch','main');self.git('branch','-D','design/old-auth')
+        path=next((self.root/'docs/design').glob('0001-*.md'))
+        path.write_text(path.read_text().replace('- [ ] **1.**','- [x] **1.**'),newline='\n')
+        self.git('commit','-qam','merged decisions and first task');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        nested=self.root/'.claude/worktrees/held';self.git('worktree','add','-qb','held',str(nested))
+        before=journal.records()
+        discovery=native.saved_work(self.root)['saved_work'][0]
+        factual=native.resume(self.root,run=old['id'])
+        self.assertEqual(discovery['status'],factual['status'])
+        self.assertEqual(discovery['status'],'running')
+        self.assertEqual(discovery['execution'],factual['execution'])
+        self.assertIsNotNone(factual['execution']['interruption'])
+        self.assertEqual(factual['execution']['state'],'idle')
+        request=self.human('/oh-deliver 0001')
+        preview=native.prepare_scope(self.root,doc='0001',keep_checkout=True)
+        self.assertFalse(preview['approved']);self.assertTrue(preview['execution_branch_required'])
+        with self.assertRaisesRegex(Refused,'execution branch'):
+            native.prepare_scope(self.root,doc='0001',keep_checkout=True,human=request)
+        for args in (command('scope_prepare',{'doc':'0001','human':request},self.root),
+                     ['scope','prepare','--doc','0001','--human',json.dumps(request)]):
+            with patch('sys.stdout',new=io.StringIO()) as output:main(['--root',str(self.root),*args])
+            selected=json.loads(output.getvalue())
+            self.assertEqual(selected['task']['id'],'2')
+            self.assertEqual(selected['retained_work'][0]['run'],old['id'])
+        self.assertEqual(journal.records(),before)
+        self.assertTrue((nested/'.git').is_file())
+        retained=load_run(self.root,old['id'])[1]
+        for key in ('granted','attempts','done','config'):self.assertEqual(retained[key],old[key])
+
+    def test_design_preparation_checks_selection_and_serializes_git_with_admission(self):
+        from datetime import datetime,timezone
+        from . import native,cancellation,branches
+        from .storage import checkout_file,lock
+        self.documents();self.git('switch','-c','new-owner')
+        stale=self.human('/oh-deliver 0001',session='pending-request',at=datetime.now(timezone.utc).isoformat())
+        self.approve();journal,current=load_run(self.root)
+        def retained():
+            return (self.git('branch','--show-current'),self.git('rev-parse','HEAD'),journal.records(),
+                    cancellation._read(self.root)['current'])
+        before=retained()
+        with self.assertRaisesRegex(Refused,'superseded'):native.prepare_scope(self.root,doc='0001',human=stale)
+        self.assertEqual(retained(),before)
+        fetched=branches.fetched;competing=[]
+        def interleave(*args):
+            # A real nonblocking claim of the same control lock models an
+            # admission arriving after preflight and before the first Git write.
+            with patch.object(native,'_locked',side_effect=lambda root:lock(checkout_file(root,'oh-control.lock'),wait=False)):
+                with self.assertRaisesRegex(Refused,'active OH runner'):native.admit(self.root,'assessment')
+            if not competing:self.assertEqual(retained(),before)
+            competing.append(True)
+            return fetched(*args)
+        with patch.object(branches,'fetched',side_effect=interleave):
+            selected=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001'))
+        self.assertTrue(competing);self.assertEqual(selected['task']['id'],'1')
+        self.assertEqual(journal.records(),before[2])
+        native.admit(self.root,'assessment')
+        active_journal,_=load_run(self.root);records=active_journal.records();branch=self.git('branch','--show-current')
+        with patch.object(branches,'fetched',side_effect=AssertionError('active checkout must stay selected')):
+            with self.assertRaisesRegex(Refused,'unsettled native'):native.prepare_scope(self.root,doc='0001')
+        self.assertEqual(self.git('branch','--show-current'),branch);self.assertEqual(active_journal.records(),records)
+
+    def test_delivery_request_survives_only_its_bound_prerequisite_on_both_hosts(self):
+        import os
+        from datetime import datetime,timezone
+        from . import native,decisions
+        from .entry import request_source
+        from .storage import now
+        self.documents();self.git('switch','-c','prerequisite-test')
+        for host in ('codex','claude'):
+            with self.subTest(host=host):
+                self.approve(tasks=[{'id':'old-'+host,'title':'Earlier idle work','instructions':'Retain this scope.'}])
+                journal,old=load_run(self.root)
+                home=Path(self.temp.name)/('native-'+host);session='entry-'+host
+                path=home/('.codex/sessions' if host=='codex' else '.claude/projects/p')/(session+'.jsonl')
+                path.parent.mkdir(parents=True)
+                def human_record(turn,text):
+                    at=datetime.now(timezone.utc).isoformat()
+                    return ({'type':'event_msg','timestamp':at,'payload':{'type':'user_message','turn_id':'entry','message':text}}
+                            if host=='codex' else {'type':'user','sessionId':session,'promptId':turn,'cwd':str(self.root),
+                                'timestamp':at,'message':{'role':'user','content':text}})
+                rows=([{'type':'session_meta','payload':{'id':session,'source':'cli','cwd':str(self.root)}}] if host=='codex' else [])
+                rows.append(human_record('entry','/oh-deliver 0001'))
+                def save():path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
+                def choose(gate,use):
+                    if host=='codex':
+                        rows.extend([{'type':'response_item','timestamp':now(),'payload':{'type':'function_call','call_id':use,
+                            'name':'request_user_input_async','arguments':json.dumps({'questions':[{'title':gate['question'],'options':gate['options']}]})}},
+                            human_record(use,'<send_user_message_question_reply>'+json.dumps([{'questionItemId':json.dumps(['request_user_input_async',use,0]),
+                                'question':gate['question'],'answer':gate['options'][0]}])+'</send_user_message_question_reply>')])
+                    else:
+                        rows.extend([{'type':'assistant','sessionId':session,'cwd':str(self.root),'timestamp':now(),'message':{'content':[
+                            {'type':'tool_use','id':use,'name':'AskUserQuestion','input':{'questions':[{'question':gate['question'],
+                                'options':[{'label':label} for label in gate['options']]}]}}]}},
+                            {'type':'user','sessionId':session,'cwd':str(self.root),'timestamp':now(),
+                             'toolUseResult':{'answers':{gate['question']:gate['options'][0]}},'message':{'content':[
+                                {'type':'tool_result','tool_use_id':use,'content':'Answered'}]}}])
+                    save()
+                    return {'host':host,'session':session,'transcript_path':str(path),'tool_use_id':use,'decision':gate['decision']}
+                save()
+                request={'host':host,'session':session,'turn':'entry','prompt':'/oh-deliver 0001','transcript_path':str(path)}
+                env={'CODEX_HOME':str(home/'.codex'),'CODEX_THREAD_ID':session if host=='codex' else '',
+                     'OH_NATIVE_SESSION_ID':session if host=='claude' else ''}
+                with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,env), \
+                        patch('oh.authority.native_human',side_effect=self.native_human_original), \
+                        patch('oh.authority.coordinator',side_effect=native_coordinator):
+                    gate=decisions.prepare(self.root,'stop',request=request)
+                    with self.assertRaisesRegex(Refused,'Bind the actual prerequisite answer'):
+                        request_source(self.root,request,gate['decision'])
+                    answer=choose(gate,'choose')
+                    native.decision(self.root,'stop',answer)
+                    # Codex can keep the same turn across several question replies.
+                    # Equal labels still belong to distinct actual native questions.
+                    again=decisions.prepare(self.root,'stop',request=request,after=gate['decision'])
+                    native.decision(self.root,'stop',choose(again,'second-prerequisite'))
+                    gate=again;stopped=journal.records()
+                    with self.assertRaises(Refused):native.prepare_scope(self.root,doc='0001',human=request,keep_checkout=True)
+                    selected=native.prepare_scope(self.root,doc='0001',human=request,keep_checkout=True,after=gate['decision'])
+                    self.assertEqual(selected['task']['id'],'1')
+                    active=load_run(self.root)[1]
+                    self.assertEqual(active['entry_request']['prompt'],'/oh-deliver 0001')
+                    self.assertEqual(active['human']['prompt'],'Stop the work')
+                    self.assertEqual(active['entry_prerequisite'],gate['decision'])
+                    self.assertEqual(native.prepare_scope(self.root,doc='0001',human=request,keep_checkout=True,
+                                     after=gate['decision'])['run'],selected['run'])
+                    self.assertEqual(journal.records(),stopped)
+                    self.assertEqual(load_run(self.root,old['id'])[1]['granted'],old['granted'])
+                    # An already accepted quick-fix preview also survives a real
+                    # cleanup prerequisite, without borrowing a different answer.
+                    scope=native.prepare_scope(self.root,{'tasks':[{'id':'fix','title':'A bounded fix','instructions':'Keep the approved starting work.'}]})
+                    approval=choose(scope['approval'],'approve-scope')
+                    from .storage import lock,checkout_file
+                    with lock(checkout_file(self.root,'oh-runner.lock'),wait=False):
+                        with self.assertRaisesRegex(Refused,'still executing'):
+                            native.approve_scope(self.root,scope['scope_id'],approval)
+                    prerequisite=decisions.prepare(self.root,'stop',request=approval)
+                    native.decision(self.root,'stop',choose(prerequisite,'stop-prerequisite'))
+                    fixed=native.approve_scope(self.root,scope['scope_id'],approval,after=prerequisite['decision'])
+                    self.assertEqual(fixed['task']['id'],'fix')
+                    self.assertEqual(load_run(self.root)[1]['entry_prerequisite'],prerequisite['decision'])
+                    # Positive continuation transfers install the prerequisite
+                    # as current owner. The exact accepted effect must still
+                    # carry both a design request and an unchanged scope approval.
+                    for kind in ('resume','recover'):
+                        rows.append(human_record('entry-'+kind,'/oh-deliver 0001'));save()
+                        carried_request={'host':host,'session':session,'turn':'entry' if host=='codex' else 'entry-'+kind,
+                                 'prompt':'/oh-deliver 0001','transcript_path':str(path)}
+                        prerequisite=decisions.prepare(self.root,kind,request=carried_request)
+                        native.decision(self.root,'resume',choose(prerequisite,'continue-'+kind))
+                        selected=native.prepare_scope(self.root,doc='0001',human=carried_request,keep_checkout=True,after=prerequisite['decision'])
+                        self.assertTrue(selected['approved']);self.assertEqual(selected['task']['id'],'1')
+                        scope=native.prepare_scope(self.root,{'tasks':[{'id':'fix','title':'After '+kind,
+                            'instructions':'Keep the unchanged accepted scope.'}]})
+                        approval=choose(scope['approval'],'approve-after-'+kind)
+                        prerequisite=decisions.prepare(self.root,kind,request=approval)
+                        native.decision(self.root,'resume',choose(prerequisite,'continue-approval-'+kind))
+                        fixed=native.approve_scope(self.root,scope['scope_id'],approval,after=prerequisite['decision'])
+                        self.assertEqual(fixed['task']['title'],'After '+kind)
+                    # Retaining a typed "approve" through cleanup must preserve
+                    # its original artifact binding, not just its time/order.
+                    for shown in ('unrelated report','another scope','actual scope'):
+                        candidate=native.prepare_scope(self.root,{'tasks':[{'id':'typed','title':'Typed '+shown,
+                            'instructions':'Use only the scope the person actually saw.'}]})
+                        actual=native._home(self.root)/'scopes'/candidate['scope_id']/'scope.md'
+                        context=(str(actual) if shown=='actual scope' else str(actual.parent.parent/'other'/'scope.md')
+                                 if shown=='another scope' else 'The unrelated report is ready.')
+                        message={'content':[{'type':'output_text' if host=='codex' else 'text','text':context}]}
+                        rows.append({'type':'response_item','timestamp':now(),'payload':message|{'type':'message','role':'assistant'}}
+                                    if host=='codex' else {'type':'assistant','sessionId':session,'cwd':str(self.root),
+                                        'timestamp':now(),'message':message})
+                        rows.append(human_record('typed-'+shown,'approve'));save()
+                        typed={'host':host,'session':session,'transcript_path':str(path),'prompt':'approve',
+                               **({'turn':'entry'} if host=='codex' else {'turn':'typed-'+shown})}
+                        if shown!='actual scope':
+                            with self.assertRaisesRegex(Refused,'identifying the reviewed artifact'):
+                                native.approve_scope(self.root,candidate['scope_id'],typed)
+                        else:
+                            from .authority import scope_human
+                            scope_human(self.root,typed,since=native._scope(self.root,candidate['scope_id'])['created_at'],subject=actual)
+                        prerequisite=decisions.prepare(self.root,'stop',request=typed)
+                        native.decision(self.root,'stop',choose(prerequisite,'stop-'+shown))
+                        retained_journal,retained=load_run(self.root);records=retained_journal.records()
+                        if shown!='actual scope':
+                            with self.assertRaisesRegex(Refused,'identifying the reviewed artifact'):
+                                native.approve_scope(self.root,candidate['scope_id'],typed,after=prerequisite['decision'])
+                            self.assertEqual(retained_journal.records(),records)
+                            self.assertEqual(load_run(self.root)[1]['granted'],retained['granted'])
+                        else:
+                            selected=native.approve_scope(self.root,candidate['scope_id'],typed,after=prerequisite['decision'])
+                            self.assertEqual(selected['task']['title'],'Typed actual scope')
+                    if host=='claude':
+                        for amended in (False,True):
+                            candidate=native.prepare_scope(self.root,{'tasks':[{'id':'plan','title':'Native plan',
+                                'instructions':'Retain only the exact accepted preview.'}]})
+                            actual=native._home(self.root)/'scopes'/candidate['scope_id']/'scope.md'
+                            plan=actual.read_text()+('\nAmended scope\n' if amended else '')
+                            use='plan-'+str(amended)
+                            rows.extend([{'type':'assistant','sessionId':session,'cwd':str(self.root),'timestamp':now(),
+                                'message':{'content':[{'type':'tool_use','name':'ExitPlanMode','id':use,'input':{'plan':plan}}]}},
+                                {'type':'user','sessionId':session,'cwd':str(self.root),'timestamp':datetime.now(timezone.utc).isoformat(),
+                                 'toolUseResult':{'plan':plan,'filePath':'native-plan.md','isAgent':False},
+                                 'message':{'content':[{'type':'tool_result','tool_use_id':use,'content':'Approved'}]}}]);save()
+                            accepted={'host':host,'session':session,'tool_use_id':use,'transcript_path':str(path)}
+                            prerequisite=decisions.prepare(self.root,'stop',request=accepted)
+                            native.decision(self.root,'stop',choose(prerequisite,'stop-'+use))
+                            if amended:
+                                with self.assertRaisesRegex(Refused,'accepted changed scope'):
+                                    native.approve_scope(self.root,candidate['scope_id'],accepted,after=prerequisite['decision'])
+                            else:
+                                self.assertEqual(native.approve_scope(self.root,candidate['scope_id'],accepted,
+                                    after=prerequisite['decision'])['task']['id'],'plan')
+                    rows.append(human_record('before-cancel','/oh-deliver 0001'));save()
+                    cancel_request={'host':host,'session':session,'turn':'entry' if host=='codex' else 'before-cancel',
+                                    'prompt':'/oh-deliver 0001','transcript_path':str(path)}
+                    gate=decisions.prepare(self.root,'stop',request=cancel_request)
+                    native.decision(self.root,'stop',choose(gate,'last-prerequisite'))
+                    self.assertEqual(request_source(self.root,cancel_request,gate['decision'])['prompt'],'/oh-deliver 0001')
+                    rows.append(human_record('later','Do not deliver 0001; leave it.'));save()
+                    with self.assertRaisesRegex(Refused,'newer'):request_source(self.root,cancel_request,gate['decision'])
 
     def test_new_delivery_leaves_merged_branch_and_selects_remaining_task_from_main(self):
         from . import native

@@ -12,6 +12,195 @@ from .test_workflow import NativeFixture
 
 
 class ControlsTest(NativeFixture,unittest.TestCase):
+    def test_idle_selection_publishes_exact_reviewed_commits_without_stopping_prior_work(self):
+        from . import publication
+        from .test_workflow import configure
+        configure(self.root,tasks_per_batch=1)
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        self.approve(self.tasks);self.assess();self.implement()
+        first=self.reviewed();native.complete(self.root,first['id'])
+        old_journal,old=load_run(self.root);old_records=old_journal.records()
+        self.assertEqual(old['status'],'checkpoint')
+        self.assertEqual(old['done'],['1']);self.assertEqual(old['granted'],['1'])
+        self.approve([self.tasks[0]|{'title':'Different approved work'}])
+        self.assess();self.implement(edit=lambda:(self.root/'different.txt').write_text('new work\n',newline='\n'))
+        second=self.reviewed();native.complete(self.root,second['id'])
+        # Reviewed commits alone do not grant publication, even on the same branch.
+        with self.assertRaisesRegex(Refused,'publication grant|human PR choice'):publication.render(self.root)
+        native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/product?'))
+        current=load_run(self.root)[1]
+        self.assertEqual(current['publication']['commits'],[old['summaries'][0]['commit'],current['summaries'][0]['commit']])
+        body=publication.render(self.root)
+        self.assertIn(first['id'],body);self.assertIn(second['id'],body)
+        self.assertEqual(old_journal.records(),old_records)
+        self.assertEqual(load_run(self.root,old['id'])[1]['status'],'checkpoint')
+        # The retained history still needs exact commit evidence and an exact-range grant.
+        from copy import deepcopy
+        made=publication.made
+        altered=deepcopy(current);altered['publication']['commits']=altered['publication']['commits'][1:]
+        with patch('oh.publication.made',side_effect=lambda root,project,commit:
+                altered if commit==current['summaries'][0]['commit'] else made(root,project,commit)):
+            with self.assertRaisesRegex(Refused,'exact reviewed run commits'):publication.render(self.root)
+        unsettled=old|{'extra_review':{'task':'1'}}
+        with patch('oh.publication.made',side_effect=lambda root,project,commit:
+                unsettled if commit==old['summaries'][0]['commit'] else made(root,project,commit)):
+            with self.assertRaisesRegex(Refused,'requested task review'):publication.render(self.root)
+        prior_journal,prior=load_run(self.root);prior_records=prior_journal.records()
+        self.approve([self.tasks[0]|{'title':'Further approved work'}])
+        self.assess();self.implement(edit=lambda:(self.root/'further.txt').write_text('further work\n',newline='\n'))
+        third=self.reviewed();native.complete(self.root,third['id'])
+        # A new exact choice covers the old reviewed range and its earlier PR
+        # choice, without altering the original decisions.
+        native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/product?'))
+        latest_journal,latest=load_run(self.root)
+        self.assertEqual(latest['publication']['commits'],prior['publication']['commits']+[latest['summaries'][0]['commit']])
+        self.assertIn(third['id'],publication.render(self.root))
+        self.git('remote','set-url','origin','https://github.com/example/other.git')
+        with self.assertRaisesRegex(Refused,'destination changed'):publication.render(self.root)
+        native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/other?'))
+        self.assertIn(third['id'],publication.render(self.root))
+        latest=load_run(self.root)[1];latest_records=latest_journal.records()
+        self.assertEqual(prior_journal.records(),prior_records)
+        self.assertEqual(old_journal.records(),old_records)
+        # Resume may return to an earlier run after other runs' reviewed commits.
+        native.resume(self.root,self.resume_choice(run=old['id']),run=old['id'])
+        native.decision(self.root,'continue',self.human('continue'))
+        self.assess();self.implement(edit=lambda:(self.root/'remaining.txt').write_text('remaining work\n',newline='\n'))
+        final=self.reviewed();native.complete(self.root,final['id'])
+        native.decision(self.root,'publish',self.human('publish',question='Publish the reviewed work branch to example/other?'))
+        finished=load_run(self.root)[1]
+        self.assertEqual(finished['done'],['1','2'])
+        self.assertEqual(finished['publication']['commits'],latest['publication']['commits']+[finished['summaries'][-1]['commit']])
+        self.assertIn(final['id'],publication.render(self.root))
+        self.assertEqual(old_journal.records()[:len(old_records)],old_records)
+        self.assertEqual(prior_journal.records(),prior_records)
+        self.assertEqual(latest_journal.records(),latest_records)
+        final_records=old_journal.records()
+        from . import cancellation
+        from .storage import now
+        with cancellation._edit(self.root) as control:
+            control['tools']['late-old-tool']={'attempt':first['id'],'kind':'tool','name':'Edit','started':now()}
+        with self.assertRaisesRegex(Refused,'unsettled native attempt or operation'):publication.render(self.root)
+        self.assertEqual(old_journal.records(),final_records)
+        with self.parent_path.open('a',newline='\n') as stream:
+            stream.write(json.dumps({'type':'response_item','payload':{'type':'function_call_output',
+                                    'call_id':'late-old-tool','output':'Completed'}})+'\n')
+        body=publication.render(self.root)
+        self.assertEqual(load_run(self.root)[1]['publication'],finished['publication'])
+        from .test_workflow import pull_request
+        pr=pull_request(finished)|{'body':body}
+        with patch('oh.publication.github',side_effect=lambda root,host,path,**kw:[pr] if kw.get('pages') else pr):
+            published=publication.reconcile(self.root)
+            self.assertEqual(publication.reconcile(self.root)['published'],published['published'])
+        self.assertEqual(published['published']['number'],pr['number'])
+        self.assertEqual(old_journal.records()[:len(final_records)],final_records)
+        self.assertEqual(prior_journal.records(),prior_records)
+        self.assertEqual(latest_journal.records(),latest_records)
+
+    def test_idle_selection_preserves_authority_findings_and_edits_and_fences_old_selection(self):
+        self.approve();self.assess();self.implement()
+        self.reviewed({'verdict':'blocking','summary':'Retain the unresolved defect.',
+                       'findings':[{'severity':'blocking','family':'retained-idle','description':'The original defect remains unresolved.'}]})
+        journal,original=load_run(self.root)
+        # An original finding stays historical; new selection cannot resolve it.
+        before=journal.records()
+        (self.root/'manual.txt').write_text('keep these manual edits',newline='\n')
+        prepared=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'title':'A different approved fix'}]})
+        selected=native.approve_scope(self.root,prepared['scope_id'],self.human(session='new-parent'))
+        self.assess()
+        newer_journal,newer=load_run(self.root);newer_records=newer_journal.records()
+        from .storage import read_json
+        packet=read_json(Path(newer['attempts'][-1]['evidence'])/'task-context.json')
+        self.assertEqual(packet['retained_work']['runs'][0]['run'],original['id'])
+        self.assertNotEqual(selected['run'],original['id'])
+        self.assertEqual(journal.records(),before)
+        self.assertEqual(selected['retained_work'][0]['run'],original['id'])
+        self.assertEqual((self.root/'manual.txt').read_text(),'keep these manual edits')
+        with self.assertRaisesRegex(Refused,'superseded'):native._owner(self.root,original)
+        with self.assertRaisesRegex(Refused,'predates'):
+            native.approve_scope(self.root,original['scope_id'],original['human'])
+        resumed=native.resume(self.root,self.resume_choice(run=original['id'],session='returning-parent'),run=original['id'])
+        self.assertEqual(resumed['run'],original['id'])
+        after=load_run(self.root)[1]
+        for key in ('config','granted','attempts','done','resolutions'):
+            self.assertEqual(after[key],original[key])
+        self.assertEqual(newer_journal.records(),newer_records)
+
+    def test_idle_selection_fences_prior_coordinator_turns_on_both_hosts(self):
+        from . import cancellation
+        for host in ('codex','claude'):
+            with self.subTest(host=host),patch.object(self,'human',side_effect=lambda prompt='approve',**kw:
+                    {'host':host,'session':'s','turn':'old-'+host,'prompt':prompt,**kw}):
+                self.approve();old=load_run(self.root)[1]
+            prepared=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'title':'New '+host+' work'}]})
+            native.approve_scope(self.root,prepared['scope_id'],self.human(host=host,session='s',turn='new-'+host))
+            event={'hook_event_name':'PreToolUse','session_id':'s','tool_name':'mcp__o_harness__status',
+                   'tool_use_id':'late-'+host,'turn_id':old['human']['turn']}
+            self.assertIn('superseded work selection',cancellation.hook(self.root,host,event)['hookSpecificOutput']['permissionDecisionReason'])
+            self.assertEqual(cancellation.hook(self.root,host,event|{'turn_id':'fresh-human-'+host}),{})
+
+    def test_idle_selection_still_requires_cleanup_of_finished_attempt_operations(self):
+        from . import cancellation
+        from .storage import now
+        self.approve();self.assess();journal,state=load_run(self.root)
+        prepared=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'title':'Different work'}]})
+        attempt=state['attempts'][-1]['id']
+        with cancellation._edit(self.root) as value:
+            value['tools']['unfinished']={'attempt':attempt,'kind':'tool','name':'Edit','started':now()}
+            value['tools']['settled-command']={'attempt':attempt,'kind':'command','started':now(),'ended':now(),
+                                              'receipt':str(Path(self.temp.name)/'expired-command-receipt')}
+        before=journal.records()
+        self.assertEqual(native.select(self.root)['execution']['state'],'unsettled')
+        with self.assertRaisesRegex(Refused,'unsettled native attempt or operation'):
+            native.approve_scope(self.root,prepared['scope_id'],self.human())
+        self.assertEqual(journal.records(),before)
+        # A lost post-hook is routine bookkeeping once the original native
+        # transcript actually contains this tool's completed result.
+        with self.parent_path.open('a',newline='\n') as stream:
+            stream.write(json.dumps({'type':'response_item','payload':{'type':'function_call_output',
+                                     'call_id':'unfinished','output':'Completed'}})+'\n')
+        self.assertTrue(native.approve_scope(self.root,prepared['scope_id'],self.human())['run'])
+        self.assertEqual(journal.records(),before)
+
+    def test_selection_orders_native_decisions_instead_of_their_later_journal_writes(self):
+        from datetime import datetime
+        from .storage import now
+        self.approve()
+        prepared=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'title':'New native request'}]})
+        stopped=self.human('stop',at=now());native.decision(self.root,'stop',stopped)
+        journal,_=load_run(self.root)
+        native_at=datetime.fromisoformat(stopped['at']);written_at=datetime.fromisoformat(journal.records()[-1]['at'])
+        # A new input can arrive while the preceding helper is still saving it.
+        newer_input=native_at+(written_at-native_at)/2
+        selected=native.approve_scope(self.root,prepared['scope_id'],self.human(at=newer_input.isoformat()))
+        self.assertEqual(selected['task']['title'],'New native request')
+
+    def test_standalone_review_repairs_can_select_over_idle_work_without_losing_its_history(self):
+        from . import prepared,review
+        from .storage import atomic_json
+        self.approve();old_journal,old=load_run(self.root);old_records=old_journal.records()
+        self.git('switch','main')
+        (self.root/'manual.txt').write_text('manual correction target',newline='\n')
+        native.review(self.root,'changes',self.human('/oh-review changes'))
+        result=self.finish_attempt('review',{'verdict':'blocking','summary':'Repair the manual behavior.',
+            'findings':[{'severity':'blocking','family':'manual-repair','description':'The manual behavior is wrong.'}]})
+        review_journal,feedback=load_run(self.root);receipt_records=review_journal.records()
+        self.git('switch','-c','repair/manual-behavior')
+        source=review.repair_source(self.root,feedback['id'])
+        self.assertEqual(source['attempt'],result['id'])
+        manifest=Path(self.temp.name)/'repairs.json'
+        atomic_json(manifest,{'tasks':[{'id':'repair','title':'Repair the reviewed behavior',
+                                     'instructions':'Fix the retained manual-repair finding and include the original changes.'}]})
+        scope=prepared.prepare(self.root,manifest=manifest,review=feedback['id'])
+        selected=native.approve_scope(self.root,scope['scope_id'],self.human())
+        self.assertNotIn(selected['run'],(old['id'],feedback['id']))
+        self.assertEqual(old_journal.records(),old_records)
+        self.assertEqual(review_journal.records(),receipt_records)
+        self.assertEqual(load_run(self.root)[1]['repair_source']['attempt'],result['id'])
+        self.assertEqual((self.root/'manual.txt').read_text(),'manual correction target')
+        (self.root/'manual.txt').write_text('Changed after feedback',newline='\n')
+        with self.assertRaisesRegex(Refused,'reviewed work changed'):review.repair_source(self.root,feedback['id'])
+
     def test_plain_native_control_turns_need_no_internal_artifact_path(self):
         from .storage import now
         from datetime import datetime,timedelta
@@ -141,11 +330,13 @@ class ControlsTest(NativeFixture,unittest.TestCase):
 
     def test_checks_keep_human_controls_available_and_block_transfer_until_quiescent(self):
         self.approve();before=load_run(self.root)[1]
+        different=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'title':'Different work after checks'}]})
         continuation=self.resume_choice(session='fresh-parent')
         def checking(*args,**kwargs):
             with self.assertRaisesRegex(Refused,'still executing'):native.resume(self.root,continuation)
             with self.assertRaisesRegex(Refused,'still executing'):native.admit(self.root,'assessment')
             with self.assertRaisesRegex(Refused,'still executing'):native.review(self.root,'tree',self.human('/oh-review tree'))
+            with self.assertRaisesRegex(Refused,'still executing'):native.approve_scope(self.root,different['scope_id'],self.human())
             native.decision(self.root,'pause',self.human('pause'))
             native.decision(self.root,'stop',self.human('stop'))
             self.assertEqual(native.resume(self.root)['status'],'stopped')
@@ -257,10 +448,10 @@ class ControlsTest(NativeFixture,unittest.TestCase):
             native.resume(self.root,continuation,run=original['id'])
         self.assertEqual(load_run(self.root)[1]['id'],feedback['run'])
         self.assertEqual(journal.records(),records);self.assertEqual(feedback_journal.records(),review_records)
-        # A review binding must not let new scope overwrite the hidden workflow.
+        # An old approval must not steal a newer explicit work selection.
         prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
-        with self.assertRaisesRegex(Refused,'saved scope'):
-            native.approve_scope(self.root,prepared['scope_id'],self.human())
+        with self.assertRaises(Refused):
+            native.approve_scope(self.root,prepared['scope_id'],original['human'])
         self.assertEqual({name:checkout_file(self.root,name).read_bytes() for name in before},before)
         # A failed binding write recovers with the same valid command, without
         # allowing an older command to steal a newer selection.

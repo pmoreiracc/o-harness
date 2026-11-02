@@ -207,7 +207,10 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         partial.write_text('keep this')
         self.stop()
         self.native_results[old] = {'text': 'Old worker claims success', 'status': 'completed'}
-        self.assertEqual(native.select(self.root)['status'], 'stopped')
+        selected=native.select(self.root)
+        self.assertEqual(selected['status'], 'running')
+        self.assertIsNotNone(selected['execution']['interruption'])
+        self.assertEqual(native.saved_work(self.root)['saved_work'][0]['execution'],selected['execution'])
         self.assertEqual(self.tool('apply_patch')['hookSpecificOutput']['permissionDecision'], 'deny')
         before = load_run(self.root)[1]['granted']
         fresh_turn = recover('s')

@@ -26,7 +26,16 @@ fetches base facts without changing the checkout. Reconcile material saved/local
 differences before choosing a path or reporting blockers. Standalone review of an
 explicit immutable subject needs no unrelated origin refresh.
 Match the person's request to the saved scope and actual evidence, not recency alone.
-For any unfinished saved work, always ask once before continuing, even when the command
+`status` is the retained workflow disposition; `execution` separately reports native
+interruption, pending results and unsettled operations. `running` does not establish
+live execution, and an interrupted turn does not complete or terminally stop a workflow.
+Recorded remaining tasks need reconciliation with current Git and approved documents.
+Idle history alone does not reserve the checkout. Different requested work can select
+it through its own normal scope authority without Stop/Pause of the old record.
+Preserve the old grants, attempts, findings and any real local/unmerged work; inspect
+`retained_work` references where they affect the new candidate. Merged output does not
+create missing completion or review evidence.
+When actually continuing an unfinished saved scope, always ask once, even when the command
 names its initiative, design or review subject. A matching request discovers work; it
 is not the resume answer. Free-text proposals and quick fixes need not repeat the old
 words: read their saved scope/report and judge whether this is the same work. Never
@@ -38,6 +47,11 @@ Start fresh, Stop and take over choices; bind its returned action with `decision
 Other workflows use Resume. Settle prior native work, then bind the same answer;
 continue its actual phase without new scope, repeated questions or renewed allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
+If a real prerequisite question intervenes, retain its initiating request with
+`decision-request --request <native-locator.json>` (Codex `request`). After binding
+the answer, use the original locator and that decision ID as `scope prepare --after`
+or `scope approve --after` (Codex `after`). Read `workflows/recovery.md` for this path;
+never pass a Stop answer as though it were a Deliver invocation or scope approval.
 
 ## Read only the procedure needed now
 

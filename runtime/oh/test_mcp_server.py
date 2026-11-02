@@ -131,7 +131,12 @@ class CodexToolsTest(unittest.TestCase):
         from .cli import main
         with patch('oh.decisions.prepare',return_value=None) as prepare,patch('sys.stdout',new=io.StringIO()):
             main(['--root',str(self.root)]+argv)
-        self.assertEqual(prepare.call_args.args[-1],repair)
+        self.assertEqual(prepare.call_args.args[6],repair)
+        carried=command('decision_request',{'kind':'stop','request':human,'after':'prior'},self.root)
+        self.assertEqual(carried[:5],['decision-request','--after','prior','--request',carried[4]])
+        self.assertEqual(read_json(carried[4]),human)
+        self.assertEqual(command('scope_prepare',{'after':'accepted','doc':'0001'},self.root),
+                         ['scope','prepare','--workflow','deliver','--after','accepted','--doc','0001'])
         tracked=command('finding_track',{'attempt':'review','destination':{'saved':True}},self.root)
         self.assertEqual(read_json(tracked[2]),{'saved':True})
         self.assertEqual(tracked[-2:],['--','review'])

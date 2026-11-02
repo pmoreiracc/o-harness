@@ -40,7 +40,9 @@ def main(argv=None):
     scope=sub.add_parser('scope');actions=scope.add_subparsers(dest='action',required=True)
     prep=actions.add_parser('prepare');prep.add_argument('manifest',type=Path,nargs='?');prep.add_argument('--doc');prep.add_argument('--track',default='');prep.add_argument('--workflow',default='deliver',choices=['deliver','design','propose']);prep.add_argument('--human')
     prep.add_argument('--keep-checkout',action='store_true',help='Keep the deliberately selected checkout; scope, approval and ownership checks still apply')
+    prep.add_argument('--after',help='Accepted prerequisite decision retaining this initiating request')
     approve=actions.add_parser('approve');approve.add_argument('scope_id');approve.add_argument('locator')
+    approve.add_argument('--after',help='Accepted prerequisite decision retaining this same scope approval')
     attempt=sub.add_parser('attempt');attempts=attempt.add_subparsers(dest='action',required=True)
     admit=attempts.add_parser('admit');admit.add_argument('role',choices=['assessment','implementation','analysis','review'])
     for action in ('bind','retain'):
@@ -55,6 +57,7 @@ def main(argv=None):
     complete=sub.add_parser('complete');complete.add_argument('attempt')
     decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator');decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
     request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int,help='Override the configured review window only when the person explicitly requests a different count; otherwise omit');request.add_argument('--run');request.add_argument('--also');request.add_argument('--repair')
+    request.add_argument('--request',help='Native locator of the initiating request to continue after this prerequisite');request.add_argument('--after',help='Prior accepted prerequisite for this same request')
     track=sub.add_parser('finding-track');track.add_argument('attempt');track.add_argument('--destination',metavar='URL_OR_FILE',help='Issue URL or path to a JSON destination file')
     resume=sub.add_parser('resume');resume.add_argument('--human');resume.add_argument('--run')
     status=sub.add_parser('status');status.add_argument('--saved',action='store_true')
@@ -96,8 +99,8 @@ def main(argv=None):
             raise Refused('Run OH helpers directly through the native tool using the packet helper prefix; do not nest them inside owned-command.')
         from . import native
         if args.command=='scope':
-            result=(native.prepare_scope(root,read_json(args.manifest) if args.manifest else None,args.doc,args.track,args.workflow,_locator(args.human),args.keep_checkout)
-                    if args.action=='prepare' else native.approve_scope(root,args.scope_id,_locator(args.locator)))
+            result=(native.prepare_scope(root,read_json(args.manifest) if args.manifest else None,args.doc,args.track,args.workflow,_locator(args.human),args.keep_checkout,args.after)
+                    if args.action=='prepare' else native.approve_scope(root,args.scope_id,_locator(args.locator),args.after))
         elif args.command=='attempt':
             result=native.admit(root,args.role) if args.action=='admit' else getattr(native,args.action)(root,args.attempt,_locator(args.locator))
         elif args.command=='review-check':
@@ -119,7 +122,7 @@ def main(argv=None):
         elif args.command=='decision':result=native.decision(root,args.kind,_locator(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
         elif args.command=='decision-request':
             from .decisions import prepare
-            result=prepare(root,args.kind,args.attempt,args.rounds,args.run,args.also,args.repair)
+            result=prepare(root,args.kind,args.attempt,args.rounds,args.run,args.also,args.repair,_locator(args.request),args.after)
         elif args.command=='finding-track':
             from .scope import track
             destination=args.destination
