@@ -76,7 +76,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Attach historical diagnostics | `evidence <attachment.json>` | `evidence` |
 | Complete the reviewed candidate | `complete <review-attempt-id>` | `complete` |
 | Bind the effect before a native question | `decision-request <kind> [--attempt ID] [--rounds N] [--run ID]` | `decision_request` |
-| Track retained outside-scope findings | `finding-track ID [--destination FILE]` | `finding_track` |
+| Track retained outside-scope findings | `finding-track ID [--destination URL_OR_FILE]` | `finding_track` |
 | Record a consequential human decision | `decision <kind> <locator.json> [--attempt ID] [--destination FILE]` | `decision` |
 | Prepare standalone feedback | `review -- <selector...>` | `review` |
 | Reconcile the approved PR | `publication [--pr N]` | `publication` |

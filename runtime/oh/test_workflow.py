@@ -964,6 +964,8 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
 
     def test_outside_scope_followups_preserve_ready_work_and_remain_visible(self):
         from . import native,scope,publication
+        from .cli import main
+        from .mcp_server import command
         self.approve();self.assess();self.implement()
         finding={'severity':'scope','description':'A separate indexing task is needed.','family':'index','path':'index.py'}
         review=self.reviewed({'verdict':'scope','summary':'Approved behavior is ready.','findings':[finding]})
@@ -972,8 +974,23 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(scope.track(self.root,review['id'])['destination'],{'saved':True})
         # Tracking facts do not consume a human source, change scope, or renew a budget.
         issue='https://github.com/example/product/issues/158'
-        tracked=scope.track(self.root,review['id'],{'issue':issue})
-        self.assertFalse(tracked['candidate_changed'])
+        journal=load_run(self.root)[0];records=journal.records()
+        with patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()) as error:
+            with self.assertRaises(SystemExit) as refused:
+                main(['--root',str(self.root),'finding-track',review['id'],'--destination',issue.replace('/issues/','/pull/')])
+        self.assertEqual(refused.exception.code,2)
+        self.assertIn('Supply the actual created or linked issue URL',error.getvalue())
+        self.assertEqual(journal.records(),records)
+        for arguments in (['finding-track',review['id'],'--destination',issue],
+                          command('finding_track',{'attempt':review['id'],'destination':{'issue':issue}},self.root)):
+            with patch('sys.stdout',new=io.StringIO()) as output:
+                main(['--root',str(self.root),*arguments])
+            tracked=json.loads(output.getvalue())
+            self.assertEqual(tracked['destination'],{'issue':issue})
+            self.assertFalse(tracked['candidate_changed'])
+            self.assertFalse(tracked['requires_review'])
+            self.assertIn(issue,(journal.path/'index.md').read_text())
+        self.assertEqual(len(journal.records()),len(records)+1)
         self.assertEqual(scope.track(self.root,review['id'])['destination'],{'issue':issue})
         after=load_run(self.root)[1]
         for key in ('decisions','granted','scope_id','config'):self.assertEqual(after[key],state[key])
