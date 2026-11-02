@@ -20,6 +20,11 @@ not discovery.
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
 workflow and standalone review without selecting either or registering a new checkout.
+For current planning/delivery readiness, listing or recovery advice, read
+`workflows/entry.md` and call `entry` first; it includes saved-work discovery and
+fetches base facts without changing the checkout. Reconcile material saved/local/base
+differences before choosing a path or reporting blockers. Standalone review of an
+explicit immutable subject needs no unrelated origin refresh.
 Match the person's request to the saved scope and actual evidence, not recency alone.
 For any unfinished saved work, always ask once before continuing, even when the command
 names its initiative, design or review subject. A matching request discovers work; it
@@ -43,6 +48,7 @@ remaining content from its saved output before acting on it.
 | Situation | Required reference |
 | --- | --- |
 | Any human question that grants scope, continuation, allowance, acceptance or publication | `workflows/decisions.md`, before preparing or displaying the question |
+| Current planning/delivery readiness, listing or recovery advice | `workflows/entry.md`, before choosing a path or claiming current tasks/blockers |
 | Resume, missing child binding, rejected launch, interrupted work, Pause or Stop | `workflows/recovery.md` |
 | Outside-scope findings or requested tracking | `workflows/findings.md` |
 | Publish, reconcile an existing PR, or inspect its CI | `workflows/publication.md` |
@@ -59,6 +65,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Purpose | Claude command | Codex tool |
 | --- | --- | --- |
 | Discover saved work | `status --saved` | `status` with `saved: true` |
+| Reconcile saved/local/origin entry facts | `entry` | `entry` |
 | Read a workflow or role contract | `resource <path>` | `resource` with `path` |
 | Locate, validate or list plans | `plans path\|check\|list` | `plans` with `action` |
 | Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
@@ -118,8 +125,9 @@ branch. Reuse the matching unmerged branch for interrupted work. For ordinary ne
 create a branch from the refreshed configured base; do not implement or commit on trunk.
 Preserve included original edits and explicit existing-PR corrections. If another
 person's dirty checkout conflicts, use a suitable native worktree rather than discarding
-their changes. Scope preparation binds the current branch/base and starting contents;
-it does not switch them. If those contents change before approval, preserve the edits
+their changes. Scope preparation binds branch/base and starting contents. Its default
+delivery entry can safely update/select a branch; `--keep-checkout` preserves a checkout
+the agent deliberately reconciled under `workflows/entry.md`. If contents change before approval, preserve the edits
 and prepare the same tasks with a current preview. Never reuse the old acceptance for
 changed starting work. Include the recorded original commit range in the first task's
 implementation and review, together with its current candidate.

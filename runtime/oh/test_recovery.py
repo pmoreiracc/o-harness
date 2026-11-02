@@ -15,6 +15,16 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
     # Exercise existing recovery cases with old, ordinary path strings beyond MAX_PATH.
     state_folder='/'.join(['long-state-'+'a'*80,'b'*90,'c'*90])
 
+    def test_offline_recovery_explains_cached_base_and_keeps_existing_choices(self):
+        self.approve();before=load_run(self.root)[1]
+        self.git('remote','add','origin',str(Path(self.temp.name)/'unavailable-origin'))
+        gate=decisions.prepare(self.root,'recover')
+        self.assertEqual(gate['base_observation']['freshness'],'unavailable')
+        self.assertIn('Base freshness: unavailable',gate['question'])
+        self.assertEqual(set(gate['options']),{'Continue','Start fresh','Stop and take over'})
+        after=load_run(self.root)[1]
+        for key in ('id','human','granted','attempts','config'):self.assertEqual(after[key],before[key])
+
     def answer(self, gate, label, host='claude', session='new-parent'):
         at=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
         return self.human(label,host=host,session=session,decision=gate['decision'],

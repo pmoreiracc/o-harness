@@ -9,6 +9,9 @@ If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Prepare the initiative
 
+Read `workflows/entry.md` before current planning-readiness advice or branch selection.
+Reconcile saved/local/origin differences while preserving useful local drafting work.
+
 Read `plans path`, resolve an undecided repo/private location once and show its actual
 folder. Respect project policy; OH adds no mandatory ADR process.
 

@@ -11,6 +11,10 @@ If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Select the work
 
+Read `workflows/entry.md` and inspect its entry facts before readiness/blocker advice
+or scope selection. Inspect the relevant plan on the reconciled checkout/base;
+historical reports and local listing results alone are not current progress evidence.
+
 A number identifies a design, not a task. Name the actual task only after selection.
 Interpret the requested work as follows:
 
