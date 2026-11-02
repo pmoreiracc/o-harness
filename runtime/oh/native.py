@@ -562,7 +562,7 @@ def select(root,run=None):
     if checked:
         result['verification']={k:checked.get(k) for k in ('task','head','tree','git_tree','at')}
         result['verification']['passed']=not any(check_failed(c) for c in checked['checks'])
-        result['verification']['checks']=[{k:c[k] for k in ('name','returncode','cancellation','unavailable') if k in c} for c in checked['checks']]
+        result['verification']['checks']=[{k:c[k] for k in ('name','returncode','cancellation','unavailable','logs') if k in c} for c in checked['checks']]
     reviews=[a for a in history if a['role']=='review' and (state['workflow']=='review' or a.get('purpose','workflow')=='workflow')]
     result.update(reviews_used=len(reviews),reviews_allowed=review_limit(state,current['id']))
     assessment=state.get('assessments',{}).get(current['id'])

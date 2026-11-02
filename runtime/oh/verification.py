@@ -8,7 +8,7 @@ from .system import Path
 import stat
 import subprocess
 import time
-from .storage import Refused, atomic_json, digest, git, git_blobs, read_json, state_home, whole, worktrees, git_env, git_root
+from .storage import Refused, atomic_json, digest, git, git_blobs, identifier, read_json, state_home, whole, worktrees, git_env, git_root
 from .system import uname, executable
 
 
@@ -100,22 +100,25 @@ def verify(root, checks, project_id):
         except FileNotFoundError as exc:
             return results+[unavailable(check,command,start,str(exc))]
         toolchain=check.get('toolchain')
-        versions=[]
+        versions=[];logs=[]
         if isinstance(toolchain,list) and all(isinstance(cmd,list) and cmd and all(isinstance(x,str) for x in cmd) for cmd in toolchain):
             for probe_command in toolchain:
                 from .processes import capture
+                directory=state_home()/'verification'/project_id/'logs'/identifier()
                 try:
                     probe_command=[executable(probe_command[0],cwd=root,env=check_env()),*probe_command[1:]]
-                    probe,cancellation=capture(root,probe_command,timeout=10,env=check_env())
+                    probe,cancellation=capture(root,probe_command,timeout=10,env=check_env(),log_dir=directory,limit=1000)
                 except FileNotFoundError as exc:
-                    return results+[unavailable(check,probe_command,start,str(exc))]
+                    if (directory/'capture.json').is_file():logs.append(str(directory/'capture.json'))
+                    return results+[unavailable(check,probe_command,start,str(exc))|{'logs':logs}]
+                logs.append(probe.log['path'])
                 if cancellation or probe.returncode:
                     detail='Toolchain probe '+repr(probe_command)+' failed: '+(probe.stdout+probe.stderr)[-1000:]
-                    return results+[unavailable(check,probe_command,start,detail,returncode=probe.returncode,cancellation=cancellation)]
-                versions.append({'command':probe_command,'output':probe.stdout+probe.stderr})
+                    return results+[unavailable(check,probe_command,start,detail,returncode=probe.returncode,cancellation=cancellation)|{'logs':logs}]
+                versions.append({'command':probe_command,**{name:probe.log[name]['sha256'] for name in ('stdout','stderr')}})
         fingerprint = digest({'tree':tree(root,dependencies),'command':check['command'],'resolved_command':command,
             'environment':dict(os.environ),'platform':uname(), 'toolchain':versions,
-            'check':check,'engine':2})
+            'check':check,'engine':3})
         cache = state_home() / 'verification' / project_id / (fingerprint+'.json')
         # No cache without an explicit dependency AND toolchain contract.
         reusable = bool(dependencies and versions)
@@ -124,12 +127,15 @@ def verify(root, checks, project_id):
             continue
         start=time.monotonic()
         from .processes import capture
-        try:output,cancellation=capture(root,command,timeout=check.get('timeout_seconds',900),env=check_env())
+        directory=state_home()/'verification'/project_id/'logs'/identifier()
+        try:output,cancellation=capture(root,command,timeout=check.get('timeout_seconds',900),env=check_env(),log_dir=directory)
         except FileNotFoundError as exc:
-            return results+[unavailable(check,command,start,str(exc))]
+            if (directory/'capture.json').is_file():logs.append(str(directory/'capture.json'))
+            return results+[unavailable(check,command,start,str(exc))|{'logs':logs}]
+        logs.append(output.log['path'])
         result={'name':check['name'],'command':command,'fingerprint':fingerprint,'returncode':output.returncode,
                 'duration_ms':round((time.monotonic()-start)*1000),'reused':False,
-                'output':(output.stdout+'\n'+output.stderr)[-12000:], 'cancellation':cancellation}
+                'output':(output.stdout+'\n'+output.stderr)[-12000:], 'cancellation':cancellation,'logs':logs}
         results.append(result)
         if check_failed(result):
             return results
@@ -139,15 +145,16 @@ def verify(root, checks, project_id):
 
 
 def failure_summary(results, limit):
-    """Readable bounded repair feedback; complete check evidence stays in the journal."""
+    """Bounded repair feedback; the journal references complete external stream logs."""
     failed=[r for r in results if check_failed(r)]
     header='\n'.join(f"{r['name']} failed (exit {r.get('returncode', 'unknown')}"+
                      (', '+', '.join(r['cancellation']) if r.get('cancellation') else '')+').' for r in failed)
+    header+='\n'+'\n'.join('Full log: '+path for r in failed for path in r.get('logs',[]))
     output='\n'.join(r.get('output','') for r in failed)
     output=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',output)
     # A tail can start with hundreds of passing tests and hide the actual assertion
     # when status further bounds it. Put error locations/messages first, retaining
-    # surrounding context and the original full output in the journal.
+    # surrounding context; full output is retained at the external log references.
     lines=output.splitlines()
     errors=[i for i,line in enumerate(lines) if re.search(
         r'\b(?:FAIL|ERROR|AssertionError|Traceback|error TS\d+|error:)|^\s*Error:|\d+:\d+\s+error\b',line)]

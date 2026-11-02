@@ -108,8 +108,14 @@ class SystemTest(unittest.TestCase):
 
     def test_explicit_command_deadline_still_cancels(self):
         from .processes import capture
-        with tempfile.TemporaryDirectory() as tmp:
-            result,reasons=capture(Path(tmp),[sys.executable,'-c','import time;time.sleep(30)'],timeout=.1)
+        from .storage import read_json
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'OH_DATA_HOME':tmp+'/state'}):
+            result,reasons=capture(Path(tmp),[sys.executable,'-c','import time;print("before timeout",flush=True);time.sleep(30)'],
+                                   timeout=1,log_dir=system.Path(tmp)/'state/verification/timeout')
+            record=read_json(result.log['path'])
+            self.assertIn('before timeout',Path(record['stdout']['path']).read_text())
+            self.assertEqual(record['cancellation'],['timeout'])
+            self.assertEqual(record['returncode'],result.returncode)
         self.assertNotEqual(result.returncode,0)
         self.assertEqual(reasons,['timeout'])
 

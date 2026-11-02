@@ -192,6 +192,16 @@ the remaining checks and cannot advance that attempt to review or commit. `oh ve
 returns failure, and task and PR summaries label the result failed while retaining the
 actual exit code and cancellation reason.
 
+Checks and toolchain probes retain complete stdout and stderr in OH's external
+`verification/<project-id>/logs/` folder. Verification results, saved status and
+subsequent agent packets expose `logs` references to capture records containing
+the stream paths, byte counts and SHA-256 hashes. Inline output stays bounded;
+read the referenced files when a noisy check hides its original error.
+Logs remain available after failure, timeout or cancellation. A helper killed
+before finalization leaves its initial record and captured bytes, with unknown
+exit status and hashes rather than a claimed result. Logs are private local
+diagnostics; do not copy them into public issues or PRs.
+
 
 Before each new Deliver task, a fresh read-only assessment uses the configured `standard`
 profile to examine the actual scope and relevant code. Its difficulty, rationale, references,
