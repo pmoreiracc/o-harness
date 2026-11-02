@@ -13,8 +13,10 @@ would keep ready work waiting. Ask only when a requested tracking action needs a
 decision or missing authority. Honor an existing explicit preference without asking again. GitHub
 tracking may find an appropriate existing issue or create one under explicit or standing
 human authority; do not require the person to predict an existing issue URL. Record the
-resulting URL with `finding-track --destination` (`finding_track`) without another
-routing approval. Recording a URL grants no permission to create an issue or fix it.
+resulting URL with `finding-track ID --destination <issue-url>` (Codex:
+`finding_track` with `destination: {"issue": "<issue-url>"}`) without another routing
+approval. The CLI also accepts a JSON destination file for saved-follow-up, design
+or issue destinations. Recording a URL grants no permission to create an issue or fix it.
 
 For Deliver with a mutable repo or private design, related future work can be quoted
 in its `## Open review scope` section using `finding-track`. This is a follow-up note,

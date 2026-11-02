@@ -54,7 +54,7 @@ def main(argv=None):
     complete=sub.add_parser('complete');complete.add_argument('attempt')
     decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator');decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
     request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int,help='Override the configured review window only when the person explicitly requests a different count; otherwise omit');request.add_argument('--run');request.add_argument('--also');request.add_argument('--repair')
-    track=sub.add_parser('finding-track');track.add_argument('attempt');track.add_argument('--destination',type=Path)
+    track=sub.add_parser('finding-track');track.add_argument('attempt');track.add_argument('--destination',metavar='URL_OR_FILE',help='Issue URL or path to a JSON destination file')
     resume=sub.add_parser('resume');resume.add_argument('--human');resume.add_argument('--run')
     status=sub.add_parser('status');status.add_argument('--saved',action='store_true')
     review=sub.add_parser('review');review.add_argument('arguments',nargs='*');review.add_argument('--human')
@@ -120,7 +120,9 @@ def main(argv=None):
             result=prepare(root,args.kind,args.attempt,args.rounds,args.run,args.also,args.repair)
         elif args.command=='finding-track':
             from .scope import track
-            result=track(root,args.attempt,read_json(args.destination) if args.destination else None)
+            destination=args.destination
+            if destination:destination={'issue':destination} if '://' in destination else read_json(Path(destination))
+            result=track(root,args.attempt,destination)
         elif args.command=='resume':result=native.resume(root,_locator(args.human),args.run)
         elif args.command=='status':
             from .workflow import active_file
