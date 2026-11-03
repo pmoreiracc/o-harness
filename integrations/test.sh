@@ -10,7 +10,7 @@ case "${1:-native}" in
   windows-full) python3 integrations/full_tests.py --workers "${OH_TEST_WORKERS:-4}" "${@:2}" ;;
   # The tests a PR must pass on Windows (see integrations/select_tests.py); the full suite runs nightly and before a release.
   windows)
-    tests=$(python3 integrations/select_tests.py "${2:-origin/main}")
+    tests=$(python3 integrations/select_tests.py "${2:-origin/main}" --explain)
     # unittest ignores -k for tests named one by one, so filter the names here.
     [ "${3:-}" != -k ] || tests=$(grep -F -- "${4:-}" <<<"$tests" || true)
     [ -n "$tests" ] || { echo 'No selected test matches' >&2;exit 1; }

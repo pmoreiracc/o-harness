@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from .config import HOME
-from . import test_workflow as fixtures
+from . import test_fixtures_workflow as fixtures
 
 SCRIPTS = HOME / 'plugins/o-harness/scripts'
 
@@ -128,7 +128,7 @@ class WindowsTest(unittest.TestCase):
             self.assertFalse(launched.exists())
 
     def test_json_values_can_come_from_a_file(self):
-        test = fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
+        test = fixtures.WorkflowFixture()
         test.setUp();self.addCleanup(test.doCleanups)
         from .cli import main
         from .config import project_checks
@@ -138,7 +138,7 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(project_checks(test.root), [{'name': 't', 'command': ['git', 'diff', '--check']}])
 
     def test_relative_config_file_uses_invocation_directory_even_with_root_override(self):
-        test = fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
+        test = fixtures.WorkflowFixture()
         test.setUp();self.addCleanup(test.doCleanups)
         from .cli import main
         from .config import project_checks,change
@@ -234,7 +234,7 @@ class WindowsTest(unittest.TestCase):
             self.assertTrue(starter.exists())
 
     def test_reviewers_get_exact_git_blobs_even_when_attributes_hide_a_diff(self):
-        test=fixtures.WorkflowTest('test_config_unknown_fields_fail_closed_and_no_false_zero')
+        test=fixtures.WorkflowFixture()
         test.setUp();self.addCleanup(test.doCleanups)
         from .review import subject,capture
         (test.root/'output.txt').write_text('the exact candidate\n',newline='\n')

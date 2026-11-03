@@ -48,6 +48,18 @@ Maintainers run an independent review of every PR before merging. Only maintaine
 Maintainers decide when to publish releases. For local testing, see
 [local builds](docs/installation.md#local-build).
 
+Windows PR jobs log why a test was selected, the digest of all selected test IDs,
+and when each module starts. A change to a shared `test_fixtures_*.py` module
+selects its consumers, while editing a consumer alone does not select its siblings.
+Keep normal LF fixture writes portable. Mark tests that deliberately exercise
+Windows-specific behavior with a comment naming the behavior.
+
+When comparing Windows test performance, use the same expanded test IDs on the
+baseline and candidate and repeat on the same runner image. Compare test time
+and total job time separately. For coverage changes, account for which cases
+moved between PR and full-suite coverage. The nightly and release runs retain
+full Windows discovery.
+
 ## Try the local source in Claude Code and Codex
 
 ### One-time setup

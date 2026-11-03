@@ -32,9 +32,23 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / 'runtime/oh'
 # Modules that test OH's OS layer: locks, process groups, launchers, host binaries, installation.
-CORE = {'test_system', 'test_integration', 'test_installation', 'test_controls'}
+CORE = {'test_system', 'test_integration', 'test_installation', 'test_controls', 'test_windows'}
 # Test bodies that touch what differs on Windows: line endings, permissions, deletion, paths, processes.
-PLATFORM = re.compile(r"os\.name|sys\.platform|[Ww]indows|\\r\\n|CRLF|newline=|chmod|st_mode|rmtree|symlink|os\.sep|\.cmd\b|\.exe\b|signal\.|kill\(")
+# Writing an LF fixture is ordinary setup. Select CRLF, translation, and real platform behavior.
+PLATFORM = re.compile(r"""os\.name|sys\.platform|[Ww]indows|\\r\\n|CRLF|newline\s*=\s*(?!['"]\\n['"])\S|chmod|st_mode|rmtree|symlink|os\.sep|\.cmd\b|\.exe\b|signal\.|kill\(""")
+FIXTURE_PREFIX = 'test_fixtures_'
+
+# Relative weights from the broad Windows runs on #142 and #147. Keep module fixtures
+# together and start expensive groups while all workers are available.
+WINDOWS_PRIORITY = {
+    'oh.test_recovery': 7,
+    'oh.test_workflow': 6,
+    'oh.test_controls': 5,
+    'oh.test_delivery': 4,
+    'oh.test_cancellation': 3,
+    'oh.test_design_adapter': 2,
+    'oh.test_planning': 1,
+}
 
 
 def before(base):
@@ -77,11 +91,28 @@ def cases(suite):
         yield from cases(item) if isinstance(item, unittest.TestSuite) else [item]
 
 
-def select(base=None):
-    new = {path.stem: path.read_text(encoding='utf-8') for path in sorted(TESTS.glob('test_*.py'))}
-    whole = (CORE | (edited(before(base), new) if base else set())) & new.keys()
+def test_ids(names):
+    """Expand modules with the same loader the workers use, preserving duplicate IDs."""
     sys.path.insert(0, str(ROOT / 'runtime'))
-    chosen = [f'oh.{m}' for m in sorted(whole)]
+    try:
+        return [case.id() for case in cases(unittest.TestLoader().loadTestsFromNames(names))]
+    finally:
+        sys.path.pop(0)
+
+
+def select(base=None, *, explain=False):
+    new = {path.stem: path.read_text(encoding='utf-8') for path in sorted(TESTS.glob('test_*.py'))}
+    old = before(base) if base else new
+    changed = edited(old, new)
+    whole = (CORE | changed) & new.keys()
+    sys.path.insert(0, str(ROOT / 'runtime'))
+    chosen = [f'oh.{m}' for m in sorted(whole) if not m.startswith(FIXTURE_PREFIX)]
+    if explain:
+        for name in chosen:
+            module=name.split('.')[-1]
+            reason=('platform module' if module in CORE else 'edited module'
+                    if code(old.get(module,''))!=code(new[module]) else 'imports edited test code')
+            print(f'{name}: {reason}',file=sys.stderr)
     for case in cases(unittest.defaultTestLoader.discover(str(TESTS), 'test_*.py', str(ROOT / 'runtime'))):
         if isinstance(case, unittest.loader._FailedTest):  # a module that fails to import runs, so its error shows
             chosen.append(case._testMethodName);continue
@@ -89,7 +120,9 @@ def select(base=None):
         if package != 'oh' or module in whole:continue
         try:source = inspect.getsource(getattr(type(case), case._testMethodName))
         except (OSError, TypeError):continue
-        if PLATFORM.search(source):chosen.append(case.id())
+        if match:=PLATFORM.search(source):
+            chosen.append(case.id())
+            if explain:print(f'{case.id()}: platform marker {match[0]!r}',file=sys.stderr)
     return chosen
 
 
@@ -134,7 +167,7 @@ def affected(paths, sources):
         sys.exit('select_tests: no owner for ' + ', '.join(unowned) + '; add what it needs to OWNERS in integrations/select_tests.py')
     gone = [p for p in paths if re.fullmatch(r'runtime/oh/\w+\.py', p) and (Path(p).stem not in sources or Path(p).stem == '__init__')]
     if gone:  # a deleted or renamed module, or the package itself: whatever used it can break anywhere
-        return sorted(m for m in sources if m.startswith('test_'))
+        return sorted(m for m in sources if m.startswith('test_') and not m.startswith(FIXTURE_PREFIX))
     uses = {m: imports(source, sources.keys()) | ({n for n in sources if re.search(rf'\boh\.{n}\b', source)} if m.startswith('test_') else set())
             for m, source in sources.items()}
     tests, seen, todo = set(), set(), sorted(set().union(*[needs(p) for p in paths]) & sources.keys())
@@ -149,27 +182,36 @@ def affected(paths, sources):
         if not direct:todo += sorted(users)
     while more := {m for m, used in uses.items() if m.startswith('test_') and used & tests} - tests:
         tests |= more
-    return sorted(tests)
+    return sorted(m for m in tests if not m.startswith(FIXTURE_PREFIX))
 
 
 def run(names, workers=2, report=False):
     """Run the exact selected names, grouped by module, in separate processes; True when every group passed."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
+    from time import monotonic
     groups = {}
     for name in names:groups.setdefault('.'.join(name.split('.')[:2]), []).append(name)
     if not groups:raise ValueError('No selected tests')
-    def one(names):
+    started=monotonic()
+    def one(module, names):
         command = [sys.executable, '-m', 'unittest', '--durations', '15', *names]
+        if report:print(f"start  {module}  +{monotonic()-started:.1f}s", flush=True)
         try:
             return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace',
                                   env=os.environ | {'PYTHONPATH': str(ROOT / 'runtime'), 'PYTHONUTF8': '1'})
         except OSError as exc:
             return subprocess.CompletedProcess(command, 1, '', str(exc))
-    if report:print(f'Running {sum(map(len, groups.values()))} selected names in {len(groups)} module groups with {workers} workers', flush=True)
+    if report:
+        from hashlib import sha256
+        ids=test_ids(names)
+        fingerprint=sha256('\n'.join(sorted(ids)).encode()).hexdigest()
+        print(f'Running {len(ids)} tests in {len(groups)} module groups with {workers} workers '
+              f'(test ID digest {fingerprint})',flush=True)
     passed = True
     with ThreadPoolExecutor(workers) as pool:
-        pending = {pool.submit(one, names): module for module, names in groups.items()}
+        order = sorted(groups, key=lambda module: -WINDOWS_PRIORITY.get(module, 0)) if report else groups
+        pending = {pool.submit(one, module, groups[module]): module for module in order}
         for future in as_completed(pending):
             module, result = pending[future], future.result()
             print(f"{'ok' if not result.returncode else 'FAILED'}  {module}", flush=True)
@@ -197,4 +239,5 @@ elif __name__ == '__main__' and sys.argv[1:2] == ['--run-selected']:
     sys.exit(0 if run(names, workers=args.workers, report=True) else 1)
 elif __name__ == '__main__':
     # Bytes, so Windows never adds \r to the test names the shell passes on.
-    sys.stdout.buffer.write(''.join(t + '\n' for t in select(sys.argv[1] if len(sys.argv) > 1 else None)).encode())
+    args=[arg for arg in sys.argv[1:] if arg!='--explain']
+    sys.stdout.buffer.write(''.join(t + '\n' for t in select(args[0] if args else None,explain='--explain' in sys.argv[1:])).encode())

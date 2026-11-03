@@ -1,11 +1,12 @@
 import unittest
 from unittest.mock import patch
 from . import plans
-from . import test_workflow as fixtures
+from . import test_fixtures_workflow as fixtures
 from .config import change
-from .hosts import PROPOSAL_SCHEMA
 from .storage import Refused
 from .workflow import load_run
+
+from .test_fixtures_plans import idea
 
 DESIGN = '''---
 type: design
@@ -24,19 +25,10 @@ last-verified: 2026-09-27
 '''
 
 
-def idea(route='roadmap', **values):
-    value = {key: '' for key in PROPOSAL_SCHEMA['required']} | {'depends': []}
-    value |= {'route': route, 'understanding': 'Search across notes.', 'reason': 'New area with several PRs.',
-              'evidence': 'Read docs/roadmap.md.', 'text': 'Full-text search over notes', 'summary': 'A new search row in M1.'}
-    if route == 'roadmap':value |= {'slug': 'search', 'milestone': 'M1'}
-    if route == 'task':value |= {'design': '0001', 'track': 'Core', 'text': 'Rate-limit sign-in attempts. Read §1.', 'depends': ['2']}
-    return value | values
-
-
 class ProposeTest(unittest.TestCase):
-    setUp_workflow = fixtures.WorkflowTest.setUp
-    git = fixtures.WorkflowTest.git
-    event = fixtures.WorkflowTest.event
+    setUp_workflow = fixtures.WorkflowFixture.setUp
+    git = fixtures.WorkflowFixture.git
+    event = fixtures.WorkflowFixture.event
 
     def setUp(self):
         self.setUp_workflow()

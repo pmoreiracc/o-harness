@@ -3,27 +3,13 @@ import unittest
 import unittest.mock
 from pathlib import Path
 from . import plans
-from . import test_workflow as fixtures
+from . import test_fixtures_workflow as fixtures
 from .config import change
 from .hosts import DESIGN_SCHEMA
 from .storage import Refused, read_json
 from .workflow import load_run
 
-BODY = '''## 1. Why this, and why now
-
-People need to sign in before anything else works.
-
-## 2. Tasks
-
-### Core track
-
-- [ ] **1.** Add the credential store.
-- [ ] **2.** Add the sign-in endpoint. Depends on task 1.
-'''
-
-
-def design(title='Sign-in', body=BODY, summary='Two tasks.'):
-    return {'kind': 'design', 'title': title, 'body': body, 'context': '', 'alternatives': '', 'consequences': '', 'summary': summary}
+from .test_fixtures_plans import BODY, design
 
 
 def decision():
@@ -33,9 +19,9 @@ def decision():
 
 
 class DesignRunTest(unittest.TestCase):
-    setUp_workflow = fixtures.WorkflowTest.setUp
-    git = fixtures.WorkflowTest.git
-    event = fixtures.WorkflowTest.event
+    setUp_workflow = fixtures.WorkflowFixture.setUp
+    git = fixtures.WorkflowFixture.git
+    event = fixtures.WorkflowFixture.event
 
     def setUp(self):
         self.setUp_workflow()

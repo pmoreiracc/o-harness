@@ -6,6 +6,10 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  # GitHub can queue revisions out of order. Only coalesce duplicate runs of the same merge SHA.
+  group: verify-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.sha) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   checks:
     runs-on: ubuntu-24.04

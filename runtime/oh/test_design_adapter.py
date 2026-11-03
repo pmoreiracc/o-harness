@@ -1,20 +1,15 @@
 import json
-import unittest
 from pathlib import Path
-from . import test_workflow as fixtures
+from . import test_fixtures_workflow as fixtures
 from .registry import profile_path
 from .storage import atomic_json, read_json, Refused
 from .design_adapter import manifest
 from .workflow import load_run
 
 
-class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
-    git=fixtures.WorkflowTest.git
-    event=fixtures.WorkflowTest.event
-    fake=fixtures.WorkflowTest.fake
-
+class DesignAdapterTest(fixtures.NativeFixture):
     def setUp(self):
-        fixtures.NativeFixture.setUp(self)
+        super().setUp()
         path=profile_path(self.root)
         atomic_json(path,read_json(path)|{'design_profile':'consumer-v1'})
         fixtures.configure(self.root,tasks_per_batch=1)
@@ -55,7 +50,7 @@ class DesignAdapterTest(fixtures.NativeFixture,unittest.TestCase):
         self.assertEqual(state['granted'],before['granted'])
         self.assertEqual(state['scope_records'][review['id']]['findings'],[finding])
         self.assertEqual(state['scope_records'][review['id']]['destination']['design'],str(self.design.resolve()))
-        with self.assertRaises(fixtures.Refused):native.complete(self.root,review['id'])
+        with self.assertRaises(Refused):native.complete(self.root,review['id'])
         native.candidate(self.root);native.verify(self.root)
         review=self.finish_attempt('review',{'verdict':'clean','summary':'Checked the routed exact candidate.','findings':[]})
         self.assertEqual(len(load_run(self.root)[1].get('review_grants',[])),len(before.get('review_grants',[])))

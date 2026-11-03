@@ -4,13 +4,13 @@ import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
-from . import test_workflow as fixtures
+from . import test_fixtures_workflow as fixtures
 from .storage import Refused
 
 
 class BranchIdentityTest(unittest.TestCase):
-    setUp=fixtures.WorkflowTest.setUp
-    git=fixtures.WorkflowTest.git
+    setUp=fixtures.WorkflowFixture.setUp
+    git=fixtures.WorkflowFixture.git
 
     def origin(self):
         origin=Path(self.temp.name)/'origin.git'
