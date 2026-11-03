@@ -15,9 +15,15 @@ bound consequential effect; the host carries out the accompanying authorized act
 It binds the current subject and effect without granting anything. Present its returned
 question and positive choice through the native host, preserving its words and effect;
 Markdown emphasis, inline code and whitespace may change. Apart from those display changes,
-keep it unchanged except for the completed-task checkpoint presentation described below; keep the returned
-refine/cancel alternatives where relevant, or offer other non-granting alternatives; explanations and full previews
-belong in the surrounding conversation. Include its `decision` identity in the actual
+keep the full question unchanged, including its decision reference, and keep all
+returned choices. The reference binds the answer to this prepared effect even if
+another question has the same wording. Explanations and full previews belong in the
+surrounding conversation.
+When the helper returns `actions`, bind the selected action with its original decision ID.
+**Stop and take over** binds `decision stop` for the same run and preserves local work and grants.
+It authorizes no part of the positive choice. Dismissal and legacy **Not now** answers
+leave the decision unresolved. If Stop is the only available action, show the complete
+prepared question and its single action in chat and bind the explicit direct answer. Include its `decision` identity in the actual
 human locator when calling `decision` (or `resume`); OH locates the native question that
 showed it, so the conversation locator is enough. A direct Yes about this same shown
 question also works when a menu is unavailable. Preserve the prepared identity and actual
@@ -31,8 +37,8 @@ for the changed boundary. Do not infer grants from a model's paraphrase of free 
 ## Delivery recovery
 
 Use `decision-request recover --run ID` for an unfinished delivery. Show its Git
-context and discard effect, then its native single-select question with Continue,
-Start fresh and Stop and take over. Use the returned `actions` map with `decision`;
+context and discard effect, then call Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` with Continue, Start fresh and Stop and take over. Use the returned `actions` map with `decision`;
 the existing `continue` action is a task-batch grant, not this recovery's Continue.
 Recovery's Continue maps to `resume`, Start fresh to `restart`, and Stop to `stop`.
 Use the exact selected label if answered in ordinary chat; a bare Yes does not
@@ -53,39 +59,41 @@ returns one question with an `actions` map and all available choices:
   publish or grant another task.
 
 Show the completed work, next authorized task IDs, branch and publication destination
-in the surrounding conversation. Present every returned option unchanged in one native
-single-select question. When using a native single-select tool, its question's introductory prose may be concise: this checkpoint
-binds the complete native menu and selected action to the prepared saved-work boundary,
-not the wording of that introduction. This follows the golden reference's Claude task
-checkpoint without its post-answer grant hook. Both hosts use the same existing OH
-decision validator; no new menu or presentation guard is involved. Do not reduce this checkpoint to Continue/Not now or put PR
-only in explanatory prose. If publication is unavailable, report the helper's actual
+in the surrounding conversation. Present every returned option unchanged with Claude `AskUserQuestion` or Codex
+Default mode `functions.request_user_input_async`. Use the direct reply for a single
+action. Copy the full returned question into the native tool, including the saved run,
+so an answer cannot move between menus with identical options. Both hosts use the
+same decision validator. If publication is unavailable, report the helper's actual
 prerequisite while retaining Continue/Stop as applicable. All-tasks-complete checkpoints
 omit Continue; private planning completion needs no PR checkpoint.
 For a plain-chat checkpoint, copy the returned `question` unchanged and show all
-returned options. The permission to shorten the introduction applies only to the
-native single-select tool, whose saved record carries the complete menu. A prose
-list of choices alone does not carry that evidence.
+returned options. A prose list of choices by itself does not identify the prepared run.
 
 After the native answer, use its label in the returned `actions` map to select the
 existing `decision` kind (`continue`, `publish` or `stop`). Bind the same decision ID
-and actual native answer once. If the introduction was reworded, preserve that answer
-and retry with its prepared decision identity; do not ask the person again. Do not
+and actual native answer once. Preserve a valid answer through retries. Do not
 prepare a separate publish/stop question or ask
 for another Yes: the selected checkpoint option already names that effect. A generic
 Yes, cancellation, silence or several selected actions grants nothing at this menu.
 If the person supplies an ambiguous free-text answer, clarify the intended action;
 never interpret Continue as publication authority or Not now as Stop.
 
-Only newly prepared completed-task checkpoints use complete-menu binding. Earlier
-prepared records, scope approval, review renewal and other consequential questions
-keep their original exact presentation checks. Ordinary-chat answers still require
+Checkpoint and recovery menus require the complete prepared question and options.
+A native Stop and take over answer to another menu also requires its complete options.
+Replay a recorded historical decision from its original receipt. If a pending
+historical menu lacks its saved-run binding, preserve its answer and present the
+current prepared question.
+Ordinary-chat answers still require
 the complete prepared context, because they carry no native menu evidence.
-A changed candidate, task window or publication destination needs
-a new accurately bound question; preserve the prior answer as history.
+A changed candidate, task window or publication destination needs a new question
+before approval. Stop still applies to the same saved run and preserves its current
+files. Preserve prior answers as history.
+If a missing candidate prerequisite prevents preparing a menu, explain the prerequisite
+and use `decision-request stop --run ID` to offer the bound Stop action in chat.
 
-Use Claude `AskUserQuestion` or Codex's available native question tool directly for real
-decisions. Keep choices short and explain their effects in chat. Ask each decision when
+Call Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async` as applicable for existing separate decisions.
+Use the existing native control when it supplies the required approval, such as
+Claude plan acceptance, and bind its actual result. Keep choices short and explain their effects in chat. Ask each decision when
 it is actually needed. Defer finding-disposition questions until the current review
 and approved repairs are retained, rather than asking while that work is in progress.
 
@@ -96,7 +104,7 @@ success establishes no menu visibility. If the person reports a missing menu, us
 readable chat question and their direct reply; do not just repost a popup or keep
 sleeping on the assumption that it is visible. Preserve the same scope and allowance.
 
-In Codex, `request_user_input_async` posts a question and returns immediately. An
+In Codex Default mode, `functions.request_user_input_async` posts a question and returns immediately. An
 `accepted: true` result only acknowledges submission; it is not the person's answer.
 Use it only when a native interruptible wait tool is also available. After posting,
 keep the turn open and wait quietly with `clock.sleep` (at most 60 seconds per call),
@@ -124,16 +132,15 @@ synthesize an approval in an agent message.
 Consequential kinds are `continue`, `grant-review`, `accept-concerns`, `publish`, `pause`,
 `stop`, `resume`, `approve-repair`, `approve-proposal` and `approve-private`. Use
 `approve-repair` with a bounded `--repair` description only when additional authority
-is needed for a supporting repair in the unfinished delivery task. Approval continues
-that task; Not now leaves it pending. Follow the deliver skill for the complete path.
+is needed for a supporting repair in the unfinished delivery task. Approval continues that task. Stop and take over stops the run and preserves its work. Follow the deliver skill for the complete path.
 Scope preparation returns its
 own `approval` question for native quick-fix acceptance. Claude plan-viewer acceptance
 continues to bind the actual full plan directly, without an extra decision request.
 Native Pause/Stop commands remain immediately usable. Older already-presented canonical
 choices remain readable for recovery; do not build new wording around that compatibility.
 Routine clarification, issue tracking and follow-up bookkeeping need no durable grant.
-For concern-only reviews, present the returned **Accept these concerns / Fix concerns**
-choices. Fix concerns continues the existing scoped repair, verification and fresh-review
+For concern-only reviews, call Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` with the returned **Accept these concerns / Fix concerns** choices. Fix concerns continues the existing scoped repair, verification and fresh-review
 path within the remaining allowance; it does not accept the findings or renew that allowance.
 Do not submit that choice as `accept-concerns`. A dismissal or a legacy Not now answer
 alone does not request repairs; follow the person's actual choice without inventing one.
@@ -143,15 +150,24 @@ or require a second confirmation. The person controls publication, scope and all
 
 Claude quick fixes use the native plan viewer's single Accept. Copy the returned scope
 preview unchanged into the plan file designated by `EnterPlanMode`; do not rewrite its
-heading, instructions or limits, or append workflow commentary. Explain execution in chat.
+heading, scope identity, instructions or limits, or append workflow commentary. Explain
+execution in chat.
 Then call `ExitPlanMode` without an
 extra `AskUserQuestion`. Bind that actual acceptance with `scope approve` using the same
 conversation locator; OH resolves the saved plan acceptance. If supplying `tool_use_id`,
 use the `ExitPlanMode` call ID, not a human turn or result UUID. This display
 copy is not a consumer design. An edited preview needs refreshed scope and approval;
 rejection or interruption grants nothing. If native plan tools are unavailable, show
-the preview and obtain a direct human approval in chat. Codex uses a native question
-or direct human reply about the same complete scope. Never ask twice for one approval.
+the preview and its prepared approval question in chat, then bind the direct reply
+using that same decision ID.
+
+When Codex is in native Plan mode, present the complete unchanged scope preview in
+its native proposed plan. The person can choose **Yes, implement this plan** in the
+same conversation. Bind its actual reply with `scope approve`; OH checks the saved
+Plan item and the human request to implement it. Use the same conversation rather
+than the host option that clears context, since approval needs the original preview.
+In Codex Default mode, use `functions.request_user_input_async` for the prepared scope
+question or use the shared direct-reply path. Never ask twice for one approval.
 
 For documents, show the actual complete artifact or preview before its bound question.
 Use readable artifact names and explain their relevant scope; internal result.json paths

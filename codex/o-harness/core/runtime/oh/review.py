@@ -81,7 +81,9 @@ def repair_source(root, run):
     from .verification import tree
     current={'branch':git(root,'branch','--show-current'),'head':git(root,'rev-parse','HEAD'),'tree':tree(root)}
     # Historical findings are reconciled by the coordinator against the current source before preparing.
-    if state['subject']['kind'] in ('changes','tree','paths') and any(current[k]!=state['subject'][k] for k in current):
+    # A lossless execution-branch choice does not alter feedback's contents.
+    # The new scope binds that branch and still needs its own approval/review.
+    if state['subject']['kind'] in ('changes','tree','paths') and any(current[k]!=state['subject'][k] for k in ('head','tree')):
         raise Refused('The reviewed work changed. Review the current work before preparing its fixes; your edits are retained.')
     from .storage import changes
     paths=state['subject']['paths']
@@ -92,8 +94,8 @@ def repair_source(root, run):
     if canonical.exists():
         other=reduce(Journal(state['project'],read_json(canonical)['run']).records())
         published_branch=bool(other.get('published') and other['branch']==current['branch'])
-        if other['status'] not in ('completed','stopped') and not other.get('published'):
-            raise Refused('A delivery is still pending in this checkout. Keep this review as feedback and finish or stop that delivery before starting unrelated repairs.')
+        from .native import _switchable
+        _switchable(root,[other])
     from .branches import main_ref
     from .delivery import unreviewed
     base=main_ref(root)

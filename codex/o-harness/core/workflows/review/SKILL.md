@@ -12,7 +12,9 @@ preserve underlying workflow work when selecting standalone feedback or returnin
 
 ## 1. Resolve the review subject
 
-Resolve the person’s subject with targeted reads; ask only when it is ambiguous. Selectors are `changes`,
+Resolve the person’s subject with targeted reads. If several concrete subjects match,
+call Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+with those choices. Selectors are `changes`,
 `tree`, `paths <relative paths>`, `commit <ref>`, `range <base> <head>` or
 `task <id>` for completed unpublished delivery work. A design number is not a task
 number. A merged
@@ -55,7 +57,9 @@ allowances; never rewrite an earlier receipt or relabel unreviewed work as OH-re
 ## Completed-task review
 
 For `task <id>`, retain the saved delivery scope, task coverage and remaining review
-allowance. If entry returns `resume_required`, ask once; after acceptance retry the
+allowance. If entry returns `resume_required`, prepare the Resume question and
+call Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+once. After acceptance retry the
 same task-review request with that answer's human locator. Do not start a second
 review merely to move the existing review to a new session. Review the current exact
 candidate without a new task grant. A clean result

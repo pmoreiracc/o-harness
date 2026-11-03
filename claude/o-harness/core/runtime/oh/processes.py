@@ -94,13 +94,60 @@ def launch(root, command, *, timeout=None, interrupt=False, **kwargs):
                 with contextlib.suppress(BrokenPipeError):stream.close()
 
 
-def capture(root, command, *, timeout=900, env=None):
-    # Temporary files keep draining independent of a descendant retaining stdout.
+def capture(root, command, *, timeout=900, env=None, log_dir=None, limit=12000):
+    """Optionally retain exact stream bytes and return only bounded decoded tails.
+
+    Named streams and an initial record survive abrupt helper termination. Final
+    hashes/status are published after owned cleanup; unfinished records never
+    claim a result. Other callers keep their existing complete-text interface.
+    """
+    # Files keep draining independent of a descendant retaining stdout.
     import tempfile
-    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
-        with launch(root, command, timeout=timeout, cwd=root,
-                    env=env, stdout=output, stderr=error) as (child, cancelled, reason):
-            system.wait_for_exit(child)
-        output.seek(0); error.seek(0)
-        return subprocess.CompletedProcess(command, child.returncode,
-            output.read().decode(errors='replace'), error.read().decode(errors='replace')), reason
+    with contextlib.ExitStack() as resources:
+        if log_dir is not None:
+            import hashlib
+            from .storage import NOFOLLOW, atomic_json, snapshot_guard, state_mkdir, now
+            log_dir=system.Path(log_dir)
+            resources.enter_context(snapshot_guard())
+            state_mkdir(log_dir)
+            streams=[]
+            record={'command':command,'root':str(root),'started':now(),'finished':None,
+                    'returncode':None,'cancellation':[],'error':None}
+            from .cancellation import command_context
+            if context:=command_context():record['attempt']=context['attempt']
+            for name in ('stdout','stderr'):
+                path=log_dir/(name+'.log')
+                fd=os.open(path,os.O_RDWR|os.O_CREAT|os.O_EXCL|NOFOLLOW,0o600)
+                streams.append(resources.enter_context(os.fdopen(fd,'w+b')))
+                record[name]={'path':str(path),'bytes':None,'sha256':None}
+            record['path']=str(log_dir/'capture.json')
+            atomic_json(log_dir/'capture.json',record,immutable=True)
+            output,error=streams
+        else:
+            output=resources.enter_context(tempfile.TemporaryFile())
+            error=resources.enter_context(tempfile.TemporaryFile())
+        child=None;reason=[];failure=None
+        try:
+            with launch(root, command, timeout=timeout, cwd=root,
+                        env=env, stdout=output, stderr=error) as (child, cancelled, reason):
+                system.wait_for_exit(child)
+        except BaseException as exc:
+            failure={'type':type(exc).__name__,'message':str(exc)}
+            raise
+        finally:
+            if log_dir is not None:
+                for name,stream in (('stdout',output),('stderr',error)):
+                    stream.flush();os.fsync(stream.fileno());stream.seek(0)
+                    digest=hashlib.sha256();size=0
+                    while block:=stream.read(1024*1024):digest.update(block);size+=len(block)
+                    record[name].update(bytes=size,sha256=digest.hexdigest())
+                record.update(finished=now(),returncode=child.returncode if child else None,
+                              cancellation=list(reason),error=failure)
+                atomic_json(log_dir/'capture.json',record)
+        def text(stream):
+            stream.seek(0,os.SEEK_END)
+            stream.seek(max(0,stream.tell()-limit) if log_dir is not None else 0)
+            return stream.read().decode(errors='replace')
+        result=subprocess.CompletedProcess(command,child.returncode,text(output),text(error))
+        if log_dir is not None:result.log=record
+        return result,reason

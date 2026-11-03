@@ -1,7 +1,7 @@
 """Durable workflow facts and historical journal reader. Skills own execution."""
 from .system import Path
 from contextlib import contextmanager
-from .storage import Journal, Refused, checkout_file, checkout_id, digest, git, project, read_json, lock
+from .storage import Journal, Refused, checkout_file, digest, git, read_json, lock
 NO_RUN = 'No saved OH work in this checkout. Select a design or prepare bounded scope.'
 
 
@@ -43,22 +43,55 @@ def human_event(payload, host):
 
 
 def active_file(root):
-    review=checkout_file(root, 'oh-active-review.json')
-    return review if review.exists() and read_json(review).get('selected',True) else checkout_file(root, 'oh-active-run.json')
+    from .registry import checkout_state
+    return _active_file(checkout_state(root))
+
+
+def _active_file(directory):
+    review=directory/'oh-active-review.json'
+    return review if review.exists() and read_json(review).get('selected',True) else directory/'oh-active-run.json'
 
 
 def load_run(root, run=None):
+    from .registry import checkout_state_path, lookup, project_profile
+    entry=lookup(root)
+    project_id,checkout=entry['project'],entry['checkout']
     if run is None:
-        if not active_file(root).exists():raise Refused(NO_RUN)
-        active=read_json(active_file(root))
+        pointer=_active_file(checkout_state_path(checkout))
+        if not pointer.exists():raise Refused(NO_RUN)
+        active=read_json(pointer)
     else:
-        active={'project':project(root)['id'],'checkout':checkout_id(root),'run':run}
-    if active['checkout'] != checkout_id(root) or active['project'] != project(root)['id']:
+        active={'project':project_id,'checkout':checkout,'run':run}
+    if active['checkout']!=checkout or active['project']!=project_id:
         raise Refused('This run belongs to another checkout or project')
-    journal=Journal(active['project'],active['run'])
+    project_profile(project_id)
+    return _read_run(project_id,checkout,active['run'])
+
+
+def saved_runs(root):
+    """Read both saved bindings using one fresh checkout identity."""
+    from .registry import checkout_state_path, index_path, lookup, project_profile
+    if not index_path(root).is_file():return []
+    entry=lookup(root)
+    project_id,checkout=entry['project'],entry['checkout']
+    directory=checkout_state_path(checkout)
+    bindings={}
+    for name in ('oh-active-run.json','oh-active-review.json'):
+        pointer=directory/name
+        if not pointer.exists():continue
+        active=read_json(pointer)
+        if active.get('project')!=project_id or active.get('checkout')!=checkout:
+            raise Refused('Saved work binding belongs to another checkout or project')
+        bindings[active['run']]=None
+    if bindings:project_profile(project_id)
+    return [_read_run(project_id,checkout,run) for run in bindings]
+
+
+def _read_run(project_id,checkout,run):
+    journal=Journal(project_id,run)
     records=journal.records();state=reduce(records)
-    state['entry_human']=records[0]['data'].get('human',{})
-    if state.get('project')!=active['project'] or state.get('checkout')!=active['checkout'] or state.get('id')!=active['run']:
+    state['entry_human']=records[0]['data'].get('entry_request',records[0]['data'].get('human',{}))
+    if state.get('project')!=project_id or state.get('checkout')!=checkout or state.get('id')!=run:
         raise Refused('Saved work belongs to another checkout or project')
     return journal,state
 

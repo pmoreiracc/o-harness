@@ -7,9 +7,11 @@ and `resume --run ID` facts (Codex `status` with `saved`, `resume` with `run`).
 Discovery never changes the selected run. Show the requested saved subject, branch,
 next step and remaining allowance. Read `workflows/recovery.md` and `workflows/decisions.md`,
 then prepare `decision-request recover --run ID` for delivery, or `decision-request resume --run ID`
-for planning/review, before asking its returned question once. Delivery presents Continue,
-Start fresh and Stop and take over; bind the selected action from its returned `actions`
-map with `decision` and the same human locator. Never replace these choices with Not now.
+for planning/review, before asking its returned question once. Delivery presents the
+available recovery choices, normally Continue, Start fresh and Stop and take over.
+Bind the selected action from its returned `actions`
+map with `decision` and the same human locator. Call Claude `AskUserQuestion` or
+Codex Default mode `functions.request_user_input_async` following the shared fallback rules.
 Do not ask a preliminary Resume question. Wait; this invocation alone does not answer it.
 After acceptance, load the selected workflow's procedure (`workflows/deliver/SKILL.md`,
 `workflows/design/SKILL.md`, `workflows/propose/SKILL.md` or `workflows/review/SKILL.md`).
@@ -21,7 +23,8 @@ never reuse a completed reviewer or renew allowances to switch hosts. Preserve u
 unfinished edits. Report the actual resumed work, not a new implementation introduction
 when only a decision or publication remains.
 For the ordinary Resume question, bind continuation with `resume --run ID --human <native-locator.json>`
-(Codex `resume` with its human locator); a factual status read alone grants nothing.
+(Codex `resume` with its human locator). Stop and take over binds `decision stop`
+using the same run and prepared decision. A factual status read alone grants nothing.
 The old conversation may remain open. Require no prior Stop/Pause when no attempt or
 check is executing, even if legacy saved status still says running. After continuation,
 only the current coordinator launches further OH operations; keep earlier attempts

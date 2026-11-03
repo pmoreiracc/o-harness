@@ -42,7 +42,8 @@ def _read(root):
 def owner_key(state):
     human=state['human']
     return digest({'run': state['id'], **{k: human.get(k) for k in ('host', 'session', 'turn', 'prompt')},
-                   **({'message_id':human['message_id']} if human.get('message_id') else {})})
+                   **({'question_call':human['question_call']} if human.get('question_call') else
+                      {'message_id':human['message_id']} if human.get('message_id') else {})})
 
 
 def register_owner(root, state, *, active=True):
@@ -132,7 +133,7 @@ def _turn_stopped(owner, turn):
                for event in ('Interrupt', 'native-interruption'))
 
 
-def poll(root, *, attempt=None, state=None):
+def poll(root, *, attempt=None, state=None, owner=None):
     """Recover a missing callback from native interruption records, never a status label.
 
     Claude has no user-interrupt Stop hook. Commands and tool boundaries inspect the
@@ -142,7 +143,7 @@ def poll(root, *, attempt=None, state=None):
     value = _read(root)
     if not value:
         return True
-    key = value['attempts'].get(attempt, {}).get('owner') if attempt else owner_key(state) if state else value.get('current')
+    key = owner or (value['attempts'].get(attempt, {}).get('owner') if attempt else owner_key(state) if state else value.get('current'))
     owner = value['owners'].get(key)
     if not owner or not owner.get('transcript'):
         return True
@@ -372,10 +373,19 @@ def hook(root, host, payload):
 
 
 def _hook(root,host,payload):
+    from .authority import newer
     event = payload.get('hook_event_name')
-    caught_up = poll(root) if event == 'PreToolUse' else True
     use = payload.get('tool_use_id')
     session, turn = payload.get('session_id'), payload.get('turn_id')
+    caught_up=True
+    if event=='PreToolUse':
+        snapshot=_read(root);actor=_actor(snapshot,host,payload)
+        watched=snapshot['attempts'][actor]['owner'] if actor else None
+        if not actor:
+            for key,item in snapshot['owners'].items():
+                if item['host']==host and item['session']==session and turn in item['turns']:
+                    if watched is None or newer(item.get('since'),snapshot['owners'][watched].get('since')):watched=key
+        caught_up=poll(root,owner=watched)
     with _edit(root) as value:
         active = value['owners'].get(value.get('current'))
         actor = _actor(value, host, payload)
@@ -415,11 +425,20 @@ def _hook(root,host,payload):
                                      and _turn_stopped(o, turn)
                                      for o in value['owners'].values()):
             return _deny('This native turn was stopped. Do not continue its tools; a new human turn can resume the saved work.')
+        # A newer registered turn may be retrying an interrupted owner write;
+        # the checked entry/continuation helper still establishes its authority.
+        if (not actor and turn and active and
+                not (active['host']==host and active['session']==session and turn in active['turns']) and
+                any(o['host']==host and o['session']==session and turn in o['turns'] for o in value['owners'].values()) and
+                not any(o['host']==host and o['session']==session and turn in o['turns'] and o.get('since') and
+                        (not active.get('since') or newer(o['since'],active['since']))
+                        for o in value['owners'].values())):
+            return _deny('This native turn belongs to a superseded work selection. A new human turn can inspect or select saved work; do not continue this old coordinator.')
         if actor:
             record = value['attempts'][actor]
             record['guard_observed'] = True
             owner = value['owners'][record['owner']]
-            if record['finished'] or Path(owner['marker']).exists():
+            if record['finished'] or record['owner']!=value.get('current') or Path(owner['marker']).exists():
                 return _deny('This OH attempt has ended. Stop this worker; do not retry through another tool. '
                              'The coordinator can resume with a fresh attempt in either conversation.')
             if not caught_up:
@@ -482,7 +501,7 @@ def _hook(root,host,payload):
                 return _deny('This launch names more than one OH admission; use the current immutable request.')
             attempt, record = launches[0]
             owner = value['owners'][record['owner']]
-            if owner['host'] != host or owner['session'] != session or record['finished'] or Path(owner['marker']).exists():
+            if owner['host'] != host or owner['session'] != session or record['finished'] or record['owner']!=value.get('current') or Path(owner['marker']).exists():
                 return _deny('This OH admission was stopped or superseded. Use Resume and obtain a fresh admission.')
             record['launch'] = use
             if use:
@@ -522,7 +541,7 @@ def started_command(context, argv):
         return attempt, Path(context['owner']['marker'])
     with _edit(root) as value:
         record = value['attempts'].get(attempt)
-        if not record or record['finished'] or Path(value['owners'][record['owner']]['marker']).exists():
+        if not record or record['finished'] or record['owner']!=value.get('current') or Path(value['owners'][record['owner']]['marker']).exists():
             raise Refused('This command belongs to a stopped or completed OH attempt')
         key = identifier()
         value['commands'][key] = {'attempt': attempt, 'argv': digest(argv), 'started': now(), 'gated': True}
@@ -551,21 +570,24 @@ def spawned_command(context, key, child):
             value['commands'][key]['process'] = record
 
 
-def _quiescent(value, attempt):
+def _quiescent(value, attempt, *, retained=False):
     if not value or attempt not in value['attempts']:
         return True  # Historical attempts still require their actual native terminal result.
+    retained=retained and value['attempts'][attempt].get('finished')
     if any(c['attempt'] == attempt and not c.get('ended') for c in value['commands'].values()):
         return False
     for tool in value['tools'].values():
         if tool['attempt'] != attempt:
             continue
+        if retained and tool.get('ended'):
+            continue  # Recorded settlement survives later expiry of temporary command receipts.
         # Cancelled parallel code-mode calls can lose their completion callback.
         # These focused reads cannot edit the consumer or grant execution.
         # Their missing replies must not prevent retention of a terminal worker.
         if tool['kind']=='tool' and tool.get('name') in ('mcp__o_harness__resource','mcp__o_harness__command_format'):
             continue
         if tool.get('receipt'):
-            if tool.get('cleanup', {}).get('source') == 'kernel-reboot':
+            if tool.get('cleanup'):
                 continue
             receipt = Path(tool['receipt'])
             if not receipt.is_dir():
@@ -651,15 +673,29 @@ def reconcile_tools(root, attempt, terminal=None):
                                   'A verified reboot proves process cleanup only; Resume still requires the original checkout identity. '
                                   'If identity validation fails, preserve the original registration and resolve that blocker; '
                                   'do not use init --replace to recover this active run.')
-            # Temporary command receipts may be removed by the reboot itself.
-            # An ended native shell call alone does not establish descendant
-            # cleanup; a later kernel boot does, without recreating lost receipts.
+            # A killed wrapper may leave only its receipt's saved process identity.
+            # Verify that receipt belongs to this command before using the existing
+            # OS cleanup proof. Missing receipts still require a later kernel boot.
             for key, tool in value['tools'].items():
                 if tool['attempt'] != attempt['id'] or not tool.get('receipt') or tool.get('cleanup'):
                     continue
                 if (Path(tool['receipt']) / 'result.json').exists():
                     continue
-                proof = recover_process({'started': tool['started']})
+                saved = {'started': tool['started']}
+                receipt = Path(tool['receipt'])
+                try:
+                    claimed = read_json(receipt / 'claimed.json')
+                    started = read_json(receipt / 'started.json')
+                    process = read_json(receipt / 'process.json')
+                except (FileNotFoundError, ValueError):
+                    pass
+                else:
+                    if (all(isinstance(item, dict) and item.get('attempt') == attempt['id']
+                            and item.get('argv') == tool.get('argv') for item in (claimed, started))
+                            and isinstance(process, dict) and type(process.get('pid')) is int
+                            and process['pid'] > 0):
+                        saved['process'] = process
+                proof = recover_process(saved)
                 if proof:
                     with _edit(root) as updated:
                         updated['tools'][key].update(ended=now(), cleanup=proof)
@@ -774,7 +810,7 @@ def unlaunched_stop(root, attempt, stopped):
 
 
 @contextmanager
-def continuation(root, state, source, *, replacing=False):
+def continuation(root, state, source, *, replacing=False, activate=True):
     """Serialize the final ownership transfer with a native Stop during cleanup."""
     from .authority import newer
     proposed = state | {'human': source}
@@ -803,7 +839,7 @@ def continuation(root, state, source, *, replacing=False):
             if not newer(source.get('at'), stopped['at']):
                 raise Refused('Work was stopped after this Resume answer. Invoke the work again to resume; the old answer cannot restart it.')
         yield
-        value['current'] = key
+        if activate:value['current'] = key
 
 
 def owned_command(root, attempt, argv):
@@ -812,7 +848,7 @@ def owned_command(root, attempt, argv):
         raise Refused('An owned command needs an explicit executable and argument array')
     with _read_control(root) as value:
         record = value['attempts'].get(attempt)
-        if not record or record['finished']:
+        if not record or record['finished'] or record['owner']!=value.get('current'):
             raise Refused('This command belongs to a completed OH attempt')
         owner = dict(value['owners'][record['owner']])
         context = {'owner': owner}

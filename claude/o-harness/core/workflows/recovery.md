@@ -1,5 +1,62 @@
 # Saved work and recovery
 
+Before current recovery/readiness advice, read `workflows/entry.md` and reconcile
+saved/local/origin facts. Preserve local work while gathering information. Delivery
+recovery questions report their observed base freshness separately from the selected
+discard/continuation effect; a cached base is not verified current origin.
+
+## Idle history and selection
+
+Discovery and selected reads use the same `status` and `execution` facts. Workflow
+disposition, native interruption and unsettled execution are different facts. A pending
+result is not proof that a child is still running; an idle workflow is not automatically
+complete. Reconcile the saved scope, reports and findings against the current approved
+documents and Git before saying work remains. A missing historical branch or nested
+worktree alone does not establish unfinished edits in the current checkout.
+
+For genuinely different work, normal new-scope approval or a verified Resume decision
+selects the checkout once native attempts/checks/tools are settled. No Stop of an idle
+record is required. New work, Resume and standalone-review repairs share that cleanup
+protection. Historical grants, spent allowances and findings stay with their original
+run; new selection does not resolve findings, fabricate completion or authorize loss
+of manual edits. Preserve/isolate local work or include it in an explicit approved
+preview. Reconcile the `retained_work` references when reviewing included changes.
+Finished attempts with missing post-hooks are reconciled from their original native
+tool-completion records before selection; missing records never count as cleanup.
+An older approval cannot reclaim a newer selection; resuming that history needs its
+current native continuation decision.
+If retained idle work has reviewed commits on the same branch, the current exact-range
+publication choice can include them without stopping its pending tasks. Their original
+commit/review evidence, unresolved correction checks and native cleanup still apply.
+An exact current choice covering the whole reviewed range governs that handoff; earlier
+PR choices remain historical, including when Resume returns to an earlier run.
+Before admitting committed work, use an execution branch. An unapproved preview on
+the base reports `execution_branch_required`; default preparation can safely select
+a branch, while `--keep-checkout` also preserves trunk. Reprepare after a deliberate
+branch choice. A lossless branch change preserves standalone feedback eligibility
+when HEAD and working contents remain exact; changed contents still need current
+feedback. The repair scope binds its new branch and needs its own approval and review.
+
+## Preserve a request across its prerequisite
+
+Avoid a prerequisite question when the only issue is an idle status label. When a real
+recovery/continuation/disposition decision is necessary before the requested work,
+prepare it with `decision-request ... --request <original-native-locator.json>`
+(Codex `decision_request` with `request`). Its question names both the existing effect
+and the initiating request. Bind the actual answer normally. Then retry `scope prepare`
+with the original request as `human` and `--after <that-decision-id>` (Codex `after`).
+For an already accepted quick-fix preview blocked on cleanup, retry `scope approve`
+with that original approval locator and the same `after` identity instead.
+
+Only that accepted, recorded prerequisite permits this carry-over, in the original
+conversation. Another prerequisite can retain the same request with `request` plus
+the prior `after` identity. The latest actual answer is reverified; later cancellation,
+changed instructions or another selection supersedes it. This grants only the original
+request/preview, not more tasks, reviews, publication or disposal of unseen changes.
+Changed preview contents still need their existing approval. Preserve the prepared
+decision, original locator and accepted answer through retries; never relabel an answer
+such as Stop as a Deliver command or make the person invoke Deliver again.
+
 ## A native command has no reservation
 
 Preserve the failed attempt and diagnose the callback before retrying it. In Codex,
@@ -19,7 +76,10 @@ For an unfinished delivery, use `decision-request recover --run ID` (Codex
 question: **How would you like OH to proceed with this delivery?** Show the
 returned work, branch, affected paths, restart base and task allowance with its
 short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
-the returned options; never substitute a generic Resume/Not now question.
+the returned options with Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async`, following the shared waiting and fallback rules.
+If a required input is missing, explain the reason returned with the question. If only
+Stop is available, show the full prepared question and bind the explicit chat answer.
 
 Bind the chosen action from the returned `actions` map with `decision` and that
 same human locator, including its decision ID. Continue uses `resume`, Start fresh
@@ -71,13 +131,17 @@ first, present its actual question, and preserve the answer while settling old n
 
 Show the selected subject, branch, latest result, next step and remaining allowance.
 Prepare the Resume decision for that run before presenting its native question, then
-use the returned question and positive option unchanged. Offer the non-granting option
-as well. Wait for the actual answer before continuation, legacy adoption or retaining
-an old result. A matching invocation is not that answer. Preserve an already-valid
-Resume answer through recovery; never ask again merely because a helper failed.
+call Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+with the returned question and both choices. Bind Stop and take over with
+`decision stop` for the same run and decision ID. It settles the run's old native
+work and preserves its files. Wait for the actual answer before continuation,
+legacy adoption or retaining an old result. A matching invocation is not that
+answer. If old operations or native saves are still settling, retry the same
+Resume or Stop answer after a short wait.
 
 With no subject, show relevant unfinished work first. If several runs plausibly match,
-ask which one, then prepare Resume for that run. A clearly different request selects
+use Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+to identify the intended run, then prepare its Resume decision. A clearly different request selects
 no unrelated work. Completed work presents its result or remaining publication step.
 
 Read selected facts with `resume --run ID` (Codex `resume` with `run`). After the Resume

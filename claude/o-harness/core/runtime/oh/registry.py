@@ -184,15 +184,22 @@ def profile_path(root, name='profile.json'):
 
 
 def profile(root):
-    entry = lookup(root)
-    value = read_json(state_home() / 'projects' / entry['project'] / 'profile.json')
-    if value.get('id') != entry['project'] or value.get('kind') not in ('product', 'harness'):
+    return project_profile(lookup(root)['project'])
+
+
+def project_profile(project):
+    value = read_json(state_home() / 'projects' / validate_id(project) / 'profile.json')
+    if value.get('id') != project or value.get('kind') not in ('product', 'harness'):
         raise Refused('Invalid external project profile')
     return value
 
 
 def checkout_state(root):
-    return state_path(state_home() / 'checkout-state' / lookup(root)['checkout'],directory=True)
+    return checkout_state_path(lookup(root)['checkout'])
+
+
+def checkout_state_path(checkout):
+    return state_path(state_home() / 'checkout-state' / validate_id(checkout),directory=True)
 
 
 def planning_settings(name):

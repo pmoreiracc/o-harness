@@ -3,8 +3,9 @@ name: oh-review
 description: Request a fresh OH invariant review of manual changes, code, documents, a commit or completed delivery work, with optional repairs after scope approval.
 ---
 Load `workflows/review/SKILL.md` through OH's resource entry and inspect saved work
-before resolving a missing subject or binding another review. Always ask once whether
-to resume selected unfinished review work, even with a matching supplied subject.
+before resolving a missing subject or binding another review. For selected unfinished
+review work, present the prepared Resume question once with Claude `AskUserQuestion`
+or Codex Default mode `functions.request_user_input_async`, even with a matching subject.
 Introduce a fresh invariant reviewer agent only when the saved phase actually needs one. Standalone
 review produces feedback; fixes use the existing bounded quick-fix approval.
 

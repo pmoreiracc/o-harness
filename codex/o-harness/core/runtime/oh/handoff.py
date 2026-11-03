@@ -143,7 +143,7 @@ def prepare(state, task, role, directory, admission, feedback=''):
     # Full command logs stay with their native check receipt, outside the mandatory context.
     if verification:
         verification = {k: v for k, v in verification.items() if k != 'checks'} | {
-            'checks': [{k: c[k] for k in ('name', 'command', 'returncode', 'cancellation', 'unavailable', 'duration_ms', 'reused') if k in c}
+            'checks': [{k: c[k] for k in ('name', 'command', 'returncode', 'cancellation', 'unavailable', 'duration_ms', 'reused', 'logs') if k in c}
                        for c in verification['checks']]}
     packet = {'purpose':admission.get('purpose','workflow'),'schema': VERSION, 'run': state['id'], 'task': task,
         'subject': {k: admission.get(k) for k in ('head', 'tree', 'git_tree', 'config_hash')},
@@ -200,6 +200,9 @@ def prepare(state, task, role, directory, admission, feedback=''):
             if original.is_file():packet['original_scope_provenance']={'path':str(original),
                 'authority':'Original run provenance; not a newly accepted native scope.'}
     if state.get('repair_source'):packet['repair_source']=state['repair_source']
+    if state.get('retained_work'):
+        packet['retained_work']={'runs':state['retained_work'],
+            'note':'Historical scopes and findings remain unchanged. Reconcile any relevant included work; selection does not resolve findings or fabricate completion.'}
     original=admission.get('included_original_work')
     if original is None and not state['summaries']:original=state.get('pr_target') or state.get('original_work')
     if original:

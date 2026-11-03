@@ -173,7 +173,8 @@ def selection(root,doc,track='',*,claim=True):
 
 
 def listing(root):
-    result={'ready':[],'unavailable':[]}
+    result={'ready':[],'unavailable':[],'source':'checkout',
+            'freshness':'Use entry and inspect material saved/local/base differences before treating this local readiness view as current.'}
     where=plans.layout(root,claim=False)
     if not Path(where['roadmap']).exists():return result
     for initiative in plans.initiatives(root,where):

@@ -20,8 +20,22 @@ not discovery.
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
 workflow and standalone review without selecting either or registering a new checkout.
+For current planning/delivery readiness, listing or recovery advice, read
+`workflows/entry.md` and call `entry` first; it includes saved-work discovery and
+fetches base facts without changing the checkout. Reconcile material saved/local/base
+differences before choosing a path or reporting blockers. Standalone review of an
+explicit immutable subject needs no unrelated origin refresh.
 Match the person's request to the saved scope and actual evidence, not recency alone.
-For any unfinished saved work, always ask once before continuing, even when the command
+`status` is the retained workflow disposition; `execution` separately reports native
+interruption, pending results and unsettled operations. `running` does not establish
+live execution, and an interrupted turn does not complete or terminally stop a workflow.
+Recorded remaining tasks need reconciliation with current Git and approved documents.
+Idle history alone does not reserve the checkout. Different requested work can select
+it through its own normal scope authority without Stop/Pause of the old record.
+Preserve the old grants, attempts, findings and any real local/unmerged work; inspect
+`retained_work` references where they affect the new candidate. Merged output does not
+create missing completion or review evidence.
+When actually continuing an unfinished saved scope, always ask once, even when the command
 names its initiative, design or review subject. A matching request discovers work; it
 is not the resume answer. Free-text proposals and quick fixes need not repeat the old
 words: read their saved scope/report and judge whether this is the same work. Never
@@ -30,9 +44,16 @@ build a similarity parser or silently absorb a changed scope.
 For a matching saved run, read `workflows/recovery.md` and `workflows/decisions.md`
 before the first question. Delivery uses `decision-request recover` and its Continue,
 Start fresh, Stop and take over choices; bind its returned action with `decision`.
-Other workflows use Resume. Settle prior native work, then bind the same answer;
+Other workflows use Resume. Call Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` at these questions. Settle prior native work,
+then bind the same answer;
 continue its actual phase without new scope, repeated questions or renewed allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
+If a real prerequisite question intervenes, retain its initiating request with
+`decision-request --request <native-locator.json>` (Codex `request`). After binding
+the answer, use the original locator and that decision ID as `scope prepare --after`
+or `scope approve --after` (Codex `after`). Read `workflows/recovery.md` for this path;
+never pass a Stop answer as though it were a Deliver invocation or scope approval.
 
 ## Read only the procedure needed now
 
@@ -43,6 +64,7 @@ remaining content from its saved output before acting on it.
 | Situation | Required reference |
 | --- | --- |
 | Any human question that grants scope, continuation, allowance, acceptance or publication | `workflows/decisions.md`, before preparing or displaying the question |
+| Current planning/delivery readiness, listing or recovery advice | `workflows/entry.md`, before choosing a path or claiming current tasks/blockers |
 | Resume, missing child binding, rejected launch, interrupted work, Pause or Stop | `workflows/recovery.md` |
 | Outside-scope findings or requested tracking | `workflows/findings.md` |
 | Publish, reconcile an existing PR, or inspect its CI | `workflows/publication.md` |
@@ -59,6 +81,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Purpose | Claude command | Codex tool |
 | --- | --- | --- |
 | Discover saved work | `status --saved` | `status` with `saved: true` |
+| Reconcile saved/local/origin entry facts | `entry` | `entry` |
 | Read a workflow or role contract | `resource <path>` | `resource` with `path` |
 | Locate, validate or list plans | `plans path\|check\|list` | `plans` with `action` |
 | Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
@@ -76,7 +99,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Attach historical diagnostics | `evidence <attachment.json>` | `evidence` |
 | Complete the reviewed candidate | `complete <review-attempt-id>` | `complete` |
 | Bind the effect before a native question | `decision-request <kind> [--attempt ID] [--rounds N] [--run ID]` | `decision_request` |
-| Track retained outside-scope findings | `finding-track ID [--destination FILE]` | `finding_track` |
+| Track retained outside-scope findings | `finding-track ID [--destination URL_OR_FILE]` | `finding_track` |
 | Record a consequential human decision | `decision <kind> <locator.json> [--attempt ID] [--destination FILE]` | `decision` |
 | Prepare standalone feedback | `review -- <selector...>` | `review` |
 | Reconcile the approved PR | `publication [--pr N]` | `publication` |
@@ -110,7 +133,8 @@ Do not hand-edit OH journals, snapshots, receipts, counters or configuration fil
 The explicit workflow registers its checkout. If a project name is ambiguous, obtain
 that name and use `init --name`. For delivery without checks, register the project's
 existing affected checks from its instructions/CI; preserve configured checks. Read
-`plans path` before planning and resolve an undecided repo/private location once.
+`plans path` before planning. If the repo/private location is undecided, call Claude
+`AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
 Configuration changes use `config set`/`unset` and the person's authorized settings.
 
 Before preparing new work, use the project's configured base and an appropriate work
@@ -118,8 +142,9 @@ branch. Reuse the matching unmerged branch for interrupted work. For ordinary ne
 create a branch from the refreshed configured base; do not implement or commit on trunk.
 Preserve included original edits and explicit existing-PR corrections. If another
 person's dirty checkout conflicts, use a suitable native worktree rather than discarding
-their changes. Scope preparation binds the current branch/base and starting contents;
-it does not switch them. If those contents change before approval, preserve the edits
+their changes. Scope preparation binds branch/base and starting contents. Its default
+delivery entry can safely update/select a branch; `--keep-checkout` preserves a checkout
+the agent deliberately reconciled under `workflows/entry.md`. If contents change before approval, preserve the edits
 and prepare the same tasks with a current preview. Never reuse the old acceptance for
 changed starting work. Include the recorded original commit range in the first task's
 implementation and review, together with its current candidate.
@@ -326,7 +351,8 @@ be admitted. Normally renew the run's snapshotted review window: call `decision-
 grant-review` without `--rounds` (Codex: omit `rounds`). Do not choose one round because
 only one more review seems necessary. Override the count only when the person explicitly
 requests a different count; never enlarge a one-round request to the configured window.
-Read `workflows/decisions.md` before presenting that question.
+Read `workflows/decisions.md` before calling Claude `AskUserQuestion` or Codex
+Default mode `functions.request_user_input_async` for that question.
 When the last available review leaves findings needing another round, obtain that renewal
 before starting the next repair/review cycle. Retain an already-running step before asking;
 an allowance question neither cancels that step nor authorizes out-of-scope repairs.
@@ -344,7 +370,9 @@ it. A failed completion is repaired idempotently from retained evidence. Select 
 next task from external completion records, under the same finite task batch. At a batch
 boundary ask whether to continue the projected next batch, publish completed work or
 stop through the completed-task checkpoint in `workflows/decisions.md`. Present every
-returned option and bind the chosen action from that same question; silence grants nothing.
+returned option with Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async`, or use the shared direct-reply path. Bind the
+chosen action from that same question; silence grants nothing.
 Follow the `next_action` in the returned `continuation`: use `decision-request continue`
 when a completed batch leaves tasks pending, or `decision-request publish` when all tasks
 are complete. Preparing that question does not publish anything. A request not to push
