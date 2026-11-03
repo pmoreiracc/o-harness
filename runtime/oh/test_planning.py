@@ -5,8 +5,8 @@ from . import native, plans
 from .config import change
 from .storage import Refused
 from .workflow import load_run
-from .test_workflow import NativeFixture
-from .test_design import BODY
+from .test_fixtures_workflow import NativeFixture
+from .test_fixtures_plans import BODY
 
 
 class PlanningTest(NativeFixture,unittest.TestCase):

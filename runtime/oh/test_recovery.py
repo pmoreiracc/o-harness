@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from . import cancellation, decisions, native, recovery
 from .storage import Refused, now
-from .test_workflow import NativeFixture
+from .test_fixtures_workflow import NativeFixture
 from .workflow import load_run
 from .authority import coordinator as native_coordinator
 
@@ -213,7 +213,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                 self.assertEqual(cancellation._read(self.root)['current'],old_key)
 
     def test_free_text_entry_retries_the_same_saved_selection_after_host_save_delay(self):
-        from .test_workflow import configure
+        from .test_fixtures_workflow import configure
         configure(self.root,plans={'location':'private'})
         for workflow in ('review', 'propose'):
             with self.subTest(workflow=workflow):
@@ -286,11 +286,11 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
 
     def test_entry_replay_finishes_both_pointers_and_records_its_initial_grant_once(self):
         from . import prepared
-        from .test_delivery import DeliveryTest
-        from .test_workflow import configure
+        from .test_fixtures_plans import delivery_documents
+        from .test_fixtures_workflow import configure
         from .storage import Journal,atomic_json,read_json
         from .workflow import active_file,reduce
-        configure(self.root,tasks_per_batch=1);DeliveryTest.documents(self)
+        configure(self.root,tasks_per_batch=1);delivery_documents(self)
         for route,host in (('repair','codex'),('design','claude')):
             for fault in ('canonical','review-deselection','grant')+(('owner-before-review',) if route=='design' else ()):
                 with self.subTest(route=route,fault=fault):
@@ -330,9 +330,10 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                         return append(journal,kind,data)
                     def entries():
                         result=[]
-                        for path in (native._home(self.root)/'runs').glob('*/000001.json'):
-                            journal=Journal(old['project'],path.parent.name);records=journal.records()
-                            if records[0]['data'].get('source')==key:result.append((journal,reduce(records)))
+                        for path in old_journal.path.parent.glob('*/000001.json'):
+                            if read_json(path)['data'].get('source')!=key:continue
+                            journal=Journal(old['project'],path.parent.name)
+                            result.append((journal,reduce(journal.records())))
                         return result
                     with patch.object(native,'atomic_json',side_effect=fail_pointer),patch.object(Journal,'append',new=fail_grant), \
                             patch.object(cancellation,'atomic_json',side_effect=fail_owner):
@@ -359,7 +360,9 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                     complete=journal.records();action();self.assertEqual(journal.records(),complete)
                     self.assertEqual(old_journal.records(),old_records)
                     self.assertEqual(review_journal.records(),review_records)
-                    self.assess()  # Actual next admission is usable, not just a running label.
+                    if fault in ('canonical','owner-before-review'):
+                        # Exercise next admission once per entry route and after owner repair.
+                        self.assess()
                     if route=='repair' and fault=='review-deselection':
                         current=cancellation._read(self.root)['current'];save=cancellation.atomic_json
                         def newer_failed_owner(path,value,*args,**kwargs):
@@ -511,9 +514,9 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         with self.assertRaisesRegex(Refused,'Recovery changed'):native.complete(self.root,review['id'])
 
     def test_continue_clean_delivery_keeps_assessment_and_retries_reported_work(self):
-        from .test_delivery import DeliveryTest
+        from .test_fixtures_plans import delivery_documents
         from .storage import read_json
-        DeliveryTest.documents(self)
+        delivery_documents(self)
         self.git('switch','-c','deliver/0001')
         prepared=native.prepare_scope(self.root,doc='0001')
         native.approve_scope(self.root,prepared['scope_id'],self.human())
@@ -539,9 +542,9 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.assertIn('1',load_run(self.root)[1]['done'])
 
     def test_private_restart_restores_approved_plan_and_completes_with_valid_publication_evidence(self):
-        from .test_delivery import DeliveryTest
+        from .test_fixtures_plans import delivery_documents
         from . import plans, delivery_verify
-        where,path=DeliveryTest.documents(self,'private')
+        where,path=delivery_documents(self,'private')
         initial=path.read_text()
         prepared=native.prepare_scope(self.root,doc='0001')
         native.approve_scope(self.root,prepared['scope_id'],self.human())

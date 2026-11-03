@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from . import test_workflow as fixtures
+from . import test_fixtures_workflow as fixtures
 from .config import HOME
 from .mcp_server import TOOLS, serve
 
@@ -46,8 +46,8 @@ def calling(thread, **extra):
 
 
 class CodexToolsTest(unittest.TestCase):
-    setUp_workflow = fixtures.WorkflowTest.setUp
-    git = fixtures.WorkflowTest.git
+    setUp_workflow = fixtures.WorkflowFixture.setUp
+    git = fixtures.WorkflowFixture.git
 
     def setUp(self):
         self.setUp_workflow()

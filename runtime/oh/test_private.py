@@ -6,18 +6,16 @@ from . import plans
 from .config import change
 from .storage import Refused,Journal
 from .workflow import load_run
-from .test_design import design
-from .test_propose import idea
-from . import test_design as design_fixtures, test_propose as proposal_fixtures
-from . import test_workflow as fixtures
+from .test_fixtures_plans import design, idea
+from . import test_fixtures_workflow as fixtures
 
 
 class PrivatePlansTest(unittest.TestCase):
-    git=fixtures.WorkflowTest.git
-    event=fixtures.WorkflowTest.event
+    git=fixtures.WorkflowFixture.git
+    event=fixtures.WorkflowFixture.event
 
     def setUp(self):
-        fixtures.WorkflowTest.setUp(self)
+        fixtures.WorkflowFixture.setUp(self)
         self.git('switch','-q','main')
         change(self.root,'plans.private_folder',str(Path(self.temp.name)/'visible plans'))
         change(self.root,'plans.location','private')

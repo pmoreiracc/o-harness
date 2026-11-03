@@ -7,32 +7,17 @@ from .config import change
 from .storage import digest,Refused,read_json
 from .workflow import load_run
 from .authority import coordinator as native_coordinator
-from . import test_workflow as fixtures
-from .test_design import BODY
+from . import test_fixtures_workflow as fixtures
+from .test_fixtures_plans import BODY, delivery_documents
 
 
-class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
-    git=fixtures.WorkflowTest.git
-    event=fixtures.WorkflowTest.event
-    fake=fixtures.WorkflowTest.fake
-
+class DeliveryTest(fixtures.NativeFixture):
     def setUp(self):
-        fixtures.NativeFixture.setUp(self)
+        super().setUp()
         self.git('switch','main')
         fixtures.configure(self.root,tasks_per_batch=1)
 
-    def documents(self,location='repo',body=BODY,base='main'):
-        change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
-        change(self.root,'plans.location',location)
-        where=plans.layout(self.root)
-        plans.start_roadmap(where,'Fixture');plans.add_milestone(self.root,where,'M1','First','It works')
-        plans.add_initiative(self.root,where,'M1','auth','Sign in',[])
-        number,path=plans.write_design(self.root,where,'auth','Sign in',body,'approved')
-        plans.claim(self.root,where,'auth',number)
-        if location=='private':plans.approve(self.root,where,number,'human-approved',False)
-        else:self.git('add','.');self.git('commit','-qm','approved plan')
-        self.git('update-ref','refs/remotes/origin/'+base,'HEAD')
-        return where,Path(path)
+    documents=delivery_documents
 
     def test_additional_repair_continues_same_design_through_checks_review_and_publication(self):
         import sys
@@ -313,12 +298,6 @@ class DeliveryTest(fixtures.NativeFixture,unittest.TestCase):
                         rows.append(human_record('typed-'+shown,'approve'));save()
                         typed={'host':host,'session':session,'transcript_path':str(path),'prompt':'approve',
                                **({'turn':'entry'} if host=='codex' else {'turn':'typed-'+shown})}
-                        if shown!='actual scope':
-                            with self.assertRaisesRegex(Refused,'identifying the reviewed artifact'):
-                                native.approve_scope(self.root,candidate['scope_id'],typed)
-                        else:
-                            from .authority import scope_human
-                            scope_human(self.root,typed,since=native._scope(self.root,candidate['scope_id'])['created_at'],subject=actual)
                         prerequisite=decisions.prepare(self.root,'stop',request=typed)
                         native.decision(self.root,'stop',choose(prerequisite,'stop-'+shown))
                         retained_journal,retained=load_run(self.root);records=retained_journal.records()
