@@ -256,7 +256,8 @@ def _finish_owner(root,state,source=None,*,retry_resume=False,force=False,orderi
 
 
 def _initial_grant(root,journal,state):
-    if state['granted'] or any(r['kind']=='grant' for r in journal.records()):return None
+    if (state['granted'] or state.get('source') in state['decisions'] or
+            any(r['kind']=='grant' for r in journal.records())):return None
     if state['workflow']=='review':
         return {'tasks':['review'],'source':state['source'],'kind':'standalone','config_hash':state['config_hash']}
     approval=journal.path/'scope'/'approval.json'
@@ -488,6 +489,12 @@ def _resume_offer(root,state):
     return select(root,state['id'])|{'resume_required':True,'next':'Read workflows/recovery.md and workflows/decisions.md, then prepare decision-request '+kind+' --run '+state['id']+' before asking. Show its returned question once and preserve that answer through recovery; bind the selected action.'}
 
 
+def _same_review_subject(selected,state):
+    prior=state.get('standalone_subject',{})
+    return all(selected[k]==prior.get(k) for k in
+               ('kind','head','branch','tree','base','revision','git_tree','paths','feedback_only'))
+
+
 def _matching_entry(root,source,workflow,design=None,track='',selected=None):
     # Exact selectors can be checked mechanically. Free-text identity remains the
     # native coordinator's judgment after inspecting saved scope, through resume.
@@ -500,7 +507,7 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
         if workflow=='review' and _finished(state):continue
         if workflow=='design' and design and design==_initiative(state):matches.append(state)
         elif workflow=='deliver' and design and (design,track)==(state.get('design'),state.get('track') or ''):matches.append(state)
-        elif workflow=='review' and selected and all(selected.get(k)==state.get('standalone_subject',{}).get(k) for k in ('kind','head','branch','tree','base','revision','git_tree','paths','feedback_only')):matches.append(state)
+        elif workflow=='review' and selected and _same_review_subject(selected,state):matches.append(state)
     if len(matches)==1:
         state=matches[0]
         key=_human_key(source,state)
@@ -540,10 +547,29 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
         if initiative and initiative!=request[1]:raise Refused('The native request selects a different initiative')
         initiative=request[1];manifest=dict(manifest or {},design=initiative)
     if source and (existing:=_matching_entry(root,source,workflow,initiative,track)) is not None:return existing
+    if doc is not None and manifest is not None:
+        raise Refused('Choose approved design selection or a task manifest')
     with _locked(root):
-        if source:_entry_order(root,source)
+        if source:
+            saved=_saved_runs(root)
+            for journal,prior in saved:
+                if (prior['workflow']!=workflow or prior.get('design')!=initiative or
+                        (prior.get('track') or '')!=track or prior.get('entry_prerequisite')!=after or
+                        _human_key(source,prior)!=prior.get('source')):
+                    continue
+                scope=prior.get('scope_snapshot')
+                if not scope:
+                    continue
+                if doc is None:
+                    if workflow=='deliver' or not isinstance(manifest,dict):
+                        continue  # A quick-fix preview is not an accepted entry.
+                    if (validate_tasks(manifest.get('tasks'))!=scope['tasks'] or
+                            any(manifest.get(k)!=scope.get(k) for k in ('repair_source','pr_target'))):
+                        continue
+                result=_finish_entry(root,journal,prior,source)
+                return result|{'scope_id':prior['scope_id'],'approved':True}
+            _entry_order(root,source,saved)
         if doc is not None:
-            if manifest is not None:raise Refused('Choose approved design selection or a task manifest')
             # Serialize quiescence and Git preparation with admissions/selection.
             new_branch=False
             if not keep_checkout:
@@ -1439,12 +1465,17 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .recovery import _settle
             state=_settle(root,journal,state,source|{'decision':locator.get('decision')})
             _switchable(root,[state])
+            initial=_initial_grant(root,journal,state) if state.get('native_version') else None
+            if initial:
+                # Finish the original accepted entry in the same durable transfer.
+                add('grant',initial)
+                state=state|{'granted':initial['tasks']}
             add('run.owner',{'human':source})
             status=state['status']
             if status=='completed' and state['workflow']=='review' and not _finished(state):status='running'
             if status in ('paused','stopped','pausing'):
                 status=state.get('control_return_status') or state.get('pause_return_status') or 'running'
-            if status in ('running','needs_attention'):
+            if status in ('running','needs_attention') or (initial and status=='checkpoint'):
                 status='running' if next_task(state|{'status':'running'}) else 'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint'
             add('run.status',{'status':status})
         if kind!='publish':add('decision',{'choice':kind,'source':key,'head':subject['head'],'scope':state.get('scope_id'),'attempt':attempt})
@@ -1602,9 +1633,14 @@ def review(root,arguments,human=None):
     if source and (existing:=_matching_entry(root,source,'review',selected=selected)) is not None:return existing
     with _locked(root):
         saved=_saved_runs(root)
-        if source:_entry_order(root,source,saved)
-        _switchable(root,[prior for _,prior in saved])
         selected=subject(root,arguments)
+        if source:
+            for journal,prior in saved:
+                if (prior['workflow']=='review' and _same_review_subject(selected,prior) and
+                        _human_key(source,prior)==prior.get('source')):
+                    return _finish_entry(root,journal,prior,source)
+            _entry_order(root,source,saved)
+        _switchable(root,[prior for _,prior in saved])
         host=source['host'] if source else 'codex' if __import__('os').environ.get('CODEX_THREAD_ID') else 'claude'
         session=source['session'] if source else __import__('os').environ.get('CODEX_THREAD_ID') or __import__('os').environ.get('OH_NATIVE_SESSION_ID')
         if not session:raise Refused('Native standalone review needs its current host session identity')

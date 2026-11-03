@@ -587,7 +587,7 @@ def _quiescent(value, attempt, *, retained=False):
         if tool['kind']=='tool' and tool.get('name') in ('mcp__o_harness__resource','mcp__o_harness__command_format'):
             continue
         if tool.get('receipt'):
-            if tool.get('cleanup', {}).get('source') == 'kernel-reboot':
+            if tool.get('cleanup'):
                 continue
             receipt = Path(tool['receipt'])
             if not receipt.is_dir():
@@ -673,15 +673,29 @@ def reconcile_tools(root, attempt, terminal=None):
                                   'A verified reboot proves process cleanup only; Resume still requires the original checkout identity. '
                                   'If identity validation fails, preserve the original registration and resolve that blocker; '
                                   'do not use init --replace to recover this active run.')
-            # Temporary command receipts may be removed by the reboot itself.
-            # An ended native shell call alone does not establish descendant
-            # cleanup; a later kernel boot does, without recreating lost receipts.
+            # A killed wrapper may leave only its receipt's saved process identity.
+            # Verify that receipt belongs to this command before using the existing
+            # OS cleanup proof. Missing receipts still require a later kernel boot.
             for key, tool in value['tools'].items():
                 if tool['attempt'] != attempt['id'] or not tool.get('receipt') or tool.get('cleanup'):
                     continue
                 if (Path(tool['receipt']) / 'result.json').exists():
                     continue
-                proof = recover_process({'started': tool['started']})
+                saved = {'started': tool['started']}
+                receipt = Path(tool['receipt'])
+                try:
+                    claimed = read_json(receipt / 'claimed.json')
+                    started = read_json(receipt / 'started.json')
+                    process = read_json(receipt / 'process.json')
+                except (FileNotFoundError, ValueError):
+                    pass
+                else:
+                    if (all(isinstance(item, dict) and item.get('attempt') == attempt['id']
+                            and item.get('argv') == tool.get('argv') for item in (claimed, started))
+                            and isinstance(process, dict) and type(process.get('pid')) is int
+                            and process['pid'] > 0):
+                        saved['process'] = process
+                proof = recover_process(saved)
                 if proof:
                     with _edit(root) as updated:
                         updated['tools'][key].update(ended=now(), cleanup=proof)

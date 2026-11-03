@@ -304,6 +304,61 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         self.assertTrue(cancellation.quiescent(self.root, self.attempt))
         self.assertFalse(receipt.exists())
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows native wrapper termination and job cleanup')
+    def test_killed_owned_wrapper_receipt_recovers_with_the_same_resume_answer(self):
+        self.approve(); self.launch()
+        heartbeat = self.root / 'owned-started'
+        argv = [sys.executable, '-c',
+                'import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text("started");time.sleep(30)',
+                str(heartbeat)]
+        line = cancellation.command_line(self.root, self.attempt, argv)
+        self.assertEqual(self.tool('Bash', {'command': line}, use='command'), {})
+        invocation = cancellation.command_prefix(self.root, self.attempt) + [json.dumps(argv)]
+        wrapper = subprocess.Popen(invocation, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        receipt = Path(cancellation._read(self.root)['tools']['command']['receipt'])
+        try:
+            until = time.monotonic() + 10
+            while not heartbeat.exists() and wrapper.poll() is None and time.monotonic() < until:
+                time.sleep(.02)
+            self.assertTrue(heartbeat.exists())
+            self.assertTrue((receipt / 'process.json').exists())
+            wrapper.kill()  # Native TaskStop can kill the wrapper before its finally block.
+            wrapper.communicate(timeout=10)
+            self.assertFalse((receipt / 'result.json').exists())
+            self.assertFalse(cancellation.quiescent(self.root, self.attempt))
+            self.stop()
+            self.native_results[self.attempt] = {'status': 'cancelled', 'text': ''}
+            answer = self.resume_choice()
+            before = load_run(self.root)[1]
+            process = (receipt / 'process.json').read_text()
+            claimed = read_json(receipt / 'claimed.json')
+            # Neither shell termination nor unrelated/missing process evidence is cleanup.
+            with patch('oh.system.boot_time', return_value=0):
+                for missing in ('process', 'claim'):
+                    with self.subTest(missing=missing):
+                        if missing == 'process':
+                            (receipt / 'process.json').unlink()
+                        else:
+                            (receipt / 'claimed.json').write_text(json.dumps(claimed | {'attempt': 'foreign'}))
+                        with self.assertRaisesRegex(Refused, 'cleanup is still pending'):
+                            native.resume(self.root, answer)
+                        self.assertFalse(cancellation.quiescent(self.root, self.attempt))
+                        (receipt / 'process.json').write_text(process)
+                        (receipt / 'claimed.json').write_text(json.dumps(claimed))
+                native.resume(self.root, answer)
+            state = load_run(self.root)[1]
+            self.assertEqual(state['attempts'][-1]['outcome'], 'cancelled')
+            self.assertEqual(state['granted'], before['granted'])
+            self.assertEqual(native.select(self.root)['reviews_used'], 0)
+            self.assertTrue(cancellation.quiescent(self.root, self.attempt))
+            self.assertFalse((receipt / 'result.json').exists())  # Cleanup never invents a successful command.
+            records = load_run(self.root)[0].records()
+            native.resume(self.root, answer)
+            self.assertEqual(load_run(self.root)[0].records(), records)
+        finally:
+            if wrapper.poll() is None:
+                wrapper.kill(); wrapper.communicate(timeout=10)
+
     def test_native_permissions_are_not_granted_and_literal_command_boundaries_are_checked(self):
         self.approve()
         self.launch()
@@ -431,10 +486,12 @@ class CancellationTest(NativeFixture, unittest.TestCase):
             thread = threading.Thread(target=verify)
             thread.start()
             try:
-                until = time.monotonic() + 5
-                while not heartbeat.exists() and time.monotonic() < until:
-                    time.sleep(.02)
-                self.assertTrue(heartbeat.exists())
+                # Wait for the child, including Git and fingerprint preparation.
+                # An early helper exit fails immediately with its actual result.
+                until = time.monotonic() + 30
+                while not heartbeat.exists() and thread.is_alive() and time.monotonic() < until:
+                    thread.join(.02)
+                self.assertTrue(heartbeat.exists(), f'Configured check did not start: {outcomes!r}')
                 self.stop()
                 answer = self.resume_choice(session='new-parent')
                 self.native_results[self.attempt] = {'status': 'cancelled', 'text': ''}

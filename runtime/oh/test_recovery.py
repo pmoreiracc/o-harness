@@ -212,6 +212,78 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                 with self.assertRaisesRegex(Refused,'stopped after this Resume answer'):native.decision(self.root,'resume',source)
                 self.assertEqual(cancellation._read(self.root)['current'],old_key)
 
+    def test_free_text_entry_retries_the_same_saved_selection_after_host_save_delay(self):
+        from .test_workflow import configure
+        configure(self.root,plans={'location':'private'})
+        for workflow in ('review', 'propose'):
+            with self.subTest(workflow=workflow):
+                source=self.human('Please review this tree' if workflow=='review' else 'Please propose a fixture change')
+                manifest={'tasks':[{'id':'1','title':'Propose a change','instructions':'Inspect the fixture.'}]}
+                def enter(subject='tree', proposed=manifest):
+                    if workflow=='review':return native.review(self.root,subject,source)
+                    return native.prepare_scope(self.root,proposed,workflow=workflow,human=source)
+                with patch.object(cancellation,'poll',return_value=False):
+                    with self.assertRaisesRegex(Refused,'interruption evidence is still being saved'):enter()
+                journal,pending=next((j,s) for j,s in native._saved_runs(self.root) if s['workflow']==workflow)
+                initial=journal.records()
+                self.assertEqual([r['kind'] for r in initial],['run.started'])
+                self.assertFalse(pending['granted'])
+                with self.assertRaisesRegex(Refused,'predates the current'):
+                    enter('tree --feedback-only',{'tasks':[manifest['tasks'][0]|{'instructions':'Different scope.'}]})
+                self.assertEqual(journal.records(),initial)
+                self.assertEqual(enter()['run'],pending['id'])
+                self.assertEqual(enter()['run'],pending['id'])
+                records=journal.records()
+                self.assertEqual(records[:1],initial)
+                self.assertEqual([r['kind'] for r in records].count('grant'),1)
+                self.assertEqual(load_run(self.root)[1]['granted'],['review' if workflow=='review' else '1'])
+                self.assertEqual(cancellation._read(self.root)['current'],cancellation.owner_key(load_run(self.root)[1]))
+
+    def test_new_owner_resume_finishes_an_accepted_entry_before_admission(self):
+        for workflow,role in (('review','review'),('deliver','assessment')):
+            with self.subTest(workflow=workflow):
+                request=self.human('Please review this tree.' if workflow=='review' else 'approve')
+                if workflow=='deliver':
+                    preview=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+                with patch.object(cancellation,'poll',return_value=False):
+                    with self.assertRaisesRegex(Refused,'interruption evidence is still being saved'):
+                        if workflow=='review':
+                            native.review(self.root,'tree',request)
+                        else:
+                            native.approve_scope(self.root,preview['scope_id'],request)
+                journal,pending=next((j,s) for j,s in native._saved_runs(self.root) if s['workflow']==workflow)
+                original=journal.records()
+                self.assertEqual([r['kind'] for r in original],['run.started'])
+                self.assertFalse(pending['granted'])
+                if workflow=='review':
+                    answer=self.resume_choice(run=pending['id'],session='new-review-coordinator')
+                else:
+                    # Continue may refresh an absorbed branch. The base transfer
+                    # must preserve the grant completed in the same transition.
+                    base=self.git('commit-tree','HEAD^{tree}','-p','HEAD','-m','Advance the fixture base').strip()
+                    self.git('update-ref','refs/remotes/origin/main',base)
+                    gate=decisions.prepare(self.root,'recover',run=pending['id'])
+                    answer=self.answer(gate,'Continue',session='new-delivery-coordinator')
+                selected=native.decision(self.root,'resume',answer,run=pending['id'])
+                self.assertEqual(selected['run'],pending['id'])
+                self.assertEqual(selected['status'],'running')
+                saved=journal.records()
+                self.assertEqual(saved[:1],original)
+                grant,=[e['data'] for r in saved if r['kind']=='transition'
+                        for e in r['data']['events'] if e['kind']=='grant']
+                self.assertEqual(grant['source'],pending['source'])
+                self.assertEqual(grant['kind'],'standalone' if workflow=='review' else 'initial')
+                expected=['review'] if workflow=='review' else [self.tasks[0]['id']]
+                self.assertEqual(grant['tasks'],expected)
+                self.assertEqual(load_run(self.root)[1]['granted'],expected)
+                native.decision(self.root,'resume',answer,run=pending['id'])
+                self.assertEqual(journal.records(),saved)
+                admitted=native.admit(self.root,role)
+                self.assertEqual(admitted['task'],expected[0])
+                self.native_results[admitted['id']]={'status':'cancelled','text':''}
+                native.bind(self.root,admitted['id'],{'child_session':'fixture-'+admitted['id']})
+                native.retain(self.root,admitted['id'],{})
+
     def test_entry_replay_finishes_both_pointers_and_records_its_initial_grant_once(self):
         from . import prepared
         from .test_delivery import DeliveryTest

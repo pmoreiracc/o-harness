@@ -188,6 +188,8 @@ def apply(root, kind, locator, *, run=None):
         cancellation.register_owner(root, state | {'human': source}, active=False)
         state = _settle(root, journal, state, source)
         native._switchable(root,[state])
+        initial = native._initial_grant(root, journal, state) if kind == 'resume' and state.get('native_version') else None
+        granted = initial['tasks'] if initial else state['granted']
         from .workflow import active_file
         selected=active_file(root)
         keep_other=kind=='stop' and selected.exists() and read_json(selected)['run']!=state['id']
@@ -235,7 +237,7 @@ def apply(root, kind, locator, *, run=None):
                 elif not applied and base and not original['paths']:
                     refresh(root, original['branch'], base)
                     changed_base = git(root, 'rev-parse', 'HEAD') != original['head']
-            events = []
+            events = [{'kind': 'grant', 'data': initial}] if initial else []
             if kind == 'restart' or changed_base:
                 retained = [s for s in state['summaries'] if kind != 'restart' or
                             s.get('commit') and contained(root, original['base'], s['commit'])]
@@ -244,7 +246,7 @@ def apply(root, kind, locator, *, run=None):
                 events.append({'kind': 'delivery.recovered', 'data': {
                     'branch': git(root, 'branch', '--show-current'), 'base': git(root, 'rev-parse', 'HEAD'),
                     'restart': kind == 'restart', 'done': done, 'summaries': retained,
-                    'granted': pending[:state['config']['tasks_per_batch']] if kind == 'restart' else state['granted']}})
+                    'granted': pending[:state['config']['tasks_per_batch']] if kind == 'restart' else granted}})
             events += [{'kind': 'run.owner', 'data': {'human': source}},
                        {'kind': 'run.status', 'data': {'status': 'stopped' if kind == 'stop' else 'running'}},
                        {'kind': 'decision', 'data': {'choice': kind, 'source': key, 'recovery': locator['decision']}}]
