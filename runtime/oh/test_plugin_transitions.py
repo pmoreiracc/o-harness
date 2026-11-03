@@ -6,21 +6,22 @@ import subprocess
 import sys
 import unittest
 from unittest.mock import patch
-from . import test_workflow as fixtures
+from . import test_fixtures_workflow as fixtures
 from .config import HOME, project_checks
-from .test_workflow import configure, write_settings
+from .test_fixtures_workflow import configure, write_settings
 from .storage import atomic_json,digest,read_json,Refused
 # POSIX users run OH's scripts directly, so tests do too; Windows needs the interpreter.
 RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class PluginTransitions(unittest.TestCase):
-    setUp=fixtures.WorkflowTest.setUp
-    git=fixtures.WorkflowTest.git
-    event=fixtures.WorkflowTest.event
-    fake=fixtures.WorkflowTest.fake
+    setUp=fixtures.WorkflowFixture.setUp
+    git=fixtures.WorkflowFixture.git
+    event=fixtures.WorkflowFixture.event
+    fake=fixtures.WorkflowFixture.fake
 
     def test_launcher_selects_current_helpers_without_restarting_a_retired_executor(self):
+        # RUN uses the Windows interpreter path for the current helper.
         home=Path(os.environ['OH_DATA_HOME']);key=digest(str(self.root.resolve()))
         checkout=read_json(home/'registry/checkouts'/(key+'.json'))['checkout']
         for revision in ('old-runner','current'):

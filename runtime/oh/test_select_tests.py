@@ -19,6 +19,23 @@ class SelectTestsTest(unittest.TestCase):
         loader = unittest.TestLoader();loader.loadTestsFromNames(chosen)
         self.assertEqual(loader.errors, [])
 
+    def test_fixture_changes_select_consumers_and_lf_setup_is_not_platform_coverage(self):
+        old={'test_fixtures_git':'value = 1', 'test_a':'from .test_fixtures_git import value',
+             'test_b':'from .test_fixtures_git import value', 'test_c':'import unittest'}
+        self.assertEqual(selector.edited(old, old|{'test_a':old['test_a']+'\nvalue = 2'}),{'test_a'})
+        self.assertEqual(selector.edited(old, old|{'test_fixtures_git':'value = 2'}),
+                         {'test_fixtures_git','test_a','test_b'})
+        self.assertEqual(selector.affected(['runtime/oh/test_fixtures_git.py'],old),['test_a','test_b'])
+        for text, expected in ((r"write_text('edit', newline='\n')",False),
+                               (r'write_text("edit", newline = "\n")',False),  # windows-ok: source text for the selector
+                               (r"write_text('edit', newline='\r\n')",True),
+                               ("write_text('edit', newline=None)",True)):
+            with self.subTest(text=text):self.assertEqual(bool(selector.PLATFORM.search(text)),expected)
+        selected=selector.select()
+        self.assertIn('oh.test_cancellation.CancellationTest.test_native_stop_cancels_configured_checks_without_recording_a_pass',selected)
+        self.assertIn('oh.test_plugin_transitions.PluginTransitions.test_launcher_selects_current_helpers_without_restarting_a_retired_executor',selected)
+        self.assertIn('oh.test_workflow.WorkflowTest.test_failed_checks_and_probes_retain_complete_bytes_with_bounded_feedback',selected)
+
     def test_local_runs_only_the_tests_a_change_affects(self):
         sources = {'gates': '', 'issues': '', 'workflow': 'from . import gates\ndef f():\n    from .issues import route\n',
                    'test_gates': 'from .gates import x\n', 'test_workflow': 'from .workflow import y\n',
@@ -64,9 +81,12 @@ class SelectTestsTest(unittest.TestCase):
                         code = failure if command[-1] == 'oh.test_d' and isinstance(failure, int) else 0
                         return subprocess.CompletedProcess(command, code, 'worker output\n', 'Ran tests; skipped=1; Slowest test durations\n')
                     output = io.StringIO()
-                    with patch.object(selector.subprocess, 'run', side_effect=child) as invoke, contextlib.redirect_stdout(output):
+                    with patch.object(selector.subprocess, 'run', side_effect=child) as invoke, \
+                         patch.object(selector, 'test_ids', return_value=names), \
+                         patch.dict(selector.WINDOWS_PRIORITY, {'oh.test_c': 1}), contextlib.redirect_stdout(output):
                         self.assertEqual(selector.run(names, workers=workers, report=True), failure is None)
                     self.assertCountEqual([call.args[0][5:] for call in invoke.call_args_list], expected)
+                    if workers==1:self.assertEqual(invoke.call_args_list[0].args[0][5:],expected[2])
                     self.assertIn('worker output', output.getvalue())
                     self.assertIn('skipped=1; Slowest test durations', output.getvalue())
                     if failure is not None:self.assertIn('FAILED  oh.test_d', output.getvalue())
@@ -103,3 +123,26 @@ class SelectTestsTest(unittest.TestCase):
             self.assertEqual(failed.exception.code, 2)
             self.assertIn('test module import failed', errors.getvalue())
             run.assert_not_called()
+
+        # PR partitions also preserve discovery and report exactly one owner per ID.
+        names=selector.select()
+        ids=selector.test_ids(names)
+        partitions=selector.windows_shards(names,4)
+        per_shard=[[name for members in shard.values() for name in members] for shard in partitions]
+        self.assertTrue(all(per_shard))
+        self.assertCountEqual(per_shard[0]+per_shard[1],ids)
+        self.assertFalse(set(per_shard[0])&set(per_shard[1]))
+        self.assertTrue(all(selector.windows_shards(['oh.test_gates','oh.test_authority'],4)))
+        with self.assertRaisesRegex(ValueError,'Could not load the Windows test selection'):
+            selector.windows_shards(['oh.test_no_such_module'],4)
+
+        class Shared(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                pass
+
+        shared=Shared()
+        with patch.object(selector,'test_cases',return_value=[shared]), \
+             patch.dict(selector.WINDOWS_LONG_CASES,{shared.id():100}):
+            partitions=selector.windows_shards(['example'],4)
+        self.assertEqual(partitions,[{__name__:[shared.id()]},{}])

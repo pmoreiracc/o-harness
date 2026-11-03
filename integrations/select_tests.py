@@ -7,10 +7,11 @@ A module counts as edited when its code differs before and after the change, com
 and comments change nothing. Edited modules run whole. Test ids come from unittest's own loader, so every id loads.
 
   python3 integrations/select_tests.py [base]   print the chosen test ids, one per line
-  python3 integrations/select_tests.py --run-selected [1|4]   run names from stdin (four processes by default)
+  python3 integrations/select_tests.py --run-selected [1|4] [--shard 0|1]   run names from stdin
 
-Windows PR tests run in four processes, keeping each module's selected tests together so class and module fixtures
-still run once. Selection is unchanged. `OH_TEST_WORKERS=1 bash integrations/test.sh windows` runs them serially.
+Windows PR CI partitions the same selection across two runners with four processes each. Most cases stay grouped
+by module. A few historically slow methods run separately if their module and class have no shared setup.
+Local Windows runs use one runner. `OH_TEST_WORKERS=1 bash integrations/test.sh windows` runs them serially.
 
 Locally (and as the check OH runs on this repository's deliveries, when its `checks` setting names
 `integrations/test.sh affected {base}`), `--affected <base>` runs only the test modules a change needs,
@@ -22,6 +23,7 @@ Two test processes run at a time. The full suite still runs before every push an
   python3 integrations/select_tests.py --affected [base] [--list]   run (or list) the affected test modules
 """
 import ast
+from hashlib import sha256
 import inspect
 from pathlib import Path
 import re
@@ -32,9 +34,40 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / 'runtime/oh'
 # Modules that test OH's OS layer: locks, process groups, launchers, host binaries, installation.
-CORE = {'test_system', 'test_integration', 'test_installation', 'test_controls'}
+CORE = {'test_system', 'test_integration', 'test_installation', 'test_controls', 'test_windows'}
 # Test bodies that touch what differs on Windows: line endings, permissions, deletion, paths, processes.
-PLATFORM = re.compile(r"os\.name|sys\.platform|[Ww]indows|\\r\\n|CRLF|newline=|chmod|st_mode|rmtree|symlink|os\.sep|\.cmd\b|\.exe\b|signal\.|kill\(")
+# Writing an LF fixture is ordinary setup. Select CRLF, translation, and real platform behavior.
+PLATFORM = re.compile(r"""os\.name|sys\.platform|[Ww]indows|\\r\\n|CRLF|newline\s*=\s*(?!['"]\\n['"])\S|chmod|st_mode|rmtree|symlink|os\.sep|\.cmd\b|\.exe\b|signal\.|kill\(""")
+FIXTURE_PREFIX = 'test_fixtures_'
+
+# Relative weights from the broad Windows runs on #142 and #147. Keep module fixtures
+# together and start expensive groups while all workers are available.
+WINDOWS_PRIORITY = {
+    'oh.test_recovery': 7,
+    'oh.test_workflow': 6,
+    'oh.test_controls': 5,
+    'oh.test_delivery': 4,
+    'oh.test_cancellation': 3,
+    'oh.test_design_adapter': 2,
+    'oh.test_planning': 1,
+}
+
+# Approximate seconds from broad Windows CI. Assign by cost to eight lanes,
+# then run each half on a separate four-worker runner.
+WINDOWS_CASE_COST = {
+    'oh.test_recovery': 32, 'oh.test_workflow': 24, 'oh.test_controls': 40,
+    'oh.test_delivery': 30, 'oh.test_cancellation': 30, 'oh.test_design_adapter': 40,
+    'oh.test_planning': 36, 'oh.test_private': 6,
+}
+WINDOWS_LONG_CASES = {
+    'oh.test_recovery.RecoveryTest.test_entry_replay_finishes_both_pointers_and_records_its_initial_grant_once': 350,
+    'oh.test_recovery.RecoveryTest.test_selection_replay_repairs_failed_control_write_and_both_host_turn_fences': 161,
+    'oh.test_workflow.NativeWorkflowTest.test_completion_commits_exact_reviewed_tree_once_and_task_grants_do_not_expand': 192,
+    'oh.test_workflow.NativeWorkflowTest.test_review_attempts_and_findings_survive_repairs_and_spent_window': 85,
+    'oh.test_controls.ControlsTest.test_idle_selection_publishes_exact_reviewed_commits_without_stopping_prior_work': 242,
+    'oh.test_delivery.DeliveryTest.test_delivery_request_survives_only_its_bound_prerequisite_on_both_hosts': 325,
+    'oh.test_delivery.DeliveryTest.test_converged_tracks_finalize_through_native_check_review_and_completion': 143,
+}
 
 
 def before(base):
@@ -77,11 +110,65 @@ def cases(suite):
         yield from cases(item) if isinstance(item, unittest.TestSuite) else [item]
 
 
-def select(base=None):
-    new = {path.stem: path.read_text(encoding='utf-8') for path in sorted(TESTS.glob('test_*.py'))}
-    whole = (CORE | (edited(before(base), new) if base else set())) & new.keys()
+def test_cases(names, *, strict=False):
+    """Expand modules with the same loader the workers use, preserving duplicates."""
     sys.path.insert(0, str(ROOT / 'runtime'))
-    chosen = [f'oh.{m}' for m in sorted(whole)]
+    try:
+        loader = unittest.TestLoader()
+        suite = loader.loadTestsFromNames(names)
+        if strict and loader.errors:
+            raise ValueError('Could not load the Windows test selection:\n' + '\n'.join(loader.errors))
+        return list(cases(suite))
+    finally:
+        sys.path.pop(0)
+
+
+def test_ids(names):
+    return [case.id() for case in test_cases(names)]
+
+
+def id_digest(ids):
+    return sha256('\n'.join(sorted(ids)).encode()).hexdigest()
+
+
+def shared_setup(case):
+    module = sys.modules[type(case).__module__]
+    if any(hasattr(module, name) for name in ('setUpModule', 'tearDownModule')):
+        return True
+    return any(getattr(getattr(type(case), name), '__func__', None) is not getattr(unittest.TestCase, name).__func__
+               for name in ('setUpClass', 'tearDownClass'))
+
+
+def windows_shards(names, workers):
+    """Partition one exact selection. Keep shared setup together on the same worker."""
+    groups, costs = {}, {}
+    for case in test_cases(names, strict=True):
+        name, module = case.id(), type(case).__module__
+        group = name if name in WINDOWS_LONG_CASES and not shared_setup(case) else module
+        groups.setdefault(group, []).append(name)
+        costs[group] = costs.get(group, 0) + WINDOWS_LONG_CASES.get(name, WINDOWS_CASE_COST.get(module, 3))
+    shards = [{}, {}]
+    loads = [0] * (2 * workers)
+    for group in sorted(groups, key=lambda name: (-costs[name], name)):
+        lane = min(range(len(loads)), key=loads.__getitem__)
+        shards[lane % len(shards)][group] = groups[group]
+        loads[lane] += costs[group]
+    return shards
+
+
+def select(base=None, *, explain=False):
+    new = {path.stem: path.read_text(encoding='utf-8') for path in sorted(TESTS.glob('test_*.py'))}
+    old = before(base) if base else new
+    changed = edited(old, new)
+    whole = (CORE | changed) & new.keys()
+    sys.path.insert(0, str(ROOT / 'runtime'))
+    chosen = [f'oh.{m}' for m in sorted(whole) if not m.startswith(FIXTURE_PREFIX)]
+    if explain:
+        for name in chosen:
+            module=name.split('.')[-1]
+            reason=('platform module' if module in CORE else 'edited module'
+                    if code(old.get(module,''))!=code(new[module]) else 'imports edited test code')
+            print(f'{name}: {reason}',file=sys.stderr)
     for case in cases(unittest.defaultTestLoader.discover(str(TESTS), 'test_*.py', str(ROOT / 'runtime'))):
         if isinstance(case, unittest.loader._FailedTest):  # a module that fails to import runs, so its error shows
             chosen.append(case._testMethodName);continue
@@ -89,7 +176,9 @@ def select(base=None):
         if package != 'oh' or module in whole:continue
         try:source = inspect.getsource(getattr(type(case), case._testMethodName))
         except (OSError, TypeError):continue
-        if PLATFORM.search(source):chosen.append(case.id())
+        if match:=PLATFORM.search(source):
+            chosen.append(case.id())
+            if explain:print(f'{case.id()}: platform marker {match[0]!r}',file=sys.stderr)
     return chosen
 
 
@@ -134,7 +223,7 @@ def affected(paths, sources):
         sys.exit('select_tests: no owner for ' + ', '.join(unowned) + '; add what it needs to OWNERS in integrations/select_tests.py')
     gone = [p for p in paths if re.fullmatch(r'runtime/oh/\w+\.py', p) and (Path(p).stem not in sources or Path(p).stem == '__init__')]
     if gone:  # a deleted or renamed module, or the package itself: whatever used it can break anywhere
-        return sorted(m for m in sources if m.startswith('test_'))
+        return sorted(m for m in sources if m.startswith('test_') and not m.startswith(FIXTURE_PREFIX))
     uses = {m: imports(source, sources.keys()) | ({n for n in sources if re.search(rf'\boh\.{n}\b', source)} if m.startswith('test_') else set())
             for m, source in sources.items()}
     tests, seen, todo = set(), set(), sorted(set().union(*[needs(p) for p in paths]) & sources.keys())
@@ -149,27 +238,45 @@ def affected(paths, sources):
         if not direct:todo += sorted(users)
     while more := {m for m, used in uses.items() if m.startswith('test_') and used & tests} - tests:
         tests |= more
-    return sorted(tests)
+    return sorted(m for m in tests if not m.startswith(FIXTURE_PREFIX))
 
 
-def run(names, workers=2, report=False):
+def run(names, workers=2, report=False, shard=None):
     """Run the exact selected names, grouped by module, in separate processes; True when every group passed."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
-    groups = {}
-    for name in names:groups.setdefault('.'.join(name.split('.')[:2]), []).append(name)
+    from time import monotonic
+    if shard is None:
+        groups = {}
+        for name in names:groups.setdefault('.'.join(name.split('.')[:2]), []).append(name)
+    else:
+        partitions = windows_shards(names, workers)
+        shard_names = [[name for members in partition.values() for name in members] for partition in partitions]
+        groups, names = partitions[shard], shard_names[shard]
+        full_ids = [name for partition in shard_names for name in partition]
+        assignments = [f'{index}:{name}' for index, partition in enumerate(shard_names) for name in partition]
+        print(f'Windows shard {shard+1}/2: {len(names)} of {len(full_ids)} tests', flush=True)
+        print(f'Windows full test ID digest {id_digest(full_ids)}', flush=True)
+        print(f'Windows selection digest {id_digest(assignments)}', flush=True)
     if not groups:raise ValueError('No selected tests')
-    def one(names):
+    started=monotonic()
+    def one(module, names):
         command = [sys.executable, '-m', 'unittest', '--durations', '15', *names]
+        if report:print(f"start  {module}  +{monotonic()-started:.1f}s", flush=True)
         try:
             return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace',
                                   env=os.environ | {'PYTHONPATH': str(ROOT / 'runtime'), 'PYTHONUTF8': '1'})
         except OSError as exc:
             return subprocess.CompletedProcess(command, 1, '', str(exc))
-    if report:print(f'Running {sum(map(len, groups.values()))} selected names in {len(groups)} module groups with {workers} workers', flush=True)
+    if report:
+        ids=test_ids(names) if shard is None else names
+        fingerprint=id_digest(ids)
+        print(f'Running {len(ids)} tests in {len(groups)} groups with {workers} workers '
+              f'(test ID digest {fingerprint})',flush=True)
     passed = True
     with ThreadPoolExecutor(workers) as pool:
-        pending = {pool.submit(one, names): module for module, names in groups.items()}
+        order = sorted(groups, key=lambda module: -WINDOWS_PRIORITY.get(module, 0)) if report and shard is None else groups
+        pending = {pool.submit(one, module, groups[module]): module for module in order}
         for future in as_completed(pending):
             module, result = pending[future], future.result()
             print(f"{'ok' if not result.returncode else 'FAILED'}  {module}", flush=True)
@@ -191,10 +298,15 @@ elif __name__ == '__main__' and sys.argv[1:2] == ['--run-selected']:
     parser = argparse.ArgumentParser(description='Run selected Windows PR tests without changing their selection')
     parser.add_argument('--run-selected', action='store_true')
     parser.add_argument('workers', type=int, choices=(1, 4), nargs='?', default=4)
+    parser.add_argument('--shard', type=int, choices=(0, 1))
     args = parser.parse_args()
     names = sys.stdin.read().splitlines()
     if not names:parser.error('No selected tests')
-    sys.exit(0 if run(names, workers=args.workers, report=True) else 1)
+    try:
+        sys.exit(0 if run(names, workers=args.workers, report=True, shard=args.shard) else 1)
+    except ValueError as exc:
+        parser.error(str(exc))
 elif __name__ == '__main__':
     # Bytes, so Windows never adds \r to the test names the shell passes on.
-    sys.stdout.buffer.write(''.join(t + '\n' for t in select(sys.argv[1] if len(sys.argv) > 1 else None)).encode())
+    args=[arg for arg in sys.argv[1:] if arg!='--explain']
+    sys.stdout.buffer.write(''.join(t + '\n' for t in select(args[0] if args else None,explain='--explain' in sys.argv[1:])).encode())

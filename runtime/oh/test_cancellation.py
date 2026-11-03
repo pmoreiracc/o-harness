@@ -14,7 +14,7 @@ from unittest.mock import patch
 from . import authority, cancellation, native
 from .authority import coordinator as native_coordinator
 from .storage import Refused, identifier, now, read_json
-from .test_workflow import NativeFixture, configure
+from .test_fixtures_workflow import NativeFixture, configure
 from .workflow import load_run
 
 
@@ -127,6 +127,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         self.assertIsNotNone(cancellation.interrupted(self.root, attempt=self.attempt))
 
     def test_stop_and_resume_keep_old_worker_revoked_in_same_and_other_conversations(self):
+        # Exercise the packaged control hook on Windows as well as POSIX.
         # Drive the native tool boundary and the real human-answer parser, rather
         # than jumping directly from a stopped attempt into native.resume().
         host_home = Path(self.temp.name) / 'host'
@@ -442,6 +443,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         with self.assertRaises(Refused):command_format(self.root,self.attempt,native_argv)
 
     def test_native_stop_cancels_configured_checks_without_recording_a_pass(self):
+        # Exercise configured-check process ownership through the Windows Job Object.
         heartbeat = Path(self.temp.name) / 'checking'
         command = [sys.executable, '-c',
                    'import pathlib,sys,time;print("before native stop",flush=True);pathlib.Path(sys.argv[1]).write_text("running");time.sleep(30)',

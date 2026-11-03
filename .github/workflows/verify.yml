@@ -6,6 +6,10 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  # GitHub can queue revisions out of order. Only coalesce duplicate runs of the same merge SHA.
+  group: verify-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.sha) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   checks:
     runs-on: ubuntu-24.04
@@ -31,30 +35,33 @@ jobs:
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
   # The full Windows suite is slow: a pull request runs the tests that can break on Windows,
   # and the full suite (full.yml) runs all of them nightly and on demand, as a release does.
+  windows-a:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/windows-pr-shard.yml
+    with:
+      # Both runners use the same base even if main advances during the run.
+      base: ${{ github.event.pull_request.base.sha }}
+      shard: 0
+  windows-b:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/windows-pr-shard.yml
+    with:
+      base: ${{ github.event.pull_request.base.sha }}
+      shard: 1
   windows:
-    if: github.event_name != 'push'
-    runs-on: windows-latest
-    # Editing a shared test module can select nearly the full suite.
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
+    # Retain one stable status check for the complete Windows selection.
+    if: always() && github.event_name == 'pull_request'
+    needs: [windows-a, windows-b]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
     steps:
-      # OH verifies exact bytes; keep the checkout and test repositories free of CRLF conversion.
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.18.0'
-          package-manager-cache: false
-      - run: bash integrations/test.sh windows "$WINDOWS_TEST_BASE"
-        env:
-          WINDOWS_TEST_BASE: origin/main
-      - name: Show checkout changes after a test failure
-        if: failure()
-        run: git status --short --untracked-files=all
+      - env:
+          WINDOWS_A: ${{ needs['windows-a'].result }}
+          WINDOWS_B: ${{ needs['windows-b'].result }}
+          SELECTION_A: ${{ needs['windows-a'].outputs.selection }}
+          SELECTION_B: ${{ needs['windows-b'].outputs.selection }}
+        run: |
+          test "$WINDOWS_A" = success
+          test "$WINDOWS_B" = success
+          test -n "$SELECTION_A"
+          test "$SELECTION_A" = "$SELECTION_B"

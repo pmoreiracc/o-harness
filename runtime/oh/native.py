@@ -11,6 +11,7 @@ from .storage import (Journal, Refused, atomic_json, checkout_file, checkout_id,
                       git, identifier, lock, now, project, read_json, state_home, whole, changes)
 from .verification import tree, candidate_tree, check_failed
 from .workflow import load_run, reduce, next_task, review_limit, validate_tasks, committed, display_task
+from .workflow import saved_runs as _saved_runs
 from .telemetry import best_effort
 
 
@@ -370,22 +371,6 @@ def _command(source):
     linked=re.fullmatch(r'\[(\$(?:o-harness:)?oh-[a-z]+)\]\([^\r\n]*SKILL\.md\)(.*)',prompt,re.S)
     if linked:prompt=linked[1]+linked[2]
     return authority.typed_command('/'+prompt[1:] if prompt.startswith('$') else prompt)
-
-
-def _saved_runs(root):
-    """Read the two checkout bindings without selecting or repairing either one."""
-    from .registry import index_path
-    if not index_path(root).is_file():return []
-    result=[]
-    for name in ('oh-active-run.json','oh-active-review.json'):
-        path=checkout_file(root,name)
-        if not path.exists():continue
-        binding=read_json(path)
-        if binding.get('project')!=project(root)['id'] or binding.get('checkout')!=checkout_id(root):
-            raise Refused('Saved work binding belongs to another checkout or project')
-        journal,state=load_run(root,binding['run'])
-        if not any(other['id']==state['id'] for _,other in result):result.append((journal,state))
-    return result
 
 
 def _initiative(state):

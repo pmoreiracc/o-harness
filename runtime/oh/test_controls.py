@@ -8,13 +8,13 @@ from . import native
 from .authority import coordinator as native_coordinator
 from .storage import Refused
 from .workflow import load_run
-from .test_workflow import NativeFixture
+from .test_fixtures_workflow import NativeFixture
 
 
 class ControlsTest(NativeFixture,unittest.TestCase):
     def test_idle_selection_publishes_exact_reviewed_commits_without_stopping_prior_work(self):
         from . import publication
-        from .test_workflow import configure
+        from .test_fixtures_workflow import configure
         configure(self.root,tasks_per_batch=1)
         self.git('remote','add','origin','https://github.com/example/product.git')
         self.approve(self.tasks);self.assess();self.implement()
@@ -87,7 +87,7 @@ class ControlsTest(NativeFixture,unittest.TestCase):
                                     'call_id':'late-old-tool','output':'Completed'}})+'\n')
         body=publication.render(self.root)
         self.assertEqual(load_run(self.root)[1]['publication'],finished['publication'])
-        from .test_workflow import pull_request
+        from .test_fixtures_workflow import pull_request
         pr=pull_request(finished)|{'body':body}
         with patch('oh.publication.github',side_effect=lambda root,host,path,**kw:[pr] if kw.get('pages') else pr):
             published=publication.reconcile(self.root)
@@ -405,28 +405,26 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         native.retain(self.root,admitted['id'],{})
         self.assertEqual(load_run(self.root)[1]['status'],'paused')
 
-    def test_pause_after_review_fences_commit_and_resume_keeps_exact_review_and_allowance(self):
+    def test_paused_completion_requires_resume_and_the_exact_reviewed_tree(self):
         self.approve();self.assess();self.implement();review=self.reviewed()
         before=load_run(self.root)[1];head=self.git('rev-parse','HEAD')
         native.decision(self.root,'pause',self.human('pause'))
         with self.assertRaises(Refused):native.complete(self.root,review['id'])
         self.assertEqual(self.git('rev-parse','HEAD'),head)
+        path=self.root/'output.txt';reviewed=path.read_bytes()
+        path.write_bytes(b'Retained authorized correction.\n')
         native.resume(self.root,self.resume_choice(session='fresh-parent'))
         after=load_run(self.root)[1]
         self.assertEqual(after['granted'],before['granted'])
         self.assertEqual(after['attempts'],before['attempts'])
-        native.complete(self.root,review['id'])
-        self.assertEqual(load_run(self.root)[1]['done'],['1'])
-
-    def test_edits_while_paused_cannot_borrow_the_previous_review(self):
-        self.approve();self.assess();self.implement();review=self.reviewed()
-        native.decision(self.root,'pause',self.human('pause'))
-        (self.root/'output.txt').write_text('Retained authorized correction.',newline='\n')
-        native.resume(self.root,self.resume_choice())
-        with self.assertRaises(Refused):native.complete(self.root,review['id'])
-        self.assertEqual((self.root/'output.txt').read_text(),'Retained authorized correction.')
+        with self.assertRaisesRegex(Refused,'does not cover the current candidate'):
+            native.complete(self.root,review['id'])
+        self.assertEqual(path.read_bytes(),b'Retained authorized correction.\n')
         self.assertEqual(load_run(self.root)[1]['done'],[])
         self.assertEqual(native.resume(self.root)['reviews_used'],1)
+        path.write_bytes(reviewed)
+        native.complete(self.root,review['id'])
+        self.assertEqual(load_run(self.root)[1]['done'],['1'])
 
     def test_discovery_and_selected_reads_preserve_both_bindings_and_live_work(self):
         from .storage import checkout_file, now
