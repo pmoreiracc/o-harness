@@ -305,7 +305,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(note.read_text(),'Preserve this edit.\n')
 
     def test_codex_plan_approval_binds_the_latest_native_plan_to_the_exact_scope(self):
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta
         from . import native
         from .workflow import active_file
         offer=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
@@ -313,11 +313,18 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertIn(offer['scope_id'],preview)
         self.git('switch','-qc','other-scope')
         other=native.prepare_scope(self.root,{'tasks':self.tasks[:1]},keep_checkout=True)
+        from .storage import read_json
+        created=max(datetime.fromisoformat(read_json(Path(scope['preview']).with_name('scope.json'))['created_at'])
+                    for scope in (offer,other))
         home=Path(self.temp.name)/'host';path=home/'.codex/sessions/native-plan.jsonl'
         path.parent.mkdir(parents=True)
         def save(text,*,mode='plan',intervening=False,accept_mode='default',displayed=True):
+            at=created
             def row(kind,**payload):
-                return {'type':kind,'timestamp':datetime.now(timezone.utc).isoformat(),'payload':payload}
+                nonlocal at
+                # The synthetic transcript must establish order on clocks with coarse resolution.
+                at+=timedelta(milliseconds=1)
+                return {'type':kind,'timestamp':at.isoformat(),'payload':payload}
             def user(turn,text):
                 return row('event_msg',type='item_completed',turn_id=turn,
                            item={'type':'UserMessage','id':turn+'-input','content':[{'type':'text','text':text}]})
