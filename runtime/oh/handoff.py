@@ -200,6 +200,9 @@ def prepare(state, task, role, directory, admission, feedback=''):
             if original.is_file():packet['original_scope_provenance']={'path':str(original),
                 'authority':'Original run provenance; not a newly accepted native scope.'}
     if state.get('repair_source'):packet['repair_source']=state['repair_source']
+    if state.get('retained_work'):
+        packet['retained_work']={'runs':state['retained_work'],
+            'note':'Historical scopes and findings remain unchanged. Reconcile any relevant included work; selection does not resolve findings or fabricate completion.'}
     original=admission.get('included_original_work')
     if original is None and not state['summaries']:original=state.get('pr_target') or state.get('original_work')
     if original:

@@ -57,7 +57,7 @@ def load_run(root, run=None):
         raise Refused('This run belongs to another checkout or project')
     journal=Journal(active['project'],active['run'])
     records=journal.records();state=reduce(records)
-    state['entry_human']=records[0]['data'].get('human',{})
+    state['entry_human']=records[0]['data'].get('entry_request',records[0]['data'].get('human',{}))
     if state.get('project')!=active['project'] or state.get('checkout')!=active['checkout'] or state.get('id')!=active['run']:
         raise Refused('Saved work belongs to another checkout or project')
     return journal,state

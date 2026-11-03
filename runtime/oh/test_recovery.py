@@ -30,6 +30,351 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         return self.human(label,host=host,session=session,decision=gate['decision'],
             question=gate['question'],question_at=at,at=at,via='question',question_options=gate['options'])
 
+    def test_recovery_menu_cannot_reclaim_a_newer_selection_with_an_old_answer(self):
+        from .storage import read_json
+        from .workflow import active_file
+        self.approve();old_journal,old=load_run(self.root)
+        for kind,label in (('resume','Continue'),('restart','Start fresh'),('stop','Stop and take over')):
+            with self.subTest(kind=kind):
+                gate=decisions.prepare(self.root,'recover',run=old['id'])
+                stale=self.answer(gate,label)|{'at':now(),'question_at':now()}
+                self.approve(tasks=[{'id':kind,'title':'Different '+kind,'instructions':'Keep this work selected.'}])
+                current_journal,current=load_run(self.root)
+                def retained():
+                    return (old_journal.records(),current_journal.records(),read_json(active_file(self.root)),
+                            cancellation._read(self.root)['current'],self.git('rev-parse','HEAD'),self.git('status','--porcelain'))
+                before=retained()
+                with self.assertRaisesRegex(Refused,'superseded'):
+                    native.decision(self.root,kind,stale,run=old['id'])
+                self.assertEqual(retained(),before)
+                fresh=self.answer(gate,label)|{'at':now(),'question_at':now()}
+                if kind=='stop':
+                    with patch('oh.receipts.index',side_effect=OSError('interrupted index write')),self.assertRaisesRegex(OSError,'index write'):
+                        native.decision(self.root,kind,fresh,run=old['id'])
+                    records=old_journal.records()
+                native.decision(self.root,kind,fresh,run=old['id'])
+                if kind=='stop':
+                    self.assertEqual(old_journal.records(),records)
+                    self.assertIn('**Current state:** stopped',(old_journal.path/'index.md').read_text())
+                selected=load_run(self.root)[1]
+                self.assertEqual(selected['id'],current['id'] if kind=='stop' else old['id'])
+                if kind=='stop':self.assertEqual(cancellation._read(self.root)['current'],before[3])
+                updated=load_run(self.root,old['id'])[1]
+                self.assertEqual(updated['granted'],old['granted'])
+                self.assertEqual(updated['config'],old['config'])
+
+    def test_recovery_waits_for_finished_attempt_tools_before_transfer_and_replays_final_binding(self):
+        from .storage import read_json
+        from .workflow import active_file
+        self.approve();native.decision(self.root,'stop',self.human('stop'));old_journal,old=load_run(self.root)
+        self.approve(tasks=[{'id':'other','title':'Different work','instructions':'Keep its native tools fenced.'}])
+        finished=self.assess();other_journal,other=load_run(self.root)
+        pending=native.prepare_scope(self.root,{'tasks':[{'id':'pending','title':'Pending other approval',
+                                                       'instructions':'Respect later ownership selections.'}]})
+        with cancellation._edit(self.root) as value:
+            value['tools']['pending-edit']={'attempt':finished['id'],'kind':'tool','name':'Edit','started':now()}
+        gate=decisions.prepare(self.root,'recover',run=old['id'])
+        def timed(value):return value|{'at':datetime.now(timezone.utc).isoformat()}
+        older_approval=timed(self.human(session='pending-scope'))
+        older_review=timed(self.human('/oh-review changes',session='pending-review'))
+        older_recovery=timed(self.answer(gate,'Continue',session='pending-recovery'))
+        older_resume=timed(self.resume_choice(run=old['id'],session='pending-resume'))
+        answer=timed(self.answer(gate,'Continue'))
+        def retained():
+            return (old_journal.records(),other_journal.records(),read_json(active_file(self.root)),
+                    cancellation._read(self.root)['current'],self.git('rev-parse','HEAD'),self.git('status','--porcelain'))
+        before=retained()
+        with self.assertRaisesRegex(Refused,'unsettled native'):
+            native.decision(self.root,'resume',answer,run=old['id'])
+        self.assertEqual(retained(),before)
+        # Native completion, rather than the already-finished workflow label,
+        # settles the missed callback. The original answer remains usable.
+        self.parent_path.write_text(json.dumps({'type':'response_item','timestamp':now(),
+            'payload':{'type':'function_call_output','call_id':'pending-edit','output':'Edit completed'}})+'\n',newline='\n')
+        original=native._resume_binding
+        def interrupted(*args,**kwargs):
+            if kwargs.get('write'):raise OSError('interrupted final selection write')
+            return original(*args,**kwargs)
+        with patch.object(native,'_resume_binding',side_effect=interrupted),self.assertRaisesRegex(OSError,'final selection'):
+            native.decision(self.root,'resume',answer,run=old['id'])
+        records=old_journal.records()
+        self.assertEqual(load_run(self.root)[1]['id'],other['id'])
+        control=cancellation._read(self.root)
+        self.assertEqual(control['owners'][control['current']]['run'],old['id'])
+        self.assertIn('**Current state:** stopped',(old_journal.path/'index.md').read_text())
+        partial=retained()
+        # The pointer still names B, but A already owns a newer native epoch.
+        # All selection routes must honor that epoch, including another A answer.
+        for stale in (lambda:native.approve_scope(self.root,pending['scope_id'],older_approval),
+                      lambda:native.review(self.root,'changes',older_review),
+                      lambda:native.decision(self.root,'resume',older_recovery,run=old['id']),
+                      lambda:native.resume(self.root,older_resume,run=old['id']),
+                      lambda:native.admit(self.root,'implementation'),
+                      lambda:native.candidate(self.root),lambda:native.verify(self.root)):
+            with self.assertRaisesRegex(Refused,'superseded'):stale()
+            self.assertEqual(retained(),partial)
+        native.decision(self.root,'resume',answer|{'question_call':'newly-exposed-native-call'},run=old['id'])
+        self.assertEqual(load_run(self.root)[1]['id'],old['id'])
+        self.assertEqual(old_journal.records(),records)
+        self.assertEqual(load_run(self.root)[1]['granted'],old['granted'])
+        self.assertIn('**Current state:** running',(old_journal.path/'index.md').read_text())
+        native._owner(self.root,load_run(self.root)[1])  # Upgraded identity still owns the original journal epoch.
+        # A genuinely newer choice can still select different idle work.
+        self.assertEqual(native.approve_scope(self.root,pending['scope_id'],timed(self.human()))['task']['id'],'pending')
+        # Ordinary decisions share the same replay visibility contract as the
+        # recovery menu, including a missing or opposite-state readable index.
+        current_journal,_=load_run(self.root)
+        from .receipts import index
+        index(current_journal,load_run(self.root)[1])
+        for kind in ('stop','resume'):
+            answer=timed(self.human('stop') if kind=='stop' else self.resume_choice())
+            with patch('oh.receipts.index',side_effect=OSError('interrupted ordinary index')),self.assertRaisesRegex(OSError,'ordinary index'):
+                native.decision(self.root,kind,answer)
+            records=current_journal.records()
+            replay=native.decision(self.root,kind,answer)
+            expected='stopped' if kind=='stop' else 'running'
+            self.assertEqual(replay['status'],expected)
+            self.assertEqual(current_journal.records(),records)
+            self.assertIn('**Current state:** '+expected,(current_journal.path/'index.md').read_text())
+
+    def test_selection_replay_repairs_failed_control_write_and_both_host_turn_fences(self):
+        for host in ('codex','claude'):
+            for route in ('resume','scope','review','recover'):
+                with self.subTest(host=host,route=route):
+                    initial=native.prepare_scope(self.root,{'tasks':[{'id':'old','title':'Before '+host+route,
+                        'instructions':'Preserve the prior selection.'}]})
+                    native.approve_scope(self.root,initial['scope_id'],self.human(host=host,session='old-'+host+route))
+                    _,old=load_run(self.root)
+                    if route in ('resume','recover'):
+                        native.decision(self.root,'stop',self.human('stop',host=host,session=old['human']['session']))
+                        gate=decisions.prepare(self.root,'resume' if route=='resume' else 'recover')
+                        source=self.answer(gate,'Resume' if route=='resume' else 'Continue',host=host,session='new-'+host+route)
+                        action=lambda:native.decision(self.root,'resume',source)
+                    elif route=='scope':
+                        scope=native.prepare_scope(self.root,{'tasks':[{'id':'new','title':'After '+host+route,
+                            'instructions':'Keep this one original grant.'}]})
+                        source=self.human(host=host,session='new-'+host+route)
+                        action=lambda:native.approve_scope(self.root,scope['scope_id'],source)
+                    else:
+                        selector='changes' if host=='codex' else 'tree'
+                        source=self.human('/oh-review '+selector,host=host,session='new-'+host+route)
+                        action=lambda:native.review(self.root,selector,source)
+                    at=datetime.now(timezone.utc).isoformat()
+                    source=source|{'at':at,'question_at':at,'record_hashes':['native-human'],'transcript_path':str(self.parent_path)}
+                    if host=='claude' and route=='resume':
+                        with cancellation._edit(self.root) as value:
+                            value['owners'][value['current']]['since']=None  # Older control metadata.
+                    old_key=cancellation._read(self.root)['current'];write=cancellation.atomic_json
+                    def fail_owner(path,value,*args,**kwargs):
+                        if Path(path).name=='oh-native-execution.json' and value.get('current')!=old_key:
+                            raise OSError('interrupted execution-owner write')
+                        return write(path,value,*args,**kwargs)
+                    # The fake native boundary retains the same occurrence time
+                    # when the production retry reattests its original locator.
+                    with patch('oh.authority.coordinator',side_effect=lambda root,state,locator=None,**kw:source if locator else state['human']):
+                        with patch.object(cancellation,'atomic_json',side_effect=fail_owner),self.assertRaisesRegex(OSError,'execution-owner write'):
+                            action()
+                        journal,pending=load_run(self.root);records=journal.records()
+                        self.assertEqual(cancellation._read(self.root)['current'],old_key)
+                        payload={'hook_event_name':'PreToolUse','session_id':source['session'],'turn_id':source['turn'],
+                                 'tool_name':'mcp__o_harness__status','tool_input':{},'tool_use_id':'retry-'+host+route}
+                        # A newer proposed turn can reach its checked retry; it
+                        # is not superseded by the older, incompletely saved owner.
+                        self.assertEqual(cancellation.hook(self.root,host,payload),{})
+                        result=action()
+                    _,settled=load_run(self.root)
+                    self.assertEqual(result['status'],'running')
+                    self.assertEqual(cancellation._read(self.root)['current'],cancellation.owner_key(settled))
+                    self.assertEqual(journal.records()[:len(records)],records)
+                    self.assertEqual(settled['granted'],pending['granted'] or ['new' if route=='scope' else 'review'])
+                    completed=journal.records();action()
+                    self.assertEqual(journal.records(),completed)
+                    self.assertEqual(cancellation.hook(self.root,host,payload),{})
+                    stale=payload|{'session_id':old['human']['session'],'turn_id':old['human']['turn'],'tool_use_id':'late-'+host+route}
+                    self.assertIn('superseded work selection',cancellation.hook(self.root,host,stale)['hookSpecificOutput']['permissionDecisionReason'])
+            # A Stop in the proposed conversation still wins before an owner
+            # write is repaired, including Claude's transcript-only occurrence.
+            gate=decisions.prepare(self.root,'resume');source=self.answer(gate,'Resume',host=host,session='stopped-proposal-'+host)
+            transcript=Path(self.temp.name)/('stopped-'+host+'.jsonl');transcript.write_text('',newline='\n')
+            at=datetime.now(timezone.utc).isoformat()
+            source=source|{'at':at,'question_at':at,'record_hashes':['native-human'],'transcript_path':str(transcript)}
+            old_key=cancellation._read(self.root)['current']
+            with patch('oh.authority.coordinator',side_effect=lambda root,state,locator=None,**kw:source if locator else state['human']):
+                with patch.object(cancellation,'atomic_json',side_effect=fail_owner),self.assertRaisesRegex(OSError,'execution-owner write'):
+                    native.decision(self.root,'resume',source)
+                event=({'type':'event_msg','timestamp':now(),'payload':{'type':'turn_aborted','turn_id':source['turn'],'reason':'interrupted'}}
+                       if host=='codex' else {'type':'user','timestamp':now(),'sessionId':source['session'],'uuid':source['turn'],
+                           'message':{'content':[{'type':'text','text':'[Request interrupted by user]'}]}})
+                transcript.write_text(json.dumps(event)+'\n',newline='\n')
+                payload={'hook_event_name':'PreToolUse','session_id':source['session'],'turn_id':source['turn'],
+                         'tool_name':'mcp__o_harness__status','tool_input':{},'tool_use_id':'stopped-retry-'+host}
+                self.assertIn('was stopped',cancellation.hook(self.root,host,payload)['hookSpecificOutput']['permissionDecisionReason'])
+                with self.assertRaisesRegex(Refused,'stopped after this Resume answer'):native.decision(self.root,'resume',source)
+                self.assertEqual(cancellation._read(self.root)['current'],old_key)
+
+    def test_free_text_entry_retries_the_same_saved_selection_after_host_save_delay(self):
+        from .test_workflow import configure
+        configure(self.root,plans={'location':'private'})
+        for workflow in ('review', 'propose'):
+            with self.subTest(workflow=workflow):
+                source=self.human('Please review this tree' if workflow=='review' else 'Please propose a fixture change')
+                manifest={'tasks':[{'id':'1','title':'Propose a change','instructions':'Inspect the fixture.'}]}
+                def enter(subject='tree', proposed=manifest):
+                    if workflow=='review':return native.review(self.root,subject,source)
+                    return native.prepare_scope(self.root,proposed,workflow=workflow,human=source)
+                with patch.object(cancellation,'poll',return_value=False):
+                    with self.assertRaisesRegex(Refused,'interruption evidence is still being saved'):enter()
+                journal,pending=next((j,s) for j,s in native._saved_runs(self.root) if s['workflow']==workflow)
+                initial=journal.records()
+                self.assertEqual([r['kind'] for r in initial],['run.started'])
+                self.assertFalse(pending['granted'])
+                with self.assertRaisesRegex(Refused,'predates the current'):
+                    enter('tree --feedback-only',{'tasks':[manifest['tasks'][0]|{'instructions':'Different scope.'}]})
+                self.assertEqual(journal.records(),initial)
+                self.assertEqual(enter()['run'],pending['id'])
+                self.assertEqual(enter()['run'],pending['id'])
+                records=journal.records()
+                self.assertEqual(records[:1],initial)
+                self.assertEqual([r['kind'] for r in records].count('grant'),1)
+                self.assertEqual(load_run(self.root)[1]['granted'],['review' if workflow=='review' else '1'])
+                self.assertEqual(cancellation._read(self.root)['current'],cancellation.owner_key(load_run(self.root)[1]))
+
+    def test_new_owner_resume_finishes_an_accepted_entry_before_admission(self):
+        for workflow,role in (('review','review'),('deliver','assessment')):
+            with self.subTest(workflow=workflow):
+                request=self.human('Please review this tree.' if workflow=='review' else 'approve')
+                if workflow=='deliver':
+                    preview=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+                with patch.object(cancellation,'poll',return_value=False):
+                    with self.assertRaisesRegex(Refused,'interruption evidence is still being saved'):
+                        if workflow=='review':
+                            native.review(self.root,'tree',request)
+                        else:
+                            native.approve_scope(self.root,preview['scope_id'],request)
+                journal,pending=next((j,s) for j,s in native._saved_runs(self.root) if s['workflow']==workflow)
+                original=journal.records()
+                self.assertEqual([r['kind'] for r in original],['run.started'])
+                self.assertFalse(pending['granted'])
+                if workflow=='review':
+                    answer=self.resume_choice(run=pending['id'],session='new-review-coordinator')
+                else:
+                    # Continue may refresh an absorbed branch. The base transfer
+                    # must preserve the grant completed in the same transition.
+                    base=self.git('commit-tree','HEAD^{tree}','-p','HEAD','-m','Advance the fixture base').strip()
+                    self.git('update-ref','refs/remotes/origin/main',base)
+                    gate=decisions.prepare(self.root,'recover',run=pending['id'])
+                    answer=self.answer(gate,'Continue',session='new-delivery-coordinator')
+                selected=native.decision(self.root,'resume',answer,run=pending['id'])
+                self.assertEqual(selected['run'],pending['id'])
+                self.assertEqual(selected['status'],'running')
+                saved=journal.records()
+                self.assertEqual(saved[:1],original)
+                grant,=[e['data'] for r in saved if r['kind']=='transition'
+                        for e in r['data']['events'] if e['kind']=='grant']
+                self.assertEqual(grant['source'],pending['source'])
+                self.assertEqual(grant['kind'],'standalone' if workflow=='review' else 'initial')
+                expected=['review'] if workflow=='review' else [self.tasks[0]['id']]
+                self.assertEqual(grant['tasks'],expected)
+                self.assertEqual(load_run(self.root)[1]['granted'],expected)
+                native.decision(self.root,'resume',answer,run=pending['id'])
+                self.assertEqual(journal.records(),saved)
+                admitted=native.admit(self.root,role)
+                self.assertEqual(admitted['task'],expected[0])
+                self.native_results[admitted['id']]={'status':'cancelled','text':''}
+                native.bind(self.root,admitted['id'],{'child_session':'fixture-'+admitted['id']})
+                native.retain(self.root,admitted['id'],{})
+
+    def test_entry_replay_finishes_both_pointers_and_records_its_initial_grant_once(self):
+        from . import prepared
+        from .test_delivery import DeliveryTest
+        from .test_workflow import configure
+        from .storage import Journal,atomic_json,read_json
+        from .workflow import active_file,reduce
+        configure(self.root,tasks_per_batch=1);DeliveryTest.documents(self)
+        for route,host in (('repair','codex'),('design','claude')):
+            for fault in ('canonical','review-deselection','grant')+(('owner-before-review',) if route=='design' else ()):
+                with self.subTest(route=route,fault=fault):
+                    self.approve(tasks=[{'id':'old','title':'Prior '+route+fault,'instructions':'Preserve this idle scope.'}])
+                    old_journal,old=load_run(self.root);old_records=old_journal.records()
+                    native.review(self.root,'tree',self.human('/oh-review tree',host=host,session='feedback-'+route+fault))
+                    self.finish_attempt('review',{'verdict':'blocking','summary':'Repair the fixture behavior.',
+                        'findings':[{'severity':'blocking','family':'handoff-fixture','description':'The fixture behavior needs repair.'}]})
+                    if fault=='owner-before-review':
+                        import os
+                        with patch.dict(os.environ,{'CODEX_THREAD_ID':'','OH_NATIVE_SESSION_ID':'idle-feedback'}):
+                            native.review(self.root,'changes')
+                    review_journal,feedback=load_run(self.root);review_records=review_journal.records()
+                    if route=='repair':
+                        manifest=Path(self.temp.name)/'handoff-repairs.json'
+                        atomic_json(manifest,{'tasks':[{'id':'fix','title':'Repair fixture behavior','instructions':'Fix the retained feedback.'}]})
+                        scope=prepared.prepare(self.root,manifest=manifest,review=feedback['id'])
+                        source=self.human(host=host,session='entry-'+route+fault)
+                        action=lambda:native.approve_scope(self.root,scope['scope_id'],source)
+                    else:
+                        source=self.human('/oh-deliver 0001',host=host,session='entry-'+route+fault)
+                        action=lambda:native.prepare_scope(self.root,doc='0001',human=source,keep_checkout=True)
+                    source=source|{'at':datetime.now(timezone.utc).isoformat()}
+                    key=native._human_key(source);write=native.atomic_json;append=Journal.append
+                    control_write=cancellation.atomic_json;old_owner=cancellation._read(self.root)['current']
+                    def fail_pointer(path,value,*args,**kwargs):
+                        if ((fault=='canonical' and Path(path).name=='oh-active-run.json' and value.get('run')!=old['id']) or
+                                (fault=='review-deselection' and Path(path).name=='oh-active-review.json' and value.get('selected') is False)):
+                            raise OSError('interrupted entry '+fault)
+                        return write(path,value,*args,**kwargs)
+                    def fail_owner(path,value,*args,**kwargs):
+                        if fault=='owner-before-review' and Path(path).name=='oh-native-execution.json' and value.get('current')!=old_owner:
+                            raise OSError('interrupted entry owner')
+                        return control_write(path,value,*args,**kwargs)
+                    def fail_grant(journal,kind,data):
+                        if fault=='grant' and kind=='grant' and data.get('source')==key:raise OSError('interrupted entry grant')
+                        return append(journal,kind,data)
+                    def entries():
+                        result=[]
+                        for path in (native._home(self.root)/'runs').glob('*/000001.json'):
+                            journal=Journal(old['project'],path.parent.name);records=journal.records()
+                            if records[0]['data'].get('source')==key:result.append((journal,reduce(records)))
+                        return result
+                    with patch.object(native,'atomic_json',side_effect=fail_pointer),patch.object(Journal,'append',new=fail_grant), \
+                            patch.object(cancellation,'atomic_json',side_effect=fail_owner):
+                        with self.assertRaisesRegex(OSError,'interrupted entry'):action()
+                    pending=entries();self.assertEqual(len(pending),1)
+                    pending_journal,pending_state=pending[0];records=pending_journal.records()
+                    self.assertEqual(load_run(self.root)[1]['id'],feedback['id'])
+                    if fault=='owner-before-review':
+                        with self.assertRaisesRegex(Refused,'superseded'):native.admit(self.root,'review')
+                        self.assertEqual(review_journal.records(),review_records)
+                    result=action();journal,selected=load_run(self.root)
+                    self.assertEqual(selected['id'],result['run'])
+                    if fault!='canonical':
+                        self.assertEqual(selected['id'],pending_state['id'])
+                        self.assertEqual(journal.records()[:len(records)],records)
+                    else:
+                        self.assertEqual(pending_journal.records(),records)
+                        self.assertFalse(pending_state['granted'])
+                    grants=[r for j,_ in entries() for r in j.records() if r['kind']=='grant']
+                    self.assertEqual(len(grants),1);self.assertEqual(grants[0]['data']['source'],key)
+                    self.assertEqual(selected['granted'],['fix' if route=='repair' else '1'])
+                    self.assertEqual(read_json(active_file(self.root))['run'],selected['id'])
+                    self.assertEqual(cancellation._read(self.root)['current'],cancellation.owner_key(selected))
+                    complete=journal.records();action();self.assertEqual(journal.records(),complete)
+                    self.assertEqual(old_journal.records(),old_records)
+                    self.assertEqual(review_journal.records(),review_records)
+                    self.assess()  # Actual next admission is usable, not just a running label.
+                    if route=='repair' and fault=='review-deselection':
+                        current=cancellation._read(self.root)['current'];save=cancellation.atomic_json
+                        def newer_failed_owner(path,value,*args,**kwargs):
+                            if Path(path).name=='oh-native-execution.json' and value.get('current')!=current:
+                                raise OSError('newer feedback owner still saving')
+                            return save(path,value,*args,**kwargs)
+                        with patch.object(cancellation,'atomic_json',side_effect=newer_failed_owner),self.assertRaisesRegex(OSError,'newer feedback'):
+                            native.review(self.root,'paths product.txt',self.human('/oh-review paths product.txt',session='newer-feedback'))
+                        newer_journal,_=load_run(self.root);newer_records=newer_journal.records()
+                        pointer=read_json(active_file(self.root));before=journal.records()
+                        with self.assertRaisesRegex(Refused,'newer'):action()
+                        self.assertEqual(read_json(active_file(self.root)),pointer)
+                        self.assertEqual(cancellation._read(self.root)['current'],current)
+                        self.assertEqual(journal.records(),before);self.assertEqual(newer_journal.records(),newer_records)
+
     def orphan(self, host='claude'):
         with patch.object(self,'human',return_value={'host':host,'session':'s','turn':'initial',
                           'prompt':'approve','transcript_path':str(self.parent_path)}):

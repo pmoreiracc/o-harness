@@ -274,8 +274,18 @@ The agent can preserve/integrate local work, safely update its base or propose a
 specific discard. Discard approval names the affected paths/commits and target
 commit; the agent rechecks and executes that effect. Other work, ignored files and
 nested worktrees remain protected. Workflow entry after a prerequisite still requires
-valid native request/scope provenance; checkout reconciliation itself does not resolve
-saved-run lifecycle or preserve requests across intervening decisions. Use
+valid native request/scope provenance. Discovery and selected reads separate retained
+workflow status from native interruption and unsettled execution; idle history alone
+does not block different approved work, Resume or standalone-review repairs. Historical
+grants, findings and spent review rounds remain unchanged. Recorded task lists are not
+proof of current unfinished work; merged output supplies no missing completion evidence.
+
+A necessary recovery/continuation question can retain the initiating native request
+with `decision-request --request`. After its actual answer is bound, `scope prepare
+--after` carries that request forward; `scope approve --after` retains an already
+accepted unchanged preview. These paths reverify the latest prerequisite answer and
+honor later cancellation or changed instructions, without another invocation or a new
+grant. Use
 `scope prepare --keep-checkout` (Codex `keep_checkout: true`) when preserving a
 checkout deliberately selected after reconciliation; normal scope and approval
 checks still apply. Offline information stays labelled with its freshness limit.

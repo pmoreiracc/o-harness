@@ -44,7 +44,7 @@ def _private_restart(root, state, base):
     return {'path': bound['path'], 'text': text, 'doc': bound['doc'], 'approval': approval}
 
 
-def prepare(root, state):
+def prepare(root, state, entry_request=None):
     from . import native
     from .decisions import boundary
     from .branches import fetch_base, trunk
@@ -65,6 +65,9 @@ def prepare(root, state):
                'Stop and take over ends OH execution and leaves the files unchanged.\n'
                'Old workers are revoked before continuation. Review usage and findings remain recorded.\n'
                'Affected paths: '+(', '.join(sorted(paths)) or 'none')+'\n')
+    if entry_request:
+        from .entry import request_description
+        details+='After this prerequisite, continue the initiating request: '+request_description(entry_request)+'\n'
     choices = {'resume': 'Continue', 'stop': 'Stop and take over'}
     if state.get('approved_repairs'):
         details += 'Continue retains approved supporting repairs. Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
@@ -80,6 +83,7 @@ def prepare(root, state):
              'boundary': boundary(root,state,'resume'),
              'subject': subject, 'base_observation':observed, 'question': details, 'choices': choices,
              'menu_options': list(choices.values()), 'created_at': now()}
+    if entry_request:value['entry_request']=entry_request
     if 'restart' in choices:value['private_restart'] = _private_restart(root,state,subject['base'])
     key = digest(value)
     native._immutable(native._home(root)/'decisions'/(key+'.json'), value)
@@ -156,9 +160,17 @@ def apply(root, kind, locator, *, run=None):
         source = authority.native_human(root, locator, latest=False)
         verify(root, state, kind, locator, source, replay=True)
         key = native._human_key(source,state)
+        native._continuation_order(root,state,source)
         if key in state['decisions']:
-            if state['human']['session'] != source['session']:
+            if native._human_key(state['human'],state)!=key:
                 raise Refused('A newer coordinator owns this delivery; use its current recovery decision')
+            if kind!='stop':
+                source=authority.coordinator(root,state,locator,retry_resume=True)
+                native._switchable(root,[state]+[s for _,s in native._saved_runs(root) if s['id']!=state['id']])
+                with cancellation.continuation(root,state,state['human'],replacing=True):pass
+                native._resume_binding(root,state,write=True)
+            from .receipts import index
+            index(journal,state)
             return native.select(root, state['id'])
         source = authority.coordinator(root, state, locator, retry_resume=True)
         source = source | {'decision': locator['decision']}
@@ -172,13 +184,16 @@ def apply(root, kind, locator, *, run=None):
             raise Refused('The files or Git base changed since this recovery question. Inspect the changes and present the updated choices.')
         if kind != 'stop' and current['branch'] not in (state['branch'],(intent or {}).get('branch')) and not applied:
             raise Refused('This checkout is on different work. Return to '+state['branch']+' without discarding edits, then present recovery there.')
-        for _, other in native._saved_runs(root):
-            if other['id'] != state['id'] and native._active(other):
-                raise Refused('Another delivery owns live work in this checkout; settle that delivery before changing these files')
+        native._switchable(root,[s for _,s in native._saved_runs(root) if s['id']!=state['id']])
         cancellation.register_owner(root, state | {'human': source}, active=False)
         state = _settle(root, journal, state, source)
-        native._idle(root)
-        with cancellation.continuation(root, state, source, replacing=True):
+        native._switchable(root,[state])
+        initial = native._initial_grant(root, journal, state) if kind == 'resume' and state.get('native_version') else None
+        granted = initial['tasks'] if initial else state['granted']
+        from .workflow import active_file
+        selected=active_file(root)
+        keep_other=kind=='stop' and selected.exists() and read_json(selected)['run']!=state['id']
+        with cancellation.continuation(root, state, source, replacing=True,activate=not keep_other):
             # Recheck after cleanup: an old operation may have changed files while
             # the question was open. Never discard changes the person did not see.
             settled = facts(root, state)
@@ -222,7 +237,7 @@ def apply(root, kind, locator, *, run=None):
                 elif not applied and base and not original['paths']:
                     refresh(root, original['branch'], base)
                     changed_base = git(root, 'rev-parse', 'HEAD') != original['head']
-            events = []
+            events = [{'kind': 'grant', 'data': initial}] if initial else []
             if kind == 'restart' or changed_base:
                 retained = [s for s in state['summaries'] if kind != 'restart' or
                             s.get('commit') and contained(root, original['base'], s['commit'])]
@@ -231,11 +246,11 @@ def apply(root, kind, locator, *, run=None):
                 events.append({'kind': 'delivery.recovered', 'data': {
                     'branch': git(root, 'branch', '--show-current'), 'base': git(root, 'rev-parse', 'HEAD'),
                     'restart': kind == 'restart', 'done': done, 'summaries': retained,
-                    'granted': pending[:state['config']['tasks_per_batch']] if kind == 'restart' else state['granted']}})
+                    'granted': pending[:state['config']['tasks_per_batch']] if kind == 'restart' else granted}})
             events += [{'kind': 'run.owner', 'data': {'human': source}},
                        {'kind': 'run.status', 'data': {'status': 'stopped' if kind == 'stop' else 'running'}},
                        {'kind': 'decision', 'data': {'choice': kind, 'source': key, 'recovery': locator['decision']}}]
-            native._immutable(journal.path/'decisions'/(key+'.json'), {'human': source, 'prepared': prepared})
+            native._immutable(journal.path/'decisions'/(key+'.json'), {'human': source, 'prepared': prepared,'locator':locator})
             journal.append('transition', {'events': events})
         updated = reduce(journal.records())
         if kind != 'stop':native._resume_binding(root, updated, write=True)

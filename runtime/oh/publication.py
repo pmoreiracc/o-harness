@@ -535,14 +535,10 @@ def render(root,base=None):
             from .delivery_verify import verify_run
             verify_run(root,state,current=any(d.get('commit')==git(root,'rev-parse','HEAD') for d in state['summaries']))
         states[run]=state
-        # A stopped run's commits, or those of a completed run nobody chose to publish, are published by the PR
-        # choice of the run that resumed its branch.
-        if state['status'] not in ('pr','stopped','completed'):raise Refused('A recorded human PR choice is required before exporting native evidence')
+        # Retained idle work can have pending tasks. Only the actual range grant
+        # below authorizes its completed reviewed commits, never its status.
         if state['status']=='pr':
-            grant=state.get('publication')
-            if grant and grant.get('remote_fingerprint') and destination(root)!= {k:grant[k] for k in ('remote','destination','remote_fingerprint')}:
-                raise Refused('The publication destination changed after approval. Restore the approved remote or request publication for the new destination; do not rerun completed tasks.')
-            grants[run]=grant
+            grants[run]=state.get('publication')
         done=[t for t in state['summaries'] if t['commit']==commit]
         if len(done)!=1:raise Refused('Commit has no unique authoritative task completion')
         evidence=state['commit_intents'][done[0].get('commit_key',done[0]['task'])].get('publication')
@@ -552,8 +548,19 @@ def render(root,base=None):
         records.append({'commit':commit,'evidence':evidence})
     if commits(root,base,reviewed=covered(records))!=[record['commit'] for record in records]:
         raise Refused('This branch holds commits that OH neither made nor reviewed, so OH cannot publish it as reviewed')
+    from .native import _switchable
+    _switchable(root,states.values())
+    # The latest exact full-range choice replaces earlier choices for this
+    # handoff, including after Resume returns to a run with earlier commits.
+    # Original grants remain in their journals; legacy disjoint ranges still work.
+    latest=records[-1]['evidence']['run'];covering=grants.get(latest)
+    if isinstance(covering,dict) and covering.get('commits')==[r['commit'] for r in records]:
+        grants={latest:covering}
     value=public_value(root,{}, {'schema':1,'branch':branch,'head':git(root,'rev-parse','HEAD'),'records':records,'grants':grants})
     validate_grants(value)
+    for grant in grants.values():
+        if grant.get('remote_fingerprint') and destination(root)!= {k:grant[k] for k in ('remote','destination','remote_fingerprint')}:
+            raise Refused('The publication destination changed after approval. Restore the approved remote or request publication for the new destination; do not rerun completed tasks.')
     target=next((g.get('base_branch',base) for g in grants.values() if g.get('head')==value['head']),base)
     # Full evidence is already retained and verified above. PR prose is a presentation,
     # not another journal or a machine evidence transport. The host may summarize it.
@@ -671,16 +678,16 @@ def covered(records):
 
 
 def validate_grants(value):
-    """Each run's PR choice covers the next stretch of the branch's commits: its own, after any that a stopped run
-    left on the branch before this run resumed it. Together they cover every commit once, in order."""
+    """Bind the exact reviewed range to its PR choice, ending in that run's commit.
+    Resume may interleave runs; historical disjoint grant ranges remain readable."""
     records=value['records'];grants=value.get('grants',{});at=0
-    if not isinstance(grants,dict) or not grants:raise Refused('Every run needs its retained publication grant')
+    if not isinstance(grants,dict) or not grants:raise Refused('Recorded publication grants must cover every reviewed commit')
     for run,grant in grants.items():
         if not isinstance(grant,dict) or grant.get('choice')!='pr' or not re.fullmatch('[0-9a-f]{64}',grant.get('source','')) or grant.get('branch')!=value['branch'] or not isinstance(grant.get('commits'),list) or not grant['commits'] or grant.get('head')!=grant['commits'][-1]:
             raise Refused('Publication grant does not cover the exact reviewed run commits')
         stretch=records[at:at+len(grant['commits'])];at+=len(stretch)
         own=[r['evidence']['run']==run for r in stretch]
-        if [r['commit'] for r in stretch]!=grant['commits'] or not own[-1] or own!=sorted(own) or any(r['evidence']['run'] in grants for r,mine in zip(stretch,own) if not mine):
+        if [r['commit'] for r in stretch]!=grant['commits'] or not own[-1] or any(r['evidence']['run'] in grants for r,mine in zip(stretch,own) if not mine):
             raise Refused('Publication grant does not cover the exact reviewed run commits')
-    if at!=len(records):raise Refused('Every run needs its retained publication grant')
+    if at!=len(records):raise Refused('Recorded publication grants must cover every reviewed commit')
     if records[-1]['commit']!=value['head']:raise Refused('Publication grant does not cover this branch head')

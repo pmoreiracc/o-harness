@@ -40,9 +40,10 @@ TOOLS = [
     tool('resource', 'OH workflow', 'Read a packaged workflow or role reference.', {'path':TEXT}, ['path'], read_only=True),
     tool('scope_prepare', 'Prepare scope', 'Retain the scope to present through native host tools. Grants no implementation authority.',
          {'manifest':OBJECT,'workflow':{'type':'string','enum':['deliver','design','propose']},'doc':TEXT,'track':TEXT,'human':OBJECT,
-          'keep_checkout':{'type':'boolean','description':'Keep the checkout deliberately selected after inspecting entry facts; all scope/approval/ownership checks still apply.'}}),
+          'keep_checkout':{'type':'boolean','description':'Keep the checkout deliberately selected after inspecting entry facts; all scope/approval/ownership checks still apply.'},
+          'after':{'type':'string','description':'Accepted prerequisite decision retaining the same initiating human request.'}}),
     tool('scope_approve', 'Record scope approval', 'Verify a native human reply for the identified scope; model claims cannot approve it.',
-         {'scope':TEXT,'human':OBJECT}, ['scope','human']),
+         {'scope':TEXT,'human':OBJECT,'after':TEXT}, ['scope','human']),
     tool('attempt_admit', 'Admit native agent', 'Bind a fresh agent attempt and its packet; review admission consumes its allowance once.',
          {'role':{'type':'string','enum':['assessment','implementation','analysis','review']}}, ['role']),
     tool('attempt_bind', 'Bind native agent identity', 'Bind the native child returned by the host to its prior admission.',
@@ -61,7 +62,8 @@ TOOLS = [
     tool('decision_request', 'Bind decision effect', 'Prepare native human choices. Use recover for delivery recovery: Continue, Start fresh, Stop and take over. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions. Bind the returned action from the same answer. Displays no menu and grants nothing.',
          {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1,
           'description':'Omit to renew the run’s configured review window. Supply only when the person explicitly requests a different number of additional rounds.'},'run':TEXT,'also':TEXT,
-          'repair':{'type':'string','description':'For approve-repair: bounded supporting repair and why additional approval is needed. Continues the same delivery task; does not renew allowances or waive checks.'}}, ['kind']),
+          'repair':{'type':'string','description':'For approve-repair: bounded supporting repair and why additional approval is needed. Continues the same delivery task; does not renew allowances or waive checks.'},
+          'request':OBJECT,'after':TEXT}, ['kind']),
     tool('finding_track', 'Track outside-scope findings', 'Record a saved follow-up, design note or an issue URL. Grants no implementation or issue-creation authority.',
          {'attempt':TEXT,'destination':OBJECT}, ['attempt']),
     tool('decision', 'Record human decision', 'Verify a native human decision about task/review allowance, findings or publication. Displays no menu.',
@@ -118,12 +120,13 @@ def command(name, arguments, root):
         args=['scope','prepare','--workflow',workflow]
         if 'keep_checkout' in arguments and not isinstance(arguments['keep_checkout'],bool):raise Refused('keep_checkout must be boolean')
         if arguments.get('keep_checkout'):args+=['--keep-checkout']
+        if text('after'):args+=['--after',text('after')]
         for key in ('doc','track'):
             if text(key):args+=[f'--{key}',text(key)]
         if arguments.get('human') is not None:args+=['--human',payload(root,arguments['human'])]
         if text('doc') and 'manifest' not in arguments:return args
         return args+['--',payload(root,arguments.get('manifest',{}))]
-    if name=='scope_approve':return ['scope','approve','--',text('scope',True),payload(root,arguments.get('human'))]
+    if name=='scope_approve':return ['scope','approve']+(['--after',text('after')] if text('after') else [])+['--',text('scope',True),payload(root,arguments.get('human'))]
     if name=='attempt_admit':
         role=arguments.get('role')
         if role not in ('assessment','implementation','analysis','review'):raise Refused('Invalid agent role')
@@ -135,8 +138,9 @@ def command(name, arguments, root):
     if name=='complete':return ['complete','--',text('attempt',True)]
     if name=='decision_request':
         args=['decision-request']
-        for key in ('attempt','run','also','repair'):
+        for key in ('attempt','run','also','repair','after'):
             if text(key):args+=['--'+key,text(key)]
+        if arguments.get('request') is not None:args+=['--request',payload(root,arguments['request'])]
         if 'rounds' in arguments:
             if type(arguments['rounds']) is not int or arguments['rounds']<1:raise Refused('rounds must be a positive whole number')
             args+=['--rounds',str(arguments['rounds'])]

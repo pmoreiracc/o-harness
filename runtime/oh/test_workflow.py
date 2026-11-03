@@ -193,12 +193,15 @@ class NativeFixture:
         from .authority import native_human
         self.native_human_original=native_human
         self.git('update-ref','refs/remotes/origin/main','HEAD')
-        self.native_results={};self.turn=0
+        self.native_results={};self.turn=0;self.human_occurrences={}
         self.parent_path=Path(self.temp.name)/'native-parent.jsonl';self.parent_path.write_text('',newline='\n')
         from .storage import now
         def human(root,locator,**kwargs):
+            value={'host':'codex','session':'s','turn':'human','prompt':'approve'}|locator
+            identity=tuple(value.get(k) for k in ('host','session','turn','prompt','message_id'))+(value.get('question_call') or value.get('tool_use_id'),)
+            if locator.get('at'):self.human_occurrences[identity]=locator['at']
             return {'host':'codex','session':'s','turn':locator.get('turn','human'),
-                    'prompt':locator.get('prompt','approve'),'at':now(),'record_hashes':['native-human'],
+                    'prompt':locator.get('prompt','approve'),'at':self.human_occurrences.setdefault(identity,now()),'record_hashes':['native-human'],
                     'transcript_path':str(self.parent_path)}|locator
         def coordinator(root,state,locator=None,**kwargs):return human(root,locator) if locator else state['human']
         def child(root,state,attempt,locator):
@@ -355,7 +358,7 @@ class NativeWorkflowTest(NativeFixture,unittest.TestCase):
         self.assertEqual(unused.records()[:len(prior)],prior)
         self.assertEqual((reduce(unused.records())['status'],reduce(unused.records())['granted']),('stopped',[]))
         newer=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'instructions':'A different fresh scope.'}]})
-        with self.assertRaises(Refused):native.approve_scope(self.root,newer['scope_id'],self.human())
+        with self.assertRaises(Refused):native.approve_scope(self.root,newer['scope_id'],state['human'])
         self.assertEqual(journal.records(),original)
         configure(self.root,tasks_per_batch=4,review_rounds=9)
         self.assertEqual(native.resume(self.root)['granted'],['1'])

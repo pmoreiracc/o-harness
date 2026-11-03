@@ -65,17 +65,27 @@ def _checkpoint(root,state,kind,details):
             'checkpoint_status':state['status'],'publication_destination':dest,'unavailable':unavailable}
 
 
-def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None):
+def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,request=None,after=None):
     from .native import _locked, _home, _immutable, _attempt, _saved_subject, _active
     with _locked(root):
         journal,state=load_run(root,run)
+        entry_request=None
+        if request is not None:
+            if kind not in ('recover','resume','stop'):raise Refused('Retain an initiating request only for its recovery/continuation prerequisite')
+            from .entry import request_source
+            entry_request=request_source(root,request,after)
+            entry_request={k:v for k,v in entry_request.items() if k not in ('prerequisite_human','prerequisite')}
+        elif after is not None:raise Refused('A prerequisite identity requires its initiating request locator')
         if repair is not None and kind!='approve-repair':raise Refused('A repair description belongs to approve-repair')
         if kind=='recover':
             from .recovery import prepare
-            return prepare(root,state)
+            return prepare(root,state,entry_request)
         task=next_task(state|{'status':'running'}) or next((t for t in state['tasks'] if t['id'] not in state['done']),state['tasks'][-1])
         subject=_saved_subject(state)
         details=f'Work: {subject}\nBranch: {state["branch"]}'
+        if entry_request:
+            from .entry import request_description
+            details+='\nAfter this prerequisite, continue the initiating request: '+request_description(entry_request)
         if kind=='grant-review':
             if _active(state):raise Refused('Retain the current native attempt before asking for more review allowance')
             count=state['config']['review_rounds'] if rounds is None else rounds
@@ -125,6 +135,7 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None):
             label='Approve both actions'
         value={'kind':kind,'run':state['id'],'attempt':attempt,'boundary':boundary(root,state,kind,attempt),
                'question':details+'\n\n'+label+'?','label':label,'created_at':now()}
+        if entry_request:value['entry_request']=entry_request
         if kind=='grant-review':value['rounds']=count
         if kind=='approve-repair':value.update(task=task['id'],repair=repair.strip())
         checkpoint=_checkpoint(root,state,kind,f'Work: {subject}\nBranch: {state["branch"]}') if also is None and attempt is None else None

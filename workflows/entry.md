@@ -18,6 +18,9 @@ HEAD, local edits/commits and the observed base. Saved status labels and histori
 reports alone establish neither live execution nor unfinished work. Merged output
 does not create missing review/completion evidence. Preserve grants, spent allowances,
 findings and existing publication destinations.
+Discovery and selected reads now separate the workflow's retained `status` from
+`execution` interruption/cleanup facts. Use those facts rather than a status-only
+Stop request; see `workflows/recovery.md` for idle selection and retained requests.
 
 Use native Git to inspect the full staged/unstaged/untracked changes, local commits,
 other worktrees and the relevant plan on both HEAD and the observed base. Returned
