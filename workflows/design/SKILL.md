@@ -12,8 +12,9 @@ If the subject is missing, discover relevant saved work before asking for it.
 Read `workflows/entry.md` before current planning-readiness advice or branch selection.
 Reconcile saved/local/origin differences while preserving useful local drafting work.
 
-Read `plans path`, resolve an undecided repo/private location once and show its actual
-folder. Respect project policy; OH adds no mandatory ADR process.
+Read `plans path`. If the repo/private location is undecided, call Claude
+`AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
+Show the actual folder for the selected location. Respect project policy.
 
 Prepare one bounded planning task for the requested initiative with `scope prepare
 <manifest.json> --workflow design --human <native-locator.json>` (Codex `scope_prepare`).
@@ -44,7 +45,8 @@ question names the decision required and its effect instead of silently choosing
 Repository designs need human merge of the reviewed design PR to become approved.
 Private designs need native acceptance of their reviewed contents: show the complete
 artifact, prepare `decision-request approve-private --attempt ID`, present its
-question using `workflows/decisions.md`, and bind the answer with `decision approve-private`.
+question with Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+using `workflows/decisions.md`. Bind acceptance with `decision approve-private`.
 Refinement returns to scoped authoring, document checks and a fresh review. Accepting
 a proposed decision document does not decide its underlying product question.
 

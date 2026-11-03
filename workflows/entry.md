@@ -40,7 +40,8 @@ If discarding is the appropriate resolution, show the exact affected paths and l
 commits, the destination commit and what will be lost before asking native human
 approval. An existing explicit approval of that same effect needs no second question.
 Use the saved delivery's existing recovery decision when applicable; otherwise use
-ordinary native conversation for the specific Git disposition. Stop preserves files;
+Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+for a separate Git disposition question, with the shared direct-reply fallback. Stop preserves files;
 it is not discard permission. Offer preservation/isolation where appropriate without
 making backups or stashes mandatory after explicit discard approval.
 

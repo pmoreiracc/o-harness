@@ -44,7 +44,9 @@ build a similarity parser or silently absorb a changed scope.
 For a matching saved run, read `workflows/recovery.md` and `workflows/decisions.md`
 before the first question. Delivery uses `decision-request recover` and its Continue,
 Start fresh, Stop and take over choices; bind its returned action with `decision`.
-Other workflows use Resume. Settle prior native work, then bind the same answer;
+Other workflows use Resume. Call Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` at these questions. Settle prior native work,
+then bind the same answer;
 continue its actual phase without new scope, repeated questions or renewed allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
 If a real prerequisite question intervenes, retain its initiating request with
@@ -131,7 +133,8 @@ Do not hand-edit OH journals, snapshots, receipts, counters or configuration fil
 The explicit workflow registers its checkout. If a project name is ambiguous, obtain
 that name and use `init --name`. For delivery without checks, register the project's
 existing affected checks from its instructions/CI; preserve configured checks. Read
-`plans path` before planning and resolve an undecided repo/private location once.
+`plans path` before planning. If the repo/private location is undecided, call Claude
+`AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
 Configuration changes use `config set`/`unset` and the person's authorized settings.
 
 Before preparing new work, use the project's configured base and an appropriate work
@@ -348,7 +351,8 @@ be admitted. Normally renew the run's snapshotted review window: call `decision-
 grant-review` without `--rounds` (Codex: omit `rounds`). Do not choose one round because
 only one more review seems necessary. Override the count only when the person explicitly
 requests a different count; never enlarge a one-round request to the configured window.
-Read `workflows/decisions.md` before presenting that question.
+Read `workflows/decisions.md` before calling Claude `AskUserQuestion` or Codex
+Default mode `functions.request_user_input_async` for that question.
 When the last available review leaves findings needing another round, obtain that renewal
 before starting the next repair/review cycle. Retain an already-running step before asking;
 an allowance question neither cancels that step nor authorizes out-of-scope repairs.
@@ -366,7 +370,9 @@ it. A failed completion is repaired idempotently from retained evidence. Select 
 next task from external completion records, under the same finite task batch. At a batch
 boundary ask whether to continue the projected next batch, publish completed work or
 stop through the completed-task checkpoint in `workflows/decisions.md`. Present every
-returned option and bind the chosen action from that same question; silence grants nothing.
+returned option with Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async`, or use the shared direct-reply path. Bind the
+chosen action from that same question; silence grants nothing.
 Follow the `next_action` in the returned `continuation`: use `decision-request continue`
 when a completed batch leaves tasks pending, or `decision-request publish` when all tasks
 are complete. Preparing that question does not publish anything. A request not to push

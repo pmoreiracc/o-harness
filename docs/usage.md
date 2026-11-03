@@ -205,7 +205,7 @@ for what has been tested and the remaining limits.
 Every work entry checks saved work before preparing a new scope. For example, repeat
 `oh-design agent-pipeline` in the same checkout to find its interrupted draft or
 pending decision. OH asks "Resume agent-pipeline on design/agent-pipeline?" with
-`Resume` and `Not now`, even when you named the initiative. Nothing continues before
+`Resume saved work` and `Stop and take over`, even when you named the initiative. Nothing continues before
 your answer. Propose and quick fixes compare the requested outcome with saved scope;
 you do not need to reproduce the original wording. With no subject, OH shows relevant
 unfinished work first. Declining leaves it intact.

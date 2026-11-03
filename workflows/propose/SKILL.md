@@ -12,8 +12,9 @@ If the subject is missing, discover relevant saved work before asking for it.
 Read `workflows/entry.md` before current plan/readiness claims or branch selection.
 Reconcile the relevant saved/local/origin evidence before judging existing work.
 
-Read `plans path`, resolve an undecided repo/private location once and show its actual
-folder. Respect project policy; planning alone does not authorize product implementation.
+Read `plans path`. If the repo/private location is undecided, call Claude
+`AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
+Show the actual folder for the selected location. Respect project policy.
 
 Prepare one bounded routing task with `scope prepare <manifest.json> --workflow propose
 --human <native-locator.json>` (Codex `scope_prepare`). That request authorizes analysis;
@@ -31,7 +32,8 @@ with the actual recommendation/question; no unnecessary document or review is re
 ## 3. Approve the actual additions
 
 Before additions are written, prepare `decision-request approve-proposal --attempt ID`
-for the retained analysis, then present its approve/refine/cancel question using
+for the retained analysis, then call Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` with its approve/refine/cancel choices using
 `workflows/decisions.md`. Bind approval of the latest analysis report with `decision
 approve-proposal` and its actual native human locator. Refinement revises the unapproved
 proposal; neither permission to analyze nor an author report approves the additions.

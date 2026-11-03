@@ -221,7 +221,7 @@ class ControlsTest(NativeFixture,unittest.TestCase):
             native.decision(self.root,'stop',direct('s','Stop now'))
             self.assertEqual(native.resume(self.root)['status'],'stopped')
             native.resume(self.root,direct('fresh-parent','/oh-resume'))
-            native.decision(self.root,'stop',direct('fresh-parent','Stop and take over'))
+            native.decision(self.root,'stop',direct('fresh-parent','/oh-stop'))
             self.assertEqual(native.resume(self.root)['status'],'stopped')
             native.resume(self.root,direct('fresh-parent','Resume the approved work.'))
             with self.assertRaises(Refused):

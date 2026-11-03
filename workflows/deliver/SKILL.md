@@ -20,14 +20,17 @@ Interpret the requested work as follows:
 
 - No arguments: first show relevant unfinished saved work. For matching work, read
   the recovery and decision references and prepare its Resume question before asking;
-  never add a preliminary Resume question. Otherwise use `plans list`, show ready designs,
-  unavailable reasons and limits, and ask which design or quick fix the person wants.
+  never add a preliminary Resume question. Otherwise use `plans list` and show ready designs,
+  unavailable reasons and limits. For concrete choices, call Claude `AskUserQuestion` or
+  Codex Default mode `functions.request_user_input_async` to select a design or quick fix.
+  Use ordinary chat for the description of a quick fix.
   The empty invocation itself grants no continuation authority.
 - Approved design number and optional track: use `scope prepare --doc NNNN
   [--track TRACK] --human <native-locator.json>` (Codex `scope_prepare`). The helper
   validates approval and selects the parsed tasks. Do not rebuild them as an arbitrary
-  manifest or ask for another trigger. Missing track/selection needs one ordinary
-  question; preserve the answer.
+  manifest or ask for another trigger. For a missing track or concrete selection, call
+  Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+  once and preserve the answer.
 - A bounded change in prose: first compare saved quick-fix scope and reports with
   the requested outcome; offer to resume the same work without requiring identical wording.
   For genuinely new work, inspect the relevant code and correct base, then prepare
@@ -42,11 +45,12 @@ Interpret the requested work as follows:
 
 ## 2. Bind the required scope approval
 
-Read `workflows/decisions.md` before presenting scope. For a quick fix, Claude's
-native plan viewer Accept is the one scope approval;
-Codex uses a native question or direct human reply. Bind that actual acceptance with
-`scope approve`. For Codex, show the complete scope preview and the returned `approval`
-question and choices; retain its decision identity when binding the reply. An initiating
+Read `workflows/decisions.md` before presenting scope. For a quick fix, use Claude's
+native plan viewer **Accept** or Codex Plan mode's native **Implement** when that plan
+surface is available. Show the complete unchanged scope preview there and bind the
+actual acceptance with `scope approve`. In Codex Default mode, show the preview and
+call `functions.request_user_input_async` with the returned `approval` question and
+choices. Retain its decision identity and use the shared direct-reply fallback. An initiating
 human locator identifies the request and does not replace this scope acceptance.
 Revisions replace the unapproved preview and receive approval of the
 new contents. Inspect original user edits and branch ownership; do not reset, stash,
@@ -95,15 +99,16 @@ and human authorization.
 When a specific supporting repair genuinely needs additional authority, explain its
 evidence, bounded change and why approval is needed. Prepare `decision-request approve-repair
 --repair "<change, reason and limits>"` (MCP `decision_request`, kind `approve-repair`,
-`repair` text). Present its returned **Approve repair and continue / Not now** choices
-through the native host and bind the answer with `decision`, following
+`repair` text). Present its returned **Approve repair and continue / Stop and take over** choices
+with Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`.
+Bind the returned action with `decision`, following
 `workflows/decisions.md`. Retain an active worker before presenting the decision.
 
 After approval, admit a fresh implementation agent and continue the same task through
 required checks, fresh review and completion. The original design, task list, dependencies
 and remaining allowances stay intact; the approved repair accompanies the original scope
-in author and reviewer packets. Earlier readiness is superseded, not erased. Not now
-leaves the work pending; it does not stop or discard it.
+in author and reviewer packets. Earlier readiness remains in history. Stop and take
+over stops the run and preserves local work and grants.
 
 This decision cannot authorize a new product initiative, change project policy, waive
 checks, add tasks, renew reviews or publish. A different product outcome belongs in the
@@ -114,7 +119,9 @@ active design with a combined quick-fix manifest: that starts separate work.
 
 ## 4. Continue or hand off
 
-At a real batch/allowance/concern boundary ask the native human decision once. Follow
+At a real batch, allowance or concern boundary, call Claude `AskUserQuestion`
+or Codex Default mode `functions.request_user_input_async` once, following the
+shared single-action and direct-reply paths. Follow
 the shared completion checkpoint in `workflows/runtime.md` and the `continuation`
 returned by `complete`, including its `next_action` for local-only work.
 If PR preparation fails, repair it within the approved scope

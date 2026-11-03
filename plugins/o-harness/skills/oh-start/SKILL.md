@@ -5,7 +5,8 @@ disable-model-invocation: true
 ---
 Load `workflows/oh/SKILL.md` through OH's resource entry. Select the requested
 workflow after saved-work discovery; show unfinished work before asking for a missing
-subject, and ask once whether to resume or choose different work. Follow its
+subject. For concrete work choices call Claude `AskUserQuestion` or Codex
+Default mode `functions.request_user_input_async` as applicable. Follow its
 native-agent workflow and report actual results.
 
 Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
