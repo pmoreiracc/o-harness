@@ -123,3 +123,26 @@ class SelectTestsTest(unittest.TestCase):
             self.assertEqual(failed.exception.code, 2)
             self.assertIn('test module import failed', errors.getvalue())
             run.assert_not_called()
+
+        # PR partitions also preserve discovery and report exactly one owner per ID.
+        names=selector.select()
+        ids=selector.test_ids(names)
+        partitions=selector.windows_shards(names,4)
+        per_shard=[[name for members in shard.values() for name in members] for shard in partitions]
+        self.assertTrue(all(per_shard))
+        self.assertCountEqual(per_shard[0]+per_shard[1],ids)
+        self.assertFalse(set(per_shard[0])&set(per_shard[1]))
+        self.assertTrue(all(selector.windows_shards(['oh.test_gates','oh.test_authority'],4)))
+        with self.assertRaisesRegex(ValueError,'Could not load the Windows test selection'):
+            selector.windows_shards(['oh.test_no_such_module'],4)
+
+        class Shared(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                pass
+
+        shared=Shared()
+        with patch.object(selector,'test_cases',return_value=[shared]), \
+             patch.dict(selector.WINDOWS_LONG_CASES,{shared.id():100}):
+            partitions=selector.windows_shards(['example'],4)
+        self.assertEqual(partitions,[{__name__:[shared.id()]},{}])

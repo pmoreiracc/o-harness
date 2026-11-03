@@ -53,6 +53,10 @@ and when each module starts. A change to a shared `test_fixtures_*.py` module
 selects its consumers, while editing a consumer alone does not select its siblings.
 Keep normal LF fixture writes portable. Mark tests that deliberately exercise
 Windows-specific behavior with a comment naming the behavior.
+The required `windows` check waits for both partitions of the same selection.
+Each test runs in one partition, with shared module and class setup kept together.
+Each job logs the full test ID digest for timing comparisons and an assignment
+digest that the required check uses to verify the two jobs agreed on the split.
 
 When comparing Windows test performance, use the same expanded test IDs on the
 baseline and candidate and repeat on the same runner image. Compare test time
