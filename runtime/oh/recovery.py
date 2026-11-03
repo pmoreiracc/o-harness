@@ -1,5 +1,6 @@
 """Human-selected delivery recovery using the existing journal, Git and tool gates."""
 from .system import Path
+from subprocess import SubprocessError
 import time
 from .storage import Refused, atomic_json, changes, digest, git, now, read_json
 from .verification import tree
@@ -31,8 +32,10 @@ def _private_restart(root, state, base):
     text = state['scope_snapshot']['documents'][bound['path']]
     if kept:
         summary = kept[-1]
-        review = next(a for a in state['attempts'] if a['id'] == summary['review'])
-        artifact = review['artifact_snapshots'][bound['path']]
+        review = next((a for a in state['attempts'] if a['id'] == summary['review']), {})
+        artifact = review.get('artifact_snapshots',{}).get(bound['path'])
+        if not artifact:
+            raise Refused('The reviewed private design snapshot is unavailable.')
         text = Path(artifact['path']).read_text()
         import hashlib
         if hashlib.sha256(text.encode()).hexdigest() != artifact['sha256']:
@@ -44,50 +47,68 @@ def _private_restart(root, state, base):
     return {'path': bound['path'], 'text': text, 'doc': bound['doc'], 'approval': approval}
 
 
-def prepare(root, state, entry_request=None):
+def prepare(root, state, entry_request=None, *, stop_boundary):
     from . import native
-    from .decisions import boundary
-    from .branches import fetch_base, trunk
+    from .decisions import boundary, save_offer, TAKE_OVER
+    from .branches import contained, fetch_base, trunk
     if state['workflow'] != 'deliver' or state.get('published'):
         raise Refused('This recovery gate is for unpublished delivery; use the saved planning or publication step')
-    name = trunk(root, state['config'])
-    observed=fetch_base(root,name)
-    subject = facts(root, state)
-    paths = set(subject['paths'])
-    paths.update(path for path in subject['artifacts'] if path != 'approval')
-    if subject['base']:
-        paths.update(git(root, 'diff', '--name-only', '-z', subject['base']+'...HEAD').split('\0'))
-    paths.discard('')
-    details = (f'Work: {native._saved_subject(state)}\nBranch: {subject["branch"]}\n'
-               'Base freshness: '+observed['freshness']+(' — '+observed['reason'] if observed['reason'] else '')+'\n'
-               'Continue keeps existing changes and finishes the approved delivery.\n'
-               'Start fresh discards the listed local changes and this branch’s unmerged delivery work; no backup is made.\n'
+    observed = None
+    unavailable = ''
+    try:
+        name = trunk(root, state['config'])
+        observed = fetch_base(root, name)
+        subject = facts(root, state)
+        paths = set(subject['paths'])
+        paths.update(path for path in subject['artifacts'] if path != 'approval')
+        if subject['base']:
+            paths.update(git(root, 'diff', '--name-only', '-z', subject['base']+'...HEAD').split('\0'))
+        paths.discard('')
+    except (OSError, Refused, ValueError, SubprocessError) as exc:
+        subject = None
+        unavailable = str(exc)
+    branch = subject['branch'] if subject else state['branch']
+    details = (f'Work: {native._saved_subject(state)}\nBranch: {branch}\nSaved run: {state["id"]}\n'
                'Stop and take over ends OH execution and leaves the files unchanged.\n'
-               'Old workers are revoked before continuation. Review usage and findings remain recorded.\n'
-               'Affected paths: '+(', '.join(sorted(paths)) or 'none')+'\n')
+               'Old execution is settled before any action. Review usage and findings remain recorded.\n')
+    if observed:
+        details += 'Base freshness: '+observed['freshness']+(' — '+observed['reason'] if observed['reason'] else '')+'\n'
     if entry_request:
         from .entry import request_description
         details+='After this prerequisite, continue the initiating request: '+request_description(entry_request)+'\n'
-    choices = {'resume': 'Continue', 'stop': 'Stop and take over'}
-    if state.get('approved_repairs'):
-        details += 'Continue retains approved supporting repairs. Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
-    if subject['base'] and subject['branch'] in (state['branch'],state.get('recovery_intent',{}).get('branch')):
-        choices = {'resume': 'Continue', 'restart': 'Start fresh', 'stop': 'Stop and take over'}
-        details += 'Restart base: '+subject['base_ref']+' ('+subject['base'][:12]+').\n'
-        from .branches import contained
-        kept = {s['task'] for s in state['summaries'] if s.get('commit') and contained(root, subject['base'], s['commit'])}
-        batch = [t['id'] for t in state['tasks'] if t['id'] not in kept][:state['config']['tasks_per_batch']]
-        details += 'Restart authorizes this task batch: '+', '.join(batch)+'. No additional review rounds.\n'
+    choices = {}
+    private_restart = None
+    if subject:
+        choices['resume'] = 'Continue'
+        details += 'Continue keeps existing changes, including approved repairs, and finishes the approved delivery.\n'
+        details += 'Affected paths: '+(', '.join(sorted(paths)) or 'none')+'\n'
+        if subject['base'] and subject['branch'] in (state['branch'],state.get('recovery_intent',{}).get('branch')):
+            try:
+                private_restart = _private_restart(root, state, subject['base'])
+                kept = {s['task'] for s in state['summaries'] if s.get('commit') and contained(root, subject['base'], s['commit'])}
+                batch = [t['id'] for t in state['tasks'] if t['id'] not in kept][:state['config']['tasks_per_batch']]
+            except (OSError, Refused, ValueError, SubprocessError) as exc:
+                details += 'Start fresh unavailable. Restore the saved restart evidence before trying again. '+str(exc)+'\n'
+            else:
+                choices['restart'] = 'Start fresh'
+                details += 'Start fresh discards the listed local changes and this branch’s unmerged delivery work; no backup is made.\n'
+                if state.get('approved_repairs'):
+                    details += 'Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
+                details += 'Restart base: '+subject['base_ref']+' ('+subject['base'][:12]+').\n'
+                details += 'Restart authorizes this task batch: '+', '.join(batch)+'. No additional review rounds.\n'
+    else:
+        details += 'Continue and Start fresh unavailable. Restore the required recovery input before trying again. '+unavailable+'\n'
+    choices['stop'] = TAKE_OVER
     details += '\nHow would you like OH to proceed with this delivery?'
     value = {'kind': 'recover', 'run': state['id'], 'attempt': None, 'presentation': 'recovery-menu',
              'boundary': boundary(root,state,'resume'),
+             'stop_boundary': stop_boundary, 'bound_question': True,
              'subject': subject, 'base_observation':observed, 'question': details, 'choices': choices,
              'menu_options': list(choices.values()), 'created_at': now()}
     if entry_request:value['entry_request']=entry_request
-    if 'restart' in choices:value['private_restart'] = _private_restart(root,state,subject['base'])
-    key = digest(value)
-    native._immutable(native._home(root)/'decisions'/(key+'.json'), value)
-    return {'decision': key, 'question': details, 'options': value['menu_options'],
+    if 'restart' in choices:value['private_restart'] = private_restart
+    key = save_offer(root,value)
+    return {'decision': key, 'question': value['question'], 'options': value['menu_options'],
             'base_observation':observed,
             'actions': {label: action for action, label in choices.items()},
             'human_locator': 'Bind the selected action from this one native question with decision.'}
@@ -176,14 +197,15 @@ def apply(root, kind, locator, *, run=None):
         source = source | {'decision': locator['decision']}
         verify(root, state, kind, locator, source)
         original = prepared['subject']
-        current = facts(root, state)
-        intent = state.get('recovery_intent')
-        retry = intent and intent['key'] == key and intent['kind'] == kind
-        applied = retry and current['branch'] == intent['branch'] and current['head'] == intent['base'] and not current['paths']
-        if kind == 'restart' and current != original and not applied:
-            raise Refused('The files or Git base changed since this recovery question. Inspect the changes and present the updated choices.')
-        if kind != 'stop' and current['branch'] not in (state['branch'],(intent or {}).get('branch')) and not applied:
-            raise Refused('This checkout is on different work. Return to '+state['branch']+' without discarding edits, then present recovery there.')
+        if kind != 'stop':
+            current = facts(root, state)
+            intent = state.get('recovery_intent')
+            retry = intent and intent['key'] == key and intent['kind'] == kind
+            applied = retry and current['branch'] == intent['branch'] and current['head'] == intent['base'] and not current['paths']
+            if kind == 'restart' and current != original and not applied:
+                raise Refused('The files or Git base changed since this recovery question. Inspect the changes and present the updated choices.')
+            if current['branch'] not in (state['branch'],(intent or {}).get('branch')) and not applied:
+                raise Refused('This checkout is on different work. Return to '+state['branch']+' without discarding edits, then present recovery there.')
         native._switchable(root,[s for _,s in native._saved_runs(root) if s['id']!=state['id']])
         cancellation.register_owner(root, state | {'human': source}, active=False)
         state = _settle(root, journal, state, source)
@@ -194,19 +216,18 @@ def apply(root, kind, locator, *, run=None):
         selected=active_file(root)
         keep_other=kind=='stop' and selected.exists() and read_json(selected)['run']!=state['id']
         with cancellation.continuation(root, state, source, replacing=True,activate=not keep_other):
-            # Recheck after cleanup: an old operation may have changed files while
-            # the question was open. Never discard changes the person did not see.
-            settled = facts(root, state)
-            if kind == 'restart' and settled != original and not applied:
-                raise Refused('Old work changed the files during cleanup. Inspect the result and present the updated recovery choices.')
-            if kind != 'restart':
-                if settled['branch'] != original['branch']:
-                    raise Refused('The selected branch changed during recovery; return to '+original['branch']+' and retry the same answer without discarding edits.')
-                # Continue preserves the current candidate, including an old worker's
-                # final writes. Only destructive restart binds the exact shown files.
-                current = original = settled
-            changed_base = bool(applied) or current['branch'] != state['branch']
+            changed_base = False
             if kind != 'stop':
+                # Recheck after cleanup before changing branch or discarding files.
+                settled = facts(root, state)
+                if kind == 'restart' and settled != original and not applied:
+                    raise Refused('Old work changed the files during cleanup. Inspect the result and present the updated recovery choices.')
+                if kind == 'resume':
+                    if settled['branch'] != original['branch']:
+                        raise Refused('The selected branch changed during recovery; return to '+original['branch']+' and retry the same answer without discarding edits.')
+                    # Continue preserves any final writes from the previous worker.
+                    current = original = settled
+                changed_base = bool(applied) or current['branch'] != state['branch']
                 base = original['base']
                 merged = base and contained(root, base, original['head'])
                 if not applied and (kind == 'restart' or merged and not original['paths'] and
@@ -249,7 +270,8 @@ def apply(root, kind, locator, *, run=None):
                     'granted': pending[:state['config']['tasks_per_batch']] if kind == 'restart' else granted}})
             events += [{'kind': 'run.owner', 'data': {'human': source}},
                        {'kind': 'run.status', 'data': {'status': 'stopped' if kind == 'stop' else 'running'}},
-                       {'kind': 'decision', 'data': {'choice': kind, 'source': key, 'recovery': locator['decision']}}]
+                       {'kind': 'decision', 'data': {'choice': kind, 'source': key, 'recovery': locator['decision'],
+                                                    **({'target_only': True} if keep_other else {})}}]
             native._immutable(journal.path/'decisions'/(key+'.json'), {'human': source, 'prepared': prepared,'locator':locator})
             journal.append('transition', {'events': events})
         updated = reduce(journal.records())

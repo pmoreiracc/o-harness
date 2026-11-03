@@ -76,7 +76,10 @@ For an unfinished delivery, use `decision-request recover --run ID` (Codex
 question: **How would you like OH to proceed with this delivery?** Show the
 returned work, branch, affected paths, restart base and task allowance with its
 short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
-the returned options; never substitute a generic Resume/Not now question.
+the returned options with Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async`, following the shared waiting and fallback rules.
+If a required input is missing, explain the reason returned with the question. If only
+Stop is available, show the full prepared question and bind the explicit chat answer.
 
 Bind the chosen action from the returned `actions` map with `decision` and that
 same human locator, including its decision ID. Continue uses `resume`, Start fresh
@@ -128,13 +131,17 @@ first, present its actual question, and preserve the answer while settling old n
 
 Show the selected subject, branch, latest result, next step and remaining allowance.
 Prepare the Resume decision for that run before presenting its native question, then
-use the returned question and positive option unchanged. Offer the non-granting option
-as well. Wait for the actual answer before continuation, legacy adoption or retaining
-an old result. A matching invocation is not that answer. Preserve an already-valid
-Resume answer through recovery; never ask again merely because a helper failed.
+call Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+with the returned question and both choices. Bind Stop and take over with
+`decision stop` for the same run and decision ID. It settles the run's old native
+work and preserves its files. Wait for the actual answer before continuation,
+legacy adoption or retaining an old result. A matching invocation is not that
+answer. If old operations or native saves are still settling, retry the same
+Resume or Stop answer after a short wait.
 
 With no subject, show relevant unfinished work first. If several runs plausibly match,
-ask which one, then prepare Resume for that run. A clearly different request selects
+use Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
+to identify the intended run, then prepare its Resume decision. A clearly different request selects
 no unrelated work. Completed work presents its result or remaining publication step.
 
 Read selected facts with `resume --run ID` (Codex `resume` with `run`). After the Resume

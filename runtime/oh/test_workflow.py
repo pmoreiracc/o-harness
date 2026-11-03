@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from .config import load
+from .authority import coordinator as native_coordinator
 from .storage import Refused, atomic_json, identifier, Journal
 from .workflow import load_run, reduce
 from .telemetry import collect, connect, analytics, emit, usage_values
@@ -109,6 +110,111 @@ class WorkflowTest(WorkflowFixture):
 
 
 class NativeWorkflowTest(NativeFixture):
+    def test_takeover_choice_stops_only_its_prepared_saved_work(self):
+        from . import decisions,native
+        from .storage import now
+        self.approve()
+        journal,original=load_run(self.root)
+        note=self.root/'local.txt';note.write_text('Preserve this edit.\n',newline='\n')
+        def answer(offer,prompt='Stop and take over',options=None):
+            return self.human(prompt,decision=offer['decision'],question=offer['question'],question_at=now(),
+                              question_options=offer['options'] if options is None else options,via='question')
+        offer=decisions.prepare(self.root,'resume')
+        self.assertEqual(offer['actions'],{'Resume saved work':'resume','Stop and take over':'stop'})
+        for invalid in (answer(offer,'Not now'),answer(offer,'Yes'),answer(offer,options=['Stop and take over'])):
+            with self.assertRaises(Refused):native.decision(self.root,'stop',invalid)
+        for via in ('question','text'):
+            unbound=answer(offer)|{'via':via}
+            unbound.pop('decision')
+            with self.assertRaisesRegex(Refused,'bound decision effect'):
+                native.decision(self.root,'stop',unbound)
+        with self.assertRaises(Refused):native.decision(self.root,'resume',answer(offer))
+        native.decision(self.root,'pause',self.human('pause'))
+        with self.assertRaisesRegex(Refused,'saved work changed'):native.decision(self.root,'stop',answer(offer))
+        accepted=answer(decisions.prepare(self.root,'resume'))
+        self.assertEqual(native.decision(self.root,'stop',accepted)['status'],'stopped')
+        records=journal.records()
+        self.assertEqual(native.decision(self.root,'stop',accepted)['status'],'stopped')
+        self.assertEqual(journal.records(),records)
+        self.assertEqual(load_run(self.root)[1]['granted'],original['granted'])
+        self.assertEqual(note.read_text(),'Preserve this edit.\n')
+
+        native.resume(self.root,self.resume_choice())
+        legacy=self.human('Stop and take over')
+        with patch('oh.native._affirmed',return_value=True):
+            native.decision(self.root,'stop',legacy)
+        records=journal.records()
+        self.assertEqual(native.decision(self.root,'stop',legacy)['status'],'stopped')
+        self.assertEqual(journal.records(),records)
+
+        native.resume(self.root,self.resume_choice())
+        repair=decisions.prepare(self.root,'approve-repair',repair='Repair the required fixture input.')
+        with patch('oh.native._subject',side_effect=Refused('Candidate damaged after the question')):
+            self.assertEqual(native.decision(self.root,'stop',answer(repair))['status'],'stopped')
+        self.assertEqual(note.read_text(),'Preserve this edit.\n')
+
+    def test_codex_plan_approval_binds_the_latest_native_plan_to_the_exact_scope(self):
+        from datetime import datetime, timedelta
+        from . import native
+        from .workflow import active_file
+        offer=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+        preview=Path(offer['preview']).read_text()
+        self.assertIn(offer['scope_id'],preview)
+        self.git('switch','-qc','other-scope')
+        other=native.prepare_scope(self.root,{'tasks':self.tasks[:1]},keep_checkout=True)
+        from .storage import read_json
+        created=max(datetime.fromisoformat(read_json(Path(scope['preview']).with_name('scope.json'))['created_at'])
+                    for scope in (offer,other))
+        home=Path(self.temp.name)/'host';path=home/'.codex/sessions/native-plan.jsonl'
+        path.parent.mkdir(parents=True)
+        def save(text,*,mode='plan',intervening=False,accept_mode='default',displayed=True):
+            at=created
+            def row(kind,**payload):
+                nonlocal at
+                # The synthetic transcript must establish order on clocks with coarse resolution.
+                at+=timedelta(milliseconds=1)
+                return {'type':kind,'timestamp':at.isoformat(),'payload':payload}
+            def user(turn,text):
+                return row('event_msg',type='item_completed',turn_id=turn,
+                           item={'type':'UserMessage','id':turn+'-input','content':[{'type':'text','text':text}]})
+            def context(turn,mode):
+                return row('turn_context',turn_id=turn,cwd=str(self.root),collaboration_mode={'mode':mode})
+            rows=[row('session_meta',id='native-plan',cwd=str(self.root),source='cli'),
+                  context('preview',mode),user('preview','Show the scope')]
+            if displayed:rows.append(row('event_msg',type='item_completed',turn_id='preview',item={'type':'Plan','text':text}))
+            if intervening:rows.append(user('refine','Revise the plan'))
+            rows.extend([context('accept',accept_mode),user('accept','Implement the plan.')])
+            path.write_text(''.join(json.dumps(r)+'\n' for r in rows),encoding='utf-8',newline='\n')
+        human={'host':'codex','session':'native-plan','turn':'accept','transcript_path':str(path),'prompt':'Implement the plan.'}
+        with patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex'),'CODEX_THREAD_ID':'native-plan'}), \
+                patch('oh.authority.native_human',side_effect=self.native_human_original), \
+                patch('oh.authority.coordinator',side_effect=native_coordinator):
+            for kwargs in ({'mode':'default'},{'intervening':True},{'accept_mode':'plan'},{'displayed':False}):
+                save(preview,**kwargs)
+                with self.assertRaises(Refused):native.approve_scope(self.root,offer['scope_id'],human)
+                self.assertFalse(active_file(self.root).exists())
+            save(preview+'\nExtra work.')
+            with self.assertRaisesRegex(Refused,'accepted changed scope'):native.approve_scope(self.root,offer['scope_id'],human)
+            self.assertFalse(active_file(self.root).exists())
+            readable=Path(offer['preview'])
+            readable.chmod(0o600)
+            readable.write_text(preview+'\nExtra work.',newline='\n')
+            with self.assertRaisesRegex(Refused,'accepted changed scope'):native.approve_scope(self.root,offer['scope_id'],human)
+            self.assertFalse(active_file(self.root).exists())
+            readable.write_text(preview,newline='\n')
+            save(preview)
+            with self.assertRaisesRegex(Refused,'accepted changed scope'):
+                native.approve_scope(self.root,other['scope_id'],human)
+            self.assertFalse(active_file(self.root).exists())
+            self.git('switch','-q','work')
+            result=native.approve_scope(self.root,offer['scope_id'],human)
+            journal,state=load_run(self.root)
+            self.assertEqual(state['accepted_scope'],preview)
+            self.assertEqual(result['granted'],['1'])
+            records=journal.records()
+            self.assertEqual(native.approve_scope(self.root,offer['scope_id'],human)['run'],result['run'])
+            self.assertEqual(journal.records(),records)
+
     def test_failed_verification_log_references_survive_journal_status_and_handoff(self):
         from . import native
         from .storage import read_json
@@ -164,6 +270,7 @@ class NativeWorkflowTest(NativeFixture):
 
     def test_scope_needs_native_approval_and_preserves_its_immutable_task_window(self):
         from . import native
+        from .storage import digest, now, read_json
         from .workflow import active_file
         configure(self.root,tasks_per_batch=1)
         original=self.root/'manual.txt';original.write_text('Included original work.',newline='\n')
@@ -182,6 +289,20 @@ class NativeWorkflowTest(NativeFixture):
         self.assertFalse(prepared['approved'])
         self.assertFalse(active_file(self.root).exists())
         self.assertIn('approval',prepared)
+        without_identity=self.human('approve',question=prepared['approval']['question'])
+        with self.assertRaisesRegex(Refused,'original prepared scope decision'):
+            native.approve_scope(self.root,prepared['scope_id'],without_identity)
+        other=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'instructions':'Different scope.'},self.tasks[1]]})
+        folder=native._home(self.root)/'decisions'
+        historical=read_json(folder/(other['approval']['decision']+'.json'))
+        historical['question']=historical['question'].split('\n\nDecision reference: ')[0]
+        key=digest(historical)
+        native._immutable(folder/(key+'.json'),historical)
+        self.assertTrue(prepared['approval']['question'].startswith(historical['question']))
+        with self.assertRaisesRegex(Refused,'does not approve the presented scope'):
+            native.approve_scope(self.root,other['scope_id'],
+                                 self.human('Approve this scope',question=prepared['approval']['question'],question_at=now(),decision=key))
+        self.assertFalse(active_file(self.root).exists())
         for text in ('Discuss the change.','stop','publish','Do not approve this scope.',
                      'Do not approve this scope; revise it.','Approve neither this scope nor publication.'):
             with self.subTest(text=text),self.assertRaises(Refused):
@@ -198,10 +319,10 @@ class NativeWorkflowTest(NativeFixture):
         unused.append('run.status',{'status':'prepared_checkpoint'});prior=unused.records()
         atomic_json(checkout_file(self.root,'oh-active-run.json'),
                     {'project':self.project_id,'run':unused.path.name,'checkout':checkout_id(self.root)})
-        from .storage import now
         approval=prepared['approval']
         native.approve_scope(self.root,prepared['scope_id'],self.human('yes',session='fresh-parent',question=approval['question'],question_at=now(),decision=approval['decision']))
         journal,state=load_run(self.root);original=journal.records()
+        self.assertEqual(read_json(journal.path/'scope'/'approval.json')['decision'],approval['decision'])
         self.assertEqual(state['granted'],['1'])
         self.assertNotEqual(state['id'],unused.path.name)
         self.assertEqual(unused.records()[:len(prior)],prior)
@@ -220,18 +341,6 @@ class NativeWorkflowTest(NativeFixture):
         path=Path(prepared['preview']).with_name('scope.json');value=json.loads(path.read_text())
         value['tasks'][0]['instructions']='Unapproved expansion';path.write_text(json.dumps(value),newline='\n')
         with self.assertRaises(Refused):native.approve_scope(self.root,prepared['scope_id'],self.human())
-
-    def test_actual_native_plan_cannot_silently_approve_different_prepared_tasks(self):
-        from . import native
-        prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
-        accepted=Path(prepared['preview']).read_text()+'\nAlso replace authentication.\n'
-        with self.assertRaises(Refused):
-            native.approve_scope(self.root,prepared['scope_id'],self.human(via='plan',accepted_plan=accepted))
-        from .workflow import active_file
-        self.assertFalse(active_file(self.root).exists())
-        exact=Path(prepared['preview']).read_text()
-        native.approve_scope(self.root,prepared['scope_id'],self.human(via='plan',accepted_plan=exact))
-        self.assertEqual(load_run(self.root)[1]['accepted_scope'],exact)
 
     def test_native_admissions_are_sequential_fresh_and_use_explicit_profiles(self):
         from . import native
@@ -473,7 +582,7 @@ class NativeWorkflowTest(NativeFixture):
                     if host=='claude':
                         path=home/'.claude/projects/s.jsonl'
                         common={'sessionId':'s','cwd':str(self.root)}
-                        rows=[common|{'type':'assistant','timestamp':call_at,'message':{'content':[{'type':'tool_use','id':'grant','name':'AskUserQuestion','input':{'questions':[{'question':question,'options':[{'label':label},{'label':'Not now'}]}]}}]}},
+                        rows=[common|{'type':'assistant','timestamp':call_at,'message':{'content':[{'type':'tool_use','id':'grant','name':'AskUserQuestion','input':{'questions':[{'question':question,'options':[*({'label':choice} for choice in offered['options'])]}]}}]}},
                               common|{'type':'user','timestamp':answer_at,'toolUseResult':{'answers':{question:label}},'message':{'content':[{'type':'tool_result','tool_use_id':'grant','content':'The user answered.'}]}}]
                     else:
                         path=home/'.codex/sessions/s.jsonl'
@@ -695,6 +804,9 @@ class NativeWorkflowTest(NativeFixture):
         self.assertIn('Continue authorizes tasks: 2',offer['question'])
         self.assertIn(self.git('rev-parse','HEAD'),offer['question'])
         history=load_run(self.root)[0].records()
+        unbound=self.human('Continue',question=offer['question'],question_at=now())
+        with self.assertRaisesRegex(Refused,'bound decision effect'):
+            native.decision(self.root,'continue',unbound)
         # The same native question supports all three effects on both hosts.
         home=Path(self.temp.name)/'checkpoint-host'
         with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(home/'.codex')}):
@@ -705,7 +817,7 @@ class NativeWorkflowTest(NativeFixture):
                     menu_offer=decision_request(self.root,'continue')
                 for label,kind in menu_offer['actions'].items():
                     asked=now();answered=now()
-                    question='Task 1 is complete on work; continue with task 2, publish the reviewed work, or take over?'
+                    question=menu_offer['question']
                     if host=='claude':
                         path=home/'.claude/projects/checkpoint.jsonl'
                         common={'sessionId':'checkpoint','cwd':str(self.root)}
@@ -725,11 +837,12 @@ class NativeWorkflowTest(NativeFixture):
                     locator={'host':host,'session':'checkpoint','tool_use_id':'menu','transcript_path':str(path),'decision':menu_offer['decision']}
                     source=self.native_human_original(self.root,locator)
                     self.assertEqual(verify_decision(self.root,state,kind,locator,source)['kind'],kind)
-                    # A paraphrased heading locates the same complete native menu; no
-                    # second human answer or natural-language interpretation is needed.
+                    # The transcript locates the exact prepared native menu.
                     hook={k:v for k,v in locator.items() if k!='tool_use_id'}
                     with patch('oh.authority.native_human',side_effect=self.native_human_original):
                         self.assertEqual(native._presented(self.root,hook,state)['tool_use_id'],'menu')
+                    with self.assertRaisesRegex(Refused,'does not match the prepared offer'):
+                        verify_decision(self.root,state,kind,locator,source|{'question':question.replace(state['id'],'another-run')})
                     for labels in (None,menu_offer['options'][:1],menu_offer['options']+['Other action'],
                                    menu_offer['options'][:-1]+[menu_offer['options'][0]]):
                         with self.subTest(host=host,labels=labels),self.assertRaisesRegex(Refused,'complete single-select'):
@@ -751,9 +864,10 @@ class NativeWorkflowTest(NativeFixture):
         self.git('remote','set-url','origin','https://github.com/example/product.git')
         (self.root/'new-edit.txt').write_text('Preserve this later edit.',newline='\n')
         with self.assertRaisesRegex(Refused,'subject changed'):native.decision(self.root,'publish',publish)
-        (self.root/'new-edit.txt').unlink()
         stop=self.human('Stop and take over',session='fresh-parent',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
         native.decision(self.root,'stop',stop);native.decision(self.root,'stop',stop)
+        self.assertEqual((self.root/'new-edit.txt').read_text(),'Preserve this later edit.')
+        (self.root/'new-edit.txt').unlink()
         self.assertEqual(native.resume(self.root)['status'],'stopped')
         self.assertNotIn('next_action',native.resume(self.root)['continuation'])
         self.assertIsNone(load_run(self.root)[1].get('publication'))
@@ -778,8 +892,11 @@ class NativeWorkflowTest(NativeFixture):
         self.git('remote','remove','origin')
         self.assertEqual(native.resume(self.root)['continuation']['next_action'],last['continuation']['next_action'])
         final=decision_request(self.root,'publish')
-        self.assertEqual(final['options'],['Stop and take over','Not now'])
+        self.assertEqual(final['options'],['Stop and take over'])
+        self.assertEqual(final['actions'],{'Stop and take over':'stop'})
         self.assertIn('PR unavailable',final['question'])
+        self.assertEqual(verify_decision(self.root,load_run(self.root)[1],'stop',{'decision':final['decision']},
+                         {'prompt':'Stop and take over','question':final['question'],'question_at':now()})['kind'],'stop')
         self.git('remote','add','origin','https://github.com/example/product.git')
         self.git('update-ref','refs/remotes/origin/main',head)
         second_commit=self.git('rev-parse','HEAD');original_summaries=load_run(self.root)[1]['summaries']
@@ -1119,9 +1236,7 @@ class NativeWorkflowTest(NativeFixture):
         from .storage import now
         offer=decision_request(self.root,'publish')
         self.assertEqual(offer['options'],['Open PR with completed tasks','Stop and take over'])
-        # Exercise the publication transition and reconciliation, not only the
-        # prepared-decision validator: native checkpoint prose may be concise.
-        choice=self.human('Open PR with completed tasks',question=short_question,question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        choice=self.human('Open PR with completed tasks',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
         native.decision(self.root,'publish',choice)
         native.decision(self.root,'publish',choice)
         journal,state=load_run(self.root);grant=state['publication'];attempts=state['attempts']

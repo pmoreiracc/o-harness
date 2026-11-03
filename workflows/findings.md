@@ -10,7 +10,9 @@ is useful, offer context-appropriate choices such as Add a follow-up to this des
 Create or link a GitHub issue, or Keep in saved follow-ups. There is no mandatory
 routing menu. Report retained follow-ups without posting an optional question that
 would keep ready work waiting. Ask only when a requested tracking action needs a real
-decision or missing authority. Honor an existing explicit preference without asking again. GitHub
+decision or missing authority. For concrete choices call Claude `AskUserQuestion`
+or Codex Default mode `functions.request_user_input_async`, following the shared
+waiting and direct-reply rules. Honor an existing explicit preference without asking again. GitHub
 tracking may find an appropriate existing issue or create one under explicit or standing
 human authority; do not require the person to predict an existing issue URL. Record the
 resulting URL with `finding-track ID --destination <issue-url>` (Codex:

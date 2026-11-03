@@ -25,15 +25,37 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         after=load_run(self.root)[1]
         for key in ('id','human','granted','attempts','config'):self.assertEqual(after[key],before[key])
 
+    def test_recovery_offers_stop_when_the_saved_base_ref_is_missing(self):
+        self.approve()
+        self.git('branch','-D','main')
+        self.git('update-ref','-d','refs/remotes/origin/main')
+        gate=decisions.prepare(self.root,'recover')
+        self.assertEqual(gate['options'],['Stop and take over'])
+        self.assertIn('fetch origin main',gate['question'])
+        result=native.decision(self.root,'stop',self.answer(gate,'Stop and take over')|{'via':'text'})
+        self.assertEqual(result['status'],'stopped')
+
     def answer(self, gate, label, host='claude', session='new-parent'):
         at=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
         return self.human(label,host=host,session=session,decision=gate['decision'],
             question=gate['question'],question_at=at,at=at,via='question',question_options=gate['options'])
 
     def test_recovery_menu_cannot_reclaim_a_newer_selection_with_an_old_answer(self):
-        from .storage import read_json
+        from .storage import digest, read_json
         from .workflow import active_file
         self.approve();old_journal,old=load_run(self.root)
+        current=decisions.prepare(self.root,'recover')
+        stored=read_json(native._home(self.root)/'decisions'/(current['decision']+'.json'))
+        historical={k:v for k,v in stored.items() if k not in ('bound_question','stop_boundary')}
+        historical['question']=historical['question'].replace('Saved run: '+old['id']+'\n','')
+        identity=digest(historical)
+        native._immutable(native._home(self.root)/'decisions'/(identity+'.json'),historical)
+        foreign=current|{'decision':identity,'question':current['question'].replace(old['id'],'another-run')}
+        records=old_journal.records()
+        for effect,label in (('stop','Stop and take over'),('restart','Start fresh')):
+            with self.assertRaisesRegex(Refused,'pending historical menu'):
+                native.decision(self.root,effect,self.answer(foreign,label))
+        self.assertEqual(old_journal.records(),records)
         for kind,label in (('resume','Continue'),('restart','Start fresh'),('stop','Stop and take over')):
             with self.subTest(kind=kind):
                 gate=decisions.prepare(self.root,'recover',run=old['id'])
@@ -461,10 +483,54 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.orphan()
         (self.root/'output.txt').write_text('human takes over',newline='\n')
         before=self.git('status','--porcelain')
-        self.recover('stop',host='codex')
+        gate=decisions.prepare(self.root,'recover')
+        answer=self.answer(gate,'Stop and take over',host='codex')
+        new_parent=Path(self.temp.name)/'new-parent.jsonl';new_parent.write_text('',newline='\n')
+        answer['transcript_path']=str(new_parent)
+        with patch('oh.authority.native_result',side_effect=FileNotFoundError('deleted native transcript')), \
+                patch('oh.recovery.facts',side_effect=FileNotFoundError('missing private plan after preparation')):
+            native.decision(self.root,'stop',answer)
+            native.decision(self.root,'stop',answer)
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertEqual(self.git('status','--porcelain'),before)
         with self.assertRaisesRegex(Refused,'not running'):native.admit(self.root,'assessment')
+
+    def test_takeover_settles_guarded_saved_review_without_changing_files(self):
+        self.approve()
+        delivery_journal,delivery=load_run(self.root)
+        review=native.review(self.root,'changes',self.human('Review my work'))
+        pending=native.admit(self.root,'review')
+        with cancellation._edit(self.root) as value:
+            value['attempts'][pending['id']]['guard_observed']=True
+        artifact=load_run(self.root,review['run'])[1]['standalone_artifact']
+        (Path(artifact['root'])/'product.txt').unlink()
+        note=self.root/'local.txt';note.write_text('Keep my draft.\n',newline='\n')
+        offer=decisions.prepare(self.root,'resume',run=review['run'])
+        answer=self.answer(offer,'Stop and take over')
+        before=delivery_journal.records()
+        with self.assertRaisesRegex(Refused,'different decision'):
+            native.decision(self.root,'stop',answer,run=delivery['id'])
+        unbound={k:v for k,v in answer.items() if k!='decision'}
+        with self.assertRaisesRegex(Refused,'bound decision effect'):
+            native.decision(self.root,'stop',unbound,run=delivery['id'])
+        self.assertEqual(native.decision(self.root,'stop',answer)['status'],'stopped')
+        journal,state=load_run(self.root,review['run'])
+        self.assertEqual(state['attempts'][0]['outcome'],'abandoned')
+        self.assertEqual(state.get('review_grants',[]),[])
+        self.assertEqual(note.read_text(),'Keep my draft.\n')
+        self.assertEqual(delivery_journal.records(),before)
+        retained=journal.records()
+        self.assertEqual(native.decision(self.root,'stop',answer,run=review['run'])['status'],'stopped')
+        self.assertEqual(journal.records(),retained)
+
+        resume=decisions.prepare(self.root,'recover',run=delivery['id'])
+        native.decision(self.root,'resume',self.answer(resume,'Continue',session='delivery-resume'))
+        explicit=decisions.prepare(self.root,'stop',run=review['run'])
+        self.assertEqual(explicit['options'],['Stop and take over'])
+        result=native.decision(self.root,'stop',self.answer(explicit,'Stop and take over')|{'via':'text'})
+        self.assertEqual(result['run'],review['run'])
+        self.assertEqual(load_run(self.root)[1]['id'],delivery['id'])
+        self.assertEqual(native.admit(self.root,'assessment')['role'],'assessment')
 
     def test_changed_files_invalidate_destructive_choice_and_pending_tools_still_block(self):
         old=self.orphan()
@@ -473,6 +539,18 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         (self.root/'surprise.txt').write_text('new user edit',newline='\n')
         with self.assertRaisesRegex(Refused,'changed since'):native.decision(self.root,'restart',answer)
         self.assertTrue((self.root/'surprise.txt').exists())
+        displayed=decisions.prepare(self.root,'recover')
+        (self.root/'surprise.txt').write_text('More edits at the same path',newline='\n')
+        updated=decisions.prepare(self.root,'recover')
+        self.assertEqual(displayed['options'],updated['options'])
+        self.assertNotEqual(displayed['question'],updated['question'])
+        with self.assertRaisesRegex(Refused,'does not match the prepared offer'):
+            native.decision(self.root,'restart',self.answer(displayed,'Start fresh')|{'decision':updated['decision']})
+        typed=self.answer(displayed,'Start fresh')|{'via':'text','question_context':[
+            {'text':offer['question'],'at':now()} for offer in (displayed,updated)]}
+        with self.assertRaisesRegex(Refused,'actual native question'):
+            native.decision(self.root,'restart',typed)
+        self.assertEqual((self.root/'surprise.txt').read_text(),'More edits at the same path')
         with cancellation._edit(self.root) as value:
             value['tools']['pending-edit']={'attempt':old['id'],'kind':'tool','name':'Edit','started':now()}
         with self.assertRaisesRegex(Refused,'still settling'):self.recover('resume')
@@ -548,6 +626,15 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         initial=path.read_text()
         prepared=native.prepare_scope(self.root,doc='0001')
         native.approve_scope(self.root,prepared['scope_id'],self.human())
+        path.unlink()
+        unavailable=decisions.prepare(self.root,'recover')
+        self.assertEqual(unavailable['options'],['Stop and take over'])
+        self.assertIn('Restore the required recovery input',unavailable['question'])
+        stopped=native.decision(self.root,'stop',self.answer(unavailable,'Stop and take over')|{'via':'text'})
+        self.assertEqual(stopped['status'],'stopped')
+        self.assertFalse(path.exists())
+        path.write_text(initial,newline='\n')
+        self.recover('resume')
         self.assess();self.implement();native.candidate(self.root)
         self.assertNotEqual(path.read_text(),initial)
         self.recover('restart')

@@ -246,7 +246,7 @@ class DeliveryTest(fixtures.NativeFixture):
                     self.assertEqual(selected['task']['id'],'1')
                     active=load_run(self.root)[1]
                     self.assertEqual(active['entry_request']['prompt'],'/oh-deliver 0001')
-                    self.assertEqual(active['human']['prompt'],'Stop the work')
+                    self.assertEqual(active['human']['prompt'],'Stop and take over')
                     self.assertEqual(active['entry_prerequisite'],gate['decision'])
                     self.assertEqual(native.prepare_scope(self.root,doc='0001',human=request,keep_checkout=True,
                                      after=gate['decision'])['run'],selected['run'])

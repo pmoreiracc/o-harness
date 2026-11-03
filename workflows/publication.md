@@ -3,7 +3,9 @@
 Read when reviewed work reaches publication, or when recovering an existing PR handoff.
 Read `workflows/decisions.md` before the publication question.
 Follow the `continuation` returned by `complete`: a local commit with a pending
-publication decision still needs that checkpoint. Repair recoverable preparation
+publication decision still needs that checkpoint. Call Claude `AskUserQuestion`
+or Codex Default mode `functions.request_user_input_async` for its returned choices,
+using the shared chat fallback when needed. Repair recoverable preparation
 failures within scope; report any unresolved step instead of claiming the handoff finished.
 If the person already chose the checkpoint's PR option, bind that answer using its
 existing decision identity and proceed; do not request a second publication approval.
@@ -40,7 +42,8 @@ meaningful check changes between calls. Do not end the handoff while CI is pendi
 
 An empty, pending, failed, cancelled or skipped check set is not success. On `pass`,
 report it; merging stays with the person. On `fail`, read the failed jobs' logs
-(`gh run view <run-id> --log-failed`), give a short diagnosis, then ask one native question:
+(`gh run view <run-id> --log-failed`), give a short diagnosis, then call Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` with the following choices.
 
 - **Prepare a fix for PR #N** starts the existing-PR quick-fix correction for this PR. It
   still needs its own scope approval, implementation, checks and fresh review before

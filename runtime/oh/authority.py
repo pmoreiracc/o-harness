@@ -297,15 +297,29 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
         result=attest(host,payload,root,latest=latest,retry_resume=retry_resume)
         if since and not newer(result.get('at'),since):raise Refused('This human reply predates the subject it would approve')
         context='';context_at=None;displays=[]
+        codex_plan_reply=host=='codex' and result['prompt']=='Implement the plan.'
+        plan=None;plan_turn=None;implementation_turn=False
         for record in _records(result['transcript_path']):
             if record.get('timestamp') and result.get('at') and not newer(result['at'],record['timestamp']):continue
             if host=='codex':
                 item=record.get('payload') or {}
+                if codex_plan_reply and record.get('type')=='turn_context':
+                    mode=(item.get('collaboration_mode') or {}).get('mode')
+                    if item.get('turn_id')==result['turn']:
+                        implementation_turn=mode=='default' and within(item.get('cwd'),root)
+                    else:
+                        plan_turn=item.get('turn_id') if mode=='plan' and within(item.get('cwd'),root) else None
                 if (record.get('type')=='event_msg' and item.get('thread_id',session)==session
                         and (item.get('type')=='user_message' or item.get('type')=='item_completed'
                              and (item.get('item') or {}).get('type')=='UserMessage')):
                     displays=[];context='';context_at=None
+                    plan=None
                     continue
+                if (codex_plan_reply and plan_turn and record.get('type')=='event_msg'
+                        and item.get('type')=='item_completed' and item.get('turn_id')==plan_turn
+                        and item.get('thread_id',session)==session and (item.get('item') or {}).get('type')=='Plan'):
+                    text=item['item'].get('text')
+                    plan=(text,record) if isinstance(text,str) and text.strip() and (since is None or newer(record.get('timestamp'),since)) else None
                 if (record.get('type')=='event_msg' and item.get('type')=='item_completed'
                         and item.get('thread_id')==session):
                     item=item.get('item') or {}
@@ -322,7 +336,10 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
             if text:
                 context=text;context_at=record.get('timestamp')
                 displays.append({'text':text,'at':context_at,'record_hash':digest(record)})
-        if subject and not any(str(subject) in shown['text'] for shown in displays):
+        if plan and implementation_turn:
+            text,record=plan
+            result.update(via='plan',accepted_plan=text,record_hashes=result['record_hashes']+[digest(record)])
+        if subject and result.get('via')!='plan' and not any(str(subject) in shown['text'] for shown in displays):
             raise Refused('This typed reply has no preceding native context identifying the reviewed artifact')
         result['question']=context
         result['question_at']=context_at
@@ -461,6 +478,17 @@ def question_text(text):
     return ' '.join(text.split())
 
 
+_OFFER_REFERENCE=re.compile(r'\bDecision reference: ([0-9a-f]{64})\b')
+
+
+def shown_offer_reference(source):
+    displays=source.get('question_context') or [{'text':source.get('question','')}]
+    for shown in reversed(displays):
+        refs=_OFFER_REFERENCE.findall(question_text(shown['text']))
+        if refs:return refs[-1]
+    return None
+
+
 def presented_question_at(source,question):
     """Match the complete prepared text in this reply's verified display context.
 
@@ -468,6 +496,8 @@ def presented_question_at(source,question):
     Keep the time of the actual full display; later prose cannot refresh an old grant.
     """
     expected=question_text(question)
+    reference=re.search(r'Decision reference: ([0-9a-f]{64})$',expected)
+    if shown_offer_reference(source)!=(reference[1] if reference else None):return None
     displays=source.get('question_context') or [{'text':source.get('question',''),'at':source.get('question_at')}]
     for shown in reversed(displays):
         if expected in question_text(shown['text']):return shown.get('at')
