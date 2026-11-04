@@ -8,14 +8,24 @@ consumer repositories and keep raw worker transcripts out of the coordinator's c
 
 ## Entries and facts
 
-In Codex use the connected OH tools with the checkout's absolute `root`. In Claude use
-the absolute plugin launcher, `<plugin>/scripts/oh --root <checkout> <command>`
-(`scripts\oh.cmd` on native Windows). Load resources through the same resource entry.
-If a connected OH tool fails, retry that same operation once before asking the person
-to intervene. If the connection remains unavailable, report the actual error and a
-host-supported recovery step; do not assume `/mcp` exists in the desktop app or bypass
-the connection with shell writes to OH state. Setup requires an explicit invocation,
-not discovery.
+In Codex call the connected `mcp__o_harness__<operation>` tool with the checkout's
+absolute `root`; the operation names are in the table below. For example, load a
+workflow with `mcp__o_harness__resource` and read saved work with
+`mcp__o_harness__status` using `saved: true`. In code mode invoke the same tools
+through `text(await tools.mcp__o_harness__<operation>(arguments))` inside `functions.exec`.
+In Claude use the absolute plugin launcher,
+`<plugin>/scripts/oh --root <checkout> <command>` (`scripts\oh.cmd` on native Windows).
+
+OH's `resource` is a tool. MCP resource/template listings do not discover OH tools
+or establish connection health. If tool lookup is needed, match `mcp__o_harness__`
+in the available tool inventory. A failed text search is not a connection failure.
+Retry a failed read once using the actual tool. For an uncertain state-changing call,
+inspect its saved outcome before retrying with the same inputs. Preserve the current
+request and approvals through recovery. Diagnose a connection failure from the actual
+OH tool error; report an unavoidable host action only after supported recovery fails.
+Follow the host's actual connection controls; `/mcp` availability depends on the
+interface. Setup requires an explicit invocation. Native scope, ownership and
+permission requirements still apply during recovery.
 
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
