@@ -79,12 +79,10 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         from . import cancellation
         from .storage import now
         with cancellation._edit(self.root) as control:
-            control['tools']['late-old-tool']={'attempt':first['id'],'kind':'tool','name':'Edit','started':now()}
+            control['commands']['late-old-command']={'attempt':first['id'],'started':now()}
         with self.assertRaisesRegex(Refused,'unsettled native attempt or operation'):publication.render(self.root)
         self.assertEqual(old_journal.records(),final_records)
-        with self.parent_path.open('a',newline='\n') as stream:
-            stream.write(json.dumps({'type':'response_item','payload':{'type':'function_call_output',
-                                    'call_id':'late-old-tool','output':'Completed'}})+'\n')
+        with cancellation._edit(self.root) as control:control['commands']['late-old-command'].update(ended=now(),returncode=0)
         body=publication.render(self.root)
         self.assertEqual(load_run(self.root)[1]['publication'],finished['publication'])
         from .test_fixtures_workflow import pull_request
@@ -146,7 +144,8 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         prepared=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'title':'Different work'}]})
         attempt=state['attempts'][-1]['id']
         with cancellation._edit(self.root) as value:
-            value['tools']['unfinished']={'attempt':attempt,'kind':'tool','name':'Edit','started':now()}
+            value['tools']['legacy-read']={'attempt':attempt,'kind':'tool','name':'Read','started':now()}
+            value['commands']['unfinished']={'attempt':attempt,'started':now()}
             value['tools']['settled-command']={'attempt':attempt,'kind':'command','started':now(),'ended':now(),
                                               'receipt':str(Path(self.temp.name)/'expired-command-receipt')}
         before=journal.records()
@@ -154,11 +153,7 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         with self.assertRaisesRegex(Refused,'unsettled native attempt or operation'):
             native.approve_scope(self.root,prepared['scope_id'],self.human())
         self.assertEqual(journal.records(),before)
-        # A lost post-hook is routine bookkeeping once the original native
-        # transcript actually contains this tool's completed result.
-        with self.parent_path.open('a',newline='\n') as stream:
-            stream.write(json.dumps({'type':'response_item','payload':{'type':'function_call_output',
-                                     'call_id':'unfinished','output':'Completed'}})+'\n')
+        with cancellation._edit(self.root) as value:value['commands']['unfinished'].update(ended=now(),returncode=0)
         self.assertTrue(native.approve_scope(self.root,prepared['scope_id'],self.human())['run'])
         self.assertEqual(journal.records(),before)
 

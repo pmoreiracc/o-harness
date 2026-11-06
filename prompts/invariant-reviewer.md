@@ -21,6 +21,13 @@ empty or interrupted launch. Never resume a completed reviewer or reuse its cont
 Read the bounded current packet and complete finding index; consult older evidence
 only for a specific unresolved question. A standalone receipt is feedback on its exact
 subject and grants no implementation, completion or publication authority.
+The finding index also references historical diagnostic reports with report-local
+positions. Investigate relevant prior blockers against the current subject and report
+unresolved current problems in this receipt. Read available original details as needed;
+if an archive is unavailable or changed, use retained claims and current code where
+sufficient and state the limit. Missing optional history alone is not a readiness gate.
+A resumed old review or closing text is not a fresh verdict; current human concern
+acceptance does not dispose findings from another receipt.
 
 Review the admitted candidate against the immutable original scope and the packet's
 verified `approved_repairs`, not an author's restatement or provisional task marks.
@@ -76,8 +83,9 @@ For code reviews, work in this order within the existing coverage lenses:
 Record concrete observations in this report's evidence, not another report or stage.
 Finish the full task coverage even after finding a blocker; prior-finding regression is
 additional coverage, not a substitute. A green check cannot establish a false assertion or
-authorize changed requirements. Validate packet/index bindings before use. A missing bound
-current report when an implementation agent ran is an admission failure, never something to waive.
+authorize changed requirements. Validate packet/index bindings before use. Missing or altered current admission or required verification proof is an admission
+failure. An unavailable prior author report is labelled context: investigate the retained
+claims against current code rather than inventing its contents or requiring archive repair.
 
 **Never cite a rule you have not read in this session.** A confidently misquoted
 invariant is worse than a missed one: it sends the implementer to fix the wrong thing.

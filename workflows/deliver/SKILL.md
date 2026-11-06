@@ -24,13 +24,29 @@ Interpret the requested work as follows:
   unavailable reasons and limits. For concrete choices, call Claude `AskUserQuestion` or
   Codex Default mode `functions.request_user_input_async` to select a design or quick fix.
   Use ordinary chat for the description of a quick fix.
+  For an approved-design choice, ask `Which approved design should OH deliver?`
+  with design numbers as labels and names in descriptions. Keep that same question
+  on its own line for the typed fallback and pass the actual answer locator.
   The empty invocation itself grants no continuation authority.
 - Approved design number and optional track: use `scope prepare --doc NNNN
   [--track TRACK] --human <native-locator.json>` (Codex `scope_prepare`). The helper
-  validates approval and selects the parsed tasks. Do not rebuild them as an arbitrary
-  manifest or ask for another trigger. For a missing track or concrete selection, call
+  validates approval and selects the first runnable task, skipping completed tasks,
+  explicit blockers and unmet dependencies. With no track specified, it automatically
+  selects the only runnable track; a completed track is not another choice. A merged
+  earlier track does not finish the design while runnable work remains. Proceed under
+  the invocation without asking whether to prepare that work. Do not rebuild tasks as
+  an arbitrary manifest or ask for another trigger. Only if the helper reports multiple
+  runnable tracks, or a concrete design selection is missing, call
   Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
-  once and preserve the answer.
+  once and preserve the answer. For a track choice, use the helper's exact short
+  question: `Which track should OH deliver for design NNNN?` Use the exact track
+  names as choices (a recommended suffix is fine). Put recommendations or other
+  explanations in commentary, outside the question. This binds delivery, not an
+  inspection or planning choice that merely mentions delivery.
+  Retry `scope prepare` with that answer's native locator, including `tool_use_id`
+  for a menu answer, rather than the older invocation. For a typed fallback, show
+  the same question on its own line and use the actual reply locator. The answer and its native
+  question context select the track; no repeated invocation or extra approval is needed.
 - A bounded change in prose: first compare saved quick-fix scope and reports with
   the requested outcome; offer to resume the same work without requiring identical wording.
   For genuinely new work, inspect the relevant code and correct base, then prepare
@@ -52,6 +68,11 @@ actual acceptance with `scope approve`. In Codex Default mode, show the preview 
 call `functions.request_user_input_async` with the returned `approval` question and
 choices. Retain its decision identity and use the shared direct-reply fallback. An initiating
 human locator identifies the request and does not replace this scope acceptance.
+For quick-fix menus, **Approve and fix** accepts the shown scope; **Stop and take over**
+leaves it unapproved and ends the handoff without asking for further planning input.
+Honor the saved labels of older prepared questions. For CI corrections, first complete
+the authorized investigation described in `workflows/publication.md`; a preliminary
+failure summary is not an established repair plan.
 Revisions replace the unapproved preview and receive approval of the
 new contents. Inspect original user edits and branch ownership; do not reset, stash,
 rebase or switch branches to bypass a refusal. An explicit existing-PR correction
@@ -76,6 +97,9 @@ parent-authored fix or direct commit for the requested OH delivery.
    passing the retained evidence and specific next step. A worker finishing or suggesting
    an outside-scope repair is not itself a reason to ask for approval. At a concrete
    boundary, use the additional-repair decision below.
+   An unfinished report after native cleanup follows this same fresh-author path.
+   Preserve the candidate, usable checks and original report; the current authorized
+   coordinator does not ask for Continue again merely to retain or finish its work.
 4. Repair blocking families and accompanying concerns within scope, preserving every
    finding. Concern-only outcomes use the person's fix/accept decision. Reverify changes
    and use a fresh reviewer within the remaining allowance. Read the new implementation

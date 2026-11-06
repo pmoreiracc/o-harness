@@ -67,6 +67,17 @@ WINDOWS_LONG_CASES = {
     'oh.test_controls.ControlsTest.test_idle_selection_publishes_exact_reviewed_commits_without_stopping_prior_work': 242,
     'oh.test_delivery.DeliveryTest.test_delivery_request_survives_only_its_bound_prerequisite_on_both_hosts': 325,
     'oh.test_delivery.DeliveryTest.test_converged_tracks_finalize_through_native_check_review_and_completion': 143,
+    # PR #160: the enlarged workflow/recovery groups otherwise occupied one
+    # worker for 851s/661s. Split these measured cases through the existing lanes.
+    'oh.test_workflow.NativeWorkflowTest.test_additional_review_reverifies_actual_inputs_and_completes_a_clean_scoped_repair': 145,
+    'oh.test_workflow.NativeWorkflowTest.test_publication_reuses_the_existing_pr_and_unknown_discovery_does_not_reopen_work': 65,
+    'oh.test_workflow.NativeWorkflowTest.test_legacy_resume_preserves_original_findings_and_consumed_review_allowance': 55,
+    'oh.test_workflow.NativeWorkflowTest.test_partial_retention_preserves_stale_selection_and_original_render_boundary': 50,
+    'oh.test_workflow.NativeWorkflowTest.test_precommit_intent_rechecks_proof_and_accepts_fresh_reviewed_repair': 48,
+    'oh.test_workflow.NativeWorkflowTest.test_interrupted_commit_recovers_without_another_review_or_duplicate_commit': 43,
+    'oh.test_recovery.RecoveryTest.test_private_restart_restores_approved_plan_and_completes_with_valid_publication_evidence': 90,
+    'oh.test_recovery.RecoveryTest.test_restart_after_merged_task_keeps_completion_evidence_and_selects_next_batch': 56,
+    'oh.test_recovery.RecoveryTest.test_continue_clean_delivery_keeps_assessment_and_retries_reported_work': 55,
 }
 
 

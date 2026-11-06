@@ -59,6 +59,146 @@ class CancellationTest(NativeFixture, unittest.TestCase):
             'turn_id': 'worker-turn', 'agent_id': worker or self.worker,
             'tool_name': name, 'tool_input': args or {}, 'tool_use_id': use})
 
+    def test_resume_callbacks_require_native_results_and_saved_unreserved_calls_block_successors(self):
+        prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+        native.approve_scope(self.root,prepared['scope_id'],self.human(host='claude'))
+        admitted=native.admit(self.root,'assessment')
+        native.bind(self.root,admitted['id'],{'child_session':'worker'})
+        cancellation.bind(self.root,load_run(self.root)[1]['attempts'][-1],'worker',aliases=['worker-name'])
+        operations={admitted['id']:{}}
+        with patch.object(authority,'claude_operations',side_effect=lambda state,attempt:operations.get(attempt['id'],{})):
+            for number,(name,args) in enumerate((('SendMessage',{'to':'worker-name'}),('SendMessage',{'to':'worker'}),
+                                                ('Agent',{'resume':'worker'}),('Task',{'resume':'worker'}))):
+                use='resume-'+str(number)
+                payload={'session_id':'s','tool_use_id':use,'tool_name':name,'tool_input':args,'hook_event_name':'PreToolUse'}
+                self.assertEqual(cancellation.hook(self.root,'claude',payload),{})
+                self.assertFalse(cancellation.quiescent(self.root,admitted['id']))
+                cancellation.hook(self.root,'claude',payload|{'hook_event_name':'PostToolUse'})
+                self.assertFalse(cancellation.quiescent(self.root,admitted['id']))
+                operations[admitted['id']][use]={'state':'pending','started':now()}
+                cancellation.reconcile_execution(self.root,load_run(self.root)[1]['attempts'][-1])
+                self.assertFalse(cancellation.quiescent(self.root,admitted['id']))
+                operations[admitted['id']][use]['state']='rejected'
+                cancellation.reconcile_execution(self.root,load_run(self.root)[1]['attempts'][-1])
+                self.assertTrue(cancellation.quiescent(self.root,admitted['id']))
+            self.native_results[admitted['id']]={'status':'completed','text':json.dumps({'difficulty':'standard'})}
+            native.retain(self.root,admitted['id'],{})
+            self.implement();review=self.reviewed()
+            operations[review['id']]={'missing-pre-hook':{'state':'pending','started':now()}}
+            with self.assertRaisesRegex(Refused,'unsettled'):native.complete(self.root,review['id'])
+            operations[review['id']]['missing-pre-hook']['state']='rejected'
+            native.complete(self.root,review['id'])
+            denied=cancellation.hook(self.root,'claude',payload|{'tool_use_id':'after-finish'})
+            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'],'deny')
+
+    @unittest.skipIf(os.name=='nt','POSIX wrapper deadline; Windows wrapper coverage is separate')
+    def test_packaged_callback_denies_known_work_under_contention_before_wrapper_deadline(self):
+        from .installation import build
+        from .storage import atomic_json,digest,Journal
+        self.approve()
+        journal,_=load_run(self.root)
+        # Construct a valid long immutable history in linear fixture time.
+        # Production append intentionally validates its prefix on writes.
+        previous=journal.records()[-1]
+        for number in range(2000):
+            row={'sequence':previous['sequence']+1,'previous':previous['hash'],'id':str(number),'at':now(),
+                 'kind':'evidence.attached','data':{'files':{},'summary':'Retained observation '+str(number)+'x'*2048}}
+            row['hash']=digest(row);atomic_json(journal.path/f'{row["sequence"]:06}.json',row,immutable=True);previous=row
+        self.launch()
+        plugin=Path(self.temp.name)/'plugin'/'o-harness'
+        build(plugin,'codex')
+        installed=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup','--development'],capture_output=True,text=True)
+        self.assertEqual(installed.returncode,0,installed.stderr)
+        journal,_=load_run(self.root)
+        journal.append('evidence.attached',{'files':{},'summary':'x'*(2*1024*1024)})
+        payload={'hook_event_name':'PreToolUse','cwd':str(self.root),'session_id':'s','agent_id':self.worker,
+                 'tool_name':'Read','tool_input':{},'tool_use_id':'contended'}
+        # Ordinary overlapping callbacks must survive a brief state-file write;
+        # immediate denial can cancel a sibling native code-mode call.
+        ready=threading.Event()
+        def brief_write():
+            with cancellation._edit(self.root):
+                ready.set();time.sleep(.075)
+        writer=threading.Thread(target=brief_write);writer.start();ready.wait(2)
+        try:
+            with patch.object(Journal,'records',side_effect=AssertionError('Hook reread the complete journal')):
+                self.assertEqual(cancellation.hook(self.root,'codex',payload|{'tool_use_id':'brief'}),{})
+        finally:writer.join()
+        cancellation.hook(self.root,'codex',payload|{'hook_event_name':'PostToolUse','tool_use_id':'brief'})
+        command=[sys.executable,'-I',str(plugin/'scripts/native-control.py'),'codex']
+        # Exercise the real packaged launcher with the long prefix and a
+        # concurrently held control lock, including its subprocess startup.
+        ready.clear()
+        writer=threading.Thread(target=brief_write);writer.start();ready.wait(2)
+        start=time.monotonic()
+        result=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,timeout=4)
+        writer.join()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout or '{}'),{})
+        self.assertLess(time.monotonic()-start,2.5)
+        cancellation.hook(self.root,'codex',payload|{'hook_event_name':'PostToolUse'})
+        with cancellation._edit(self.root):
+            start=time.monotonic()
+            result=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,timeout=4)
+            elapsed=time.monotonic()-start
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertLess(elapsed,2.5)
+        self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+        # An actual old producer could finish its journal before saving control.
+        # The checked handoff repairs that gap, not every worker callback.
+        self.native_results[self.attempt]={'status':'completed','text':json.dumps({'difficulty':'standard'})}
+        with patch.object(cancellation,'close_settled'):
+            native.retain(self.root,self.attempt,{})
+        self.assertFalse(cancellation._read(self.root)['attempts'][self.attempt]['finished'])
+        cancellation.register_owner(self.root,load_run(self.root)[1])
+        start=time.monotonic()
+        result=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,timeout=4)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertLess(time.monotonic()-start,2.5)
+        self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_completion_closes_tools_before_journal_and_retries_after_receipt_expiry(self):
+        from .storage import Journal
+        self.approve();self.launch()
+        argv=[sys.executable,'-c','raise AssertionError("closed claim ran")']
+        self.tool('Bash',{'command':cancellation.command_line(self.root,self.attempt,argv)},use='queued-command')
+        receipt=Path(cancellation._read(self.root)['tools']['queued-command']['receipt'])
+        self.native_results[self.attempt]={'status':'completed','text':json.dumps({'difficulty':'standard'})}
+        save=cancellation.atomic_json
+        def failed_control(path,value,**kwargs):
+            if Path(path)==cancellation._path(self.root) and value['attempts'][self.attempt]['finished']:
+                raise OSError('control write failed')
+            return save(path,value,**kwargs)
+        with patch.object(cancellation,'atomic_json',side_effect=failed_control),self.assertRaisesRegex(OSError,'control write failed'):
+            native.retain(self.root,self.attempt,{})
+        self.assertFalse(load_run(self.root)[1]['attempts'][-1]['finished'])
+        self.assertFalse(cancellation._read(self.root)['attempts'][self.attempt]['finished'])
+        append=Journal.append;claimed=[];workers=[]
+        def queued_claim():
+            try:cancellation.owned_command(self.root,self.attempt,argv)
+            except Refused:claimed.append('denied')
+        def failed_journal(journal,kind,data):
+            if kind=='transition' and data['events'][0]['kind']=='attempt.finished':
+                self.assertTrue(cancellation._read(self.root)['attempts'][self.attempt]['finished'])
+                worker=threading.Thread(target=queued_claim);workers.append(worker);worker.start()
+                raise OSError('journal write failed')
+            return append(journal,kind,data)
+        with patch.object(Journal,'append',failed_journal),self.assertRaisesRegex(OSError,'journal write failed'):
+            native.retain(self.root,self.attempt,{})
+        for worker in workers:worker.join(2);self.assertFalse(worker.is_alive())
+        self.assertEqual(claimed,['denied']);self.assertFalse((receipt/'claimed.json').exists())
+        self.assertFalse(load_run(self.root)[1]['attempts'][-1]['finished'])
+        self.assertEqual(self.tool('Read',use='after-close')['hookSpecificOutput']['permissionDecision'],'deny')
+        with self.assertRaises(Refused):native.admit(self.root,'implementation')
+        shutil.rmtree(receipt)  # windows-ok: owned-command receipt files, no Git objects
+        self.native_results[self.attempt]['duration_ms']=7  # same report, refreshed native metadata
+        completed=native.retain(self.root,self.attempt,{})
+        self.assertEqual(completed['outcome'],'assessed')
+        journal,state=load_run(self.root);before=journal.records()
+        self.assertEqual(state['assessments']['1']['difficulty'],'standard')
+        native.retain(self.root,self.attempt,{})
+        self.assertEqual(journal.records(),before)
+
     @unittest.skipUnless(os.name == 'nt', 'Windows hook shell contract')
     def test_packaged_windows_hooks_reserve_commands_and_revoke_workers(self):
         from .installation import build
@@ -498,6 +638,8 @@ class CancellationTest(NativeFixture, unittest.TestCase):
                 answer = self.resume_choice(session='new-parent')
                 self.native_results[self.attempt] = {'status': 'cancelled', 'text': ''}
                 self.assertTrue(cleaning.wait(5))
+                with self.assertRaisesRegex(Refused, 'still executing'):
+                    native.retain(self.root,self.attempt,{})
                 # Even with no process left, the helper must finish its locked
                 # work before Resume can transfer ownership.
                 with self.assertRaisesRegex(Refused, 'still executing'):
@@ -532,9 +674,8 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         self.assertEqual(recovered['attempts'][-1]['outcome'], 'cancelled')
         self.assertEqual(partial.read_text(), 'preserved implementation')
         tools = cancellation._read(self.root)['tools']
-        self.assertEqual(tools['failed-check']['completion_source'], 'native-record')
-        self.assertEqual(tools['interrupted-check']['completion_source'], 'stopped-verification')
-        self.assertEqual(tools['queued-shell-check']['completion_source'], 'stopped-verification')
+        for key in ('failed-check','interrupted-check','queued-shell-check'):
+            self.assertNotIn(key,tools)
         replacement = native.admit(self.root, 'implementation')
         native.bind(self.root, replacement['id'], {'child_session': 'replacement-worker'})
         # A delayed shell helper must refuse even on hosts without a caller
@@ -548,19 +689,15 @@ class CancellationTest(NativeFixture, unittest.TestCase):
             self.assertIn('ended attempt', delayed.stderr)
         self.assertEqual(self.tool('apply_patch')['hookSpecificOutput']['permissionDecision'], 'deny')
 
-    def test_resume_waits_for_existing_tool_then_accepts_the_same_answer(self):
+    def test_stop_revokes_worker_without_waiting_for_an_ordinary_tool_callback(self):
         self.approve()
         self.launch()
         self.assertEqual(self.tool('apply_patch', use='edit'), {})
         self.stop()
         answer = self.resume_choice()
         self.native_results[self.attempt] = {'status': 'completed', 'text': ''}
-        with self.assertRaisesRegex(Refused, 'cleanup is still pending'):
-            native.resume(self.root, answer)
-        cancellation.hook(self.root, 'codex', {
-            'hook_event_name': 'PostToolUse', 'session_id': 's', 'agent_id': self.worker,
-            'tool_use_id': 'edit', 'tool_name': 'apply_patch'})
         native.resume(self.root, answer)
+        self.assertEqual(self.tool('apply_patch')['hookSpecificOutput']['permissionDecision'],'deny')
         self.assertEqual(load_run(self.root)[1]['human']['turn'], answer['turn'])
 
     @unittest.skipIf(os.name == 'nt', 'POSIX native shell SIGTERM; Windows host kills use native job cleanup')
@@ -684,94 +821,59 @@ class CancellationTest(NativeFixture, unittest.TestCase):
                 native.retain(self.root, self.attempt, {})
                 retained = load_run(self.root)[1]['attempts'][-1]
                 self.assertEqual(retained['outcome'], 'cancelled')
-                self.assertEqual(retained['findings'][0]['description'], 'Keep this finding')
+                self.assertEqual(retained['findings'], [])
+                self.assertEqual(read_json(retained['late_report']['path'])['findings'][0]['description'], 'Keep this finding')
                 native.resume(self.root, self.resume_choice())
 
-    def test_terminal_model_does_not_override_unfinished_tools(self):
-        self.approve()
-        self.launch()
-        # A rejected sibling in Promise.all can cancel a read without its post-hook.
-        # It cannot hold a writer alive. An edit requires a completion boundary;
-        # commands and external tools still need their own execution evidence.
-        self.tool('mcp__o_harness__resource', {'path':'prompts/implementation.md'},use='cancelled-read')
-        self.tool('mcp__o_harness__command_format',use='cancelled-format')
-        self.tool('apply_patch', use='unfinished-edit')
-        self.native_results[self.attempt] = {'status': 'completed', 'text': ''}
-        with self.assertRaisesRegex(Refused, 'tools are still running'):
-            native.retain(self.root, self.attempt, {})
-        # Old completion, another child and interrupted/synthetic completion do
-        # not settle a later file edit whose own callback is absent.
-        for result in ({'completed_at':'2000-01-01T00:00:00Z'},
-                       {'completed_at':now(),'native_id':'another-child'},
-                       {'completed_at':now(),'status':'interrupted'}):
-            with patch('oh.authority.native_result',return_value={'status':'completed','native_id':self.worker,**result}):
-                with self.assertRaisesRegex(Refused, 'tools are still running'):
-                    native.retain(self.root,self.attempt,{})
-        self.native_results[self.attempt]['completed_at']=now()
-        self.tool('mcp__o_harness__verify', use='nested-failure')
-        self.tool('apply_patch', use='nested-patch')
-        helper = shlex.join(cancellation.command_prefix(self.root, self.attempt)[:-3] + ['status'])
-        self.tool('Bash', {'command': helper}, use='nested-helper')
-        def completed(thread, **item):
-            with self.parent_path.open('a', newline='\n') as stream:
-                stream.write(json.dumps({'type': 'event_msg', 'payload': {
-                    'type': 'item_completed', 'thread_id': thread,
-                    'item': {'type': 'McpToolCall', 'id': 'nested-failure', **item}}}) + '\n')
-        completed('other-child', status='failed', result={'isError': True})
-        completed(self.worker, status='in_progress', result={})
-        completed(self.worker, status='failed', error={'message': 'transport timed out'})
-        with self.parent_path.open('a',newline='\n') as stream:
-            stream.write(json.dumps({'type':'event_msg','payload':{'type':'task_complete'}})+'\n')
-        with self.assertRaisesRegex(Refused, 'tools are still running'):
-            native.retain(self.root, self.attempt, {})
-        self.assertEqual(cancellation._read(self.root)['tools']['unfinished-edit']['completion_source'],'native-child-completed')
-        completed(self.worker, status='failed', result={'isError': True, 'content': []})
-        completed(self.worker, type='FileChange', id='nested-patch', status='failed', stderr='patch did not apply')
-        completed(self.worker, type='CommandExecution', id='nested-helper', status='completed', exit_code=None)
-        with self.assertRaisesRegex(Refused, 'tools are still running'):
-            native.retain(self.root, self.attempt, {})
-        completed(self.worker, type='CommandExecution', id='nested-helper', status='completed', exit_code=0)
-        native.retain(self.root, self.attempt, {})
-        self.assertTrue(load_run(self.root)[1]['attempts'][0]['finished'])
+    def _ordinary_tool_handoff(self, host):
+        prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+        native.approve_scope(self.root,prepared['scope_id'],self.human(host=host))
+        admitted=native.admit(self.root,'assessment')
+        native.bind(self.root,admitted['id'],{'child_session':'worker'})
+        before=load_run(self.root)[1]
+        initial=cancellation._read(self.root)['tools']
+        # The failed 0010 image had no inner completion callback. An arbitrary
+        # other native tool must behave the same way, without a tool-name list.
+        for name in ('view_image','apply_patch','mcp__example__operation'):
+            for use in (name,None):
+                self.assertEqual(cancellation.hook(self.root,host,{
+                    'hook_event_name':'PreToolUse','session_id':'s','agent_id':'worker',
+                    'tool_name':name,'tool_input':{},'tool_use_id':use}),{})
+        helper=shlex.join(cancellation.command_prefix(self.root,admitted['id'])[:-3]+['status'])
+        self.assertEqual(cancellation.hook(self.root,host,{
+            'hook_event_name':'PreToolUse','session_id':'s','agent_id':'worker',
+            'tool_name':'Bash','tool_input':{'command':helper},'tool_use_id':'helper'}),{})
+        self.assertEqual(cancellation._read(self.root)['tools'],initial)
+        legacy={name:{'attempt':admitted['id'],'kind':'tool','name':name,'started':now()}
+                for name in ('view_image','mcp__example__operation','OH helper')}
+        with cancellation._edit(self.root) as value:value['tools'].update(legacy)
+        # Removing individual callbacks never substitutes for the worker result.
+        with self.assertRaises(authority.Saving):native.retain(self.root,admitted['id'],{})
+        self.native_results[admitted['id']]={'status':'completed','text':json.dumps({'difficulty':'standard'})}
+        with cancellation._edit(self.root) as value:
+            value['commands']['running']={'attempt':admitted['id'],'started':now()}
+        with self.assertRaisesRegex(Refused,'Owned execution'):native.retain(self.root,admitted['id'],{})
+        with cancellation._edit(self.root) as value:value['commands']['running'].update(ended=now(),returncode=0)
+        self.assertEqual(native.retain(self.root,admitted['id'],{})['outcome'],'assessed')
+        native.resume(self.root,self.resume_choice(host=host))
+        after=load_run(self.root)[1]
+        for key in ('granted','scope_id','config'):self.assertEqual(after[key],before[key])
+        self.assertEqual(len(after['attempts']),1)
+        self.assertEqual(after['done'],[])
+        # Adoption does not fabricate completion for historical tool rows, even
+        # when a delayed post-hook arrives after the attempt has been retained.
+        cancellation.hook(self.root,host,{'hook_event_name':'PostToolUse','session_id':'s',
+            'agent_id':'worker','tool_use_id':'view_image'})
+        self.assertEqual({k:cancellation._read(self.root)['tools'][k] for k in legacy},legacy)
+        denied=cancellation.hook(self.root,host,{'hook_event_name':'PreToolUse','session_id':'s',
+            'agent_id':'worker','tool_name':'Read','tool_use_id':'late'})
+        self.assertEqual(denied['hookSpecificOutput']['permissionDecision'],'deny')
 
-    def test_failed_native_discovery_settles_retention_and_resume(self):
-        self.approve()
-        self.launch()
-        before = load_run(self.root)[1]
-        names = ('list_mcp_resources', 'list_mcp_resource_templates')
-        for name in names:
-            self.tool(name, {'server': 'unknown-server'}, use=name)
-        self.native_results[self.attempt] = {'status': 'completed', 'text': json.dumps({
-            'difficulty': 'simple', 'rationale': 'Read-only discovery failed; assessment completed.'})}
+    def test_codex_handoff_uses_worker_and_owned_execution_not_tool_callbacks(self):
+        self._ordinary_tool_handoff('codex')
 
-        def completed(name, **changes):
-            item = {'type': 'McpToolCall', 'id': name, 'tool': name, 'status': 'failed',
-                    'error': {'message': 'resources/list failed: unknown MCP server'}}
-            thread = changes.pop('thread', self.worker)
-            with self.parent_path.open('a', newline='\n') as stream:
-                stream.write(json.dumps({'type': 'event_msg', 'payload': {
-                    'type': 'item_completed', 'thread_id': thread, 'item': item | changes}}) + '\n')
-
-        for name in names:
-            completed(name, thread='another-child')
-            completed(name, status='in_progress')
-            completed(name, tool='external_write')
-        with self.assertRaisesRegex(Refused, 'tools are still running'):
-            native.retain(self.root, self.attempt, {})
-        for name in names:
-            self.assertNotIn('ended', cancellation._read(self.root)['tools'][name])
-            completed(name)
-        retained = native.retain(self.root, self.attempt, {})
-        self.assertEqual(retained['outcome'], 'assessed')
-        native.retain(self.root, self.attempt, {})
-        native.resume(self.root, self.resume_choice())
-        after = load_run(self.root)[1]
-        for key in ('granted', 'scope_id', 'config'):
-            self.assertEqual(after[key], before[key])
-        self.assertEqual(len(after['attempts']), 1)
-        self.assertEqual(after['done'], [])
-        for name in names:
-            self.assertEqual(cancellation._read(self.root)['tools'][name]['completion_source'], 'native-record')
+    def test_claude_handoff_uses_worker_and_owned_execution_not_tool_callbacks(self):
+        self._ordinary_tool_handoff('claude')
 
     def test_child_only_stop_rejects_older_resume_but_coordinator_cleanup_does_not(self):
         home = Path(self.temp.name) / 'host'
@@ -798,6 +900,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         metadata = {'stoppedByUser': True, 'toolUseId': 'spawn'}
         child.with_suffix('.meta.json').write_text(json.dumps(metadata), newline='\n')
         with patch('pathlib.Path.home', return_value=home):
+            with self.assertRaisesRegex(Refused,'child Stop'):cancellation.guard(self.root,state=state)
             saved_child = child.read_text(); child.write_text('', newline='\n')
             with self.assertRaisesRegex(authority.Saving, 'Stop occurrence is still saving'):
                 with cancellation.continuation(self.root, state, original | {'at': stamp('02')}):pass
@@ -944,14 +1047,14 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         with self.assertRaisesRegex(Refused, 'still running'):
             native.retain(self.root, admitted['id'], {})
         self.assertNotIn('ended', cancellation._read(self.root)['tools']['rejected-launch'])
-        # The parent's exact launch result settles only that call, not child tools.
+        # The parent's exact launch result settles the failed launch. The worker's
+        # native outcome, not its ordinary Read callback, establishes handoff.
         with self.parent_path.open('a', newline='\n') as stream:
             stream.write(json.dumps(result('rejected-launch')) + '\n')
-        with self.assertRaisesRegex(Refused, 'still running'):
-            native.retain(self.root, admitted['id'], {})
+        self.assertEqual(native.retain(self.root, admitted['id'], {})['outcome'],'assessed')
         tools = cancellation._read(self.root)['tools']
         self.assertEqual(tools['rejected-launch']['completion_source'], 'native-parent-record')
-        self.assertNotIn('ended', tools['worker-read'])
+        self.assertNotIn('worker-read', tools)
         event('PostToolUse', agent_id='worker', tool_use_id='worker-read')
         self.assertEqual(native.retain(self.root, admitted['id'], {})['outcome'], 'assessed')
         native.retain(self.root, admitted['id'], {})  # Recovery remains idempotent.
@@ -966,7 +1069,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
     def test_codex_rejected_launch_retry_settles_without_callback(self):
         self._rejected_launch_retry('codex')
 
-    def test_rejected_child_retention_reconciles_tools_without_binding_its_work(self):
+    def test_rejected_child_retention_requires_owned_cleanup_without_binding_its_work(self):
         self.approve()
         admitted = native.admit(self.root, 'assessment')
         before = load_run(self.root)[1]
@@ -994,7 +1097,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
             child.write_text(json.dumps(result('rejected-child')) + '\n', newline='\n')
             with self.assertRaisesRegex(Refused, 'still running'):
                 native.retain(self.root, admitted['id'], {})
-            self.assertEqual(cancellation._read(self.root)['tools']['admission-read']['completion_source'], 'native-record')
+            self.assertNotIn('ended',cancellation._read(self.root)['tools']['admission-read'])
             # Native helper completion never substitutes for owned-process cleanup.
             with cancellation._edit(self.root) as value:
                 value['commands']['owned'].update(ended=now(), returncode=130)

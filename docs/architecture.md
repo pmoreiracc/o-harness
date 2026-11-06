@@ -58,7 +58,7 @@ Agent call's structured handback report. OH matches the original report to the c
 acknowledged terminal handback, preserving its full text. Retention retries reuse the
 same completed attempt and do not repeat assessment or consume another allowance.
 Native final notices may omit the spawn-call ID; OH still requires the bound parent
-and child, current lifecycle and settled owned tools. Interim background-wait notices
+and child, current lifecycle and settled owned commands/checks. Interim background-wait notices
 cannot finish the attempt. Native system-marked background completions are tool evidence,
 never human approval, including when Claude delivers them as user-role messages.
 Claude Desktop Stop may leave only the child's native interruption record and
@@ -70,7 +70,7 @@ An omitted Claude spawn-call ID is recovered only from a unique native launch
 result, then checked against the immutable admission as usual.
 
 Claude's Agent and SubagentStop hooks reuse checked binding and retention. A hook is
-a wakeup, not proof that the child's tools have settled; delayed evidence is retried
+a wakeup, not proof that the child's execution has settled; delayed evidence is retried
 through the same helpers. Codex task paths resolve through native session metadata.
 Child admission and author helpers can recover a missed binding on both hosts, preserving
 the original profile checks and admission. No hook launches work or grants continuation.
@@ -191,7 +191,7 @@ a missing configured-check receipt from that saved identity. Unknown or reused i
 never authorize a signal. Historical receipts without an identity require conclusive
 cleanup evidence, such as a kernel boot time later than the command start.
 
-Resume verifies the existing human answer, waits for command/tool cleanup, and then
+Resume verifies the existing human answer, waits for owned command/check cleanup, and then
 transfers ownership under the tool-admission lock. Old attempts remain revoked after
 same-conversation or cross-conversation continuation. A cleanup receipt does not
 claim native model termination. Late reports remain attached to the original attempt
@@ -201,9 +201,18 @@ answer; it grants nothing independently. Changed instructions or a later Stop st
 invalidate continuation. Repeated questions are matched to their prepared decision's
 creation time, so an older identical question cannot replace the current answer.
 
-Native hooks are trusted host integrations, not a security sandbox. A missing or
-failed callback, a killed wrapper, detached work or an external service can prevent
-verified cleanup. OH must retain that uncertainty and refuse overlapping work.
+Ordinary native tools are not mirrored in OH's execution ledger. Their individual
+completion callbacks do not gate handoff; the native worker outcome and OH-owned
+commands/checks do. Older ordinary-tool rows remain unchanged and nonblocking.
+Worker launch/reactivation bindings, owned-command reservations and Stop guards remain.
+This follows the golden reference's task/outcome boundary while keeping OH's cross-host
+ownership and process cleanup. OH relies on the host for ordinary tool execution; it
+does not independently certify the lifetime of arbitrary external-service jobs.
+
+Native hooks are trusted host integrations, not a security sandbox. A killed wrapper
+or missing owned-process evidence can prevent verified cleanup. OH retains that
+uncertainty and refuses overlapping work. A missing ordinary-tool callback alone
+is not evidence that a worker or owned process remains active.
 The [evidence and acceptance plan](plans/native-stop-recovery.md) separates live
 prototype results from fixture coverage and pending platform tests.
 

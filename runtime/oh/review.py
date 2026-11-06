@@ -101,7 +101,9 @@ def repair_source(root, run):
     base=main_ref(root)
     fork=git(root,'merge-base','HEAD',base) if base else current['head']
     covers=unreviewed(root,fork,base) if base else []
-    return {'run':run,'attempt':latest['id'],'receipt':str(Path(latest['evidence'])/'result.json'),
-            'hash':digest(read_json(Path(latest['evidence'])/'result.json')),'findings':latest['findings'],
+    from .handoff import report_reference
+    ref=report_reference(latest)
+    return {'run':run,'attempt':latest['id'],'receipt':ref['path'],
+            'hash':ref.get('hash') or digest(read_json(ref['path'])),'findings':latest['findings'],
             'subject':state['subject'],'starting_work':current,'files':changes(root),'covers':covers,
             'review_base':fork if covers else current['head'],'new_branch':published_branch}

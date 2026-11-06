@@ -17,6 +17,42 @@ def parse(arguments):
     return {'kind':'quick_fix','intent':text,'authorized':False,'prepare':True,
             'next':'Prepare the agreed task list and return its preview and decision menu, including the task/review limits. Execution has not started.'}
 
+
+def track_question(doc):
+    return f'Which track should OH deliver for design {doc}?'
+
+
+DESIGN_QUESTION='Which approved design should OH deliver?'
+
+
+def requested(source,doc,track,command):
+    """Validate a native request or its concrete selection in native question context."""
+    menu=source.get('via')=='question'
+    selected=parse(command[1]) if command and not menu else None
+    if selected:
+        if (selected.get('kind'),selected.get('doc'),selected.get('track'))!=('design',doc,track):
+            raise Refused('The native request selects a different design or track')
+        return
+    text=source['prompt'].strip()
+    direct=re.fullmatch(r'(?i)(?:(?:can|could|would) you |please )?(?:deliver|implement|build|finish)\s+'
+        r'(?:(?:the )?(?:approved )?design\s+)?([0-9]{4})(?:\s+(?:track\s+)?([a-zA-Z0-9_-]+))?[.!?]?',text)
+    if direct and not menu:
+        if (direct[1],(direct[2] or '').casefold())!=(doc,track.casefold()):
+            raise Refused('The native request selects a different design or track')
+        return
+    # Native menu answers and typed replies both retain the question actually shown.
+    # A short choice completes that question; it need not repeat a skill invocation.
+    from .authority import question_text
+    question=source.get('question','')
+    expected=track_question(doc) if track else DESIGN_QUESTION
+    delivery_choice=(question_text(question)==expected if source.get('via')=='question' else
+                     any(question_text(line)==expected for line in question.splitlines()))
+    answer=re.sub(r'(?i)\s*\(recommended\)$','',question_text(text)).strip()
+    choice=answer.casefold()
+    choices={doc} if not track else {track.casefold(),doc+' '+track.casefold()}
+    if delivery_choice and choice in choices:return
+    raise Refused('Request delivery of this approved design explicitly before admitting its task batch')
+
 def inputs(where):
     return plans.private_inputs(where|{'location':'private'})
 
@@ -122,7 +158,7 @@ def selection(root,doc,track='',*,claim=True):
     _,contract=parsed(approved['text']);_,current=parsed(text)
     if set(contract)!=set(current) or any(contract[n][2:]!=current[n][2:] for n in contract):
         raise Refused('The working design task contract differs from its approved source')
-    rows=list(current.values());tracks={r[2] for r in rows}
+    rows=sorted(current.values(),key=lambda r:int(r[0]));tracks={r[2] for r in rows}
     if where['location']=='private':delivered_base(root,approvals[doc],progressed=any(r[1]=='done' for r in rows))
     roadmap=plans.initiatives(root,where)
     named=[row for row in roadmap if row[3]==doc]
@@ -138,7 +174,6 @@ def selection(root,doc,track='',*,claim=True):
                 if record.get('path')!=str(dependency_path) or record.get('sha256')!=plans.digest_of(dependency_path):raise Refused(f'Completed dependency {dependency} changed since its approved delivery')
                 delivered_base(root,record,progressed=True);approvals[number]=record
             freeze_render(root,number,layout=where)
-    if len(tracks)>1 and not track and any(r[1]=='pending' for r in rows):raise Refused('Choose one design track: '+', '.join(sorted(tracks)))
     if track and track not in tracks:raise Refused('Unknown design track')
     # Working checkboxes cannot create completion authority. Only reviewed delivery records can.
     completed={n for n,row in contract.items() if row[1]=='done'}
@@ -149,6 +184,11 @@ def selection(root,doc,track='',*,claim=True):
     except Refused:pass
     for n,row in current.items():
         if row[1]=='done' and n not in completed:raise Refused('Unrecorded task completion cannot grant subsequent work')
+    if not track and len(tracks)>1:
+        runnable={r[2] for r in rows if r[0] not in completed and not r[4]
+                  and set(filter(None,r[3].split(',')))<=completed}
+        if len(runnable)>1:raise Refused('Choose one design track: '+', '.join(sorted(runnable))+'\n'+track_question(doc))
+        if runnable:track=next(iter(runnable))
     tasks=[];available=set(completed)
     for row in rows:
         task_id,_,owner,needs,blocked,title=row

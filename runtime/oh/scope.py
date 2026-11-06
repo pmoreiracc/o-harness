@@ -44,6 +44,13 @@ def followups(state):
         if bound and bound.get('status') in ('draft','approved') and not state.get('correction'):
             item['suggested_design']=bound['path']
         result.append(item)
+    from .retention import diagnostic_index
+    for item in diagnostic_index(state):
+        findings=[f for f in item['findings'] if f['severity']=='scope']
+        if findings and item['role']=='review':
+            result.append({'attempt':item['attempt'],'task':item['task'],'findings':findings,
+                           'action':'retained','destination':{'saved':True},'historical':True,
+                           'report':item['report'],'status':item['status']})
     return result
 
 

@@ -143,30 +143,26 @@ def _settle(root, journal, state, source):
                 if proof:
                     with cancellation._edit(root) as updated:
                         updated['commands'][key].update(ended=now(), returncode=130, cleanup=proof)
-            try: cancellation.reconcile_tools(root, attempt)
-            except FileNotFoundError: pass
+            try: cancellation.reconcile_execution(root, attempt)
+            except (FileNotFoundError,authority.Unavailable): pass
             with cancellation._edit(root) as updated:
                 for tool in updated['tools'].values():
                     if tool['attempt'] == attempt['id'] and tool['kind'] == 'launch':
                         # Only launch bookkeeping is retired here. Known child
-                        # tools and command receipts still require real cleanup.
+                        # lifecycle and command receipts still require real cleanup.
                         tool.setdefault('ended', now())
                         tool.setdefault('completion_source', 'recovery-revocation')
             if cancellation.quiescent(root, attempt['id']): break
             time.sleep(.1)
         if not cancellation.quiescent(root, attempt['id']):
             raise authority.Saving('Old operations are still settling. Retry this same recovery answer; do not ask again or start another worker.')
-        directory = Path(attempt['evidence'])
-        native._immutable(directory/'revoked-result.json', {
-            'status': 'abandoned', 'text': '', 'origin': 'human-recovery',
-            'record_hashes': source['record_hashes'], 'interruption': revocation,
-            'note': 'Execution authority revoked and tracked operations settled; no native success or model termination is asserted.'})
-        if not (directory/'result.json').exists():
-            native._immutable(directory/'result.json', {'summary': 'Abandoned by the recovery decision; existing files preserved.', 'findings': []})
-        with cancellation.settlement(root, attempt['id']):
-            journal.append('attempt.finished', {'id': attempt['id'], 'outcome': 'abandoned',
-                'summary': 'Abandoned by explicit recovery.', 'revocation': revocation,
-                'native_source': source['record_hashes'], 'findings': attempt.get('findings', [])})
+        state=load_run(root,state['id'])[1]
+        attempt=native._attempt(state,attempt['id'])
+        native._finish_attempt(root,journal,state,attempt,{
+            'status':'abandoned','text':'','origin':'human-recovery',
+            'record_hashes':source['record_hashes'],'interruption':revocation,
+            'note':'Execution authority revoked and owned execution settled; no native success or model termination is asserted.'},
+            stopped=revocation,revoked=True,recovery=True)
     return load_run(root, state['id'])[1]
 
 
