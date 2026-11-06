@@ -22,17 +22,38 @@ def family_identity(finding):
     return family_fields(family if isinstance(family,str) and family else finding['description'])['family']
 
 
+def report_reference(attempt, *, verify=True):
+    if not attempt or not attempt.get('evidence'):return None
+    ref=(attempt.get('normalized_report') or attempt['report_ref'] if attempt.get('source_ref') else
+         (attempt.get('late_report') if not attempt.get('late_source') else None) or attempt.get('normalized_report') or {'path':str(Path(attempt['evidence'])/'result.json')})
+    if verify and ref.get('hash'):
+        try:value=read_json(ref['path'])
+        except FileNotFoundError:raise Refused('The retained report is missing; restore its original evidence before continuing.') from None
+        if digest(value)!=ref['hash']:raise Refused('The retained report changed; restore its original evidence before continuing.')
+    return ref
+
+
 def report(attempt):
     if not attempt or not attempt.get('evidence'):return {}
     try:
-        if ref:=attempt.get('late_report') or attempt.get('normalized_report'):
-            value=read_json(ref['path'])
-            if digest(value)!=ref['hash']:raise Refused('The normalized handoff changed; preserve the original evidence.')
-        else:
-            saved=read_json(Path(attempt['evidence'])/'result.json')
-            value=saved.get('structured',saved)
+        ref=report_reference(attempt);value=read_json(ref['path'])
+        if ref.get('hash') and digest(value)!=ref['hash']:raise Refused('The normalized handoff changed; preserve the original evidence.')
+        value=value.get('structured',value)
     except FileNotFoundError:return {}  # a terminated host may have saved no final report
     return value if isinstance(value, dict) else {}
+
+def context_report(attempt):
+    """Prior reports inform a new agent; unavailable archives are not a gate."""
+    ref=report_reference(attempt,verify=False)
+    if not ref:return {},None
+    try:
+        value=read_json(ref['path'])
+        if ref.get('hash') and digest(value)!=ref['hash']:raise Refused('Changed report')
+        return value.get('structured',value),ref|{'hash':ref.get('hash') or digest(value),'available':True,'status':'available'}
+    except FileNotFoundError:status='unavailable'
+    except (Refused,ValueError,TypeError,AttributeError):status='changed'
+    return {},ref|{'available':False,'status':status}
+
 
 def confirms_repairs(state, attempt):
     """Only valid independent evidence closes earlier in-scope findings."""
@@ -50,13 +71,26 @@ def confirms_repairs(state, attempt):
     except Refused:return False
     return True
 
-def finding_index(state, task):
+
+def confirms_blocker_repairs(attempt,subject=None):
+    """A valid nonblocking review closes blockers; concern acceptance is separate."""
+    if not attempt.get('finished') or attempt.get('superseded') or attempt.get('report_issues') or attempt.get('review_fragments'):return False
+    if not attempt.get('git_tree') or not attempt.get('head'):return False
+    if subject and any(attempt.get(k)!=subject.get(k) for k in ('head','tree','git_tree','artifacts')):return False
+    findings=attempt.get('findings',[])
+    return (attempt.get('outcome')=='clean' and not findings or attempt.get('outcome')=='needs_resolution'
+            and bool(findings) and all(f['severity'] in ('concern','scope') for f in findings))
+
+def finding_index(state, task, *, subject=None):
     """Distinct cases and original locators, with later review evidence and labelled author claims."""
     families = {}
     incomplete = []
     history = [a for a in state['attempts'] if a['task'] == task and a.get('purpose','workflow')=='workflow']
+    latest_review=next((a for a in reversed(history) if a['role']=='review' and a.get('finished') is not False and not a.get('superseded')),None)
+    candidate=state.get('candidate',{})
+    subject=subject or (candidate if candidate.get('task')==task else latest_review)
     author = next((a for a in reversed(history) if a['role'] in ('implementation','analysis') and a.get('finished')), None)
-    readiness = report(author).get('readiness') or {}
+    readiness = context_report(author)[0].get('readiness') or {}
     items = readiness.get('prior_findings', []) if isinstance(readiness,dict) else []
     claims = {c['id']:c for c in items if isinstance(c,dict) and set(c)=={'id','disposition','proof'}
               and all(isinstance(v,str) for v in c.values())} if isinstance(items,list) else {}
@@ -92,16 +126,30 @@ def finding_index(state, task):
                 'review': str(Path(attempt['evidence'])/'result.json') if attempt.get('evidence') else '',
                 'tree': attempt.get('git_tree') or attempt.get('tree'),
                 'decision': choice, 'scope_action': scope.get('action')}
+            source=attempt.get('finding_sources',{}).get(str(number))
+            historical=bool(source) or number in attempt.get('historical_positions',[])
+            if source:
+                ref=source['report'];occurrence.update(review=ref['path'],report=ref,original_position=source['position'],historical=True)
+                try:
+                    from .retention import read
+                    read(ref);occurrence['source_status']='verified'
+                except FileNotFoundError:occurrence['source_status']='unavailable'
+                except (Refused,ValueError):occurrence['source_status']='changed'
+                if finding['severity']=='concern':occurrence['note']='Historical observation; current review decisions do not accept or dismiss this occurrence.'
             # A later valid review closes earlier in-scope findings. An author claim alone cannot.
-            clean = next((a for a in reversed(history[position+1:]) if a['role']=='review' and confirms_repairs(state,a)), None)
-            if disposition=='still-open' and finding['severity']!='scope' and clean:
+            clean=latest_review if latest_review in history[position+1:] and (
+                confirms_blocker_repairs(latest_review,subject) if finding['severity']=='blocking' else
+                confirms_repairs(state,latest_review) and (not subject or all(latest_review.get(k)==subject.get(k) for k in ('head','tree','git_tree','artifacts')))) else None
+            if disposition=='still-open' and finding['severity']!='scope' and clean and not (historical and finding['severity']=='concern'):
                 occurrence.update(disposition='fixed', reviewed_by=clean['id'],
                     resolution_evidence=str(Path(clean['evidence'])/'result.json') if clean.get('evidence') else '')
             if claim:=claims.get(occurrence['id']):
                 occurrence['author_claim']={k:claim[k] for k in ('disposition','proof')} | {
                     'attempt':author['id'], 'evidence':str(Path(author['evidence'])/'result.json')}
             group['occurrences'].append(occurrence)
-    return {'schema': VERSION, 'task': task, 'families': list(families.values()), 'incomplete_reviews': incomplete}
+    from .retention import diagnostic_index
+    return {'schema': VERSION, 'task': task, 'families': list(families.values()), 'incomplete_reviews': incomplete,
+            'diagnostics':diagnostic_index(state,task)}
 
 def finding_ids(index):
     return {item['id'] for family in index['families'] for item in family['occurrences']}
@@ -124,20 +172,18 @@ def supplementary_evidence(references):
 def prepare(state, task, role, directory, admission, feedback=''):
     """An immutable projection of native facts and the latest author's explicitly labelled claims."""
     directory = Path(directory)
-    index = finding_index(state, task['id'])
+    index = finding_index(state, task['id'],subject=admission)
     index_path = directory/'finding-index.json'
     atomic_json(index_path, index, immutable=True)
     authors = [a for a in state['attempts'] if a['task'] == task['id'] and
                a['role'] in ('implementation', 'analysis') and a.get('finished') and a.get('evidence')]
     author = authors[-1] if authors else None
-    value = report(author)
+    value,author_ref = context_report(author)
     current = None
     if author:
-        path = Path(author['normalized_report']['path']) if author.get('normalized_report') else Path(author['evidence'])/'result.json'
         current = {'attempt': author['id'], 'outcome': author.get('outcome'), 'superseded':bool(author.get('superseded')),
             'summary': value.get('summary') or author.get('summary', ''),
-            'readiness': value.get('readiness'), 'report': {'path': str(path),
-                'hash': digest(read_json(path)) if path.is_file() else None, 'available':path.is_file()},
+            'readiness': value.get('readiness'), 'report': author_ref,
             'authority': 'Historical author report, never approval or proof of completion. Recheck reported execution failures in the current environment.'}
     verification = state.get('verification', {}).get(task['id'])
     # Full command logs stay with their native check receipt, outside the mandatory context.
@@ -145,6 +191,10 @@ def prepare(state, task, role, directory, admission, feedback=''):
         verification = {k: v for k, v in verification.items() if k != 'checks'} | {
             'checks': [{k: c[k] for k in ('name', 'command', 'returncode', 'cancellation', 'unavailable', 'duration_ms', 'reused', 'logs') if k in c}
                        for c in verification['checks']]}
+    selected_reports={(a['id'],a.get('report_ref',{}).get('hash')) for a in state['attempts']
+                      if a.get('outcome') in ('reported','assessed','clean','blocking','needs_resolution')}
+    supplementary=[e for e in state.get('supplementary',[])
+                   if not e.get('report_hash') or (e.get('attempt'),e['report_hash']) not in selected_reports]
     packet = {'purpose':admission.get('purpose','workflow'),'schema': VERSION, 'run': state['id'], 'task': task,
         'subject': {k: admission.get(k) for k in ('head', 'tree', 'git_tree', 'config_hash')},
         'role': role, 'current_work': current, 'remaining_work': feedback,
@@ -155,7 +205,7 @@ def prepare(state, task, role, directory, admission, feedback=''):
         'approved_repairs':[repair for task_id,repairs in state.get('approved_repairs',{}).items()
                             if task_id==task['id'] or role=='review' and task_id in state['done'] for repair in repairs],
         'proposal_decisions':state.get('proposal_answers',[]),
-        'supplementary_evidence':supplementary_evidence(state.get('supplementary',[])),
+        'supplementary_evidence':supplementary_evidence(supplementary),
         'supplementary_evidence_policy':'Historical diagnostics, not current verification or authority. File status is observed at admission. Changed or unavailable references do not block authorized repairs; inspect current inputs when relevant and use current candidate checks and independent review for completion.',
         'completed_tasks':[{'id':t['id'],'title':t['title']} for t in state['tasks'] if t['id'] in state['done']],
         'standalone_subject':state.get('standalone_subject'),
@@ -187,11 +237,10 @@ def prepare(state, task, role, directory, admission, feedback=''):
             'exit 130 is cancellation, never a passing check or a reason to retry this worker.'}
     latest=next((a for a in reversed(state['attempts']) if a['task']==task['id'] and a['role']=='review' and a.get('finished') and a.get('evidence')),None)
     if latest:
-        ref=latest.get('late_report') or latest.get('normalized_report')
-        path=Path(ref['path']) if ref else Path(latest['evidence'])/'result.json'
+        _,ref=context_report(latest)
         packet['current_review']={'attempt':latest['id'],'outcome':latest.get('outcome'),
-            'report':{'path':str(path),'hash':digest(read_json(path))},
-            'instruction':'Read the full receipt, including reasoning and limits, before deciding repairs. Judge claims against the approved scope and concrete behavior; do not implement suggestions blindly.'}
+            'report':ref,
+            'instruction':'Read available receipt details before deciding repairs. If unavailable, investigate the retained findings against current code; missing optional history is not a readiness gate. Judge claims against the approved scope and concrete behavior; do not implement suggestions blindly.'}
     if not state.get('standalone_subject'):
         approval=directory.parent.parent/'scope'/'approval.json'
         if approval.is_file():packet['human_scope_approval']={'path':str(approval)}

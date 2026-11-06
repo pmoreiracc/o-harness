@@ -4,7 +4,7 @@ The host still executes and approves every tool. This module can only revoke wor
 Resume authority remains in native.decision. Old attempts retain their revocation
 when the same conversation receives a new owner epoch.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 import json
 import os
@@ -15,6 +15,7 @@ from .storage import Refused, atomic_json, checkout_file, digest, identifier, lo
 
 _execution = ContextVar('oh_execution', default=None)
 _hook_checkout = ContextVar('oh_hook_checkout', default=None)
+_callback = ContextVar('oh_control_callback', default=False)
 
 
 def _path(root):
@@ -25,7 +26,15 @@ def _path(root):
 
 @contextmanager
 def _edit(root):
-    with lock(_path(root).with_suffix('.lock')):
+    from time import sleep
+    with ExitStack() as held:
+        for delay in (0,.01,.02,.04,.08):
+            if delay:sleep(delay)
+            try:
+                held.enter_context(lock(_path(root).with_suffix('.lock'),wait=not _callback.get()))
+                break
+            except Refused as exc:
+                if not _callback.get() or not isinstance(exc.__context__,BlockingIOError) or delay==.08:raise
         path = _path(root)
         value = read_json(path) if path.exists() else {'owners': {}, 'attempts': {}, 'tools': {}, 'commands': {}}
         before = digest(value) if path.exists() else None
@@ -49,6 +58,11 @@ def owner_key(state):
 def register_owner(root, state, *, active=True):
     key = owner_key(state)
     with _edit(root) as value:
+        # Verified coordinator state repairs old journal/control write gaps before
+        # selecting this owner. Closure is not proof that tracked operations ended.
+        for attempt in state.get('attempts',[]):
+            record=value['attempts'].get(attempt['id'])
+            if record and attempt.get('finished'):record['finished']=True
         if active:
             value['current'] = key
         value['owners'].setdefault(key, {
@@ -71,7 +85,7 @@ def register_attempt(root, state, attempt):
         })
 
 
-def bind(root, attempt, child):
+def bind(root, attempt, child, *, aliases=()):
     with _edit(root) as value:
         record = value['attempts'].get(attempt['id'])
         if record is None:
@@ -79,6 +93,7 @@ def bind(root, attempt, child):
         if record['child'] not in (None, child):
             raise Refused('Native interruption binding cannot change children')
         record['child'] = child
+        record['aliases'] = sorted(aliases)
         record['verified'] = True
         if record.get('launch') in value['tools']:
             value['tools'][record['launch']]['ended'] = now()
@@ -104,6 +119,15 @@ def guard(root, *, attempt=None, state=None):
         raise Refused('Native interruption evidence is still being saved or read. Retry this same operation; no new approval is needed.')
     if interrupted(root, attempt, state):
         raise Refused('Native Stop ended this work. Preserve its edits and use the existing Resume question to continue.')
+    if state:
+        from .authority import child_user_interruption,newer
+        control=_read(root)
+        for child in state.get('attempts',[]):
+            owned=(control or {}).get('attempts',{}).get(child['id'])
+            if owned and owned['owner']!=owner_key(state):continue
+            stopped=child_user_interruption(root,state,child)
+            if stopped and newer(stopped['at'],state['human'].get('at')):
+                raise Refused('Native child Stop ended this selection. Preserve its edits and use the existing Resume decision before advancing.')
 
 
 def _record_stop(owner, turn, record):
@@ -367,9 +391,30 @@ def hook(root, host, payload):
         return {}
     # Resolve registration once for this synchronous callback. Repeated Git
     # identity checks in poll/read/edit can otherwise exhaust the host deadline.
-    token=_hook_checkout.set((root,path))
-    try:return _hook(root,host,payload)
-    finally:_hook_checkout.reset(token)
+    token=_hook_checkout.set((root,path));callback=_callback.set(True)
+    try:
+        try:return _hook(root,host,payload)
+        except Refused as exc:
+            if not isinstance(exc.__context__,BlockingIOError):raise
+            value=_read(root);actor=_actor(value,host,payload)
+            targets=_resume_targets(value,host,payload)
+            args=payload.get('tool_input') or {};text=args.get('prompt',args.get('message',''))
+            launch=any(args.get('task_name')=='oh_'+a.replace('-','') or isinstance(text,str) and str(Path(r['directory'])/'request.json') in text
+                       for a,r in value['attempts'].items())
+            if payload.get('hook_event_name')=='PreToolUse' and (actor or targets or launch):
+                return _deny('OH is settling this attempt. Retry the same native call after the current operation finishes; no new approval is needed.')
+            return {}  # Unrelated work and lost post callbacks grant no OH authority.
+    finally:
+        _callback.reset(callback);_hook_checkout.reset(token)
+
+
+def _resume_targets(value,host,payload):
+    if host!='claude':return []
+    from .authority import claude_reactivation
+    return [a for a,r in value['attempts'].items() if r.get('child')
+            and value['owners'][r['owner']]['host']==host and value['owners'][r['owner']]['session']==payload.get('session_id')
+            and claude_reactivation(payload.get('tool_name'),payload.get('tool_input'),
+                                    {'child_session':r['child']},r.get('aliases',[]))]
 
 
 def _hook(root,host,payload):
@@ -405,8 +450,8 @@ def _hook(root,host,payload):
                                           'at': now(), 'event': 'Interrupt'})
             return {}
         if event in ('PostToolUse', 'PostToolUseFailure'):
-            if use in value['tools']:
-                value['tools'][use]['ended'] = now()
+            if use in value['tools'] and value['tools'][use]['kind'] != 'tool':
+                value['tools'][use]['returned' if value['tools'][use]['kind']=='resume' else 'ended'] = now()
             return {}
         if event == 'SubagentStart':
             pending = [(a, r) for a, r in value['attempts'].items()
@@ -420,6 +465,18 @@ def _hook(root,host,payload):
             return {}
         name = payload.get('tool_name', '')
         args = payload.get('tool_input') or {}
+        targets=_resume_targets(value,host,payload)
+        if targets:
+            if len(targets)!=1:return _deny('This native name is ambiguous. Address the original OH child by its native ID.')
+            target=targets[0];record=value['attempts'][target];owner=value['owners'][record['owner']]
+            if record['finished'] or record['owner']!=value.get('current') or Path(owner['marker']).exists():
+                return _deny('This OH attempt has ended or stopped. Retain its evidence and obtain a fresh admission; do not reactivate it.')
+            if not caught_up or not use:return _deny('Native evidence is still saving. Retry this same call with its native identity.')
+            value['tools'][use]={'attempt':target,'kind':'resume','name':name,'started':now()}
+            return {}
+        if name in ('Agent','Task') and args.get('name') and not args.get('resume'):
+            for record in value['attempts'].values():
+                if record.get('launch')!=use and args['name'] in record.get('aliases',[]):record['aliases'].remove(args['name'])
         shell, command = _shell_command(host, name, args)
         if not actor and turn and any(o['host'] == host and o['session'] == session
                                      and _turn_stopped(o, turn)
@@ -443,8 +500,6 @@ def _hook(root,host,payload):
                              'The coordinator can resume with a fresh attempt in either conversation.')
             if not caught_up:
                 return _deny('OH is waiting for native interruption evidence to finish saving. Retry this same tool call; no new approval is needed.')
-            if not use:
-                return _deny('The native host omitted this tool’s identity. Retry the same call after its records are saved; OH cannot track an unidentified operation.')
             admission_call = (name.endswith('admission') and args.get('attempt_directory') == record['directory'])
             admission_shell = (shell and isinstance(command, str)
                                and _focused_helper(root, actor, record, command)
@@ -467,9 +522,6 @@ def _hook(root,host,payload):
                             prefix = command_prefix(root, actor)[:-3] + ['verify', '--attempt', actor]
                             invocation = _shell_guidance(prefix, host, name)
                             return _deny('Bind this check to its admitted attempt, then retry the same native shell call: ' + invocation)
-                    if use:
-                        value['tools'][use] = {'attempt': actor, 'kind': 'tool', 'name': 'OH helper',
-                                               'helper': helper, 'started': now()}
                     return {}
                 argv = _owned_argv(root, actor, command)
                 if argv is None:
@@ -487,8 +539,6 @@ def _hook(root,host,payload):
                 value['tools'][use] = {'attempt': actor, 'kind': 'command',
                                        'argv': digest(argv), 'started': now(), 'receipt': receipt}
                 return {}
-            if use:
-                value['tools'][use] = {'attempt': actor, 'kind': 'tool', 'name': name, 'started': now()}
             return {}
         # Only native OH launches are associated with an admission. Unrelated host work is untouched.
         target = args.get('task_name')
@@ -573,7 +623,7 @@ def spawned_command(context, key, child):
 def _quiescent(value, attempt, *, retained=False):
     if not value or attempt not in value['attempts']:
         return True  # Historical attempts still require their actual native terminal result.
-    retained=retained and value['attempts'][attempt].get('finished')
+    retained=value['attempts'][attempt].get('finished',False)
     if any(c['attempt'] == attempt and not c.get('ended') for c in value['commands'].values()):
         return False
     for tool in value['tools'].values():
@@ -581,10 +631,10 @@ def _quiescent(value, attempt, *, retained=False):
             continue
         if retained and tool.get('ended'):
             continue  # Recorded settlement survives later expiry of temporary command receipts.
-        # Cancelled parallel code-mode calls can lose their completion callback.
-        # These focused reads cannot edit the consumer or grant execution.
-        # Their missing replies must not prevent retention of a terminal worker.
-        if tool['kind']=='tool' and tool.get('name') in ('mcp__o_harness__resource','mcp__o_harness__command_format'):
+        # Older builds mirrored ordinary native tools here. Their callbacks are
+        # not execution authority or process-cleanup evidence. Leave the history
+        # untouched; worker settlement is checked through its native lifecycle.
+        if tool['kind']=='tool':
             continue
         if tool.get('receipt'):
             if tool.get('cleanup'):
@@ -615,14 +665,27 @@ def settlement(root, attempt):
     with _edit(root) as value:
         if not _quiescent(value, attempt):
             from .authority import Saving
-            raise Saving('Owned command or tool cleanup is still pending. Retry retention with the same answer.')
-        yield
-        if attempt in value['attempts']:
-            value['attempts'][attempt]['finished'] = True
+            raise Saving('Owned execution is still pending. Retry retention with the same answer.')
+        yield value
 
 
-def reconcile_tools(root, attempt, terminal=None):
-    """Reconcile under the control lock; report edits needing native completion."""
+def close_settled(root, attempt, value):
+    """Persist denial before journal completion, while settlement holds the gate."""
+    if not _quiescent(value,attempt):
+        raise Refused('Owned operations changed before closure; retry retention after cleanup.')
+    if attempt not in value['attempts']:return
+    # _quiescent verified receipt completion or an unclaimed owned reservation.
+    # Persist that fact before temporary receipts expire. Claims use this same
+    # gate and reject the closed entry; external calls cannot use this exception.
+    for tool in value['tools'].values():
+        if tool['attempt']==attempt and tool['kind']=='command':
+            tool.setdefault('ended',now())
+    value['attempts'][attempt]['finished']=True
+    atomic_json(_path(root),value)
+
+
+def reconcile_execution(root, attempt, terminal=None):
+    """Reconcile worker lifecycle and owned processes, never ordinary tool callbacks."""
     value = _read(root)
     control = value['attempts'].get(attempt['id']) if value else None
     launches = {key for key, tool in value['tools'].items()
@@ -653,6 +716,23 @@ def reconcile_tools(root, attempt, terminal=None):
     bound = attempt.get('native_child')
     if not bound:
         return
+    operations={}
+    if control and value['owners'][control['owner']]['host']=='claude':
+        from .workflow import load_run
+        from .authority import claude_operations, Unavailable
+        owner_state=load_run(root,value['owners'][control['owner']]['run'])[1]
+        try:operations=claude_operations(owner_state,attempt)
+        except (FileNotFoundError,Unavailable):
+            # Missing parent history proves no resume settled. Preserve every
+            # tracked reservation and still inspect child/process cleanup below.
+            operations={}
+    if operations and control:
+        with _edit(root) as updated:
+            for use,operation in operations.items():
+                tool=updated['tools'].setdefault(use,{'attempt':attempt['id'],'kind':'resume','name':'Native reactivation','started':operation['started']})
+                if tool['attempt']!=attempt['id'] or tool['kind']!='resume':raise Refused('Native reactivation identity conflicts with another retained operation')
+                if operation['state'] in ('settled','rejected') or operation['state']=='returned' and terminal and terminal.get('native_id')==bound['child_session']:
+                    tool.update(ended=now(),completion_source='native-reactivation-'+operation['state'])
     value = _read(root)
     control = value['attempts'].get(attempt['id']) if value else None
     if control and Path(value['owners'][control['owner']]['marker']).exists():
@@ -700,75 +780,11 @@ def reconcile_tools(root, attempt, terminal=None):
                     with _edit(root) as updated:
                         updated['tools'][key].update(ended=now(), cleanup=proof)
             value = _read(root)
-    pending = {key for key, tool in value['tools'].items()
-               if tool['attempt'] == attempt['id'] and not tool.get('ended')} if value else set()
-    if not pending:
-        return
-    from .authority import _records
-    ended = {}
-    for record in _records(bound['transcript_path']):
-        if record.get('type') == 'response_item':
-            item = record.get('payload') or {}
-            if item.get('type') in ('function_call_output', 'custom_tool_call_output') and item.get('call_id') in pending:
-                ended[item['call_id']] = 'native-record'
-        if record.get('type') == 'event_msg':
-            event = record.get('payload') or {}
-            item = event.get('item') or {}
-            # Code-mode nested tools use exec-* IDs in item_completed, not the
-            # enclosing custom_tool_call_output's call_* ID. A returned MCP
-            # error is completion. Discovery can also fail before a server is
-            # reached, leaving only an error. That ends the read-only discovery
-            # call, but an arbitrary MCP transport error cannot prove cleanup.
-            tool = value['tools'].get(item.get('id'), {})
-            discovery_failed = (tool.get('kind') == 'tool'
-                and tool.get('name') in ('list_mcp_resources', 'list_mcp_resource_templates')
-                and item.get('tool') == tool['name']
-                and item.get('status') == 'failed' and isinstance(item.get('error'), dict))
-            item_terminal = (
-                item.get('type') == 'McpToolCall' and (isinstance(item.get('result'), dict) or discovery_failed)
-                or item.get('type') == 'CommandExecution' and type(item.get('exit_code')) is int
-                or item.get('type') == 'FileChange')
-            if (event.get('type') == 'item_completed'
-                    and event.get('thread_id') == bound['child_session']
-                    and item.get('id') in pending
-                    and item.get('status') in ('completed', 'failed') and item_terminal):
-                ended[item['id']] = 'native-record'
-        if record.get('type') == 'user':
-            content = (record.get('message') or {}).get('content')
-            for item in content if isinstance(content, list) else []:
-                if isinstance(item, dict) and item.get('type') == 'tool_result' and item.get('tool_use_id') in pending:
-                    ended[item['tool_use_id']] = 'native-record'
-    owner = value['owners'][value['attempts'][attempt['id']]['owner']]
-    # Codex may omit the inner FileChange/post-hook when apply_patch fails before
-    # execution. Its native completed child is the lifecycle boundary for this
-    # built-in edit, not for commands, helpers or arbitrary external tools.
+    resumes={key for key,tool in value['tools'].items() if tool['attempt']==attempt['id'] and tool['kind']=='resume' and not tool.get('ended')} if value else set()
     from .authority import newer
-    if (owner['host']=='codex' and terminal and terminal.get('status')=='completed'
-            and terminal.get('native_id')==bound['child_session']):
-        for key in pending-ended.keys():
-            tool=value['tools'][key]
-            if (tool['kind']=='tool' and tool.get('name')=='apply_patch'
-                    and newer(terminal.get('completed_at'),tool.get('started'))):
-                ended[key]='native-child-completed'
-    if Path(owner['marker']).exists():
-        from .controls import busy
-        # verify holds oh-runner.lock across every check and its final journal
-        # write. The caller holds oh-control.lock, so no queued old verify can
-        # pass _author's Stop check while this proof/retention is committed.
-        # Command receipts remain independently required by _quiescent, even
-        # if a killed helper released its lock before its descendants ended.
-        if not busy(root):
-            for key in pending - ended.keys():
-                tool = value['tools'][key]
-                if tool.get('name') == 'mcp__o_harness__verify' or tool.get('helper') == 'verify':
-                    ended[key] = 'stopped-verification'
-    if ended:
-        with _edit(root) as value:
-            for key, source in ended.items():
-                value['tools'][key]['ended'] = now()
-                value['tools'][key]['completion_source'] = source
-    return owner['host']=='codex' and any(value['tools'][key]['kind']=='tool'
-        and value['tools'][key].get('name')=='apply_patch' for key in pending-ended.keys())
+    later_activity=bool(attempt.get('finished') and any(o['state']!='rejected' and newer(o['started'],attempt.get('finished_at')) for o in operations.values()))
+    return bool(resumes) or later_activity
+
 
 
 def unlaunched_stop(root, attempt, stopped):

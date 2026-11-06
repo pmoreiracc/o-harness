@@ -8,14 +8,24 @@ consumer repositories and keep raw worker transcripts out of the coordinator's c
 
 ## Entries and facts
 
-In Codex use the connected OH tools with the checkout's absolute `root`. In Claude use
-the absolute plugin launcher, `<plugin>/scripts/oh --root <checkout> <command>`
-(`scripts\oh.cmd` on native Windows). Load resources through the same resource entry.
-If a connected OH tool fails, retry that same operation once before asking the person
-to intervene. If the connection remains unavailable, report the actual error and a
-host-supported recovery step; do not assume `/mcp` exists in the desktop app or bypass
-the connection with shell writes to OH state. Setup requires an explicit invocation,
-not discovery.
+In Codex call the connected `mcp__o_harness__<operation>` tool with the checkout's
+absolute `root`; the operation names are in the table below. For example, load a
+workflow with `mcp__o_harness__resource` and read saved work with
+`mcp__o_harness__status` using `saved: true`. In code mode invoke the same tools
+through `text(await tools.mcp__o_harness__<operation>(arguments))` inside `functions.exec`.
+In Claude use the absolute plugin launcher,
+`<plugin>/scripts/oh --root <checkout> <command>` (`scripts\oh.cmd` on native Windows).
+
+OH's `resource` is a tool. MCP resource/template listings do not discover OH tools
+or establish connection health. If tool lookup is needed, match `mcp__o_harness__`
+in the available tool inventory. A failed text search is not a connection failure.
+Retry a failed read once using the actual tool. For an uncertain state-changing call,
+inspect its saved outcome before retrying with the same inputs. Preserve the current
+request and approvals through recovery. Diagnose a connection failure from the actual
+OH tool error; report an unavoidable host action only after supported recovery fails.
+Follow the host's actual connection controls; `/mcp` availability depends on the
+interface. Setup requires an explicit invocation. Native scope, ownership and
+permission requirements still apply during recovery.
 
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
@@ -238,8 +248,10 @@ the binding is saved, bind promptly and retry that same operation after the shor
 delay. This is not a new attempt, model selection or approval.
 
 Bind the returned native child identity immediately. Retain its complete original result
-by native locator only after its terminal native outcome is saved and its owned tools
-have finished; an intermediate assistant `end_turn` does not establish quiescence.
+by native locator only after its terminal native outcome is saved and its owned commands
+and checks have finished; an intermediate assistant `end_turn` does not establish completion.
+Ordinary tool failures belong to the worker's execution: diagnose and recover within
+the approved work. Their individual callbacks are not additional OH handoff requirements.
 Claude's lifecycle hooks attempt the same checked binding and retention automatically.
 They never launch agents or continue a task. If a hook ran before the host saved its
 evidence, retry the existing helper after the native result arrives. Both hosts' child
@@ -260,6 +272,16 @@ match the parent's warning or indentation. A summary is not the retained report.
 Native task notifications can establish completion even when the parent absorbs the
 handback message mid-turn. Keep the original spawn locator after a native continuation;
 OH follows its attributed latest outcome and refuses stale completion/cancellation.
+The same authorized coordinator retains settled work and continues its remaining
+phase without another Continue question. Native saving or cleanup is a retry of
+that operation, not a new ownership decision. A new invocation or owner still uses
+the saved-work recovery decision.
+
+An acknowledged report remains historical evidence when the child continues for
+cleanup. Later closing text cannot replace it. If retention returns unfinished,
+admit a fresh author to assess the existing candidate and supply its current report;
+reuse verification only when its actual inputs still match. Read relevant available diagnostics and retained findings; unavailable optional
+archives do not prevent fresh assessment of the current candidate. Never restart implementation just to obtain a report.
 Never run two implementation agents together or
 modify the subject while review is active. Completed reviewers are never resumed.
 
@@ -356,12 +378,14 @@ Default mode `functions.request_user_input_async` for that question.
 When the last available review leaves findings needing another round, obtain that renewal
 before starting the next repair/review cycle. Retain an already-running step before asking;
 an allowance question neither cancels that step nor authorizes out-of-scope repairs.
-Read the finding index's incomplete reviews and original finding positions as well as
-its classified findings. Unclassified fragments remain review evidence to address.
+Read the finding index's incomplete reviews and historical diagnostic references,
+including original report-local positions. Investigate relevant retained claims on the
+current candidate. Unclassified fragments remain context, not a synthetic verdict.
 Reviewers return the minimal decision defined in the shared review prompt and check it
 within their own turn before finishing. The rest of the receipt is flexible and never
-parsed for approval. Repair agents must read the full current_review report in their
-packet before acting. Judge each suggested correction against the approved scope and
+parsed for approval. Repair agents read available current_review details in their packet; if archived
+details are unavailable, investigate the retained claims against current code and state
+any concrete verification limit. Judge each suggested correction against the approved scope and
 a concrete behavioral failure; review prose never grants scope or human authority.
 
 Only `complete` may record task completion and commit the exact reviewed candidate.

@@ -15,14 +15,15 @@ documents and Git before saying work remains. A missing historical branch or nes
 worktree alone does not establish unfinished edits in the current checkout.
 
 For genuinely different work, normal new-scope approval or a verified Resume decision
-selects the checkout once native attempts/checks/tools are settled. No Stop of an idle
+selects the checkout once native attempts and owned commands/checks are settled. No Stop of an idle
 record is required. New work, Resume and standalone-review repairs share that cleanup
 protection. Historical grants, spent allowances and findings stay with their original
 run; new selection does not resolve findings, fabricate completion or authorize loss
 of manual edits. Preserve/isolate local work or include it in an explicit approved
 preview. Reconcile the `retained_work` references when reviewing included changes.
-Finished attempts with missing post-hooks are reconciled from their original native
-tool-completion records before selection; missing records never count as cleanup.
+Worker lifecycle and owned-process evidence establish settlement before selection.
+Missing ordinary-tool callbacks do not block a settled worker; old tool rows remain
+historical observations, not outstanding cleanup obligations.
 An older approval cannot reclaim a newer selection; resuming that history needs its
 current native continuation decision.
 If retained idle work has reviewed commits on the same branch, the current exact-range
@@ -71,6 +72,11 @@ inspect callback errors, actor identity and the exact formatted command instead.
 
 ## Delivery entry and recovery
 
+This entry decision is for selecting saved work in a new invocation or ownership
+transfer. An already-authorized coordinator handling its own pending attempt first
+retains the original native result and continues the same phase. Do not turn a
+normal handback, cleanup continuation or delayed result into another Continue gate.
+
 For an unfinished delivery, use `decision-request recover --run ID` (Codex
 `decision_request` with kind `recover`). It inspects Git and prepares one native
 question: **How would you like OH to proceed with this delivery?** Show the
@@ -92,8 +98,9 @@ cleanup retries; do not ask again or make the person manage worker IDs.
 Continue preserves approved supporting repairs, existing changes and usable evidence, including checkpoint commits
 and writes that finish during cleanup. Keep the same Resume answer for that work;
 changed files require current checks and review, not another continuation approval.
-Missing review evidence is remaining work to complete, not a requirement that the
-person repair OH records. The next review includes unreviewed branch commits.
+Missing current review proof calls for fresh review within the existing allowance,
+not manual repair of OH records. Missing optional historical archives are labelled
+unavailable and do not prevent a fresh review of the current candidate. The next review includes unreviewed branch commits.
 When the old branch is
 already merged and has no extra changes, it starts from the refreshed base on the
 delivery branch. Start fresh discards precisely the changes and branch work shown
@@ -146,7 +153,7 @@ no unrelated work. Completed work presents its result or remaining publication s
 
 Read selected facts with `resume --run ID` (Codex `resume` with `run`). After the Resume
 answer, call Resume with that same answer. For recorded native interruptions it
-settles revoked attempts after owned command and tool cleanup. If cleanup or native
+settles revoked attempts after owned command and check cleanup. If cleanup or native
 saves are pending, wait briefly and retry the same answer; never ask again.
 For other pending native attempts, retain any already-terminal result through
 its original child locator before binding continuation; do not launch a replacement.
@@ -176,7 +183,7 @@ use valid completed author/check/review evidence, restore the latest proposal pr
 human decision, or finish completion/publication. Read the referenced report and scope;
 phase labels are hints, not authority to bypass admission checks. A live child is awaited
 or cancelled through its host before replacement, unless OH has verified its Stop
-revocation and all tracked tools/owned commands are settled. Revocation blocks its
+revocation and its owned commands and checks are settled. Revocation blocks its
 future tools; it does not claim the host has stopped model generation. Another
 session or elapsed time is never proof of cleanup. Completed reviewers are never resumed. A changed candidate needs
 its existing verification/review path, while unchanged work does not need repeated analysis.
@@ -223,6 +230,10 @@ a final model report only when its native identity is bound and cleanup is verif
 That receipt is explicitly OH revocation, not evidence of native model termination.
 Preserve any later native report under its original attempt; it cannot finish a new
 attempt. Retrying retention saves that report without reviving the old worker.
+Late reports remain labelled diagnostics; they cannot overwrite the original
+completion or inherit dispositions attached to its findings. Retry partial evidence
+writes with the same attempt and answer. Do not delete evidence files to clear a
+conflict or ask the person to reconstruct a report.
 
 An unresolved launch, failed cleanup, unavailable hook or lost command wrapper must
 not be cleared by hand or relabelled as stopped. Keep the valid Resume answer and

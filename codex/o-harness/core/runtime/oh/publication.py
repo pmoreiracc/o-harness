@@ -210,23 +210,26 @@ def reconcile(root,number=None):
         journal,state=load_run(root)
         if state['status']!='pr' or not state.get('publication'):
             raise Refused('This run has no publication approval. Use the current delivery decision first.')
+        published=state.get('published')
         try:found=discover(root,state,number)
         except Refused as exc:
-            if not state.get('published'):raise
-            return checkpoint(root)|{'publication_notice':str(exc),'publication_status':'last verified'}
+            if not published:raise
+            return checkpoint(root)|{'published':published,'publication_notice':str(exc),'publication_status':'last verified'}
         if found and found.get('pending_update'):
             if git(root,'rev-parse','HEAD')!=state['publication']['head'] or git(root,'branch','--show-current')!=state['publication']['branch'] or changes(root):
                 raise Refused('The checkout changed after publication approval. Preserve the changes and return to the approved clean branch head before updating this PR.')
             return checkpoint(root)|{'publication_status':'update pending','existing_pr':found,
                 'push_required':found['observed_head']!=state['publication']['head']}
         if found:found.pop('pending_update',None)  # a transient next action is not part of the completed receipt
-        if found and not state.get('published'):
+        if found and not published:
             grant=state['publication']
-            journal.append('publication.completed',found|{'run':state['id'],'grant':grant['source'],
+            published=found|{'run':state['id'],'grant':grant['source'],
                 'approved_head':grant['head'],'branch':grant['branch'],'base_branch':grant['base_branch'],
-                'destination':grant['destination'],'verified_at':now()})
+                'destination':grant['destination'],'verified_at':now()}
+            journal.append('publication.completed',published)
         result=checkpoint(root)
-        if found:return result|{'published':result['published']|found,'publication_status':'current'}
+        # The display checkpoint can omit fields to stay bounded; it is not the receipt.
+        if found:return result|{'published':published|found,'publication_status':'current'}
         # No PR exists. A later local head is not permission to push those edits (or rewind them).
         if git(root,'rev-parse','HEAD')!=state['publication']['head']:
             raise Refused('No matching PR exists, and this checkout has later or different work. Reconcile it with the approved commit before publication; no later work is approved by this run.')
@@ -235,7 +238,7 @@ def reconcile(root,number=None):
 
 CI_NEXT={
     'pass':'CI passed on the published reviewed head. Report it; merging stays with the person.',
-    'fail':'Read the failed checks\' logs (gh run view --log-failed), report a short diagnosis, then follow the CI failure choices in workflows/publication.md. Publication authority makes no code changes.',
+    'fail':'Report the failed checks and offer Investigate CI failures or Stop and take over, following workflows/publication.md. Investigation establishes causes and a proposed remedy; it does not approve code changes or a CI rerun.',
     'pending':'Checks are still running on the published head. Call ci-wait again for the same PR; this needs no new approval.',
     'no_checks':'No checks registered on the published head. Report that this is not a pass and keep the resumable handoff.',
     'skipped':'Every check was skipped. Report that this is not a pass and keep the resumable handoff.',
@@ -362,8 +365,15 @@ def public_value(root,state,value):
 def task_evidence(root,state,task,review,parent):
     from .review import workflow_reviews
     if review.get('purpose','workflow')!='workflow':raise Refused('Standalone review cannot authorize completion')
+    if review.get('source_ref'):
+        from .handoff import report_reference
+        report_reference(review)  # The selected current proof must retain its bound hash.
     attempts=workflow_reviews(state,task['id'])
     history=[{k:a.get(k) for k in ('id','host','outcome','duration_ms','profile','findings','git_tree','head','started_at','finished_at','report_issues','review_fragments','finding_positions','original_outcome','original_report_issues','original_result_hash','native_result_hash','superseded')} for a in attempts]
+    for retained,original in zip(history,attempts):
+        if original.get('finding_sources'):
+            retained['historical_positions']=[int(n) for n in original['finding_sources']]
+            retained['finding_provenance']={n:{'hash':v['report']['hash'],'position':v['position']} for n,v in original['finding_sources'].items()}
     resolutions={a['id']:state['resolutions'][a['id']]|{'scope':{k:v for k,v in state['resolutions'][a['id']].get('scope',{}).items() if k not in ('render','change')}}
                  for a in attempts if a['id'] in state['resolutions']}
     value={'schema':1,'project':state['project'],'run':state['id'],'task':task['id'],'title':task['title'],
@@ -386,7 +396,34 @@ def task_evidence(root,state,task,review,parent):
     if repairs:=state.get('approved_repairs',{}).get(task['id']):value['approved_repairs']=repairs
     value=public_value(root,state,value)
     validate_evidence(value)
+    from .verification import provenance
+    proof=provenance(Journal(state['project'],state['id']).records(),state.get('verification',{}).get(task['id']),review)
+    if not proof:raise Refused('Actual verification does not cover this review; verify the current candidate before sealing completion.')
+    value['verification']=public_value(root,state,verification_summary(proof))
     return value
+
+
+def verification_summary(proof):
+    return {'proof_hash':digest(proof),'parent':proof['head'],'git_tree':proof['git_tree'],
+            'artifacts_hash':digest(proof.get('artifacts',{})),
+            'checks':[{'name':c['name'],'returncode':c.get('returncode'),'duration_ms':c.get('duration_ms'),
+                       'reused':bool(c.get('reused')),'cancellation':bool(c.get('cancellation')),
+                       'unavailable':bool(c.get('unavailable')),'proof_hash':digest(c)} for c in proof.get('checks',[])]}
+
+
+def original_verification(evidence,root):
+    if 'verification' in evidence:return evidence['verification']
+    if root is None:return None
+    from .verification import provenance
+    try:records=Journal(evidence['project'],evidence['run']).records()
+    except FileNotFoundError:return None
+    matches=[n for n,r in enumerate(records) for e in (r['data']['events'] if r['kind']=='transition' else [r])
+             if e['kind']=='commit.intent' and e['data'].get('publication')==evidence]
+    if len(matches)!=1:return None
+    prefix=records[:matches[0]+1];original=reduce(prefix)
+    review=next((a for a in original['attempts'] if a['id']==evidence['review']),None)
+    proof=provenance(prefix,original.get('verification',{}).get(evidence['task']),review) if review else None
+    return verification_summary(proof) if proof else None
 
 
 def issue_url(value):
@@ -522,6 +559,9 @@ def render(root,base=None):
     from .workflow import active_file,load_run
     if active_file(root).exists() and (state:=load_run(root)[1]).get('published'):
         raise Refused('This delivery is already published: '+state['published']['url']+'. Use its PR; a new Deliver request starts further approved work.')
+    if active_file(root).exists():
+        from .cancellation import guard
+        guard(root,state=state)
     base=base or reference(root)
     if not base:raise Refused('No base branch found; set base_branch with oh config')
     if changes(root):raise Refused('Publish only from a clean reviewed checkout')
@@ -599,14 +639,16 @@ def readable(records,states,root=None):
             lines.extend(['Correction: '+escape(public_value(root,state,report(repair).get('summary','Reviewed corrections committed.').split('\n\n',1)[0].strip())), ''])
         if evidence.get('covers') or original.get('covers'):
             lines.extend(['Includes reviewed original commits: '+', '.join('`'+c+'`' for c in dict.fromkeys(original.get('covers',[])+evidence.get('covers',[])))+'.',''])
-        reviews=workflow_reviews(state,task) or evidence['attempts'];final=reviews[-1]
+        live={a['id']:a for a in state['attempts']}
+        reviews=[live.get(a['id'],{})|a|{'role':'review','finished':True} for a in evidence['attempts']]
+        final=next(a for a in reviews if a['id']==evidence['review'])
         lines.extend([f"Review rounds: **{len(reviews)}**",'',f"Final receipt: `{final['id']}`",'',
                       'Final receipt elapsed: **'+seconds(final.get('duration_ms'))+'**','', '### Verification',''])
-        verification=state.get('verification',{}).get(task)
+        verification=original_verification(evidence,root)
         checks=verification.get('checks',[]) if verification else []
         for check in checks:lines.append('- '+escape(check['name'])+': '+('failed' if check_failed(check) else 'passed')+'.')
-        if not checks:lines.append('Document validation passed.' if state.get('workflow') in ('design','propose') else
-                                    'No project checks applied.' if verification else 'Not recorded.')
+        if not checks:lines.append('Verification details unavailable in sealed evidence.' if verification is None else
+                                  'Document validation passed.' if state.get('workflow') in ('design','propose') else 'No project checks applied.')
         # Legacy structured manifests can be presented directly. Current receipts have
         # flexible prose: the native host reads and summarizes them without a parser.
         manifest=report(final).get('evidence')
@@ -622,7 +664,8 @@ def readable(records,states,root=None):
         severities={f['severity'] for f in final.get('findings',[])}
         outcome=('clean' if final['outcome']=='clean' else 'ready with outside-scope follow-ups' if severities=={'scope'} else 'completed with recorded concern acceptance')
         lines.extend(['','### Final verdict','',outcome+'.','','### Findings and dispositions',''])
-        dispositions={item['id']:item['disposition'] for family in finding_index(state,task)['families'] for item in family['occurrences']}
+        sealed=state|{'attempts':reviews,'resolutions':evidence.get('resolutions',{}),'scope_records':evidence.get('scope',{})}
+        dispositions={item['id']:item['disposition'] for family in finding_index(sealed,task,subject=final)['families'] for item in family['occurrences']}
         for number,attempt in enumerate(reviews,1):
             if not attempt.get('findings'):
                 lines.append(f"- Round {number}: "+('no findings; clean verdict.' if attempt['outcome']=='clean' else 'no completed verdict; retained in workflow history.'))
@@ -632,8 +675,9 @@ def readable(records,states,root=None):
                 disposition=dispositions.get(finding_id,'still-open')
                 description=' '.join(item['description'].split())
                 lines.append(f"- Round {number} — **{item['severity'].upper()}**: "+escape(description)+' **'+disposition+'**.')
-            resolution=(evidence.get('resolutions',{})|state.get('resolutions',{})).get(attempt['id'])
-            scope=(evidence.get('scope',{})|state.get('scope_records',{})).get(attempt['id'])
+                if positions[position-1] in attempt.get('historical_positions',[]) and item['severity']=='concern':lines.append('  Historical observation; current concern acceptance does not dispose this occurrence.')
+            resolution=evidence.get('resolutions',{}).get(attempt['id'])
+            scope=evidence.get('scope',{}).get(attempt['id'])
             if resolution:lines.append('  Decision: '+escape(resolution['choice'])+'.')
             if scope:
                 destination=scope['destination']
@@ -645,6 +689,16 @@ def readable(records,states,root=None):
                 lines.append('  Historical outside-scope observation retained; see any subsequent approved supporting repairs and the final review for work addressed.')
             for issue in attempt.get('report_issues') or []:lines.append('  Historical report limitation: '+escape(issue))
             if attempt.get('review_fragments'):lines.append('  Unclassified finding fragments are retained in the complete workflow history.')
+        later=[a for a in workflow_reviews(state,task) if a['id'] not in {r['id'] for r in reviews}]
+        if later:
+            lines.extend(['','### Subsequent review history','These observations do not replace the sealed final receipt.'])
+            for a in later:lines.append('- '+escape(a['id'])+': '+escape(a.get('outcome','unfinished'))+'.')
+        from .retention import diagnostic_index
+        diagnostics=diagnostic_index(state,task)
+        if diagnostics:
+            lines.extend(['','Historical diagnostic reports remain in the local review history:'])
+            for e in diagnostics:
+                lines.append('- Attempt `'+e['attempt']+'`, report hash `'+e['report']['hash']+'` ('+e['status']+'); not a replacement verdict.')
         lines.append('')
     lines.extend(['## Stop reason',''])
     latest=states[records[-1]['evidence']['run']]

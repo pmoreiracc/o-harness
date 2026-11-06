@@ -131,6 +131,10 @@ def reduce(records):
         elif kind=='attempt.started':
             parent={k:state['human'][k] for k in ('host','session','transcript_path') if k in state['human']}
             state['attempts'].append({'host':state['host'],'parent':parent} | d | {'finished':False,'started_at':record['at']})
+            # Older review.requested records lack a baseline. The first
+            # immutable admission preserves it across unfinished repair authors.
+            if state.get('extra_review') and d['task']==state['extra_review']['task'] and not state['extra_review'].get('baseline'):
+                state['extra_review']['baseline']={k:d.get(k) for k in ('head','tree','git_tree','artifacts')}
         elif kind=='attempt.admitted':
             admitted=next(a for a in state['attempts'] if a['id']==d['id'])
             admitted['request_hash']=d['hash']
@@ -142,6 +146,10 @@ def reduce(records):
             matches=[a for a in state['attempts'] if a['id']==d['id']]
             if len(matches)!=1 or not matches[0].get('revocation'):
                 raise Refused('Late native evidence requires a revoked attempt')
+            if matches[0].get('source_ref') or d.get('late_source'):
+                from .retention import PINNED_FIELDS
+                if any(key in d and d[key]!=matches[0].get(key) for key in PINNED_FIELDS):
+                    raise Refused('Late diagnostics cannot change a committed attempt or its finding positions')
             matches[0].update(d)
         elif kind=='native.authenticated':state['native_authenticated']=d
         elif kind=='native.adopted':state.update(d)
@@ -191,7 +199,7 @@ def reduce(records):
             state['human']=d['human'];state['host']=d['human']['host'];state['harness_version']=d['version']
             state.setdefault('continuations',[]).append(d|{'at':record['at']})
         elif kind=='recovery.grant':state.setdefault('recovery_grants',[]).append(d)
-        elif kind=='review.requested':state['extra_review']=d
+        elif kind=='review.requested':state['extra_review']=dict(d)
         elif kind=='review.checked':state.pop('extra_review',None)
         elif kind=='correction.started':state['correction']=d
         elif kind=='correction.completed':

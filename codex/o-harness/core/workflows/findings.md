@@ -5,6 +5,19 @@ Retaining the reviewer result already saves every finding durably. Show the open
 follow-ups and their actual destinations in the final report and on continuation;
 use the existing run index, not a new backlog database or only a PR footnote.
 
+Historical diagnostics keep original reports and report-local positions without
+merging them into a new verdict. The fresh reviewer investigates relevant prior
+blockers on the current candidate and reports unresolved current problems in its own
+receipt. Its current verdict and existing human dispositions govern readiness;
+none rewrites old findings or invents their acceptance. Missing optional archives
+are labelled unavailable, not a reason to stop otherwise verified work.
+
+Diagnostic-only scope observations remain visible as saved historical references.
+`finding-track` continues to track the actual retained scope findings of its selected
+review, with its existing attempt-wide effect. A fresh review may report a still-relevant
+scope observation for that route. An old destination never automatically applies to
+newly attached diagnostics from the same attempt.
+
 Use ordinary conversation and native tools for tracking instructions. If a decision
 is useful, offer context-appropriate choices such as Add a follow-up to this design,
 Create or link a GitHub issue, or Keep in saved follow-ups. There is no mandatory

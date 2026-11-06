@@ -5,9 +5,16 @@ disable-model-invocation: true
 ---
 Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory (from PowerShell or cmd on Windows, use `scripts\oh.cmd` there). Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly.
 
-Read the settings: in Codex, call the o-harness `config` tool with the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> config`. It returns every setting that exists, with its value, default, source, allowed values and meaning, this project's `checks`, and the settings `file`. That list is the only source of truth: never mention, suggest or write a setting that isn't in it.
+Read the settings: in Codex, call `mcp__o_harness__config` directly with the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> config`. It returns every setting that exists, with its value, default, source, allowed values and meaning, this project's `checks`, and the settings `file`. That list is the only source of truth: never mention, suggest or write a setting that isn't in it.
 
-If Codex lists no OH tools, report that the connection is unavailable and use a host-supported recovery step; do not assume `/mcp` exists in the desktop app. If a connected tool fails, retry that same operation once before asking the person to intervene. Do not run these OH commands from Codex's shell instead.
+In code mode use `text(await tools.mcp__o_harness__config({root: "<checkout>"}))`
+inside `functions.exec`. OH's `resource` is a tool. MCP resource/template listings do not discover OH tools
+or establish connection health. If tool lookup is needed, match `mcp__o_harness__`
+in the available tool inventory. A failed text search is not a connection failure.
+Retry a failed read once using the actual tool. For an uncertain state-changing call,
+inspect its saved outcome before retrying with the same inputs. Preserve the current
+request and approvals through recovery. Diagnose a connection failure from the actual
+OH tool error; report an unavoidable host action only after supported recovery fails.
 
 **No request:** show a short list of the settings (key, value, meaning) and the checks, give the `file` path, say that `oh config open` opens it and that editors explain each key through its `$schema`, and report any `note`.
 

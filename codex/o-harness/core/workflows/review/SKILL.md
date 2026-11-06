@@ -66,3 +66,19 @@ candidate without a new task grant. A clean result
 returns to its previous decision without another commit. Blocking findings enter the
 same task's scoped repair/review cycle and complete as a correction commit; preserve
 earlier completion and publication history instead of rewriting the original receipt.
+
+Before that workflow review, verify actual candidate coverage. Matching Git contents
+alone does not rebind checks to a later HEAD or changed private artifacts. When
+verification is needed, a fresh author checks the existing candidate under the saved
+task authority. In-scope candidate-changing repairs enter the existing correction
+path before fresh review; a clean review then completes the correction. Unchanged
+verified work returns to its prior decision without a new commit.
+
+Additional repair approval for an unfinished task does not apply to a completed
+task. If repair needs new authority, retain the failure and settle the author. Leave
+this review idle and prepare an ordinary bounded Deliver preview with that evidence.
+After its native approval, preserve/include existing edits and finish the repair
+locally on the authorized branch. Resume the original run by ID, verify the repaired
+subject and finish its fresh review within the original allowance. Publication waits
+for that review. Then select the run owning the latest reviewed HEAD for the existing
+full-range publication approval. No Stop/Pause is needed merely to select idle work.
