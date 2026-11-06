@@ -84,7 +84,7 @@ def untouched(root):
     if edited:=changes(root):
         shown=', '.join(edited[:5])+(f' and {len(edited)-5} more' if len(edited)>5 else '')
         raise Refused(f'This checkout has uncommitted changes ({shown}). Inspect their full diff and saved ownership. '
-                      'Preserve or include relevant work, or use another checkout. If discarding is appropriate, show the '
+                      'Preserve unrelated work with workspace in this same folder, or include relevant work in scope. If discarding is appropriate, show the '
                       'exact affected files/commits and target base, obtain native human approval, recheck the shown work, '
                       'then perform only the approved Git action and continue the original request. Do not ask the person to run routine Git repairs.')
 
@@ -147,7 +147,7 @@ def from_main(root, *, base=None):
     base=base or fetched(root,name)
     if git(root,'branch','--show-current')!=name:
         if elsewhere:=holder(root,name):
-            raise Refused(f'OH starts new work from {name}, which is checked out in {elsewhere}; type the command there.')
+            raise Refused(f'{name} is checked out in {elsewhere}. Use workspace to create an unused execution branch from {base} in this checkout, then prepare with --keep-checkout; leave the other checkout intact.')
         local=run_git(root,'show-ref','--verify','--quiet','refs/heads/'+name).returncode==0
         switched=run_git(root,'switch','--quiet',name) if local else run_git(root,'switch','--quiet','--no-track','-c',name,base)
         if switched.returncode:
@@ -175,7 +175,7 @@ def to_delivery(root,name):
     base=fetched(root,main);current=git(root,'branch','--show-current')
     exists=run_git(root,'rev-parse','--verify','--quiet','refs/heads/'+name).returncode==0
     if exists and current!=name and (elsewhere:=holder(root,name)):
-        raise Refused(f'{name} is checked out in {elsewhere}; type the command there to carry on with it.')
+        raise Refused(f'{name} is checked out in {elsewhere}. Preserve that checkout’s work and release the branch there before retrying here, or select an unused branch here if project policy permits. Do not move this task to another checkout.')
     if exists and (tip:=absorbed(root,base,name)):
         # Remember the merged branch: its commits carry the progress a private plan recorded.
         git(root,'update-ref','refs/oh/delivered/'+name,tip)

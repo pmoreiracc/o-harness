@@ -14,6 +14,9 @@ If the subject is missing, discover relevant saved work before asking for it.
 Read `workflows/entry.md` and inspect its entry facts before readiness/blocker advice
 or scope selection. Inspect the relevant plan on the reconciled checkout/base;
 historical reports and local listing results alone are not current progress evidence.
+For independent work on another branch, use its `workspace` save/switch/restore path
+with the initiating request, then prepare with `keep_checkout: true` / `--keep-checkout`.
+Do not carry unrelated uncommitted edits into the new task or ask a preservation question.
 
 A number identifies a design, not a task. Name the actual task only after selection.
 Interpret the requested work as follows:

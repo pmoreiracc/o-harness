@@ -270,6 +270,31 @@ whether the fetch succeeded, failed or the repository has no origin. Local plan
 and delivery listings identify their checkout source; material differences need
 reconciliation before treating their tasks/blockers as current.
 
+OH's workflow requires agents to keep repository work in the checkout you selected,
+using branches in that folder. It forbids creating parallel worktrees, clones or
+repository copies for a task, including nested copies. Local conflicts are reconciled
+there while preserving unfinished work; a genuine scope or discard decision is presented with its concrete
+effect. OH evidence, scratch artifacts and configured private plans retain their
+external locations. An existing checkout you selected remains supported.
+
+For independent work, the agent uses `workspace` to save unfinished edits, switch to
+the intended branch in that same folder and restore any work previously saved there.
+The helper preserves staged, unstaged and untracked changes using a retained Git stash
+and an external byte backup; it creates no unfinished commit. Ignored local files stay
+in place, except that ignored contents of a tracked file replaced by a directory are
+saved with that changed path and restored with it. Branch switches refuse to overwrite
+ignored files. Returning
+through the existing Resume/Continue choice restores the saved branch and staged state
+without another preservation question. Scope, findings and remaining allowances stay
+with their original run.
+
+An interrupted operation reuses its saved record. Failed switches restore the source
+work when possible. A moved branch, conflicting restore, active writer or unsupported
+Git state gets a concrete recovery step while retaining its backup and stash. OH does
+not force a switch or overwrite new edits to make recovery appear successful. Safety
+stashes remain in Git, labelled `OH workspace`, even after restoration; OH never pops
+them or removes your other stashes. The external backup records their exact identities.
+
 The agent can preserve/integrate local work, safely update its base or propose a
 specific discard. Discard approval names the affected paths/commits and target
 commit; the agent rechecks and executes that effect. Other work, ignored files and

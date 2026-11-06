@@ -373,6 +373,22 @@ def _deny(reason):
             'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
 
 
+def _recovery_menu(root,name,args):
+    """Catch a malformed OH recovery display before the person answers it."""
+    if name.split('.')[-1] not in ('AskUserQuestion','request_user_input','request_user_input_async'):return None
+    from .authority import question_options,question_text
+    path=checkout_file(root,'oh-recovery-menu.json')
+    if not path.exists():return None
+    prepared=read_json(path)
+    if 'Continue' not in prepared['options'] or question_options(args)!=prepared['options']:return None
+    question=args['questions'][0]
+    shown=question.get('question') or question.get('title') or ''
+    if prepared['run'] not in shown:return None
+    if question_text(shown)==question_text(prepared['question']):return None
+    return _deny('OH recovery question was reformatted. Retry this native question before asking the person; '
+                 'copy the following prepared question unchanged and preserve its options. No answer or approval has been consumed.\n'+prepared['question'])
+
+
 def hook(root, host, payload):
     """A native callback can revoke or refuse work, never approve or rewrite a tool."""
     from subprocess import CalledProcessError
@@ -465,6 +481,7 @@ def _hook(root,host,payload):
             return {}
         name = payload.get('tool_name', '')
         args = payload.get('tool_input') or {}
+        if not actor and (malformed:=_recovery_menu(root,name,args)):return malformed
         targets=_resume_targets(value,host,payload)
         if targets:
             if len(targets)!=1:return _deny('This native name is ambiguous. Address the original OH child by its native ID.')

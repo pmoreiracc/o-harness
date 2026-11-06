@@ -15,6 +15,46 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
     # Exercise existing recovery cases with old, ordinary path strings beyond MAX_PATH.
     state_folder='/'.join(['long-state-'+'a'*80,'b'*90,'c'*90])
 
+    def test_single_folder_new_delivery_completes_then_restores_old_delivery_on_both_hosts(self):
+        from . import workspace
+        for host in ('codex','claude'):
+            with self.subTest(host=host):
+                self.approve();journal,old=load_run(self.root)
+                (self.root/'product.txt').write_text('staged old work '+host,newline='\n')
+                self.git('add','product.txt')
+                (self.root/'product.txt').write_text('unstaged old work '+host,newline='\n')
+                (self.root/'old notes.txt').write_text('untracked old notes',newline='\n')
+                index=self.git('write-tree');before=self.git('status','--porcelain')
+                request=self.human('Deliver the independent fix',host=host)
+                native.switch_workspace(self.root,'deliver/new-'+host,request,base='main')
+                self.approve(tasks=[{'id':'new','title':'Independent fix','instructions':'Implement the independent fix.'}],keep_checkout=True)
+                current=load_run(self.root)[1]
+                self.assertEqual(current['scope_snapshot']['starting_edits'],[])
+                self.assess();self.implement();review=self.reviewed()
+                native.complete(self.root,review['id'])
+                (self.root/'later notes.txt').write_text('keep the newer checkout edits',newline='\n')
+                gate=decisions.prepare(self.root,'recover',run=old['id'])
+                self.assertIn('restoring its parked changes',gate['question'])
+                answer=self.answer(gate,'Continue',host=host)
+                native.decision(self.root,'resume',answer,run=old['id'])
+                resumed=load_run(self.root)[1]
+                self.assertEqual(self.git('branch','--show-current'),old['branch'])
+                self.assertEqual(self.git('status','--porcelain'),before)
+                self.assertEqual(self.git('write-tree'),index)
+                self.assertEqual((self.root/'product.txt').read_text(),'unstaged old work '+host)
+                self.assertEqual((self.root/'old notes.txt').read_text(),'untracked old notes')
+                self.assertFalse((self.root/'later notes.txt').exists())
+                self.assertTrue(workspace.parked(self.root,current['branch']))
+                for key in ('id','scope_id','granted','attempts','config','done'):
+                    self.assertEqual(resumed[key],old[key])
+                records=journal.records();stashes=self.git('stash','list','--format=%H')
+                native.decision(self.root,'resume',answer,run=old['id'])
+                self.assertEqual(journal.records(),records)
+                self.assertEqual(self.git('stash','list','--format=%H'),stashes)
+                native.decision(self.root,'stop',self.human('stop',host=host))
+                self.git('reset','--mixed','HEAD');self.git('restore','product.txt')
+                (self.root/'old notes.txt').unlink()
+
     def test_offline_recovery_explains_cached_base_and_keeps_existing_choices(self):
         self.approve();before=load_run(self.root)[1]
         self.git('remote','add','origin',str(Path(self.temp.name)/'unavailable-origin'))

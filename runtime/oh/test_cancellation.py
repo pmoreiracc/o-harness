@@ -19,6 +19,26 @@ from .workflow import load_run
 
 
 class CancellationTest(NativeFixture, unittest.TestCase):
+    def test_recovery_menu_format_is_repaired_before_native_question_on_both_hosts(self):
+        from .decisions import prepare
+        self.approve()
+        offer=prepare(self.root,'recover')
+        for host,name,text_key in (('claude','AskUserQuestion','question'),('codex','request_user_input_async','title')):
+            options=([{'label':s,'description':s} for s in offer['options']] if host=='claude' else offer['options'])
+            args={'questions':[{text_key:'Resume '+load_run(self.root)[1]['id']+'?','options':options}]}
+            denied=cancellation._recovery_menu(self.root,name,args)
+            self.assertIn(offer['question'],denied['hookSpecificOutput']['permissionDecisionReason'])
+            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'],'deny')
+            args['questions'][0][text_key]=offer['question']
+            self.assertIsNone(cancellation._recovery_menu(self.root,name,args))
+            args['questions'][0][text_key]='Another unrelated question'
+            self.assertIsNone(cancellation._recovery_menu(self.root,name,args))
+            # A later standalone Stop is not this recovery's Continue menu.
+            args['questions'][0][text_key]='Stop '+load_run(self.root)[1]['id']+'?'
+            args['questions'][0]['options']=['Stop and take over']
+            with patch.object(cancellation,'read_json',return_value={'options':['Stop and take over']}):
+                self.assertIsNone(cancellation._recovery_menu(self.root,name,args))
+
     def setUp(self):
         super().setUp()
         def cleanup():
