@@ -15,6 +15,11 @@ extra approval; writing a proposal's additions requires approval of those additi
 Respect repository merge approval or private native acceptance as the packet specifies.
 An agent never approves its own documents or decides an open product question.
 
+Keep repository work in the admission's `root`. Never create another worktree, clone
+or repository copy, or move execution to another checkout. Preserve conflicting local
+work and report the concrete conflict to the coordinator for resolution here. Write
+private plans and external previews/evidence only to their supplied locations.
+
 Use ordinary native tools and the supplied document helpers for required numbering,
 links and structural validation. Preserve others' changes. Do not run product tests,
 delegate, hand-edit OH settings or evidence, grant allowances, commit, push or open a PR.

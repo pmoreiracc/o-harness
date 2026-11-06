@@ -19,8 +19,14 @@ selects the checkout once native attempts and owned commands/checks are settled.
 record is required. New work, Resume and standalone-review repairs share that cleanup
 protection. Historical grants, spent allowances and findings stay with their original
 run; new selection does not resolve findings, fabricate completion or authorize loss
-of manual edits. Preserve/isolate local work or include it in an explicit approved
-preview. Reconcile the `retained_work` references when reviewing included changes.
+of manual edits. Preserve local work in the selected checkout or include it in an
+explicit approved preview; never create or move to a parallel checkout to recover. Use
+the single-folder `workspace` path in `workflows/entry.md` for new branch choices. A
+verified Resume/Continue automatically saves current edits and restores the saved
+branch and staged state. Reuse that same answer after a recoverable failure; do not
+make the person switch branches, pop stashes or approve preservation separately.
+Resolve real branch/content conflicts here. Reconcile the `retained_work`
+references when reviewing included changes.
 Worker lifecycle and owned-process evidence establish settlement before selection.
 Missing ordinary-tool callbacks do not block a settled worker; old tool rows remain
 historical observations, not outstanding cleanup obligations.
@@ -207,7 +213,8 @@ Completed work presents its result or outstanding publication/handoff rather tha
 restarting. An explicit new review after terminal feedback uses a fresh reviewer. For
 older scopes without a subject identifier, inspect the original native request and bound
 artifacts; ask for selection only if identity is genuinely ambiguous. Preserve useful
-and human-authored edits; no reset, stash or regeneration is a recovery shortcut.
+and human-authored edits. Use the retained `workspace` path for branch preservation;
+an unmanaged stash, reset or regeneration must not bypass recovery checks.
 
 
 ## Interruption and recovery
@@ -252,7 +259,8 @@ Pause/Stop or other decision must still be respected.
 
 After interruption, inspect status and native work before resuming. Preserve attempts,
 findings, settings, scope and spent allowances. Recover a routine helper failure and
-retry the valid operation within existing authority. Never discard, stash or commit
-another person's edits by assumption. An unavoidable blocker names a concrete remedy;
+retry the valid operation within existing authority. Use `workspace` for lossless branch
+preservation under the initiating request. Never discard or commit another person's
+edits by assumption. An unavoidable blocker names a concrete remedy;
 elapsed time, retries and restarts never create approval.
 

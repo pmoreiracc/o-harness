@@ -17,9 +17,14 @@ def facts(root, state):
         artifacts = _files([bound['path']])
         artifacts['approval'] = digest(read_json(approvals_file(root)).get(bound['doc']))
     base = main_ref(root, state['config'])
-    return {'branch': git(root, 'branch', '--show-current'), 'head': git(root, 'rev-parse', 'HEAD'),
-            'tree': tree(root), 'base': git(root, 'rev-parse', base) if base else None,
-            'base_ref': base, 'paths': sorted(changes(root)), 'artifacts': artifacts}
+    current=git(root,'branch','--show-current')
+    from .workspace import observation,parked
+    if (current!=state['branch'] and current!=state.get('recovery_intent',{}).get('branch') or
+            current==state['branch'] and parked(root,current) and not changes(root)):
+        saved=observation(root,state['branch'])
+        selected={k:saved[k] for k in ('branch','head','tree','paths')}
+    else:selected={'branch':current,'head':git(root,'rev-parse','HEAD'),'tree':tree(root),'paths':sorted(changes(root))}
+    return selected|{'base':git(root,'rev-parse',base) if base else None,'base_ref':base,'artifacts':artifacts}
 
 
 def _private_restart(root, state, base):
@@ -62,7 +67,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
         paths = set(subject['paths'])
         paths.update(path for path in subject['artifacts'] if path != 'approval')
         if subject['base']:
-            paths.update(git(root, 'diff', '--name-only', '-z', subject['base']+'...HEAD').split('\0'))
+            paths.update(git(root, 'diff', '--name-only', '-z', subject['base']+'...'+subject['head']).split('\0'))
         paths.discard('')
     except (OSError, Refused, ValueError, SubprocessError) as exc:
         subject = None
@@ -81,6 +86,8 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     if subject:
         choices['resume'] = 'Continue'
         details += 'Continue keeps existing changes, including approved repairs, and finishes the approved delivery.\n'
+        if git(root,'branch','--show-current')!=state['branch']:
+            details+='Current checkout work is saved before switching here to '+state['branch']+' and restoring its parked changes. No parallel folder is created.\n'
         details += 'Affected paths: '+(', '.join(sorted(paths)) or 'none')+'\n'
         if subject['base'] and subject['branch'] in (state['branch'],state.get('recovery_intent',{}).get('branch')):
             try:
@@ -91,7 +98,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
                 details += 'Start fresh unavailable. Restore the saved restart evidence before trying again. '+str(exc)+'\n'
             else:
                 choices['restart'] = 'Start fresh'
-                details += 'Start fresh discards the listed local changes and this branch’s unmerged delivery work; no backup is made.\n'
+                details += 'Start fresh discards the listed local changes and this branch’s unmerged delivery work; no new backup of discarded work is made. Earlier workspace safety copies remain retained.\n'
                 if state.get('approved_repairs'):
                     details += 'Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
                 details += 'Restart base: '+subject['base_ref']+' ('+subject['base'][:12]+').\n'
@@ -108,6 +115,10 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     if entry_request:value['entry_request']=entry_request
     if 'restart' in choices:value['private_restart'] = private_restart
     key = save_offer(root,value)
+    # Presentation hint only; accepted answers still validate the immutable offer.
+    from .storage import checkout_file,atomic_json
+    atomic_json(checkout_file(root,'oh-recovery-menu.json'),
+                {'run':state['id'],'question':value['question'],'options':value['menu_options']})
     return {'decision': key, 'question': value['question'], 'options': value['menu_options'],
             'base_observation':observed,
             'actions': {label: action for action, label in choices.items()},
@@ -200,8 +211,6 @@ def apply(root, kind, locator, *, run=None):
             applied = retry and current['branch'] == intent['branch'] and current['head'] == intent['base'] and not current['paths']
             if kind == 'restart' and current != original and not applied:
                 raise Refused('The files or Git base changed since this recovery question. Inspect the changes and present the updated choices.')
-            if current['branch'] not in (state['branch'],(intent or {}).get('branch')) and not applied:
-                raise Refused('This checkout is on different work. Return to '+state['branch']+' without discarding edits, then present recovery there.')
         native._switchable(root,[s for _,s in native._saved_runs(root) if s['id']!=state['id']])
         cancellation.register_owner(root, state | {'human': source}, active=False)
         state = _settle(root, journal, state, source)
@@ -214,9 +223,12 @@ def apply(root, kind, locator, *, run=None):
         with cancellation.continuation(root, state, source, replacing=True,activate=not keep_other):
             changed_base = False
             if kind != 'stop':
+                from .workspace import switch
+                if not applied:switch(root,state['branch'])
                 # Recheck after cleanup before changing branch or discarding files.
                 settled = facts(root, state)
-                if kind == 'restart' and settled != original and not applied:
+                comparable=settled if original['tree'] is not None else settled|{'tree':None}
+                if kind == 'restart' and comparable != original and not applied:
                     raise Refused('Old work changed the files during cleanup. Inspect the result and present the updated recovery choices.')
                 if kind == 'resume':
                     if settled['branch'] != original['branch']:
@@ -236,7 +248,7 @@ def apply(root, kind, locator, *, run=None):
                             name += '-'+state['id'][:8]
                             if run_git(root,'show-ref','--verify','--quiet','refs/heads/'+name).returncode == 0:
                                 raise Refused('The recovery branch is already occupied: '+name+'; select an unused execution branch before retrying')
-                    if holder(root, name): raise Refused('The selected delivery branch is in use by another worktree: '+name)
+                    if holder(root, name): raise Refused('The selected delivery branch is in use by another worktree: '+name+'. Preserve its work and release that branch there before retrying this same recovery here; do not move the task to another checkout.')
                     if not retry:
                         journal.append('recovery.started', {'key': key, 'kind': kind, 'branch': name, 'base': base})
                     if kind == 'restart':

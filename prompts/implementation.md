@@ -15,6 +15,11 @@ checkout: preserve other edits and useful work from earlier attempts. The packet
 `approved_repairs` supplements the original scope with verified human authority; apply
 those repairs within their stated limits and continue the original task.
 
+Keep all repository work in the admission's `root`. Never create another worktree,
+clone or repository copy, or move execution to another checkout. Preserve conflicting
+local work and report the concrete conflict to the coordinator for resolution here.
+External OH evidence and scratch artifacts remain in their supplied locations.
+
 Complete the requested implementation, documentation, self-review and affected checks.
 Repair routine failures within scope. Ground corrections in the approved behavior;
 do not weaken behavior or tests merely to obtain a passing result. Search sibling

@@ -11,6 +11,11 @@ If the subject is missing, discover relevant saved work before asking for it.
 
 Read `workflows/entry.md` before current plan/readiness claims or branch selection.
 Reconcile the relevant saved/local/origin evidence before judging existing work.
+For a new repository proposal, choose its intended execution branch through the
+`workspace` save/switch/restore path before preparing scope, using the initiating
+request. Prepare with `keep_checkout: true` / `--keep-checkout`; later approved additions
+stay on that bound branch. Read-only inspection and private artifacts need no unrelated
+branch change. Do not move an already bound proposal to another branch after approval.
 
 Read `plans path`. If the repo/private location is undecided, call Claude
 `AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.

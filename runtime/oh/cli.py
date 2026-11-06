@@ -62,6 +62,8 @@ def main(argv=None):
     resume=sub.add_parser('resume');resume.add_argument('--human');resume.add_argument('--run')
     status=sub.add_parser('status');status.add_argument('--saved',action='store_true')
     sub.add_parser('entry',help='Fetch and inspect saved/local/origin facts without changing the checkout')
+    workspace=sub.add_parser('workspace',help='Save local work, switch branches and restore this branch in the same checkout')
+    workspace.add_argument('branch');workspace.add_argument('--base');workspace.add_argument('--human',required=True);workspace.add_argument('--after')
     review=sub.add_parser('review');review.add_argument('arguments',nargs='*');review.add_argument('--human')
     deliver=sub.add_parser('deliver');deliver.add_argument('arguments',nargs='*');deliver.add_argument('--human')
     prep=sub.add_parser('prepare');prep.add_argument('manifest',type=Path);prep.add_argument('--review');prep.add_argument('--pr',type=int)
@@ -132,6 +134,7 @@ def main(argv=None):
         elif args.command=='entry':
             from .entry import inspect
             result=inspect(root)
+        elif args.command=='workspace':result=native.switch_workspace(root,args.branch,_locator(args.human),args.base,args.after)
         elif args.command=='status':
             from .workflow import active_file
             result=(native.saved_work(root) if args.saved else native.select(root)) if args.saved or active_file(root).exists() else {'status':'none','next':'Use /oh-propose <idea>, /oh-design <initiative>, or /oh-deliver <design or quick fix> (in Codex: $oh-propose, $oh-design, $oh-deliver).'}

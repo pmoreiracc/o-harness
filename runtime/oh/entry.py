@@ -58,6 +58,8 @@ def inspect(root):
             'authority':'Observation only. Saved labels are historical; inspect execution/ownership before deciding what can continue. '
                         'A newer base does not make local changes disposable. Use native Git to inspect full diffs and local commits; '
                         'the displayed paths are bounded. Fetching refs grants no discard, task, continuation or publication authority.'}
+    from .workspace import summary
+    if parked:=summary(root):value['parked_work']=parked
     from .config import load,load_global
     from .registry import index_path
     limit=(load(root) if index_path(root).is_file() else load_global())['context']['result_chars']

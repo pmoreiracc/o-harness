@@ -80,7 +80,7 @@ class CodexToolsTest(unittest.TestCase):
 
     def test_tools_are_focused_helpers_without_an_execution_or_menu_engine(self):
         names={tool['name'] for tool in TOOLS}
-        self.assertEqual(names,{'entry','status','resume','config','init','plans','resource','scope_prepare','scope_approve',
+        self.assertEqual(names,{'entry','workspace','status','resume','config','init','plans','resource','scope_prepare','scope_approve',
             'attempt_admit','attempt_bind','attempt_retain','candidate','verify','evidence','complete','decision',
             'review','pr_summary','publication','ci_wait','admission','command_format','review_check','decision_request','finding_track'})
         self.assertFalse(names & {'run','start','choose','confirm'})
@@ -142,6 +142,14 @@ class CodexToolsTest(unittest.TestCase):
         self.assertEqual(tracked[-2:],['--','review'])
         self.assertEqual(command('status',{'saved':True},self.root),['status','--saved'])
         self.assertEqual(command('entry',{},self.root),['entry'])
+        argv=command('workspace',{'branch':'deliver/0012','base':'main','human':human,'after':'accepted'},self.root)
+        self.assertEqual(argv[:2],['workspace','--human'])
+        self.assertEqual(read_json(argv[2]),human)
+        self.assertEqual(argv[3:],['--base','main','--after','accepted','--','deliver/0012'])
+        with patch('oh.native.switch_workspace',return_value={}) as switched,patch('sys.stdout',new=io.StringIO()):
+            main(['--root',str(self.root),*argv])
+        self.assertEqual(switched.call_args.args[1:],('deliver/0012',human,'main','accepted'))
+        with self.assertRaises(Refused):command('workspace',{'branch':'main','human':'model claim'},self.root)
         self.assertIn('--keep-checkout',command('scope_prepare',{'doc':'0001','keep_checkout':True},self.root))
         with self.assertRaises(Refused):command('scope_prepare',{'doc':'0001','keep_checkout':'yes'},self.root)
         self.assertEqual(command('ci_wait',{'pr':161,'timeout':300},self.root),['ci-wait','--pr','161','--timeout','300'])

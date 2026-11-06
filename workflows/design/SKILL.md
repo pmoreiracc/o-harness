@@ -11,6 +11,9 @@ If the subject is missing, discover relevant saved work before asking for it.
 
 Read `workflows/entry.md` before current planning-readiness advice or branch selection.
 Reconcile saved/local/origin differences while preserving useful local drafting work.
+For a different branch, use its `workspace` save/switch/restore path with the initiating
+request, then prepare with `keep_checkout: true` / `--keep-checkout`. This needs no
+additional preservation approval and creates no parallel folder.
 
 Read `plans path`. If the repo/private location is undecided, call Claude
 `AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
