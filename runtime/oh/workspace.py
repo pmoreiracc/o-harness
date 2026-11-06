@@ -307,7 +307,7 @@ def _restore(root,state,branch,*,rollback=False):
         if _same_file(path,item):continue
         if path.is_dir() and not path.is_symlink():_empty_directory(path)
         path.parent.mkdir(parents=True,exist_ok=True)
-        if item['kind']=='link':path.symlink_to(item['target'])
+        if item['kind']=='link':path.symlink_to(item['target'])  # windows-ok: restore a recorded native link; missing privileges leave its stash and backup retained.
         else:
             with path.open('xb') as stream:stream.write((Path(record['backup'])/item['blob']).read_bytes())
     _raw_bytes(root,record)
