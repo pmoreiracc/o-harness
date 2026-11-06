@@ -36,6 +36,9 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                 gate=decisions.prepare(self.root,'recover',run=old['id'])
                 self.assertIn('restoring its parked changes',gate['question'])
                 answer=self.answer(gate,'Continue',host=host)
+                # This loop starts another host immediately; do not date its prior answer in the future.
+                answered_at=now()
+                answer.update(at=answered_at,question_at=answered_at)
                 native.decision(self.root,'resume',answer,run=old['id'])
                 resumed=load_run(self.root)[1]
                 self.assertEqual(self.git('branch','--show-current'),old['branch'])
