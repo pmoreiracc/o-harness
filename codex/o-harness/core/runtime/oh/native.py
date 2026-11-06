@@ -521,16 +521,35 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
 def _resume_binding(root,state,*,write=False):
     _switchable(root,[other for _,other in _saved_runs(root) if other['id']!=state['id']])
     if git(root,'branch','--show-current')!=state['branch']:
-        raise Refused('Saved work is on '+state['branch']+'; preserve current edits and reconcile its scope/results with current Git. '
-                      'If continuation is still needed, restore/select that identified branch with native Git and retry the same answer. '
-                      'A missing historical branch does not mean current files are unfinished or that a different requested scope needs Stop.')
+        from .workspace import observation
+        observation(root,state['branch'])
     if not write:return
+    _switchable(root,[state])
+    from .workspace import switch
+    switch(root,state['branch'])
     review=checkout_file(root,'oh-active-review.json')
     if state['workflow']=='review':
         atomic_json(review,{'project':state['project'],'run':state['id'],'checkout':state['checkout'],'selected':True})
     else:
         atomic_json(checkout_file(root,'oh-active-run.json'),{'project':state['project'],'run':state['id'],'checkout':state['checkout']})
         if review.exists():atomic_json(review,read_json(review)|{'selected':False})
+
+
+def switch_workspace(root,branch,human,base=None,after=None):
+    """Lossless Git preparation under the current native request; grants no task scope."""
+    from .entry import enroll,request_source
+    if blocked:=enroll(root):raise Refused(blocked['onboarding'])
+    source=request_source(root,human,after)
+    with _locked(root):
+        saved=_saved_runs(root)
+        _entry_order(root,source,saved)
+        _switchable(root,[state for _,state in saved])
+        source=request_source(root,human,after)
+        _entry_order(root,source,saved)
+        owner=source.get('prerequisite_human',source)
+        authority.coordinator(root,{'host':owner['host'],'human':owner})
+        from .workspace import switch
+        return switch(root,branch,base)|{'authority':'Git preparation only; existing scopes, findings and allowances are unchanged.'}
 
 
 def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', human=None, keep_checkout=False, after=None):
@@ -741,7 +760,7 @@ def _start(root,key,source,*,approved_preview=False):
                 (scope['starting_edits'] or scope.get('covers')) and
                 any(prior['status'] not in ('stopped','completed','pr') for _,prior in saved)):
             raise Refused('The selected checkout carries local edits or unreviewed commits alongside saved work. '
-                          'Inspect ownership and the retained findings; preserve/isolate or explicitly include that work '
+                          'Inspect ownership and the retained findings; save unrelated work with workspace in this folder or explicitly include it '
                           'in an approved scope preview before selecting different work. Stop alone does not authorize discarding it.')
         for journal,prior in saved:
             unused=(prior['status']=='prepared_checkpoint' and not prior['granted'] and not prior['attempts'] and not prior.get('activation'))
@@ -1410,7 +1429,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .recovery import _settle
             state=_settle(root,journal,state,source|{'decision':locator['decision']})
             _switchable(root,[state])
-        subject={'head':git(root,'rev-parse','HEAD')} if kind=='stop' else _subject(root,state)
+        subject={'head':git(root,'rev-parse','HEAD')} if kind in ('stop','resume') else _subject(root,state)
         events=[]
         def add(name,value):events.append({'kind':name,'data':value})
         if adoption:
@@ -1528,6 +1547,9 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .recovery import _settle
             state=_settle(root,journal,state,source|{'decision':locator.get('decision')})
             _switchable(root,[state])
+            from .workspace import switch
+            switch(root,state['branch'])
+            subject=_subject(root,state)
             initial=_initial_grant(root,journal,state) if state.get('native_version') else None
             if initial:
                 # Finish the original accepted entry in the same durable transfer.

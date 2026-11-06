@@ -29,6 +29,8 @@ OBJECT = {'type': 'object'}
 TOOLS = [
     tool('status', 'OH saved facts', 'Read saved tasks, attempts, evidence and allowances; saved lists both workflow and review without selection.', {'saved':{'type':'boolean'}}, read_only=True),
     tool('entry', 'Inspect entry facts', 'Fetch the configured origin base and report saved/local/base facts before readiness advice. Does not change the checkout, select a workflow or grant authority.'),
+    tool('workspace', 'Switch work in this checkout', 'Safely save local changes, switch to a named branch and restore its parked work in this same folder. Uses the initiating native request, not another approval. Grants no scope or allowance.',
+         {'branch':TEXT,'base':TEXT,'human':OBJECT,'after':TEXT}, ['branch','human']),
     tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
     tool('admission', 'Validate review admission', 'Validate the immutable subject and request, recovering a missing native child binding when needed.', {'attempt_directory':TEXT}, ['attempt_directory']),
     tool('command_format', 'Format native shell command', 'Return exact Bash and PowerShell quoting for an admitted worker command. Does not execute or authorize it. Pass an executable/argument array, then run the returned string unchanged with the native shell tool and its normal permissions.',
@@ -103,6 +105,12 @@ def command(name, arguments, root):
         if 'saved' in arguments and not isinstance(arguments['saved'],bool):raise Refused('saved must be boolean')
         return ['status']+(['--saved'] if arguments.get('saved') else [])
     if name in ('config','candidate','entry'):return [name]
+    if name=='workspace':
+        if not isinstance(arguments.get('human'),dict):raise Refused('Supply the initiating native human locator')
+        args=['workspace','--human',payload(root,arguments['human'])]
+        for key in ('base','after'):
+            if arguments.get(key) is not None:args+=['--'+key,text(key,True)]
+        return args+['--',text('branch',True)]
     if name=='resume':return ['resume']+(['--run',text('run')] if text('run') else [])+(['--human',payload(root,arguments['human'])] if arguments.get('human') is not None else [])
     if name=='admission':return ['admission','--',text('attempt_directory',True)]
     if name=='command_format':

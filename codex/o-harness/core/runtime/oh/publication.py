@@ -116,7 +116,7 @@ def prepare_correction(root,number,*,previous=None):
     branch=pr['head']['ref'];head=pr['head']['sha']
     if not isinstance(branch,str) or branch==target['base_branch'] or run_git(root,'check-ref-format','--branch',branch).returncode:
         raise Refused('The selected PR needs a valid execution branch distinct from the base branch.')
-    if holder(root,branch):raise Refused(f'{branch} is checked out in another worktree. Prepare this PR from that checkout; its work is preserved.')
+    if holder(root,branch):raise Refused(f'{branch} is checked out in another worktree. Preserve that checkout’s work and release this branch there, then prepare the same PR correction here. Do not move this task or borrow its checkout authority.')
     target.update(id=pr['id'],url=pr['html_url'],branch=branch,head=head)
     fetched=run_git(root,'fetch','--quiet','origin','refs/heads/'+branch,timeout=60)
     if fetched.returncode or git(root,'rev-parse','FETCH_HEAD')!=head:

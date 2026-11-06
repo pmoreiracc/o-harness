@@ -6,6 +6,13 @@ hosts own agent execution and tool permissions. OH records native Stop and cance
 owned commands through the existing process utilities. Keep OH state outside
 consumer repositories and keep raw worker transcripts out of the coordinator's context.
 
+Repository work stays in the checkout selected by the person. Never create another
+worktree, clone or repository copy for task execution, inside or outside that checkout,
+or move the task to another existing checkout. Launch native agents in the same root
+without host worktree isolation. Branches provide separation within this checkout;
+unfinished work is preserved and reconciled here. This does not change the external
+locations for OH evidence, scratch artifacts or configured private plans.
+
 ## Entries and facts
 
 In Codex call the connected `mcp__o_harness__<operation>` tool with the checkout's
@@ -92,6 +99,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | --- | --- | --- |
 | Discover saved work | `status --saved` | `status` with `saved: true` |
 | Reconcile saved/local/origin entry facts | `entry` | `entry` |
+| Save, switch and restore in this checkout | `workspace <branch> --human <locator.json> [--base REF] [--after ID]` | `workspace` with `branch`, `human`, optional `base` and `after` |
 | Read a workflow or role contract | `resource <path>` | `resource` with `path` |
 | Locate, validate or list plans | `plans path\|check\|list` | `plans` with `action` |
 | Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
@@ -150,10 +158,13 @@ Configuration changes use `config set`/`unset` and the person's authorized setti
 Before preparing new work, use the project's configured base and an appropriate work
 branch. Reuse the matching unmerged branch for interrupted work. For ordinary new work,
 create a branch from the refreshed configured base; do not implement or commit on trunk.
-Preserve included original edits and explicit existing-PR corrections. If another
-person's dirty checkout conflicts, use a suitable native worktree rather than discarding
-their changes. Scope preparation binds branch/base and starting contents. Its default
-delivery entry can safely update/select a branch; `--keep-checkout` preserves a checkout
+Preserve included original edits and explicit existing-PR corrections. If local work
+conflicts, inspect ownership and use `workspace` to save unrelated edits, switch and
+restore in this checkout under `workflows/entry.md`. This lossless preparation uses the
+initiating native request without an extra permission question. Never use another
+folder to bypass that conflict. Scope preparation binds branch/base
+and starting contents. Its default delivery entry can safely update/select a branch;
+`--keep-checkout` preserves a checkout
 the agent deliberately reconciled under `workflows/entry.md`. If contents change before approval, preserve the edits
 and prepare the same tasks with a current preview. Never reuse the old acceptance for
 changed starting work. Include the recorded original commit range in the first task's
