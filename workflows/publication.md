@@ -48,8 +48,9 @@ report it; merging stays with the person. On `fail`, name the PR and failed chec
 then call Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async` with these choices:
 
-- **Investigate CI failures** authorizes diagnosis of these failures, including useful
-  focused reproductions and environment checks. It does not approve a repair or rerun.
+- **Investigate CI failures** authorizes diagnosis, focused reproductions and environment
+  checks, followed by preparing a justified repair proposal for approval. Include that
+  proposal in the option's description. This choice does not approve a repair or rerun.
 - **Stop and take over** leaves the PR and its evidence available to the person.
 
 After **Investigate CI failures**, investigate through ordinary native tools without
@@ -72,7 +73,11 @@ present a speculative repair as ready for approval.
 If changes are needed, prepare an existing-PR quick-fix scope from those conclusions,
 preserving this PR's destination and original reviewed work. Describe the required
 outcome and acceptance checks without turning unproven implementation guesses into
-scope restrictions. Present its actual preview and returned approval question:
+scope restrictions. Preparing the proposal is part of the accepted investigation, even
+when the proposed repair needs new scope. It makes no repair and grants no execution
+authority. Once the remedy is justified, prepare its scope and present the actual preview
+and returned approval question below. Do not end at a recommendation or ask permission
+to prepare the proposal; this approval is the person's decision about the proposed fix:
 
 - **Approve and fix** binds that prepared scope through the existing `scope approve`
   path. Then follow normal assessment, implementation, checks and fresh review before
