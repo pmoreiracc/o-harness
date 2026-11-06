@@ -29,8 +29,11 @@ summarize and group the findings further; never split approved work or rerun rev
 because of description length. Write the finished body to an external file, push
 the authorized head/branch without force, and create or update only the matching
 PR with `--body-file`. Re-run publication reconciliation after an uncertain
-response. Attach the PR in Codex with `attach_artifact` when available. Human merging
-remains separate; published cycles stay terminal.
+response. Include a clickable Markdown link, `[PR #N](URL)`, in the first published
+update and the final handoff, using the URL returned by GitHub or the saved receipt.
+Keep that link visible when reporting pending CI or a reconciliation error.
+Attach the PR in Codex with `attach_artifact` when available; the attachment does
+not replace the chat link. Human merging remains separate; published cycles stay terminal.
 
 After reconciliation records the PR, follow its CI with `ci-wait` (Codex `ci_wait`)
 instead of a single status read. It reads the published reviewed head's checks until
@@ -41,18 +44,51 @@ example 300 seconds) and call it again while it returns `pending`, reporting onl
 meaningful check changes between calls. Do not end the handoff while CI is pending.
 
 An empty, pending, failed, cancelled or skipped check set is not success. On `pass`,
-report it; merging stays with the person. On `fail`, read the failed jobs' logs
-(`gh run view <run-id> --log-failed`), give a short diagnosis, then call Claude `AskUserQuestion` or Codex Default mode
-`functions.request_user_input_async` with the following choices.
+report it; merging stays with the person. On `fail`, name the PR and failed checks,
+then call Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` with these choices:
 
-- **Prepare a fix for PR #N** starts the existing-PR quick-fix correction for this PR. It
-  still needs its own scope approval, implementation, checks and fresh review before
-  the same PR is updated.
-- **Re-run the failed jobs** suits a diagnosed flaky or infrastructure failure: run
-  `gh run rerun <run-id> --failed`, then follow CI again with `ci-wait`.
-- **Leave it** keeps the published PR and a resumable handoff.
+- **Investigate CI failures** authorizes diagnosis of these failures, including useful
+  focused reproductions and environment checks. It does not approve a repair or rerun.
+- **Stop and take over** leaves the PR and its evidence available to the person.
 
-This question routes the person's next action; it grants nothing by itself. For
+After **Investigate CI failures**, investigate through ordinary native tools without
+another approval merely to analyze. Follow the diagnosis-first guidance in
+`workflows/runtime.md` under "Failed required checks": read the failed logs
+(`gh run view <run-id> --log-failed`), relevant application paths, test setup and CI
+environment. Distinguish symptoms from causes and check behavior beyond the first failing
+assertion. Use the smallest useful experiment to resolve material uncertainty; do not
+repeat an unchanged full suite. Temporary diagnostic fixtures and normal build/test
+artifacts are allowed; preserve tracked implementation and tests until a repair is approved.
+Do not start an authoring run or reopen the published run just to investigate.
+
+Present confirmed causes with evidence, remaining uncertainty, the proposed remedy and
+its verification. Explain whether application behavior, tests or CI configuration need
+to change and why. A timeout does not establish flakiness; a stale selector or disabled
+feature does not prove the behavior behind it works. Continue useful investigation when
+the remedy is unresolved, or report the concrete blocker and supported next step. Do not
+present a speculative repair as ready for approval.
+
+If changes are needed, prepare an existing-PR quick-fix scope from those conclusions,
+preserving this PR's destination and original reviewed work. Describe the required
+outcome and acceptance checks without turning unproven implementation guesses into
+scope restrictions. Present its actual preview and returned approval question:
+
+- **Approve and fix** binds that prepared scope through the existing `scope approve`
+  path. Then follow normal assessment, implementation, checks and fresh review before
+  updating the same PR through the existing publication process. This is the repair
+  approval; do not ask a third time whether to start the fix.
+- **Stop and take over** starts no correction and leaves the prepared scope available.
+
+Use the host's native plan acceptance when that surface is available, as described in
+`workflows/deliver/SKILL.md`; it replaces this repair menu rather than adding another gate.
+For a retained older scope question, honor its saved labels and decision identity.
+If evidence instead supports a rerun without changes, offer **Re-run failed checks**
+or **Stop and take over**, explaining why a rerun is justified. Only after the rerun
+choice, run `gh run rerun <run-id> --failed` and follow CI again with `ci-wait`.
+
+For either Stop choice, finish the handoff; do not interpret it as a request to keep
+planning or ask what should change in the scope. For
 `no_checks`, `skipped`, `head_changed`, `unavailable`, `merged` or `closed`, report what
 the outcome means and keep the resumable handoff. Do not make code changes under
 publication-only authority, or enable auto-fix, auto-merge or a persistent monitor

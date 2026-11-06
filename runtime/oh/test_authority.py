@@ -341,6 +341,20 @@ class AuthorityTest(unittest.TestCase):
                     for empty in ('',None):
                         save(ch=children+[final|{'payload':final['payload']|{'last_agent_message':empty}}])
                         self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
+                    # Lifecycle completion is independent of the model's report.
+                    # Errors override even a nonempty last message; no error-code
+                    # allowlist is needed to retain a failed native turn.
+                    for error in ({'message':'Selected model is at capacity.','codex_error_info':'server_overloaded'},
+                                  {'message':'Another native failure.','codex_error_info':'unknown'}):
+                        for message in (None,'Earlier progress, not successful completion.'):
+                            event=timed|{'payload':timed['payload']|{'last_agent_message':message,'error':error}}
+                            save(ch=children+[event])
+                            failed=native_result(root,state,attempt|{'native_child':bound},locator)
+                            self.assertEqual((failed['status'],failed['error'],failed['completed_at']),
+                                             ('failed',error,timed['timestamp']))
+                    aborted=timed|{'payload':{'type':'turn_aborted','reason':'interrupted'}}
+                    save(ch=children+[aborted])
+                    self.assertNotIn('completed_at',native_result(root,state,attempt|{'native_child':bound},locator))
                     save(ch=children+[final])
                 else:
                     self.assertEqual(result['status'],'interrupted')
@@ -385,7 +399,8 @@ class AuthorityTest(unittest.TestCase):
                         self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
                     bad_ack=deepcopy(acknowledgement);bad_ack['message']['content'][0]['is_error']=True
                     save(pr=events,ch=[call,bad_ack,closing])
-                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    rejected_report=native_result(root,state,attempt|{'native_child':bound},locator)
+                    self.assertEqual((rejected_report['status'],rejected_report['text']),('unfinished',''))
                     # Background task envelopes survive even when Claude absorbs
                     # the peer handback into an already running parent turn.
                     def notification(status='completed',use='spawn',at='2026-10-15T12:00:07Z'):
@@ -553,7 +568,11 @@ class AuthorityTest(unittest.TestCase):
                             elif label=='malformed report':response['toolUseResult']['handbackReport']='invalid'
                             elif label=='before acknowledgement':response['timestamp']='2026-10-15T12:00:05Z'
                             save(pr=[parents[0],response],ch=[early,call,acknowledgement])
-                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                            if label in ('error result','different report','malformed report'):
+                                rejected_report=native_result(root,state,attempt|{'native_child':bound},locator)
+                                self.assertEqual((rejected_report['status'],rejected_report['text']),('unfinished',''))
+                            else:
+                                with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                     # Native timestamps can share a millisecond; UUID/call links and record order still establish acknowledgement.
                     save(pr=parents+[notice|{'timestamp':call['timestamp']}],ch=[call,acknowledgement|{'timestamp':call['timestamp']}])
                     self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
@@ -611,14 +630,27 @@ class AuthorityTest(unittest.TestCase):
                             elif label=='later activity':child_rows.append({'type':'assistant','agentId':'child','sessionId':'parent',
                                 'cwd':str(root),'message':{'content':'Child resumed after handback.'}})
                             save(pr=parent_rows,ch=child_rows)
-                            with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                            if label=='outstanding command':
+                                self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                            else:
+                                with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
                             if label in ('missing acknowledgement','wrong call','wrong parent UUID','wrong assistant UUID',
                                          'not terminal','rejected','failed acknowledgement','permission denied','foreign child',
                                          'foreign parent','ordinary tool','indirect call','malformed input','malformed caller',
                                          'malformed permission','outstanding command','background command','later activity'):
                                 save(pr=sync_parents,ch=[early]+child_rows)
-                                with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
-                    # A completed ordinary call before handback establishes quiescence.
+                                # A proven terminal child with an invalid report is
+                                # unfinished; missing terminal or tool proof still refuses.
+                                if label=='outstanding command':
+                                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['text'],receipt)
+                                elif label in ('wrong parent UUID','wrong assistant UUID','not terminal','rejected',
+                                             'failed acknowledgement','permission denied','ordinary tool','indirect call',
+                                             'malformed caller','malformed permission','later activity'):
+                                    rejected_report=native_result(root,state,attempt|{'native_child':bound},locator)
+                                    self.assertEqual((rejected_report['status'],rejected_report['text']),('unfinished',''))
+                                else:
+                                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # Ordinary calls need no completion certificate beyond the worker lifecycle.
                     command=deepcopy(call);command['timestamp']='2026-10-15T12:00:02Z';command['uuid']='command'
                     command['message']['content']=[{'type':'tool_use','id':'command','name':'Read','input':{'file_path':'fixture'}}]
                     result=deepcopy(acknowledgement);result['timestamp']='2026-10-15T12:00:03Z'
@@ -628,6 +660,110 @@ class AuthorityTest(unittest.TestCase):
                     # A background command the child's own record reports finished no longer blocks quiescence.
                     started=deepcopy(command);started['message']['content']=[{'type':'tool_use','id':'command','name':'Bash',
                         'input':{'command':'fixture','run_in_background':True}}]
+                    # Acknowledged reports survive background cleanup and native
+                    # name-addressed reactivation, but closing prose is no report.
+                    from .authority import native_diagnostics
+                    from .storage import digest
+                    named=deepcopy(parents)
+                    for row in named:
+                        for part in (row.get('message') or {}).get('content',[]):
+                            if isinstance(part,dict) and part.get('id')=='spawn':part['input']['name']='worker-name'
+                    named_notice=deepcopy(notice);named_notice['origin']['from']='worker-name'
+                    resumed_call=deepcopy(resume);resumed_call['timestamp']='2026-10-15T12:00:08Z'
+                    resumed_call['message']['content'][0]['input']['to']='worker-name'
+                    resumed_result=deepcopy(resumed);resumed_result['timestamp']='2026-10-15T12:00:08.100Z'
+                    cleanup_notice=notification(use='command',at='2026-10-15T12:00:09Z')
+                    cleanup_notice.update(type='user',isMeta=True,agentId='child',sessionId='parent',
+                        origin={'kind':'task-notification','producer':'session-task'},message={'content':cleanup_notice.pop('content')})
+                    closed=closing|{'timestamp':'2026-10-15T12:00:10Z'}
+                    history=named+[named_notice,resumed_call,resumed_result,notification(use='resume',at='2026-10-15T12:00:11Z')]
+                    rows=[started,result,call,acknowledgement,cleanup_notice,closed]
+                    # Settlement also occurs without coordinator reactivation.
+                    no_resume=named+[named_notice,notification(at='2026-10-15T12:00:11Z')]
+                    save(pr=no_resume,ch=rows)
+                    for _ in range(2):
+                        settled_result=native_result(root,state,attempt|{'native_child':bound},locator)
+                        self.assertEqual((settled_result['status'],settled_result['text']),('unfinished',''))
+                    self.assertEqual([o['text'] for o in native_diagnostics(root,state,attempt|{'native_child':bound})],[receipt])
+                    save(pr=no_resume,ch=[started,result,call,acknowledgement,closed])
+                    with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    save(pr=history,ch=rows)
+                    retained=native_result(root,state,attempt|{'native_child':bound},locator)
+                    self.assertEqual((retained['status'],retained['text']),('unfinished',''))
+                    observed=native_diagnostics(root,state,attempt|{'native_child':bound})
+                    self.assertEqual([o['text'] for o in observed],[receipt])
+                    self.assertEqual(len(observed[0]['record_hashes']),3)
+                    # A legacy synchronous resume must preserve the original
+                    # absorbed report, without authenticating it using a later stop.
+                    legacy_resume=deepcopy(resumed_call)
+                    legacy_resume['message']['content'][0].update(name='Agent',input={'resume':'child'})
+                    legacy_done=deepcopy(synchronous);legacy_done['timestamp']='2026-10-15T12:00:11Z'
+                    legacy_done['message']['content'][0]['tool_use_id']='resume'
+                    legacy_done['toolUseResult'].pop('handbackReport')
+                    for launch_end in (synchronous,None):
+                        pr=[parents[0]]+([launch_end] if launch_end else parents[1:])+[legacy_resume,legacy_done]
+                        save(pr=pr,ch=[call,acknowledgement,closed])
+                        diagnostics=native_diagnostics(root,state,attempt|{'native_child':bound})
+                        self.assertEqual([o['text'] for o in diagnostics],[receipt] if launch_end else [])
+                        if launch_end:
+                            self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
+                            self.assertIn(digest(synchronous),diagnostics[0]['record_hashes'])
+                    new_call=deepcopy(call);new_call.update(uuid='new-handback',timestamp='2026-10-15T12:00:10Z')
+                    new_call['message']['content'][0].update(id='new-report',input={'message':'Current report.'})
+                    new_ack=deepcopy(acknowledgement);new_ack.update(parentUuid='new-handback',sourceToolAssistantUUID='new-handback',timestamp='2026-10-15T12:00:12Z')
+                    new_ack['message']['content'][0]['tool_use_id']='new-report'
+                    resumed_report=deepcopy(legacy_done);resumed_report['timestamp']='2026-10-15T12:00:13Z'
+                    resumed_report['toolUseResult']['handbackReport']={'text':'Current report.'}
+                    save(pr=[parents[0],synchronous,legacy_resume,resumed_report],ch=[call,acknowledgement,new_call,new_ack])
+                    self.assertEqual([o['text'] for o in native_diagnostics(root,state,attempt|{'native_child':bound})],[receipt,'Current report.'])
+                    self.assertEqual(native_result(root,state,attempt|{'role':'implementation','native_child':bound},locator)['text'],'Current report.')
+                    new_notice=deepcopy(named_notice);new_notice['timestamp']='2026-10-15T12:00:11Z';new_notice['origin']['body']='Current report.'
+                    next_history=history[:-1]+[new_notice,notification(use='resume',at='2026-10-15T12:00:13Z')]
+                    save(pr=next_history,ch=rows[:-1]+[new_call,new_ack])
+                    self.assertEqual(native_result(root,state,attempt|{'role':'implementation','native_child':bound},locator)['text'],'Current report.')
+                    self.assertEqual(native_result(root,state,attempt|{'role':'review','native_child':bound},locator)['status'],'unfinished')
+                    # Later reuse of a display name cannot erase already bound
+                    # reports and lifecycle evidence from its original owner.
+                    reused={'type':'assistant','sessionId':'parent','timestamp':'2026-10-15T12:00:14Z',
+                        'message':{'content':[{'type':'tool_use','name':'Agent','id':'other-launch','input':{'name':'worker-name'}}]}}
+                    save(pr=next_history+[reused],ch=rows[:-1]+[new_call,new_ack])
+                    self.assertEqual(native_result(root,state,attempt|{'role':'implementation','native_child':bound},locator)['text'],'Current report.')
+                    self.assertEqual(len(native_diagnostics(root,state,attempt|{'native_child':bound})),2)
+                    # A missing resume result or an unkeyed late notice cannot
+                    # settle that newly executing lifecycle.
+                    for events in (history[:-2]+history[-1:],history[:-1]+[notification(use=None,at='2026-10-15T12:00:11Z')]):
+                        save(pr=events,ch=rows)
+                        with self.assertRaises(Refused):native_result(root,state,attempt|{'native_child':bound},locator)
+                    # Live Claude 2.1.318 automatically wakes the resumed child
+                    # when its background command finishes. The final notice has
+                    # no call ID, but its native stop and finished sidecar agree.
+                    unkeyed_history=history[:-1]+[notification(use=None,at='2026-10-15T12:00:11Z')]
+                    closing_rows=rows[:-1]+[closed|{'uuid':'closing'}]
+                    native_stop={'type':'attachment','agentId':'child','sessionId':'parent','parentUuid':'closing',
+                        'timestamp':'2026-10-15T12:00:10.500Z','attachment':{'type':'hook_success','hookEvent':'SubagentStop'}}
+                    meta={'toolUseId':'spawn','finished':True}
+                    meta_path.write_text(json.dumps(meta),newline='\n')
+                    save(pr=unkeyed_history,ch=closing_rows+[native_stop])
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
+                    for label in ('unfinished','foreign spawn','foreign stop','later activity','missing result','old notice'):
+                        m=meta.copy();s=deepcopy(native_stop);cr=closing_rows+[s];pr=unkeyed_history
+                        if label=='unfinished':m['finished']=False
+                        elif label=='foreign spawn':m['toolUseId']='foreign'
+                        elif label=='foreign stop':s['parentUuid']='foreign'
+                        elif label=='later activity':cr.append(closed|{'timestamp':'2026-10-15T12:00:10.750Z'})
+                        elif label=='missing result':pr=history[:-2]+unkeyed_history[-1:]
+                        else:pr=history[:-1]+[notification(use=None,at='2026-10-15T12:00:09.500Z')]
+                        meta_path.write_text(json.dumps(m),newline='\n');save(pr=pr,ch=cr)
+                        with self.subTest(unkeyed_completion=label),self.assertRaises(Refused):
+                            native_result(root,state,attempt|{'native_child':bound},locator)
+                    meta_path.unlink()
+                    rejected_call=deepcopy(resumed_call);rejected_call['timestamp']='2026-10-15T12:00:08.050Z'
+                    rejected_call['message']['content'][0]['id']='rejected-message'
+                    rejection={'type':'user','sessionId':'parent','timestamp':'2026-10-15T12:00:12Z',
+                        'message':{'content':[{'type':'tool_result','tool_use_id':'rejected-message','is_error':True}]}}
+                    overlapping=named+[named_notice,resumed_call,rejected_call,resumed_result,history[-1],rejection]
+                    save(pr=overlapping,ch=rows)
+                    self.assertEqual(native_result(root,state,attempt|{'native_child':bound},locator)['status'],'unfinished')
                     denied=deepcopy(result);denied['message']['content'][0].update(is_error=True,content='User denied tool use')
                     for ending,expected in (([call,acknowledgement],receipt),
                                             ([finished|{'timestamp':'2026-10-15T12:00:04Z'}],'Complete public report.')):

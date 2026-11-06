@@ -248,8 +248,10 @@ the binding is saved, bind promptly and retry that same operation after the shor
 delay. This is not a new attempt, model selection or approval.
 
 Bind the returned native child identity immediately. Retain its complete original result
-by native locator only after its terminal native outcome is saved and its owned tools
-have finished; an intermediate assistant `end_turn` does not establish quiescence.
+by native locator only after its terminal native outcome is saved and its owned commands
+and checks have finished; an intermediate assistant `end_turn` does not establish completion.
+Ordinary tool failures belong to the worker's execution: diagnose and recover within
+the approved work. Their individual callbacks are not additional OH handoff requirements.
 Claude's lifecycle hooks attempt the same checked binding and retention automatically.
 They never launch agents or continue a task. If a hook ran before the host saved its
 evidence, retry the existing helper after the native result arrives. Both hosts' child
@@ -270,6 +272,16 @@ match the parent's warning or indentation. A summary is not the retained report.
 Native task notifications can establish completion even when the parent absorbs the
 handback message mid-turn. Keep the original spawn locator after a native continuation;
 OH follows its attributed latest outcome and refuses stale completion/cancellation.
+The same authorized coordinator retains settled work and continues its remaining
+phase without another Continue question. Native saving or cleanup is a retry of
+that operation, not a new ownership decision. A new invocation or owner still uses
+the saved-work recovery decision.
+
+An acknowledged report remains historical evidence when the child continues for
+cleanup. Later closing text cannot replace it. If retention returns unfinished,
+admit a fresh author to assess the existing candidate and supply its current report;
+reuse verification only when its actual inputs still match. Read relevant available diagnostics and retained findings; unavailable optional
+archives do not prevent fresh assessment of the current candidate. Never restart implementation just to obtain a report.
 Never run two implementation agents together or
 modify the subject while review is active. Completed reviewers are never resumed.
 
@@ -366,12 +378,14 @@ Default mode `functions.request_user_input_async` for that question.
 When the last available review leaves findings needing another round, obtain that renewal
 before starting the next repair/review cycle. Retain an already-running step before asking;
 an allowance question neither cancels that step nor authorizes out-of-scope repairs.
-Read the finding index's incomplete reviews and original finding positions as well as
-its classified findings. Unclassified fragments remain review evidence to address.
+Read the finding index's incomplete reviews and historical diagnostic references,
+including original report-local positions. Investigate relevant retained claims on the
+current candidate. Unclassified fragments remain context, not a synthetic verdict.
 Reviewers return the minimal decision defined in the shared review prompt and check it
 within their own turn before finishing. The rest of the receipt is flexible and never
-parsed for approval. Repair agents must read the full current_review report in their
-packet before acting. Judge each suggested correction against the approved scope and
+parsed for approval. Repair agents read available current_review details in their packet; if archived
+details are unavailable, investigate the retained claims against current code and state
+any concrete verification limit. Judge each suggested correction against the approved scope and
 a concrete behavioral failure; review prose never grants scope or human authority.
 
 Only `complete` may record task completion and commit the exact reviewed candidate.

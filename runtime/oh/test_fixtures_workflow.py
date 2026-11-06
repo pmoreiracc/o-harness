@@ -118,7 +118,7 @@ class NativeFixture(WorkflowFixture):
             value=self.native_results[attempt['id']]
             return {'text':value['text'],'status':value['status'],'profile':attempt['profile'] if attempt.get('native_child') else None,
                     'native_id':attempt.get('native_child',{}).get('child_session'),'record_hashes':['native-result'],'duration_ms':1}|value
-        for name,callback in (('native_human',human),('coordinator',coordinator),('native_child',child),('native_result',result)):
+        for name,callback in (('native_human',human),('coordinator',coordinator),('native_child',child),('native_result',result),('native_diagnostics',lambda *args:[]),('claude_operations',lambda *args:{})):
             mocked=patch('oh.authority.'+name,side_effect=callback);mocked.start();self.addCleanup(mocked.stop)
         auth=patch('oh.hosts.authentication');auth.start();self.addCleanup(auth.stop)
         catalog=patch('oh.capabilities.codex_models',return_value={

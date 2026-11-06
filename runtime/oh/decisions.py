@@ -255,11 +255,14 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
 def scope_request(root,scope):
     titles='; '.join(t['title'] for t in scope['tasks'][:3])
     if len(scope['tasks'])>3:titles+=f'; and {len(scope["tasks"])-3} more tasks in the shown preview'
+    fix=scope.get('workflow')=='deliver' and not scope.get('design')
+    label='Approve and fix' if fix else 'Approve this scope'
     question=(f'Scope: {titles}\nBranch: {scope["branch"]}\n'
-              f'Task batch: {scope["config"]["tasks_per_batch"]}; review rounds per task: {scope["config"]["review_rounds"]}.\n\nApprove this scope?')
-    value={'kind':'approve-scope','scope':digest(scope),'label':'Approve this scope','question':question,'created_at':now()}
+              f'Task batch: {scope["config"]["tasks_per_batch"]}; review rounds per task: {scope["config"]["review_rounds"]}.\n\n'
+              +('Approve this fix?' if fix else 'Approve this scope?'))
+    value={'kind':'approve-scope','scope':digest(scope),'label':label,'question':question,'created_at':now()}
     key=save_offer(root,value)
-    return {'decision':key,'question':value['question'],'options':[value['label'],'Keep planning']}
+    return {'decision':key,'question':value['question'],'options':[value['label'],TAKE_OVER]}
 
 
 def verify_scope(root,scope,locator,source):
@@ -272,7 +275,7 @@ def verify_scope(root,scope,locator,source):
     from .authority import question_text,presented_question_at
     question=question_text(source.get('question',''))
     shown_at=source.get('question_at') if source.get('via')=='question' else presented_question_at(source,value['question'])
-    if (question!=question_text(value['question']) if source.get('via')=='question' else shown_at is None) or source['prompt'].strip().casefold().rstrip('.!') not in ('approve this scope','yes','yes please'):
+    if (question!=question_text(value['question']) if source.get('via')=='question' else shown_at is None) or source['prompt'].strip().casefold().rstrip('.!') not in (value.get('label','Approve this scope').casefold(),'yes','yes please'):
         raise Refused('This answer does not approve the presented scope')
     from .authority import newer
     if not newer(shown_at,value['created_at']):raise Refused('This question predates the prepared scope')

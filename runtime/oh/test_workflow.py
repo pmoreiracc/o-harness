@@ -289,6 +289,12 @@ class NativeWorkflowTest(NativeFixture):
         self.assertFalse(prepared['approved'])
         self.assertFalse(active_file(self.root).exists())
         self.assertIn('approval',prepared)
+        self.assertEqual(prepared['approval']['options'],['Approve and fix','Stop and take over'])
+        for text in ('Investigate CI failures','Stop and take over'):
+            with self.subTest(choice=text),self.assertRaisesRegex(Refused,'does not approve the presented scope'):
+                native.approve_scope(self.root,prepared['scope_id'],self.human(text,
+                    question=prepared['approval']['question'],question_at=now(),decision=prepared['approval']['decision']))
+        self.assertFalse(active_file(self.root).exists())
         without_identity=self.human('approve',question=prepared['approval']['question'])
         with self.assertRaisesRegex(Refused,'original prepared scope decision'):
             native.approve_scope(self.root,prepared['scope_id'],without_identity)
@@ -320,7 +326,7 @@ class NativeWorkflowTest(NativeFixture):
         atomic_json(checkout_file(self.root,'oh-active-run.json'),
                     {'project':self.project_id,'run':unused.path.name,'checkout':checkout_id(self.root)})
         approval=prepared['approval']
-        native.approve_scope(self.root,prepared['scope_id'],self.human('yes',session='fresh-parent',question=approval['question'],question_at=now(),decision=approval['decision']))
+        native.approve_scope(self.root,prepared['scope_id'],self.human('Approve and fix',session='fresh-parent',question=approval['question'],question_at=now(),decision=approval['decision']))
         journal,state=load_run(self.root);original=journal.records()
         self.assertEqual(read_json(journal.path/'scope'/'approval.json')['decision'],approval['decision'])
         self.assertEqual(state['granted'],['1'])
@@ -419,9 +425,10 @@ class NativeWorkflowTest(NativeFixture):
         packet=json.loads(Path(resumed['task_context']['path']).read_text())
         self.assertEqual(packet['current_work']['summary'],reason)
         self.assertEqual(packet['current_work']['outcome'],'blocked')
-        self.assertEqual(packet['supplementary_evidence'][0]['files'][str(measurement.resolve())],
+        attachment=next(e for e in packet['supplementary_evidence'] if str(measurement.resolve()) in e['files'])
+        self.assertEqual(attachment['files'][str(measurement.resolve())],
                          __import__('hashlib').sha256(measurement.read_bytes()).hexdigest())
-        self.assertEqual(packet['supplementary_evidence'][0]['file_status'],
+        self.assertEqual(attachment['file_status'],
                          {str(measurement.resolve()):'unchanged',str(source.resolve()):'changed'})
         self.assertEqual((self.root/'partial.txt').read_text(),'keep this work')
         self.assertNotIn('recovery_grants',load_run(self.root)[1])
@@ -431,16 +438,17 @@ class NativeWorkflowTest(NativeFixture):
         native.bind(self.root,resumed['id'],{'child_session':'child-'+resumed['id']})
         self.native_results[resumed['id']]={'status':'completed','text':'Implemented the repair.'}
         self.assertEqual(native.retain(self.root,resumed['id'],{})['outcome'],'reported')
-        self.assertEqual(load_run(self.root)[1]['supplementary'],[attached])
+        self.assertEqual([e for e in load_run(self.root)[1]['supplementary'] if e.get('files')==attached['files']],[attached])
         with self.assertRaises(Refused):native.admit(self.root,'review')  # Checks still required.
         review=self.reviewed()
         review_packet=json.loads((Path(review['evidence'])/'task-context.json').read_text())
-        self.assertEqual(review_packet['supplementary_evidence'][0]['file_status'],
+        attachment=next(e for e in review_packet['supplementary_evidence'] if str(measurement.resolve()) in e['files'])
+        self.assertEqual(attachment['file_status'],
                          {str(measurement.resolve()):'unavailable',str(source.resolve()):'changed'})
         self.assertEqual(review['outcome'],'clean')
         native.complete(self.root,review['id'])
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
-        self.assertEqual(load_run(self.root)[1]['supplementary'],[attached])
+        self.assertEqual([e for e in load_run(self.root)[1]['supplementary'] if e.get('files')==attached['files']],[attached])
 
     def test_review_requires_completed_work_and_passing_checks_for_the_final_candidate(self):
         from . import native
@@ -632,6 +640,157 @@ class NativeWorkflowTest(NativeFixture):
         self.assertEqual(families[1]['occurrences'][0]['disposition'],'routed')
         native.complete(self.root,clean['id'])
 
+    def test_historical_reports_reach_fresh_review_without_becoming_readiness_gates(self):
+        from . import native,authority,handoff,publication
+        from .scope import followups
+        from .storage import read_json
+        self.approve();self.assess();self.implement()
+        findings=[{'severity':severity,'family':severity,'description':'Original '+severity} for severity in ('blocking','concern','scope')]
+        historical={'text':json.dumps({'verdict':'findings','findings':findings}),'status':'completed',
+                    'record_hashes':['authenticated-report'],'request':'handback','at':'2026-10-01T00:00:00Z'}
+        with patch.object(authority,'native_diagnostics',side_effect=lambda root,state,attempt:[historical] if attempt['role']=='review' else []):
+            old=self.reviewed()
+        self.assertEqual(old['outcome'],'unfinished')
+        self.assertEqual(old['findings'],[]);self.assertNotIn('finding_sources',old)
+        journal,state=load_run(self.root)
+        original=next(item for item in handoff.finding_index(state,'1')['diagnostics'] if item['findings'])
+        self.assertEqual([f['position'] for f in original['findings']],[1,2,3])
+        self.assertEqual(original['status'],'available')
+        self.assertEqual(read_json(original['report']['path'])['source'],historical)
+        # Optional archive loss/alteration must preserve the saved claim and hash,
+        # not strand a fresh reviewer or relabel the changed bytes as trusted.
+        path=Path(original['report']['path']);path.write_text('{}',newline='\n')
+        changed=next(item for item in handoff.finding_index(state,'1')['diagnostics'] if item['findings'])
+        self.assertEqual(changed['status'],'changed');self.assertEqual(changed['report'],original['report'])
+        from .retention import attach
+        self.assertEqual(attach(journal,state,old,historical),original['report'])
+        self.assertEqual(path.read_text(),'{}')
+        path.unlink();Path(old['source_ref']['path']).unlink()
+        scope=followups(state)[0]
+        self.assertTrue(scope['historical']);self.assertEqual(scope['destination'],{'saved':True})
+        fresh=native.admit(self.root,'review')
+        packet=read_json(fresh['task_context']['path']);index=read_json(Path(fresh['task_context']['path']).parent/packet['findings']['path'])
+        original=next(item for item in index['diagnostics'] if item['findings'])
+        self.assertEqual(original['status'],'unavailable')
+        self.assertEqual([f['severity'] for f in original['findings']],['blocking','concern','scope'])
+        native.bind(self.root,fresh['id'],{'child_session':'fresh-review'})
+        self.native_results[fresh['id']]={'status':'completed','text':json.dumps({'verdict':'clean','findings':[]})}
+        native.retain(self.root,fresh['id'],{})
+        completed=native.complete(self.root,fresh['id'])
+        journal,state=load_run(self.root)
+        self.assertEqual(followups(state)[0]['destination'],{'saved':True})
+        self.assertNotIn(old['id'],state.get('resolutions',{}))
+        self.assertIn('Historical diagnostic reports',(journal.path/'index.md').read_text())
+        rendered=publication.readable([{'commit':completed['commit'],'evidence':state['commit_intents']['1']['publication']}],{state['id']:state},self.root)
+        self.assertIn(original['report']['hash'],rendered)
+
+    def test_pinned_review_reports_cannot_be_rehashed_by_packets_or_repair_sources(self):
+        from . import native,handoff,review
+        selected=native.review(self.root,'changes',self.human('Review my changes.'))
+        result=self.finish_attempt('review',{'verdict':'findings','findings':[{'severity':'blocking','description':'Retained defect'}]})
+        journal,state=load_run(self.root);path=Path(result['report_ref']['path']);original=path.read_bytes()
+        for missing in (False,True):
+            if missing:path.unlink()
+            else:path.write_text(json.dumps({'verdict':'clean','findings':[]}),newline='\n')
+            with self.subTest(missing=missing):
+                packet,_=handoff.prepare(state,state['tasks'][0],'implementation',Path(self.temp.name)/('packet-'+str(missing)),result|{'root':str(self.root)})
+                retained=json.loads(Path(packet['path']).read_text())['current_review']['report']
+                self.assertEqual(retained['hash'],result['report_ref']['hash'])
+                self.assertEqual(retained['status'],'unavailable' if missing else 'changed')
+                with self.assertRaisesRegex(Refused,'retained report'):handoff.report(result)
+                with self.assertRaisesRegex(Refused,'retained report'):review.repair_source(self.root,selected['run'])
+            path.write_bytes(original)
+        ref=review.repair_source(self.root,selected['run'])
+        self.assertEqual(ref['hash'],result['report_ref']['hash'])
+
+    def test_partial_retention_preserves_stale_selection_and_original_render_boundary(self):
+        from . import native,authority
+        from .storage import digest
+        self.approve()
+        admission=native.admit(self.root,'assessment')
+        native.bind(self.root,admission['id'],{'child_session':'assessor'})
+        fake_revocation=Path(admission['request']).parent/'revoked-result.json'
+        fake_revocation.write_text(json.dumps({'status':'completed','text':json.dumps({'difficulty':'complex'})}),newline='\n')
+        with self.assertRaises(Refused):native.retain(self.root,admission['id'],{})
+        self.assertFalse(load_run(self.root)[1]['attempts'][-1]['finished'])
+        old_record={'type':'fixture-native','text':'original'};new_record={'type':'fixture-native','text':'later'}
+        self.parent_path.write_text(json.dumps(old_record)+'\n'+json.dumps(new_record)+'\n',newline='\n')
+        self.native_results[admission['id']]={'status':'completed','text':json.dumps({'difficulty':'simple'}),'record_hashes':[digest(old_record)]}
+        save=native._immutable
+        def interrupted(path,value):
+            if Path(path).name=='result.json':raise OSError('Crash after native source write')
+            return save(path,value)
+        with patch.object(native,'_immutable',side_effect=interrupted),self.assertRaises(OSError):native.retain(self.root,admission['id'],{})
+        source_path=Path(admission['request']).parent/'native-result.json';original=source_path.read_bytes()
+        self.native_results[admission['id']]={'status':'completed','text':json.dumps({'difficulty':'complex'}),'record_hashes':[digest(new_record)]}
+        result=native.retain(self.root,admission['id'],{})
+        self.assertEqual(result['outcome'],'unfinished');self.assertEqual(source_path.read_bytes(),original)
+        self.assertNotIn('1',load_run(self.root)[1].get('assessments',{}))
+        receipt=Path(result['evidence'])/'report.md';rendered=receipt.read_bytes()
+        self.assess()
+        native.retain(self.root,admission['id'],{})
+        self.assertEqual(receipt.read_bytes(),rendered)
+        self.assertEqual(load_run(self.root)[1]['assessments']['1']['difficulty'],'standard')
+        # Review projection preserves the old native occurrence first, including
+        # malformed positions, when a later report arrives after a partial save.
+        self.implement();native.candidate(self.root);native.verify(self.root);admission=native.admit(self.root,'review')
+        native.bind(self.root,admission['id'],{'child_session':'partial-reviewer'})
+        (Path(admission['request']).parent/'revoked-result.json').write_text(json.dumps({'status':'completed','text':json.dumps({'verdict':'clean','findings':[]})}),newline='\n')
+        with self.assertRaises(Refused):native.retain(self.root,admission['id'],{})
+        self.assertFalse(load_run(self.root)[1]['attempts'][-1]['finished'])
+        original_finding={'severity':'concern','description':'Original concern'}
+        later_finding={'severity':'blocking','description':'Later blocker'}
+        self.native_results[admission['id']]={'status':'completed','text':json.dumps({'verdict':'findings','findings':['Malformed',original_finding]}),'record_hashes':[digest(old_record)]}
+        with patch.object(native,'_immutable',side_effect=interrupted),self.assertRaises(OSError):native.retain(self.root,admission['id'],{})
+        self.native_results[admission['id']]={'status':'completed','text':json.dumps({'verdict':'findings','findings':[later_finding]}),'record_hashes':[digest(new_record)]}
+        result=native.retain(self.root,admission['id'],{})
+        self.assertEqual([f['description'] for f in result['findings']],['Later blocker'])
+        self.assertEqual(result['finding_positions'],[1])
+        from .retention import read,diagnostic_index
+        item=next(item for item in diagnostic_index(load_run(self.root)[1],'1') if item['findings'] and item['findings'][0]['description']=='Original concern')
+        self.assertEqual(item['findings'][0]['position'],2);self.assertEqual(item['unparsed'],1)
+        original=read(item['report'])
+        self.assertEqual(original['source']['record_hashes'],[digest(old_record)])
+        self.assertEqual(original['report']['findings'][1],original_finding)
+        fresh=self.reviewed();completed=native.complete(self.root,fresh['id'])
+        from . import publication
+        final=load_run(self.root)[1]
+        sealed=final['commit_intents']['1']['publication']
+        body=publication.readable([{'commit':completed['commit'],'evidence':sealed}],{final['id']:final})
+        self.assertIn(item['report']['hash'],body)
+        self.assertIn('not a replacement verdict',body)
+
+    def test_legacy_completion_replays_only_missing_assessment_effects(self):
+        # Old runtimes could commit the finish before its dependent assessment.
+        # Retrying that receipt must neither lose the missing effect nor replace
+        # an assessment supplied by a subsequent attempt.
+        from . import native
+        from .storage import Journal
+        self.approve()
+        admission=native.admit(self.root,'assessment')
+        native.bind(self.root,admission['id'],{'child_session':'legacy-assessor'})
+        self.native_results[admission['id']]={'status':'completed','text':json.dumps({'difficulty':'simple'})}
+        append=Journal.append
+        def legacy_finish(journal,kind,data):
+            if kind=='transition' and data['events'][0]['kind']=='attempt.finished':
+                append(journal,'attempt.finished',data['events'][0]['data'])
+                raise OSError('Legacy crash before dependent assessment')
+            return append(journal,kind,data)
+        with patch.object(Journal,'append',legacy_finish),self.assertRaisesRegex(OSError,'Legacy crash'):
+            native.retain(self.root,admission['id'],{})
+        native.retain(self.root,admission['id'],{})
+        self.assertEqual(load_run(self.root)[1]['assessments']['1']['difficulty'],'simple')
+        journal,_=load_run(self.root)
+        prior=next(e['data'] for r in journal.records() for e in (r['data']['events'] if r['kind']=='transition' else [r]) if e['kind']=='attempt.started')
+        finish=next(r['data'] for r in journal.records() if r['kind']=='attempt.finished')
+        journal.append('attempt.started',prior|{'id':'later-assessment'})
+        journal.append('attempt.finished',finish|{'id':'later-assessment'})
+        journal.append('task.assessed',{'task':'1','attempt':'later-assessment','difficulty':'standard','rationale':'Later retained assessment'})
+        before=load_run(self.root)[0].records()
+        native.retain(self.root,admission['id'],{})
+        self.assertEqual(load_run(self.root)[0].records(),before)
+        self.assertEqual(load_run(self.root)[1]['assessments']['1']['difficulty'],'standard')
+
     def test_structured_decision_preserves_receipt_and_original_finding_positions(self):
         from . import native
         from .handoff import finding_index
@@ -710,8 +869,9 @@ class NativeWorkflowTest(NativeFixture):
         self.assertTrue(index['incomplete_reviews'][-1]['issues'])
         with self.assertRaises(Refused):native.complete(self.root,review['id'])
         repair=native.admit(self.root,'implementation')
-        packet=json.loads(Path(repair['task_context']['path']).read_text())
-        self.assertEqual(json.loads(Path(packet['findings']['path']).read_text()),index)
+        packet_path=Path(repair['task_context']['path']);packet=json.loads(packet_path.read_text())
+        if packet.get('details'):packet=json.loads((packet_path.parent/packet['details']['path']).read_text())
+        self.assertEqual(json.loads((packet_path.parent/packet['findings']['path']).read_text()),index)
         self.assertEqual(json.loads(Path(packet['current_review']['report']['path']).read_text())['receipt'],receipt)
         self.assertEqual(packet['current_review']['attempt'],review['id'])
 
@@ -957,17 +1117,140 @@ class NativeWorkflowTest(NativeFixture):
         self.assertEqual(source_path.read_bytes(),source)
         self.assertEqual(len(load_run(self.root)[1]['attempts']),2)
         review=self.reviewed()
+        # Upgrade after sealing an old-format intent, but before Git commits.
+        # The new producer adds verification evidence; retry must keep the old seal.
+        from . import publication
+        journal,state=load_run(self.root);checked=state['verification']['1']
+        # Reproduce the old producer's actual same-tree rebinding history.
+        # Its selected check originated on another HEAD under the same identity.
+        legacy=checked|{'at':'legacy-check-time'}
+        journal.append('verification',legacy|{'head':'earlier-check-head'})
+        journal.append('verification',legacy)
+        producer=publication.task_evidence;run_git=native.git
+        def old_evidence(*args):return {k:v for k,v in producer(*args).items() if k!='verification'}
+        def before_commit(root,*args):
+            if args[0]=='commit':raise OSError('Interrupted before Git commit')
+            return run_git(root,*args)
+        with patch.object(publication,'task_evidence',side_effect=old_evidence),patch.object(native,'git',side_effect=before_commit), \
+                patch.object(native,'provenance',return_value=legacy),patch('oh.verification.provenance',return_value=legacy),self.assertRaises(OSError):
+            native.complete(self.root,review['id'])
+        sealed=load_run(self.root)[1]['commit_intents']['1']['publication']
+        self.assertNotIn('verification',sealed)
+        with self.assertRaisesRegex(Refused,'Passing verification'):native.complete(self.root,review['id'])
         journal,state=load_run(self.root);original=Journal.append
         def interrupted(this,kind,data):
             if kind=='task.completed':raise OSError('Interrupted after exact commit.')
             return original(this,kind,data)
-        with patch.object(Journal,'append',interrupted),self.assertRaises(OSError):native.complete(self.root,review['id'])
+        # The legacy runtime wrote the exact sealed commit, then crashed before
+        # its completion event. New readers recover that fact without a new Git write.
+        with patch.object(Journal,'append',interrupted),patch.object(native,'provenance',return_value=legacy), \
+                patch('oh.verification.provenance',return_value=legacy),self.assertRaises(OSError):
+            native.complete(self.root,review['id'])
         committed=self.git('rev-parse','HEAD');attempts=len(load_run(self.root)[1]['attempts'])
         recovered=native.complete(self.root,review['id'])
         self.assertEqual(recovered['commit'],committed)
         self.assertEqual(self.git('rev-parse','HEAD'),committed)
         self.assertEqual(len(load_run(self.root)[1]['attempts']),attempts)
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
+        self.assertEqual(load_run(self.root)[1]['commit_intents']['1']['publication'],sealed)
+        publication.verify_record(self.root,committed,sealed)
+        self.assertIsNone(publication.original_verification(sealed,self.root))
+
+    def test_precommit_intent_rechecks_proof_and_accepts_fresh_reviewed_repair(self):
+        from . import native,publication
+        self.approve();self.assess();self.implement();review=self.reviewed()
+        run_git=native.git
+        def before_commit(root,*args):
+            if args[0]=='commit':raise OSError('Interrupted before Git commit')
+            return run_git(root,*args)
+        with patch.object(native,'git',side_effect=before_commit),self.assertRaises(OSError):
+            native.complete(self.root,review['id'])
+        journal,state=load_run(self.root);original=state['commit_intents']['1'];parent=self.git('rev-parse','HEAD')
+        path=Path(review['report_ref']['path']);report=path.read_bytes()
+        for missing in (False,True):
+            if missing:path.unlink()
+            else:path.write_text('{}',newline='\n')
+            with self.subTest(missing=missing),self.assertRaisesRegex(Refused,'retained report'):
+                native.complete(self.root,review['id'])
+            self.assertEqual(self.git('rev-parse','HEAD'),parent)
+            path.write_bytes(report)
+        self.reviewed({'verdict':'blocking','findings':[{'severity':'blocking','family':'retry','description':'Repair the candidate.'}]})
+        with self.assertRaisesRegex(Refused,'Final review does not match'):native.complete(self.root,review['id'])
+        self.assertEqual(self.git('rev-parse','HEAD'),parent)
+        self.implement(edit=lambda:(self.root/'output.txt').write_text('Repaired candidate.\n',newline='\n'))
+        fresh=self.reviewed();completed=native.complete(self.root,fresh['id'])
+        journal,final=load_run(self.root)
+        intents=[r['data'] for r in journal.records() if r['kind']=='commit.intent']
+        self.assertEqual(len(intents),2);self.assertEqual(intents[0],original)
+        self.assertEqual(intents[1]['review'],fresh['id']);self.assertEqual(intents[1]['parent'],parent)
+        publication.verify_record(self.root,completed['commit'],intents[1]['publication'])
+        self.assertEqual(final['done'],['1'])
+
+    def test_additional_review_reverifies_actual_inputs_and_completes_a_clean_scoped_repair(self):
+        from . import native,publication
+        baseline=self.git('rev-parse','HEAD')
+        program=("import pathlib,subprocess,sys; head=subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(); "
+                 "sys.exit(0 if head=="+repr(baseline)+" or pathlib.Path('output.txt').read_text().strip()=='repaired' else 1)")
+        configure(self.root,review_rounds=4,checks=[{'name':'history-sensitive','command':['python3','-c',program]}])
+        self.approve();self.assess();self.implement();first=self.reviewed();native.complete(self.root,first['id'])
+        native.review(self.root,['task','1'],self.resume_choice())
+        journal,state=load_run(self.root);old=state['verification']['1']
+        self.assertNotEqual(old['head'],self.git('rev-parse','HEAD'))
+        with self.assertRaisesRegex(Refused,'checks'):native.admit(self.root,'review')
+        # Already-saved legacy synthetic rebinding is not actual verification either.
+        journal.append('verification',old|native._subject(self.root,state))
+        with self.assertRaisesRegex(Refused,'checks'):native.admit(self.root,'review')
+        author=native.admit(self.root,'implementation');native.bind(self.root,author['id'],{'child_session':'repair-author'})
+        from copy import deepcopy
+        legacy=deepcopy(load_run(self.root)[0].records())
+        for row in legacy:
+            if row['kind']=='review.requested':row['data'].pop('baseline',None)
+        self.assertEqual(reduce(legacy)['extra_review']['baseline']['git_tree'],author['git_tree'])
+        failed=native.verify(self.root,attempt_id=author['id'])
+        self.assertEqual(failed['checks'][0]['returncode'],1)
+        (self.root/'output.txt').write_text('repaired\n',newline='\n')
+        native.candidate(self.root);passed=native.verify(self.root,attempt_id=author['id'])
+        self.assertEqual(passed['checks'][0]['returncode'],0)
+        self.native_results[author['id']]={'status':'unfinished','text':''}
+        native.retain(self.root,author['id'],{})
+        self.assertTrue(load_run(self.root)[1].get('correction'))
+        self.finish_attempt('implementation','Verified the existing scoped repair without further edits.')
+        fresh=self.finish_attempt('review',{'verdict':'clean','findings':[]})
+        completed=native.complete(self.root,fresh['id'])
+        journal,state=load_run(self.root);self.assertEqual(self.git('status','--porcelain'),'')
+        intent=next(v for v in state['commit_intents'].values() if v['review']==fresh['id'])
+        evidence=intent['publication'];publication.verify_record(self.root,completed['commit'],evidence)
+        self.assertEqual(evidence['verification']['checks'][0]['returncode'],0)
+        later=dict(state);later['attempts']=state['attempts']+[state['attempts'][-1]|{'id':'later-incomplete','outcome':'unfinished','findings':[]}]
+        later['verification']={'1':{'checks':[{'name':'later-only-check','returncode':1}]}}
+        body=publication.readable([{'commit':completed['commit'],'evidence':evidence}],{state['id']:later},self.root)
+        self.assertIn('Final receipt: `'+fresh['id']+'`',body)
+        self.assertIn('history-sensitive: passed',body)
+        self.assertNotIn('later-only-check',body)
+        self.assertIn('later-incomplete: unfinished',body)
+        # A separate approved Deliver can repair a shared prerequisite. Resuming
+        # the original additional review preserves its owner and both commits.
+        original_run=state['id'];original_records=journal.records()
+        native.review(self.root,['task','1'],self.resume_choice())
+        self.approve([{'id':'shared-repair','title':'Repair shared prerequisite','instructions':'Add the shared prerequisite for verification.','needs':[]}])
+        repair_run=load_run(self.root)[1]['id'];self.assertNotEqual(repair_run,original_run)
+        self.assess();self.implement(edit=lambda:(self.root/'shared.txt').write_text('ready\n',newline='\n'))
+        repair_review=self.reviewed();repair_commit=native.complete(self.root,repair_review['id'])
+        repair_state=load_run(self.root)[1]
+        native.resume(self.root,self.resume_choice(run=original_run),run=original_run)
+        self.assertEqual(load_run(self.root)[1]['id'],original_run)
+        final_review=self.reviewed();checked=native.complete(self.root,final_review['id'])
+        self.assertFalse(checked['committed'])
+        resumed=load_run(self.root)[1]
+        self.assertEqual(self.git('rev-parse','HEAD'),repair_commit['commit'])
+        self.assertFalse(resumed.get('extra_review'))
+        self.assertEqual(journal.records()[:len(original_records)],original_records)
+        records=[{'commit':completed['commit'],'evidence':evidence},
+                 {'commit':repair_commit['commit'],'evidence':repair_state['commit_intents']['shared-repair']['publication']}]
+        combined=publication.readable(records,{original_run:resumed,repair_run:repair_state},self.root)
+        self.assertIn(fresh['id'],combined);self.assertIn(repair_review['id'],combined)
+        for record in records:publication.verify_record(self.root,record['commit'],record['evidence'])
+        self.assertEqual(self.git('status','--porcelain'),'')
 
     def test_stop_refuses_unsettled_native_child_and_resume_never_renews_allowance(self):
         from . import native
@@ -1189,6 +1472,7 @@ class NativeWorkflowTest(NativeFixture):
 
     def test_publication_reuses_the_existing_pr_and_unknown_discovery_does_not_reopen_work(self):
         from . import native, publication
+        configure(self.root,context={'result_chars':1000})
         self.git('remote','add','origin','https://github.com/example/product.git')
         (self.root/'manual.txt').write_text('Existing manual PR work to review.',newline='\n')
         self.git('add','.');self.git('commit','-qm','manual PR starting work')
@@ -1221,6 +1505,7 @@ class NativeWorkflowTest(NativeFixture):
         review=self.reviewed({'verdict':'clean','summary':'Rechecked the repair.',
             'findings':[],'evidence':EVIDENCE})
         packet=json.loads((Path(review['evidence'])/'task-context.json').read_text())
+        if packet.get('details'):packet=json.loads((Path(review['evidence'])/packet['details']['path']).read_text())
         self.assertEqual(packet['included_original_work']['covers'],[manual])
         self.assertEqual(packet['included_original_work']['url'],scope['pr_target']['url'])
         native.complete(self.root,review['id'])
@@ -1278,9 +1563,23 @@ class NativeWorkflowTest(NativeFixture):
         def github(root,host,path,**kwargs):return [pr] if kwargs.get('pages') else pr
         with patch('oh.publication.github',side_effect=github):
             saved=publication.reconcile(self.root)
+            recorded=journal.records()
+            self.assertNotIn('published',native.select(self.root))
             repeated=publication.reconcile(self.root)
+            self.assertEqual(journal.records(),recorded)
         self.assertEqual(saved['published']['number'],144)
-        self.assertEqual(repeated['published']['number'],144)
+        receipt=load_run(self.root)[1]['published']
+        self.assertEqual(saved['published'],receipt)
+        self.assertEqual(repeated['published'],receipt)
+        self.assertEqual(saved['publication_status'],'current')
+        self.assertEqual(receipt['url'],pr['html_url'])
+        self.assertEqual(receipt['approved_head'],grant['head'])
+        # A compact checkpoint cannot hide the saved PR link during a lookup outage.
+        with patch('oh.publication.github',side_effect=Refused('GitHub temporarily unavailable.')):
+            offline=publication.reconcile(self.root)
+        self.assertEqual(offline['publication_status'],'last verified')
+        self.assertEqual(offline['published'],receipt)
+        self.assertEqual(journal.records(),recorded)
         self.assertEqual(load_run(self.root)[1]['attempts'],attempts)
         # CI is followed on the published reviewed head until a meaningful result; an empty,
         # pending, skipped, failed or cancelled set never reads as a pass.
@@ -1308,7 +1607,9 @@ class NativeWorkflowTest(NativeFixture):
                 return result
             def sleep(seconds):now[0]+=seconds
             with patch('oh.observability.observe_ci'):
-                return publication.ci_wait(self.root,None,timeout,read=read,sleep=sleep,clock=lambda:now[0])
+                result=publication.ci_wait(self.root,None,timeout,read=read,sleep=sleep,clock=lambda:now[0])
+            self.assertEqual(result['url'],published['url'])
+            return result
         registering=[{},{'runs':[{'name':'verify','status':'in_progress'}],'statuses':[{'context':'legacy','state':'pending'}]},
                      {'runs':[done('success'),done('skipped','optional')],'statuses':[{'context':'legacy','state':'success'}]}]
         for steps,outcome in ((registering,'pass'),([{'runs':[done('success'),done('failure','lint')]}],'fail'),

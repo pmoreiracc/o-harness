@@ -18,6 +18,31 @@ class GateTest(unittest.TestCase):
         delay=patch('oh.authority.sleep');delay.start();self.addCleanup(delay.stop)
         self.subject=self.home/'approved scope.md';self.subject.write_text('One bounded task.',newline='\n')
 
+    def test_fix_approval_uses_its_saved_label_and_preserves_older_offers(self):
+        from .decisions import scope_request, verify_scope, save_offer
+        from .storage import digest, read_json
+        scope={'workflow':'deliver','design':None,'branch':'fix-ci',
+               'tasks':[{'title':'Repair the diagnosed CI failure'}],
+               'config':{'tasks_per_batch':1,'review_rounds':3}}
+        with patch.dict(os.environ,{'OH_DATA_HOME':str(self.home/'state')}),patch('oh.native._home',return_value=self.home/'state'), \
+                patch('oh.decisions.now',return_value='2026-11-05T12:00:00Z'):
+            offered=scope_request(self.root,scope)
+            key=offered['decision']
+            source={'via':'question','question':offered['question'],'question_at':'2026-11-05T12:00:01Z','prompt':'Approve and fix'}
+            verify_scope(self.root,scope,{'decision':key},source)
+            for choice in ('Investigate CI failures','Re-run failed checks','Stop and take over','Keep planning','Approve this scope'):
+                with self.subTest(choice=choice),self.assertRaises(Refused):
+                    verify_scope(self.root,scope,{'decision':key},source|{'prompt':choice})
+            # The new label must not reinterpret an outstanding old question.
+            old={'kind':'approve-scope','scope':digest(scope),'label':'Approve this scope',
+                 'question':'Approve the previously shown scope?','created_at':'2026-11-05T12:00:00Z'}
+            old_key=save_offer(self.root,old)
+            old_source=source|{'question':old['question'],'prompt':'Approve this scope'}
+            before=read_json(self.home/'state/decisions'/f'{old_key}.json')
+            verify_scope(self.root,scope,{'decision':old_key},old_source)
+            with self.assertRaises(Refused):verify_scope(self.root,scope,{'decision':old_key},old_source|{'prompt':'Approve and fix'})
+            self.assertEqual(read_json(self.home/'state/decisions'/f'{old_key}.json'),before)
+
     def test_direct_resume_answer_survives_only_the_prescribed_retry_on_both_hosts(self):
         for host in ('codex','claude'):
             with self.subTest(host=host):

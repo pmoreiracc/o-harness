@@ -85,6 +85,18 @@ def check_failed(result):
     return result.get('returncode') != 0 or bool(result.get('cancellation') or result.get('unavailable'))
 
 
+def provenance(records,checked,subject):
+    """Find the actual check event, not a later same-tree relabelling of it."""
+    if not checked or any(checked.get(k)!=subject.get(k) for k in ('head','tree','git_tree','artifacts')):return None
+    if any(check_failed(c) for c in checked.get('checks',[])):return None
+    for record in records:
+        for event in record['data']['events'] if record['kind']=='transition' else [record]:
+            value=event['data']
+            if event['kind']=='verification' and all(value.get(k)==checked.get(k) for k in ('task','at','checks')):
+                return value if all(value.get(k)==subject.get(k) for k in ('head','tree','git_tree','artifacts')) else None
+    return None
+
+
 def verify(root, checks, project_id):
     results = []
     for check in checks:

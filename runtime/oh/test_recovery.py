@@ -85,7 +85,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                 self.assertEqual(updated['granted'],old['granted'])
                 self.assertEqual(updated['config'],old['config'])
 
-    def test_recovery_waits_for_finished_attempt_tools_before_transfer_and_replays_final_binding(self):
+    def test_recovery_waits_for_owned_commands_before_transfer_and_replays_final_binding(self):
         from .storage import read_json
         from .workflow import active_file
         self.approve();native.decision(self.root,'stop',self.human('stop'));old_journal,old=load_run(self.root)
@@ -94,7 +94,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         pending=native.prepare_scope(self.root,{'tasks':[{'id':'pending','title':'Pending other approval',
                                                        'instructions':'Respect later ownership selections.'}]})
         with cancellation._edit(self.root) as value:
-            value['tools']['pending-edit']={'attempt':finished['id'],'kind':'tool','name':'Edit','started':now()}
+            value['commands']['pending-command']={'attempt':finished['id'],'started':now()}
         gate=decisions.prepare(self.root,'recover',run=old['id'])
         def timed(value):return value|{'at':datetime.now(timezone.utc).isoformat()}
         older_approval=timed(self.human(session='pending-scope'))
@@ -109,10 +109,8 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         with self.assertRaisesRegex(Refused,'unsettled native'):
             native.decision(self.root,'resume',answer,run=old['id'])
         self.assertEqual(retained(),before)
-        # Native completion, rather than the already-finished workflow label,
-        # settles the missed callback. The original answer remains usable.
-        self.parent_path.write_text(json.dumps({'type':'response_item','timestamp':now(),
-            'payload':{'type':'function_call_output','call_id':'pending-edit','output':'Edit completed'}})+'\n',newline='\n')
+        # A finished workflow label cannot settle an actual owned command.
+        with cancellation._edit(self.root) as value:value['commands']['pending-command'].update(ended=now(),returncode=0)
         original=native._resume_binding
         def interrupted(*args,**kwargs):
             if kwargs.get('write'):raise OSError('interrupted final selection write')
@@ -460,6 +458,44 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.assertEqual(len([a for a in state['attempts'] if a['role']=='review']),1)
         self.assertNotEqual(old['id'],state['assessments']['1']['attempt'])
 
+    def test_failed_codex_turn_ignores_legacy_tool_callbacks_and_reuses_cross_host_continue(self):
+        from . import authority
+        from .storage import read_json
+        self.approve();self.assess()
+        admitted=native.admit(self.root,'implementation')
+        native.bind(self.root,admitted['id'],{'child_session':'failed-child'})
+        attempt=load_run(self.root)[1]['attempts'][-1]
+        with cancellation._edit(self.root) as value:
+            value['attempts'][admitted['id']]['guard_observed']=True
+            for key,name in (('missed-patch','apply_patch'),('external-write','mcp__external__write')):
+                value['tools'][key]={'attempt':admitted['id'],'kind':'tool','name':name,'started':now()}
+        (self.root/'output.txt').write_text('Keep the implementation.\n',newline='\n')
+        before=load_run(self.root)[1]
+        error={'message':'Selected model is at capacity.','codex_error_info':'server_overloaded'}
+        event={'type':'event_msg','timestamp':now(),'payload':{
+            'type':'task_complete','last_agent_message':None,'error':error}}
+        self.parent_path.write_text(json.dumps(event)+'\n',newline='\n')
+        gate=decisions.prepare(self.root,'recover');answer=self.answer(gate,'Continue')
+        # Parse native terminal evidence rather than mocking a successful result.
+        with patch('oh.authority._path',return_value=self.parent_path), \
+                patch('oh.authority.native_result',side_effect=authority._native_result):
+            # The failed worker outcome is real; ordinary per-tool callbacks are
+            # no longer extra cleanup obligations, even for old snapshot records.
+            native.decision(self.root,'resume',answer)
+            native.decision(self.root,'resume',answer)
+        after=load_run(self.root)[1]
+        self.assertEqual(after['host'],'claude')
+        for key in ('missed-patch','external-write'):
+            self.assertNotIn('ended',cancellation._read(self.root)['tools'][key])
+        for key in ('granted','done','config'):self.assertEqual(after[key],before[key])
+        self.assertTrue(after['attempts'][-1]['finished'])
+        self.assertNotEqual(after['attempts'][-1]['outcome'],'reported')
+        retained=read_json(Path(attempt['evidence'])/'native-result.json')
+        self.assertEqual((retained['status'],retained['error']),('failed',error))
+        self.assertEqual((self.root/'output.txt').read_text(),'Keep the implementation.\n')
+        fresh=native.admit(self.root,'implementation')
+        self.assertNotEqual(fresh['id'],admitted['id'])
+
     def test_restart_discards_only_presented_work_and_finishes_on_updated_base(self):
         self.orphan()
         (self.root/'product.txt').write_text('discard me',newline='\n')
@@ -480,7 +516,10 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['done'],['1'])
 
     def test_stop_deleted_chat_revokes_worker_without_changing_files(self):
-        self.orphan()
+        from . import authority
+        attempt=self.orphan()
+        with cancellation._edit(self.root) as value:
+            value['tools']['pending-resume']={'attempt':attempt['id'],'kind':'resume','name':'SendMessage','started':now()}
         (self.root/'output.txt').write_text('human takes over',newline='\n')
         before=self.git('status','--porcelain')
         gate=decisions.prepare(self.root,'recover')
@@ -489,8 +528,13 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         answer['transcript_path']=str(new_parent)
         with patch('oh.authority.native_result',side_effect=FileNotFoundError('deleted native transcript')), \
                 patch('oh.recovery.facts',side_effect=FileNotFoundError('missing private plan after preparation')):
-            native.decision(self.root,'stop',answer)
-            native.decision(self.root,'stop',answer)
+            with patch.object(authority,'claude_operations',side_effect=authority.Unavailable('Deleted parent')):
+                with self.assertRaisesRegex(Refused,'operations are still settling'):native.decision(self.root,'stop',answer)
+                self.assertNotIn('ended',cancellation._read(self.root)['tools']['pending-resume'])
+            with patch.object(authority,'claude_operations',return_value={'pending-resume':{'state':'rejected','started':now()}}):
+                native.decision(self.root,'stop',answer)
+            with patch.object(authority,'claude_operations',side_effect=authority.Unavailable('Deleted parent')):
+                native.decision(self.root,'stop',answer)
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertEqual(self.git('status','--porcelain'),before)
         with self.assertRaisesRegex(Refused,'not running'):native.admit(self.root,'assessment')
@@ -532,7 +576,51 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['id'],delivery['id'])
         self.assertEqual(native.admit(self.root,'assessment')['role'],'assessment')
 
-    def test_changed_files_invalidate_destructive_choice_and_pending_tools_still_block(self):
+    def test_partial_native_report_and_recovery_keep_findings_when_late_retention_retries(self):
+        from . import authority,handoff
+        from .storage import digest,read_json
+        from .workflow import reduce
+        self.approve();self.assess();self.implement();native.candidate(self.root);native.verify(self.root)
+        pending=native.admit(self.root,'review');native.bind(self.root,pending['id'],{'child_session':'pending-review'})
+        findings=[{'severity':s,'family':s,'description':'Retain original '+s} for s in ('blocking','concern','scope')]
+        row={'type':'fixture-native','report':findings}
+        self.parent_path.write_text(json.dumps(row)+'\n',newline='\n')
+        report={'status':'completed','text':json.dumps({'verdict':'findings','findings':findings}),'record_hashes':[digest(row)]}
+        self.native_results[pending['id']]=report
+        with cancellation._edit(self.root) as value:value['attempts'][pending['id']]['guard_observed']=True
+        write=native._immutable
+        def interrupted(path,value):
+            if Path(path).name=='result.json':raise OSError('Partial canonical selection')
+            return write(path,value)
+        with patch.object(native,'_immutable',side_effect=interrupted),self.assertRaises(OSError):native.retain(self.root,pending['id'],{})
+        canonical=Path(pending['request']).parent/'native-result.json';original=canonical.read_bytes()
+        del self.native_results[pending['id']]
+        offer=decisions.prepare(self.root,'recover')
+        native.decision(self.root,'resume',self.answer(offer,'Continue',host='codex'))
+        journal,state=load_run(self.root);old=next(a for a in state['attempts'] if a['id']==pending['id'])
+        self.assertEqual(old['outcome'],'abandoned');self.assertEqual(old['findings'],[])
+        diagnostics=handoff.finding_index(state,'1')['diagnostics']
+        self.assertEqual([f['severity'] for f in next(d for d in diagnostics if d['findings'])['findings']],['blocking','concern','scope'])
+        self.assertEqual(old['source_ref']['kind'],'revocation');self.assertEqual(canonical.read_bytes(),original)
+        projection={k:old.get(k) for k in ('findings','finding_positions','finding_sources','report_issues')}
+        self.native_results[pending['id']]={'status':'completed','text':json.dumps({'verdict':'clean','findings':[]})}
+        def interrupted_late(path,value):
+            if Path(path).name.startswith('late-report-'):raise OSError('Partial late report')
+            return write(path,value)
+        with patch.object(native,'_immutable',side_effect=interrupted_late),self.assertRaises(OSError):native.retain(self.root,pending['id'],{})
+        native.retain(self.root,pending['id'],{})
+        journal,state=load_run(self.root);old=next(a for a in state['attempts'] if a['id']==pending['id'])
+        self.assertEqual({k:old.get(k) for k in projection},projection)
+        self.assertEqual(canonical.read_bytes(),original)
+        self.assertEqual(read_json(old['late_report']['path'])['findings'],[])
+        index=handoff.finding_index(state,'1')
+        self.assertEqual(index['families'],[])
+        self.assertEqual(len(next(d for d in index['diagnostics'] if d['findings'])['findings']),3)
+        records=journal.records();native.retain(self.root,pending['id'],{});self.assertEqual(journal.records(),records)
+        with self.assertRaisesRegex(Refused,'cannot change'):
+            reduce(records+[{'kind':'attempt.late-result','at':now(),'data':{'id':pending['id'],'findings':[{'severity':'blocking','description':'Late replacement'}]}}])
+
+    def test_changed_files_invalidate_destructive_choice_and_pending_commands_still_block(self):
         old=self.orphan()
         gate=decisions.prepare(self.root,'recover')
         answer=self.answer(gate,'Start fresh')
@@ -552,8 +640,8 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
             native.decision(self.root,'restart',typed)
         self.assertEqual((self.root/'surprise.txt').read_text(),'More edits at the same path')
         with cancellation._edit(self.root) as value:
-            value['tools']['pending-edit']={'attempt':old['id'],'kind':'tool','name':'Edit','started':now()}
-        with self.assertRaisesRegex(Refused,'still settling'):self.recover('resume')
+            value['commands']['pending-command']={'attempt':old['id'],'started':now()}
+        with self.assertRaisesRegex(Refused,'cleanup is still pending'):self.recover('resume')
         self.assertFalse(load_run(self.root)[1]['attempts'][0]['finished'])
         # Continue keeps work written while the question was open or cleanup ran.
         # Its already-selected effect does not authorize a reset of those files.
@@ -562,7 +650,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         answer['transcript_path']=str(new_parent)
         original_settle=recovery._settle
         def settle(*args):
-            with cancellation._edit(self.root) as value:value['tools']['pending-edit']['ended']=now()
+            with cancellation._edit(self.root) as value:value['commands']['pending-command'].update(ended=now(),returncode=0)
             (self.root/'surprise.txt').write_text('final worker write',newline='\n')
             return original_settle(*args)
         with patch('oh.authority.native_result',side_effect=FileNotFoundError('deleted native transcript')), \
@@ -687,6 +775,42 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.assertEqual(state['commit_intents']['1'],prior)
         self.assess();self.implement();review=self.reviewed();native.complete(self.root,review['id'])
         self.assertEqual(verify_run(self.root,load_run(self.root)[1],current=True)['tasks'],2)
+
+    def test_legacy_late_report_preserves_projection_and_retries_partial_save(self):
+        from .storage import Journal,read_json
+        from .handoff import report_reference,finding_index
+        from .workflow import reduce
+        self.approve();self.assess();self.implement();native.candidate(self.root);native.verify(self.root)
+        pending=native.admit(self.root,'review');native.bind(self.root,pending['id'],{'child_session':'legacy-revoked-review'})
+        journal,state=load_run(self.root);directory=Path(pending['request']).parent
+        original={'severity':'blocking','family':'legacy','description':'Committed legacy blocker'}
+        (directory/'result.json').write_text(json.dumps({'verdict':'findings','findings':[None]*6+[original]}),newline='\n')
+        (directory/'revoked-result.json').write_text(json.dumps({'status':'cancelled','text':'Stopped'}),newline='\n')
+        journal.append('attempt.finished',{'id':pending['id'],'outcome':'abandoned',
+            'revocation':{'decision':'legacy-stop'},'findings':[original],'finding_positions':[7],'summary':'Original stopped attempt'})
+        # Model an old writer that saved the file but never committed its late event.
+        (directory/'native-result.json').write_text('{"partial":"legacy source"}',newline='\n')
+        self.native_results[pending['id']]={'status':'completed','text':json.dumps({'verdict':'findings','findings':[
+            {'severity':'concern','family':'late','description':'New late observation'}]})}
+        append=Journal.append
+        def crash(j,kind,data):
+            if kind=='attempt.late-result':raise OSError('Late event not committed')
+            return append(j,kind,data)
+        with patch.object(Journal,'append',new=crash),self.assertRaisesRegex(OSError,'Late event'):
+            native.retain(self.root,pending['id'],{})
+        result=native.retain(self.root,pending['id'],{})
+        self.assertEqual(result['findings'],[original]);self.assertEqual(result['finding_positions'],[7])
+        self.assertEqual(result['outcome'],'abandoned');self.assertEqual(result['summary'],'Original stopped attempt')
+        self.assertEqual(report_reference(result)['path'],str(directory/'result.json'))
+        self.assertEqual(read_json(result['late_report']['path'])['findings'][0]['description'],'New late observation')
+        journal,state=load_run(self.root);records=journal.records()
+        native.retain(self.root,pending['id'],{})
+        self.assertEqual(journal.records(),records)
+        self.assertEqual(finding_index(state,'1')['families'][0]['occurrences'][0]['id'],pending['id']+'#7')
+        self.assertEqual(len(finding_index(state,'1')['diagnostics']),1)
+        with self.assertRaisesRegex(Refused,'cannot change'):
+            reduce(records+[{'kind':'attempt.late-result','at':now(),'data':{
+                'id':pending['id'],'late_source':result['late_source'],'findings':[]}}])
 
 
 if __name__=='__main__':unittest.main()

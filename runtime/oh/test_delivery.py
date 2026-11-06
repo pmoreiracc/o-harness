@@ -11,6 +11,27 @@ from . import test_fixtures_workflow as fixtures
 from .test_fixtures_plans import BODY, delivery_documents
 
 
+class DeliveryRequestTest(unittest.TestCase):
+    def test_design_choice_binds_delivery_effect_for_menu_and_typed_reply(self):
+        for via in ('question','typed'):
+            source={'prompt':'0001','via':via,'question':delivery.DESIGN_QUESTION}
+            delivery.requested(source,'0001','',None)
+            with self.assertRaises(Refused):delivery.requested(source,'0002','',None)
+            with self.assertRaises(Refused):
+                delivery.requested(source|{'question':'Which design should I inspect before we deliver 0001?'},'0001','',None)
+
+
+    def test_explicit_typed_request_binds_design_and_track(self):
+        from .native import _command
+        for text in ('Deliver 0001 core','Please implement design 0001 track core.','/oh-deliver 0001 core'):
+            source={'prompt':text,'via':'typed'}
+            delivery.requested(source,'0001','core',_command(source))
+            for doc,track in (('0002','core'),('0001','ui'),('0001','')):
+                with self.subTest(text=text,doc=doc,track=track),self.assertRaisesRegex(Refused,'different design or track'):
+                    delivery.requested(source,doc,track,_command(source))
+        delivery.requested({'prompt':'Please deliver 0001.'},'0001','',None)
+
+
 class DeliveryTest(fixtures.NativeFixture):
     def setUp(self):
         super().setUp()
@@ -18,6 +39,91 @@ class DeliveryTest(fixtures.NativeFixture):
         fixtures.configure(self.root,tasks_per_batch=1)
 
     documents=delivery_documents
+
+    def _track_selection(self,host,typed=False):
+        import os
+        from datetime import datetime,timedelta,timezone
+        from itertools import count
+        from . import native
+        started=datetime.now(timezone.utc);ticks=count()
+        # Native records have an explicit order even on hosts with coarse clocks.
+        def now():return (started+timedelta(microseconds=next(ticks))).isoformat()
+        self.documents(body='## Tasks\n\n### Core track\n\n- [ ] **1.** Core behavior.\n\n### UI track\n\n- [ ] **2.** UI behavior.\n')
+        home=Path(self.temp.name)/'native';session='track-selection'
+        path=home/('.codex/sessions' if host=='codex' else '.claude/projects/p')/(session+'.jsonl')
+        path.parent.mkdir(parents=True)
+        def human(text):
+            return ({'type':'event_msg','timestamp':now(),'payload':{'type':'user_message','turn_id':'entry','message':text}}
+                    if host=='codex' else {'type':'user','sessionId':session,'promptId':'entry','cwd':str(self.root),
+                        'timestamp':now(),'message':{'role':'user','content':text}})
+        rows=([{'type':'session_meta','payload':{'id':session,'source':'cli','cwd':str(self.root)}}] if host=='codex' else [])
+        rows.append(human('/oh-deliver 0001'))
+        def save():path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
+        save()
+        locator={'host':host,'session':session,'transcript_path':str(path)}
+        request=locator|{'turn':'entry','prompt':'/oh-deliver 0001'}
+        question=delivery.track_question('0001');answer='Core (recommended)';use='select-track'
+        env={'CODEX_HOME':str(home/'.codex'),'CODEX_THREAD_ID':session if host=='codex' else '',
+             'OH_NATIVE_SESSION_ID':session if host=='claude' else ''}
+        with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,env), \
+                patch('oh.authority.native_human',side_effect=self.native_human_original), \
+                patch('oh.authority.coordinator',side_effect=native_coordinator):
+            with self.assertRaisesRegex(Refused,'Choose one design track'):
+                native.prepare_scope(self.root,doc='0001',human=request)
+            if typed:
+                rows.extend([{'type':'response_item','timestamp':now(),'payload':{'type':'message','role':'assistant',
+                    'content':[{'type':'output_text','text':question}]}},human(answer)])
+                reply=locator|{'turn':'entry','prompt':answer}
+            elif host=='codex':
+                rows.extend([{'type':'response_item','timestamp':now(),'payload':{'type':'function_call','call_id':use,
+                    'name':'request_user_input_async','arguments':json.dumps({'questions':[{'title':question,'options':[answer,'UI']}]})}},
+                    human('<send_user_message_question_reply>'+json.dumps([{'questionItemId':json.dumps(['request_user_input_async',use,0]),
+                        'question':question,'answer':answer}])+'</send_user_message_question_reply>')])
+                reply=locator|{'tool_use_id':use}
+            else:
+                rows.extend([{'type':'assistant','sessionId':session,'cwd':str(self.root),'timestamp':now(),'message':{'content':[
+                    {'type':'tool_use','id':use,'name':'AskUserQuestion','input':{'questions':[{'question':question,
+                        'options':[{'label':answer},{'label':'UI'}]}]}}]}},
+                    {'type':'user','sessionId':session,'cwd':str(self.root),'timestamp':now(),
+                     'toolUseResult':{'answers':{question:answer}},'message':{'content':[
+                        {'type':'tool_result','tool_use_id':use,'content':'Answered'}]}}])
+                reply=locator|{'tool_use_id':use}
+            save();branch=self.git('branch','--show-current')
+            # A genuine native answer to inspection does not authorize delivery,
+            # even when the question mentions the same design and delivery verb.
+            saved=path.read_text()
+            path.write_text(saved.replace(question,'Which track should I inspect before we deliver 0001?'),newline='\n')
+            with self.assertRaisesRegex(Refused,'Request delivery'):
+                native.prepare_scope(self.root,doc='0001',track='core',human=reply)
+            self.assertEqual(self.git('branch','--show-current'),branch)
+            if not typed:
+                for label in ('Deliver 0001 core','/oh-deliver 0001 core'):
+                    path.write_text(saved.replace(question,'Which track should I inspect before we deliver 0001?').replace(answer,label),newline='\n')
+                    for selected_track in ('core','ui'):
+                        with self.subTest(label=label,track=selected_track),self.assertRaisesRegex(Refused,'Request delivery'):
+                            native.prepare_scope(self.root,doc='0001',track=selected_track,human=reply)
+                        self.assertEqual(self.git('branch','--show-current'),branch)
+            path.write_text(saved,newline='\n')
+            # The old request remains stale, and a genuine choice cannot select another track/design.
+            if host=='codex':
+                with self.assertRaises(Refused):native.prepare_scope(self.root,doc='0001',track='core',human=request)
+            for doc,track in (('0001','ui'),('0002','core')):
+                with self.assertRaisesRegex(Refused,'Request delivery'):
+                    native.prepare_scope(self.root,doc=doc,track=track,human=reply)
+                self.assertEqual(self.git('branch','--show-current'),branch)
+            selected=native.prepare_scope(self.root,doc='0001',track='core',human=reply)
+            self.assertTrue(selected['approved']);self.assertEqual(selected['task']['id'],'1')
+            self.assertEqual(load_run(self.root)[1]['track'],'core')
+            self.assertEqual(native.prepare_scope(self.root,doc='0001',track='core',human=reply)['run'],selected['run'])
+            self.assertEqual(native.admit(self.root,'assessment')['role'],'assessment')
+            rows.append(human('Stop'));save()
+            with self.assertRaises(Refused):native.prepare_scope(self.root,doc='0001',track='core',human=reply)
+
+    def test_codex_track_selection_continues_delivery(self):self._track_selection('codex')
+
+    def test_claude_track_selection_continues_delivery(self):self._track_selection('claude')
+
+    def test_typed_track_selection_uses_native_question_context(self):self._track_selection('codex',typed=True)
 
     def test_additional_repair_continues_same_design_through_checks_review_and_publication(self):
         import sys
@@ -354,6 +460,58 @@ class DeliveryTest(fixtures.NativeFixture):
         self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(self.git('rev-parse','HEAD'),main)
         self.assertEqual(selected['task']['id'],'2')
+
+    def test_merged_track_selects_only_runnable_track_without_another_question(self):
+        from . import native
+        body=('## 5. Open decisions\n\nOwner decisions remain unresolved.\n\n## Tasks\n\n### Dashboard track\n\n'
+              '- [ ] **1.** Resolve forecast transition. *Blocked on §5.*\n'
+              '- [ ] **2.** Compose Budget. *Depends on task 1.*\n'
+              '- [ ] **3.** Deliver Transactions. *Depends on task 2.*\n'
+              '- [ ] **6.** Later independent work.\n'
+              '- [ ] **4.** Deliver the import-rule editor.\n'
+              '- [ ] **5.** Deliver Memory. *Depends on task 8.* *Blocked on §5.*\n\n'
+              '### Registry track\n\n- [ ] **8.** Deliver invocation policy.\n')
+        _,path=self.documents(body=body)
+        self.git('switch','-c','deliver/0001-registry')
+        path.write_text(path.read_text().replace('- [ ] **8.**','- [x] **8.**'),newline='\n')
+        self.git('commit','-qam','delivered registry')
+        self.git('switch','main');self.git('merge','--no-ff','--no-edit','deliver/0001-registry')
+        self.git('update-ref','refs/remotes/origin/main','HEAD');base=self.git('rev-parse','HEAD')
+        self.git('switch','deliver/0001-registry')
+        # Explicit selection of the completed track must not silently switch scope.
+        with self.assertRaisesRegex(Refused,'No ready pending tasks'):
+            delivery.selection(self.root,'0001','registry')
+        request=self.human('/oh-deliver 0001')
+        selected=native.prepare_scope(self.root,doc='0001',human=request)
+        journal,state=load_run(self.root)
+        self.assertTrue(selected['approved']);self.assertEqual(selected['task']['id'],'4')
+        self.assertEqual(state['track'],'dashboard');self.assertEqual(state['granted'],['4'])
+        self.assertEqual([t['id'] for t in state['tasks']],['4','6'])
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001-dashboard')
+        self.assertEqual(self.git('rev-parse','HEAD'),base)
+        records=journal.records()
+        self.assertEqual(native.prepare_scope(self.root,doc='0001',human=request)['run'],state['id'])
+        self.assertEqual(journal.records(),records)
+        native.admit(self.root,'assessment')
+        self.assertEqual(native.prepare_scope(self.root,doc='0001',human=request)['run'],state['id'])
+        self.assertEqual(len(load_run(self.root)[1]['attempts']),1)
+
+    def test_automatic_track_ignores_blocked_tracks_but_preserves_real_choices(self):
+        _,path=self.documents(body=('## 5. Open decisions\n\nOwner decision remains unresolved.\n\n## Tasks\n\n### Dashboard track\n\n'
+            '- [ ] **1.** Dashboard. *Blocked on §5.*\n\n'
+            '### Registry track\n\n- [ ] **8.** Registry.\n'))
+        manifest,_=delivery.selection(self.root,'0001')
+        self.assertEqual(manifest['track'],'registry')
+        self.assertEqual([t['id'] for t in manifest['tasks']],['8'])
+        text=path.read_text()
+        path.write_text(text.replace(' *Blocked on §5.*',''),newline='\n')
+        self.git('commit','-qam','resolve dashboard blocker');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        with self.assertRaisesRegex(Refused,'Choose one design track: dashboard, registry'):
+            delivery.selection(self.root,'0001')
+        path.write_text(text.replace('**8.** Registry.','**8.** Registry. *Depends on task 1.*'),newline='\n')
+        self.git('commit','-qam','both tracks blocked');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        with self.assertRaisesRegex(Refused,'No ready pending tasks'):
+            delivery.selection(self.root,'0001')
 
     def test_entry_discovers_merged_progress_before_reconciled_delivery_selection(self):
         from . import native

@@ -133,6 +133,11 @@ def completed(directory, admission, result, record, state):
     if record.get('review_fragments'):
         import json
         lines.extend(['','## Unclassified findings','',*('    '+json.dumps(item,ensure_ascii=False) for item in record['review_fragments'])])
+    if record.get('diagnostics'):
+        lines.extend(['','## Historical reports','','These observations do not replace this attempt’s outcome.',''])
+        for ref in record['diagnostics']:
+            relative=Path(ref['path']).relative_to(directory).as_posix()
+            lines.append('- [Original report]('+relative+') — SHA-256 `'+ref['hash']+'`.')
     value = result.get('structured') or {}
     if isinstance(value,dict) and value.get('decision_format')==1:
         lines.extend(['','## Full review receipt','',value['receipt']])
@@ -195,7 +200,8 @@ def index(journal, state):
             if resolution:lines.append(f"| Decision | | {resolution['choice']} | |")
             if scope:lines.append(f"| Scope | | {scope['action']} | |")
             if attempt.get('late_report'):
-                lines.append("| Late native evidence | | "+artifact('Original worker report',f"attempts/{attempt['id']}/late-result.json")+"; attempt remains cancelled | |")
+                relative=Path(attempt['late_report']['path']).relative_to(journal.path).as_posix()
+                lines.append("| Late native evidence | | "+artifact('Unadjudicated worker report',relative)+"; original outcome unchanged | |")
             if attempt.get('normalized_report'):
                 name='reparsed-review.json' if role=='review' else 'normalized-report.json'
                 label='Recovered review decision' if role=='review' else 'Unambiguous legacy references'
@@ -203,6 +209,14 @@ def index(journal, state):
         lines.append('')
         from .handoff import finding_index
         findings=finding_index(state,task['id'])
+        if findings.get('diagnostics'):
+            lines.extend(['### Historical diagnostic reports','','These reports preserve observations, not current verdicts or approval.',''])
+            for item in findings['diagnostics']:
+                relative=Path(item['report']['path']).relative_to(journal.path).as_posix()
+                lines.append('- '+artifact(item['attempt'],relative)+' — '+item['status']+'; original report positions retained.')
+                for finding in item['findings']:
+                    lines.append('  - #'+str(finding['position'])+' '+finding['severity']+': '+finding['description'])
+            lines.append('')
         if findings['incomplete_reviews']:
             lines.extend(['### Incomplete review evidence',''])
             for item in findings['incomplete_reviews']:
@@ -218,9 +232,10 @@ def index(journal, state):
                     label=item['disposition']
                     if label=='still-open' and item.get('author_claim',{}).get('disposition')=='fixed':label='Awaiting review confirmation'
                     if label=='fixed' and item.get('reviewed_by'):label='Confirmed by review'
-                    relative=f"attempts/{original}/result.json"
+                    relative=Path(item['review']).relative_to(journal.path).as_posix() if item.get('historical') else f"attempts/{original}/result.json"
                     link=f"[{escape(item['id'])}]({relative})" if (journal.path/relative).is_file() else escape(item['id'])+' (result unavailable)'
                     lines.append(f"- {link}: **{label}** ({escape(family['family'])}).")
+                    if item.get('note'):lines.append('  '+escape(item['note']))
                     if item.get('reviewed_by'):
                         lines.append('  Confirmed by '+artifact('review',f"attempts/{item['reviewed_by']}/result.json")+'.')
                     if claim:=item.get('author_claim'):

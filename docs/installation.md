@@ -154,7 +154,10 @@ versions' `setup` refuses to replace, so go back to an older version only with a
 data folder.
 Finish or cancel active native work before switching builds. Current helpers preserve
 historical evidence and adopt unfinished work only at a quiet boundary; they do not
-restart a retired runner or replenish allowances. The dashboard service
+restart a retired runner or replenish allowances. Checked owner handoff reconciles
+legacy completed-attempt control entries before new work. Do not run old and new
+completion writers concurrently on the same saved run; use fresh sessions after
+settling the old coordinator. The dashboard service
 restarts itself on the new version; if you installed it before version 0.3.0, run
 `oh service-install` once more.
 On Windows, OH retains earlier downloaded Python versions because an installed dashboard
@@ -182,3 +185,9 @@ activation or release.
 OH only switches automatically to a higher
 version, so activate a local build with `scripts/oh setup` from the installed plugin
 (`setup --development` if the checkout had uncommitted changes).
+
+Keep the snapshot that wrote a run available for retention and receipt retries.
+New source-bound completion records require a compatible reader even after the run
+settles; older runtimes cannot safely revisit them. Use isolated development data
+when a trial needs to switch back to an older runtime. Switching plugins or rolling
+back source does not roll back workflow history.
