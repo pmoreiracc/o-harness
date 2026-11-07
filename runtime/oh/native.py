@@ -1211,6 +1211,18 @@ def _author(root,state):
     _owner(root,state)
 
 
+def _private_design(root,state):
+    """The initiative's actual deliverable, rather than any changed planning file."""
+    from .plans import initiative,design_file
+    where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
+    slug=_initiative(state)
+    if not slug:raise Refused('Private Design needs its initiative slug; preserve the draft and prepare Design for that initiative')
+    number=initiative(root,where,slug,named=True)['design']
+    path=design_file(root,number,where) if number else None
+    if not path:raise Refused('Private Design needs a design linked from its initiative; link the actual draft, then prepare and verify the candidate before review')
+    return where,number,Path(path)
+
+
 def candidate(root):
     with _locked(root):
         journal,state=load_run(root);_idle(root);author=_author(root,state)
@@ -1224,13 +1236,12 @@ def candidate(root):
             from .plans import write
             write(Path(bound['path']),text)
         if state.get('plans',{}).get('location')=='private' and state['workflow']=='design':
-            from .plans import private_inputs,write
-            where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
-            original=state.get('scope_snapshot',{}).get('documents',{})
-            for name in private_inputs(where):
-                path=Path(name);text=path.read_text()
-                if path.parent==where['designs'] and text!=original.get(name) and re.search(r'^status:\s*draft\s*$',text,re.M):
-                    write(path,re.sub(r'^status:\s*draft\s*$', 'status: approved',text,count=1,flags=re.M))
+            from .plans import write
+            _,_,path=_private_design(root,state);text=path.read_text()
+            # Review and native acceptance cover the final bytes. This status
+            # alone grants nothing; completion records the exact human approval.
+            if re.search(r'^status:\s*draft\s*$',text,re.M):
+                write(path,re.sub(r'^status:\s*draft\s*$', 'status: approved',text,count=1,flags=re.M))
         value={'task':task['id'],**_subject(root,state)}
         journal.append('native.candidate',value)
         return value
@@ -1626,6 +1637,13 @@ def complete(root,attempt_id):
             raise Refused('The proposed additions were not approved before writing')
         if state['workflow']=='design' and state.get('plans',{}).get('location')=='private' and state.get('private_native_approval',{}).get('attempt')!=attempt_id:
             raise Refused('The human must approve the exact reviewed private plan')
+        private_design=None
+        if state['workflow']=='design' and state.get('plans',{}).get('location')=='private':
+            from .plans import status_of,verify_design,digest_of
+            where,number,path=private_design=_private_design(root,state)
+            if status_of(path)!='approved' or subject['artifacts'].get(str(path))!=digest_of(path):
+                raise Refused('The reviewed private design is not delivery-ready. Preserve it, run candidate and verify, then review and accept those exact contents within the remaining allowance before completion')
+            verify_design(root,where,number)
         from .publication import task_evidence,validate_evidence
         # A saved intent is not a commit. Validate current proof before every new
         # Git write; only an already-created exact commit recovers from its seal.
@@ -1657,13 +1675,10 @@ def complete(root,attempt_id):
                          'delivery_base':old.get('delivery_base',state['base']),'delivery_baseline':old.get('delivery_baseline',state['base']),
                          'delivery_no_code':not bool(git(root,'diff','--name-only',state['base'],value.get('commit',subject['head'])))}
             atomic_json(approvals_file(root),records|{bound['doc']:updated})
-        if state.get('plans',{}).get('location')=='private' and state['workflow']=='design':
+        if private_design:
             from .plans import approve
-            where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
-            for path in subject['artifacts']:
-                number=re.match(r'([0-9]{4})-',Path(path).name)
-                if number and Path(path).parent==where['designs'] and Path(path).read_text()!=state['scope_snapshot'].get('documents',{}).get(path) and re.search(r'^status:\s*approved\s*$',Path(path).read_text(),re.M):
-                    approve(root,where,number[1],state['id'],False)
+            where,number,_=private_design
+            approve(root,where,number,state['id'],False)
         if correction:
             value.update(commit_key=key,correction_of=correction['prior_commit'])
             journal.append('correction.completed',value);journal.append('run.status',{'status':correction['return_status'],**({'head':git(root,'rev-parse','HEAD'),'tree':tree(root)} if correction['return_status']=='paused' else {})})
