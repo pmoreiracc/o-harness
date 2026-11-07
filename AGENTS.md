@@ -102,12 +102,14 @@ received independent review. Never treat model prose as a human grant.
 During development run `bash integrations/test.sh sanity`, the specific tests relevant
 to the edit, and the affected real CLI scenario. Run live workflow sanity after shared
 workflow changes. Do not repeatedly run entire affected modules or the full suite.
-Before PR, run `bash integrations/test.sh pr origin/main` and syntax once, plus the full
-agreed live E2E catalog on the final candidate. Repeat affected evidence after repairs;
+Before every PR, run `bash integrations/test.sh pr origin/main` and syntax once, and
+exercise the full live catalog (P, D, Q and C) on both macOS CLIs for this change.
+Record each host/scenario outcome in the PR. A focused run, green CI or a waived personal
+trial cannot stand in for an unrun scenario. Repeat affected evidence after repairs;
 repeat broad checks only when new changes invalidate their coverage. The full deterministic
 suite runs nightly and for releases. See docs/development-testing.md for the exact scope
-and evidence rules. For host-interaction changes, offer the tested snapshot for the
-developer's acceptance before publication; do not change an active snapshot without authority.
+and evidence rules. Once both hosts' catalog results are available, offer the tested
+snapshot for developer acceptance for host-interaction changes; do not change an active snapshot without authority.
 
 After acceptance, stop task-owned test processes and remove disposable projects,
 worktrees, isolated profiles, test state and temporary credentials. Close test PRs without

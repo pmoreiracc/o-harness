@@ -1,8 +1,8 @@
 """Prepare tiny real-CLI acceptance projects. Never launch agents or supply approvals.
 
 Run explicitly: python3 integrations/e2e_fixture.py prepare
-Then follow docs/cli-acceptance.md. Everything except the packaged snapshot lives
-in the printed temporary folder. This is fixture setup, not a second agent runner.
+Then follow docs/cli-acceptance.md. The snapshot and reusable Codex test login
+live outside the printed trial directory. This is fixture setup, not a second agent runner.
 """
 import argparse
 import json
@@ -25,6 +25,56 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8', newline='\n')
 
 
+def acceptance_home():
+    return Path.home() / '.local/share/oh-dev/acceptance/codex-home'
+
+
+def codex_login():
+    home = acceptance_home()
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.execvpe('codex', ['codex', 'login'], codex_environment(home))
+
+
+def codex_environment(home):
+    # A separately signed-in subscription profile, including when invoked from Codex.
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('CODEX_', 'OH_'))
+           and k not in ('OPENAI_API_KEY', 'OPENAI_BASE_URL')}
+    return env | {'CODEX_HOME': str(home)}
+
+
+def codex_home(base, value):
+    # Keep saved conversations from the original disposable-home fixtures resumable.
+    return acceptance_home() if value.get('codex_profile') == 'acceptance' else base / 'codex-home'
+
+
+def check_codex_candidate(value, env):
+    result = subprocess.check_output(
+        ['codex', 'plugin', 'list', '--marketplace', 'oh-dev', '--json'], env=env, text=True)
+    source = Path(value['build']) / 'codex/plugins/o-harness'
+    for plugin in json.loads(result)['installed']:
+        if (plugin.get('pluginId') == 'o-harness@oh-dev' and plugin.get('enabled')
+                and plugin.get('version') == value['candidate']['version']
+                and Path(plugin.get('source', {}).get('path', '')) == source):
+            return
+    raise ValueError('Codex has not selected this snapshot. Run the fixture setup-codex command for this trial.')
+
+
+def setup_codex(path):
+    base, value = trial(path)
+    home = codex_home(base, value)
+    env = codex_environment(home)
+    login = subprocess.run(['codex', 'login', 'status'], env=env, capture_output=True, text=True)
+    if login.returncode or 'Logged in using ChatGPT' not in login.stdout + login.stderr:
+        raise SystemExit('The acceptance profile needs a subscription login. Run python3 integrations/e2e_fixture.py login-codex.')
+    if home != base / 'codex-home':
+        # Only replace the fixture-owned base config; authentication is managed by Codex.
+        config = (base / 'codex-home/config.toml').read_text(encoding='utf-8')
+        (home / 'config.toml').write_text(config, encoding='utf-8', newline='\n')
+    subprocess.run(['codex', 'plugin', 'add', 'o-harness@oh-dev'], env=env, check=True)
+    check_codex_candidate(value, env)
+    print('Selected', value['candidate']['version'], 'in', home)
+
+
 def prepare(codex_model, claude_model):
     base = Path(tempfile.mkdtemp(prefix='oh-cli-acceptance-')).resolve()
     print('Preparing isolated fixtures in ' + str(base), file=sys.stderr, flush=True)
@@ -33,7 +83,7 @@ def prepare(codex_model, claude_model):
     import oh_dev
     build, candidate = oh_dev.create_snapshot()
     save(base / 'trial.json', {'kind': 'oh-cli-acceptance', 'root': str(base), 'build': str(build),
-                             'candidate': candidate, 'models': {'codex': codex_model, 'claude': claude_model}})
+                             'candidate': candidate, 'codex_profile': 'acceptance', 'models': {'codex': codex_model, 'claude': claude_model}})
     from oh.registry import register
     from oh.config import edit
     from oh import plans
@@ -109,7 +159,7 @@ def prepare(codex_model, claude_model):
     save(base / 'claude-settings.json', {'enabledPlugins': {'o-harness@oh-dev': False}})
     print(base)
     print('Snapshot:', candidate['version'])
-    print('No agents launched. Follow docs/cli-acceptance.md; authenticate/trust only this test profile.')
+    print('No agents launched. Follow docs/cli-acceptance.md; run setup-codex for the candidate.')
 
 
 def trial(path):
@@ -170,10 +220,12 @@ def launch(path, host, scenario, prompt, resume=None):
     root = base / f'{host}-{scenario}'
     from oh.storage import git_env
     env = {k: v for k, v in git_env().items() if not k.startswith(('CODEX_', 'OH_'))
-           and k not in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDECODE')}
+           and k not in ('OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDECODE')}
     env.update(OH_DATA_HOME=str(base / 'data'), OH_DEV_NORMAL_DATA_HOME=str(base / 'data'))
     if host == 'codex':
-        env['CODEX_HOME'] = str(base / 'codex-home')
+        env['CODEX_HOME'] = str(codex_home(base, value))
+        if value.get('codex_profile') == 'acceptance':
+            check_codex_candidate(value, env)
         args = ['codex', '--no-daemon', '--approve-for-me']
         if resume:
             args += ['exec', 'resume', resume, prompt]
@@ -194,6 +246,9 @@ def launch(path, host, scenario, prompt, resume=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
+    sub.add_parser('login-codex', help='sign in once to the dedicated acceptance profile')
+    setup = sub.add_parser('setup-codex', help='install and verify this trial snapshot in the acceptance profile')
+    setup.add_argument('directory')
     new = sub.add_parser('prepare')
     new.add_argument('--codex-model', required=True)
     new.add_argument('--claude-model', required=True)
@@ -205,7 +260,9 @@ def main():
     start.add_argument('--scenario', choices=('delivery', 'planning', 'choice'), required=True)
     start.add_argument('--prompt', required=True);start.add_argument('--resume')
     args = parser.parse_args()
-    if args.command == 'prepare':prepare(args.codex_model, args.claude_model)
+    if args.command == 'login-codex':codex_login()
+    elif args.command == 'setup-codex':setup_codex(args.directory)
+    elif args.command == 'prepare':prepare(args.codex_model, args.claude_model)
     elif args.command == 'inspect':inspect(args.directory, args.host, args.scenario)
     else:launch(args.directory, args.host, args.scenario, args.prompt, args.resume)
 

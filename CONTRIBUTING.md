@@ -31,7 +31,8 @@ bash integrations/test.sh syntax   # Python, JavaScript and shell syntax
 3. Add tests for the behavior or regression you fix. Tests use temporary repositories and
    fake model responses; never use a real project as a fixture.
 4. For dashboard changes, check it in a browser at desktop and narrow widths.
-5. Open a PR against `main` that explains the problem, the new behavior, how you checked it
+5. Run the [full CLI catalog](docs/cli-acceptance.md) on both Mac CLIs before every PR.
+   Open a PR against `main` that explains the problem, the new behavior, how you checked it
    and any limits. Keep docs in sync with what the code actually does.
 
 Runtime filesystem paths use `oh.system.Path`: it preserves ordinary path strings in
