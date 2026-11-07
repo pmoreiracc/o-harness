@@ -57,6 +57,8 @@ def _checkpoint(root,state,kind,details):
     if any(t in state['granted'] for t in pending):return None
     choices={}
     details+='\nCompleted tasks: '+', '.join(state['done'])
+    from .delivery import checkpoint_progress
+    details+=checkpoint_progress(state)
     if pending:
         choices['continue']='Continue with the next task batch'
         details+='\nContinue authorizes tasks: '+', '.join(pending[:state['config']['tasks_per_batch']])

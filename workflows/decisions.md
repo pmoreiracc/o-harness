@@ -49,7 +49,7 @@ only after old execution is revoked and tracked operations are settled.
 ## Completed-task checkpoint
 
 After a completed batch, call `decision-request continue` when tasks remain, or
-`decision-request publish` when all tasks are complete. At this boundary the helper
+`decision-request publish` when all selected tasks are complete. At this boundary the helper
 returns one question with an `actions` map and all available choices:
 
 - **Continue with the next task batch** authorizes only the listed next task IDs.
@@ -65,7 +65,12 @@ action. Copy the full returned question into the native tool, including the save
 so an answer cannot move between menus with identical options. Both hosts use the
 same decision validator. If publication is unavailable, report the helper's actual
 prerequisite while retaining Continue/Stop as applicable. All-tasks-complete checkpoints
-omit Continue; private planning completion needs no PR checkpoint.
+omit Continue; private planning completion needs no PR checkpoint. Selected work being
+complete does not mean the whole design is complete. The prepared question explains
+pending tasks from the saved starting design, their blockers/dependencies and other
+tracks. Excluded tasks gain no authority. Resolve open design decisions through Design,
+get the revised design approved, then re-enter Deliver against that revision, preserving
+completed evidence and using normal publication to carry completed code forward.
 For a plain-chat checkpoint, copy the returned `question` unchanged and show all
 returned options. A prose list of choices by itself does not identify the prepared run.
 

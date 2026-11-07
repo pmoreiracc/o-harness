@@ -40,6 +40,55 @@ class DeliveryTest(fixtures.NativeFixture):
 
     documents=delivery_documents
 
+    def test_checkpoint_explains_saved_design_without_expanding_selection(self):
+        from .decisions import _checkpoint
+        body=('## 5. Open decisions\n\nChoose the storage owner.\n\n## Tasks\n\n### Core track\n\n'
+              '- [ ] **1.** Store credentials.\n'
+              '- [ ] **2.** Add sign-in. Depends on task 1.\n'
+              '- [ ] **3.** Add recovery. Depends on task 2. Blocked on §5.\n'
+              '- [ ] **4.** Test recovery. Depends on task 3.\n'
+              '\n### UI track\n\n- [ ] **5.** Show sign-in. Depends on task 2.\n')
+        _,path=self.documents(body=body)
+        manifest,extra=delivery.selection(self.root,'0001','core')
+        self.assertEqual([t['id'] for t in manifest['tasks']],['1','2'])
+        original=path.read_text()
+        state=manifest|extra|{'status':'checkpoint','done':['1'],'summaries':[{}],
+            'granted':['1'],'config':{'tasks_per_batch':1},'attempts':[],
+            'human':{'host':'codex','session':'checkpoint'},
+            'scope_snapshot':{'documents':{str(path):original}}}
+        with patch('oh.publication.settled'),patch('oh.publication.destination',return_value=None):
+            ready=_checkpoint(self.root,state,'continue','Work: saved design')
+            self.assertIn('Continue authorizes tasks: 2',ready['question'])
+            self.assertIn('Pending task 3',ready['question'])
+            self.assertIn('blocked on §5',ready['question'])
+            self.assertIn('requires completed task(s): 3',ready['question'])
+            self.assertIn('belongs to another track: ui',ready['question'])
+            self.assertEqual(set(ready['choices']),{'continue','stop'})
+            completed=state|{'status':'completed','done':['1','2'],'granted':['1','2']}
+            blocked=_checkpoint(self.root,completed,'publish','Work: saved design')
+            self.assertEqual(set(blocked['choices']),{'stop'})
+            self.assertIn('Selected work is complete;',blocked['question'])
+            self.assertIn('get the revised design approved through Design',blocked['question'])
+            # A local edit cannot silently remove the saved blocker from an offer.
+            path.write_text(original.replace(' Blocked on §5.',''),newline='\n')
+            self.assertEqual(_checkpoint(self.root,completed,'publish','Work: saved design'),blocked)
+            # Pre-fix runs use their existing starting authority, with no migration.
+            older={k:v for k,v in completed.items() if k!='scope_snapshot'}
+            self.assertEqual(_checkpoint(self.root,older,'publish','Work: saved design'),blocked)
+            with patch('oh.publication.destination',return_value={'destination':'example/product'}), \
+                    patch('oh.storage.changes',return_value=[]),patch('oh.decisions.state_head',return_value='reviewed'), \
+                    patch('oh.branches.trunk',return_value='main'):
+                published=completed|{'summaries':[{'commit':'reviewed'}]}
+                offer=_checkpoint(self.root,published,'publish','Work: saved design')
+                self.assertEqual(set(offer['choices']),{'publish','stop'})
+                self.assertIn('blocked on §5',offer['question'])
+            done=completed|{'done':['1','2','3','4','5']}
+            final=_checkpoint(self.root,done,'publish','Work: saved design')
+            self.assertIn('Design complete: all approved design tasks are complete.',final['question'])
+            self.assertNotIn('Pending task',final['question'])
+        self.assertEqual([t['id'] for t in state['tasks']],['1','2'])
+        self.assertEqual(state['granted'],['1'])
+
     def _track_selection(self,host,typed=False):
         import os
         from datetime import datetime,timedelta,timezone
