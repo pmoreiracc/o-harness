@@ -26,7 +26,7 @@ class E2EFixtureTest(unittest.TestCase):
                 subprocess.run(['git', 'init', '-q', str(root)], env=git_env(), check=True)
             (base / 'trial.json').write_text(json.dumps({
                 'kind': 'oh-cli-acceptance', 'root': str(base), 'build': str(base / 'snapshot'),
-                'models': {'codex': 'fixture', 'claude': 'fixture'},
+                'models': {'codex': 'fixture', 'claude': 'fixture'}, 'effort': 'low',
             }), encoding='utf-8', newline='\n')
             previous = Path.cwd()
             try:
@@ -48,6 +48,7 @@ class E2EFixtureTest(unittest.TestCase):
                             self.assertIn('actual answer', arguments)
                             self.assertFalse(any('bypass' in argument for argument in arguments))
                             if host == 'claude':
+                                self.assertEqual(arguments[arguments.index('--effort') + 1], 'low')
                                 self.assertEqual(arguments[arguments.index('--setting-sources') + 1], 'project,local')
             finally:
                 os.chdir(previous)

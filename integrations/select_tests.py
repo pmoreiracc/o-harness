@@ -1,6 +1,6 @@
 """Pick the tests a pull request must pass on Windows: OH's platform layer, tests that exercise platform-specific
 behavior, every test module the change edits, and every test module that imports an edited one (directly or
-through another). The full suite runs on Windows nightly, on demand and before a release (.github/workflows/full.yml),
+through another). The full suite runs on Windows nightly, on demand (.github/workflows/full.yml),
 which covers changes to runtime code.
 
 A module counts as edited when its code differs before and after the change, compared by syntax tree: blank lines
@@ -19,11 +19,11 @@ learned from the pre-separation harness's verify-change.sh: each changed path ma
 explanatory text needs nothing, a runtime module needs the test modules that import it (directly or through other
 modules), and a path no rule names stops the run with its name, so its owner is added here rather than guessed.
 Two test processes run at a time. PR checks combine affected tests with a small core;
-full discovery runs nightly and before releases. Sanity is a fast deterministic check,
+full discovery runs nightly. Sanity is a fast deterministic check,
 not evidence that the native CLI workflows passed.
 
   python3 integrations/select_tests.py --affected [base] [--list]   run (or list) the affected test modules
-  python3 integrations/select_tests.py --sanity   run the deterministic core
+  python3 integrations/select_tests.py --core   run the deterministic core
   python3 integrations/select_tests.py --pr [base] [--list]   run the PR selection
 """
 import ast
@@ -216,6 +216,7 @@ OWNERS = [
     ('CLAUDE.md', ()), ('.github/*', ()), ('.gitignore', ()), ('.claude/*', ()), ('.codex/*', ()), ('config/invariants.json', ()),
     ('.gitattributes', ('test_windows',)),
     ('integrations/select_tests.py', ('test_select_tests',)), ('integrations/test.sh', ('test_select_tests',)),
+    ('integrations/full_tests.py', ('test_select_tests',)),
     ('integrations/oh_dev.py', ('test_installation',)),
     ('integrations/e2e_fixture.py', ('test_e2e_fixture',)),
     ('integrations/windows-*.ps1', ('test_windows',)), ('integrations/*', ()),  # the rest run only in CI
@@ -271,10 +272,9 @@ def affected(paths, sources):
 
 
 def pr_selection(paths, sources):
-    # An unknown path or a change to selection itself must not silently drop tests.
-    broad = any(needs(path) is None or path in (
-        'integrations/select_tests.py', 'integrations/full_tests.py', 'integrations/test.sh',
-    ) for path in paths)
+    # Known runner changes exercise their own selection/sharding tests plus core.
+    # An unknown path still needs conservative coverage until it has an owner.
+    broad = any(needs(path) is None for path in paths)
     modules = (sorted(m for m in sources if m.startswith('test_') and not m.startswith(FIXTURE_PREFIX))
                if broad else affected(paths, sources))
     names = ['oh.' + module for module in modules]
@@ -327,10 +327,10 @@ def run(names, workers=2, report=False, shard=None):
     return passed
 
 
-if __name__ == '__main__' and sys.argv[1:2] in (['--sanity'], ['--pr']):
+if __name__ == '__main__' and sys.argv[1:2] in (['--core'], ['--sanity'], ['--pr']):
     base = next((arg for arg in sys.argv[2:] if arg != '--list'), 'origin/main')
     sources = {p.stem: p.read_text(encoding='utf-8') for p in sorted(TESTS.glob('*.py'))}
-    names = list(SANITY) if sys.argv[1] == '--sanity' else pr_selection(changed(base), sources)
+    names = list(SANITY) if sys.argv[1] in ('--core','--sanity') else pr_selection(changed(base), sources)
     if '--list' in sys.argv:
         print('\n'.join(names));sys.exit()
     sys.exit(0 if run(names, workers=2, report=True) else 1)

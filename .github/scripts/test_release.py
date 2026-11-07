@@ -67,6 +67,9 @@ class ReleaseTest(unittest.TestCase):
     def test_new_release_only_changes_versions_then_waits_for_exact_main_commit(self):
         api, calls = self.fixture()
         self.assertEqual(release.prepare(api, '1.1.0', BOT, lambda _: None), 'merged')
+        pr_body = next(data['body'] for method, path, data in calls if (method, path) == ('POST', 'pulls'))
+        self.assertIn('package and installation checks', pr_body)
+
         tree = next(data for method, path, data in calls if path == 'git/trees')
         self.assertEqual(tree['base_tree'], 'base-tree')
         self.assertEqual({item['path'] for item in tree['tree']}, set(release.MANIFESTS))

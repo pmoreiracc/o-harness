@@ -75,7 +75,9 @@ def setup_codex(path):
     print('Selected', value['candidate']['version'], 'in', home)
 
 
-def prepare(codex_model, claude_model):
+def prepare(codex_model, claude_model, suite="catalog"):
+    sanity = suite == "sanity"
+    effort = "low" if sanity else "medium"
     base = Path(tempfile.mkdtemp(prefix='oh-cli-acceptance-')).resolve()
     print('Preparing isolated fixtures in ' + str(base), file=sys.stderr, flush=True)
     os.environ['OH_DATA_HOME'] = str(base / 'data')
@@ -83,11 +85,11 @@ def prepare(codex_model, claude_model):
     import oh_dev
     build, candidate = oh_dev.create_snapshot()
     save(base / 'trial.json', {'kind': 'oh-cli-acceptance', 'root': str(base), 'build': str(build),
-                             'candidate': candidate, 'codex_profile': 'acceptance', 'models': {'codex': codex_model, 'claude': claude_model}})
+                             'candidate': candidate, 'suite': suite, 'effort': effort, 'codex_profile': 'acceptance', 'models': {'codex': codex_model, 'claude': claude_model}})
     from oh.registry import register
     from oh.config import edit
     from oh import plans
-    profiles = {host: {role: {'model': model, 'effort': 'medium'}
+    profiles = {host: {role: {'model': model, 'effort': effort}
                       for role in ('simple', 'standard', 'complex', 'review', 'insights')}
                 for host, model in (('codex', codex_model), ('claude', claude_model))}
     for host in ('codex', 'claude'):
@@ -107,7 +109,11 @@ def prepare(codex_model, claude_model):
                     instructions.write('\nIn noninteractive Codex exec resume, the test operator has no async-card '
                         'input surface. Use OH plain-chat fallback: show the complete prepared question and choices, '
                         'end the turn, and wait for the actual native reply through exec resume.\n')
-                if scenario == 'delivery':
+                if scenario == 'delivery' and sanity:
+                    instructions.write('\nSanity trial: on initial track selection stop at the prepared scope '
+                                       'before workers. Present the native Stop choice. In a fresh session '
+                                       'after actual Resume, deliver the approved task normally.\n')
+                elif scenario == 'delivery':
                     instructions.write('\nAcceptance coordinator: in the FIRST implementation admission only, '
                         'ask the child to attempt reading missing-trial.txt, then return unfinished without edits '
                         'or checks. Preserve that real failed attempt and continue with a fresh author under '
@@ -138,7 +144,7 @@ def prepare(codex_model, claude_model):
                 body = ('## Why\n\nVerify ordinary delivery.\n\n## Tasks\n\n### Core track\n\n'
                         '- [ ] **1.** Change answer.txt to exactly after followed by one newline. '
                         'Preserve other application files. Run python3 check.py.\n')
-                if scenario == 'delivery':
+                if scenario == 'delivery' and not sanity:
                     body += ('- [ ] **2.** Change marker.txt to exactly done followed by one newline. '
                              'Preserve other application files. Run python3 check.py. *Depends on task 1.*\n')
                 else:
@@ -150,7 +156,7 @@ def prepare(codex_model, claude_model):
     (base / 'codex-home').mkdir()
     roots = [base / f'codex-{scenario}' for scenario in ('delivery', 'planning', 'choice')]
     (base / 'codex-home/config.toml').write_text(
-        f'model = {json.dumps(codex_model)}\nmodel_reasoning_effort = "medium"\n'
+        f'model = {json.dumps(codex_model)}\nmodel_reasoning_effort = "{effort}"\n'
         'sandbox_mode = "workspace-write"\napproval_policy = "on-request"\n'
         '[features]\nmulti_agent = true\ncodex_hooks = true\n'
         '[marketplaces.oh-dev]\nsource_type = "local"\nsource = ' + json.dumps(str(build / 'codex')) + '\n'
@@ -233,7 +239,7 @@ def launch(path, host, scenario, prompt, resume=None):
             args += ['--no-alt-screen', '-C', str(root), '--add-dir', str(base / 'data'),
                      '--add-dir', str(base / 'plans'), prompt]
     else:
-        args = ['claude', '--model', value['models']['claude'], '--effort', 'medium',
+        args = ['claude', '--model', value['models']['claude'], '--effort', value.get('effort', 'medium'),
                 '--setting-sources', 'project,local', '--settings', str(base / 'claude-settings.json'),
                 '--plugin-dir', str(Path(value['build']) / 'claude/plugins/o-harness'),
                 '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--permission-mode', 'auto']
@@ -250,6 +256,7 @@ def main():
     setup = sub.add_parser('setup-codex', help='install and verify this trial snapshot in the acceptance profile')
     setup.add_argument('directory')
     new = sub.add_parser('prepare')
+    new.add_argument('--suite', choices=('sanity', 'catalog'), default='catalog')
     new.add_argument('--codex-model', required=True)
     new.add_argument('--claude-model', required=True)
     observe = sub.add_parser('inspect')
@@ -262,7 +269,7 @@ def main():
     args = parser.parse_args()
     if args.command == 'login-codex':codex_login()
     elif args.command == 'setup-codex':setup_codex(args.directory)
-    elif args.command == 'prepare':prepare(args.codex_model, args.claude_model)
+    elif args.command == 'prepare':prepare(args.codex_model, args.claude_model, args.suite)
     elif args.command == 'inspect':inspect(args.directory, args.host, args.scenario)
     else:launch(args.directory, args.host, args.scenario, args.prompt, args.resume)
 
