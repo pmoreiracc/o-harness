@@ -57,17 +57,20 @@ whether they prevent proving this change's approved outcome from a separate prod
 1. Run `bash integrations/test.sh pr origin/main` and `bash integrations/test.sh syntax` on
    the final candidate. PR selection is the deterministic core plus affected modules.
    Selection infrastructure and unknown paths trigger full discovery rather than a silent skip.
-2. Run the complete agreed live E2E catalog on that candidate. During this suite's initial
-   development, exercise every supported catalog scenario on both Mac CLIs. Further OS
-   acceptance must be labeled separately; Windows unit CI is not native Windows acceptance.
-3. For a host-interaction change, let the developer try the tested snapshot before PR.
+2. Before every PR, exercise P, D, Q and C from the [live catalog](cli-acceptance.md)
+   on both macOS CLIs. Include the eight outcomes in the PR description. Record a
+   reproduced product failure with its impact and issue as described above. If a
+   scenario has not been exercised, finish it before opening the PR. Focused tests,
+   hosted CI and personal trial decisions do not replace any catalog entry.
+3. After both hosts finish, present their results and limits together. For a
+   host-interaction change, offer the developer one personal snapshot trial then.
+   Declining that trial waives only the personal trial.
 4. Open the PR and follow hosted checks. PR CI uses the same deterministic selection on
    Linux and retains Windows platform coverage. Broad Linux/Windows discovery runs nightly
    at 03:00 America/Sao_Paulo and before releases. GitHub may delay scheduled starts.
 
 Changes after verification invalidate the affected evidence. Rerun those scenarios/tests;
-unchanged unrelated results need no repetition. Syntax or documentation-only changes do
-not justify rerunning all model workflows. Full test discovery remains available with
+unchanged unrelated results need no repetition. This reuse applies to results from the full catalog already exercised for this PR. Full test discovery remains available with
 `bash integrations/test.sh native`; it is not mandatory before each local commit.
 
 ## What live acceptance proves
@@ -78,12 +81,12 @@ Assert necessary approval ordering and effects, not an exact incidental tool seq
 Inspect questions for understandable scope, correct available choices, valid dismissal and
 unnecessary repeat approvals. CLI output does not prove desktop layout or a physical click.
 
-Keep fixtures, native transcripts and copied authentication outside the checkout. Each
+Keep fixtures and native transcripts outside the checkout. Codex uses the dedicated acceptance login. Each
 trial starts isolated. After a failure, preserve that trial for diagnosis; retry explicitly
 with its outcome recorded. Do not weaken a production guard to make the fixture pass.
 
 After acceptance, stop owned processes, close test PRs without merging, and delete the
-task's disposable repositories, host profiles, state and temporary credentials. Preserve
+task's disposable repositories, sessions, state and temporary credentials. Retain the dedicated Codex acceptance login. Preserve
 only a concise sanitized report (source/snapshot, hosts, scenarios, outcomes, duration,
 usage if known and limitations). Failed evidence is removed after diagnosis, not hidden.
 Normal host configuration, active snapshots and unrelated projects/drafts are preserved.

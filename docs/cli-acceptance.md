@@ -5,6 +5,13 @@ may be the developer or their authorized development agent using native CLI tool
 must travel through the actual host; never write synthetic approvals or successful reports
 into OH state. An automated test choice is not evidence of a physical human click.
 
+## Sign in once on each Mac
+
+Run `python3 integrations/e2e_fixture.py login-codex` and complete the native ChatGPT
+sign-in. The launcher always uses `~/.local/share/oh-dev/acceptance/codex-home` for new
+trials. Codex manages that profile's subscription login. Repeat only if it expires or
+you sign out. Finish one candidate's sessions before setting up another on this profile.
+
 ## Prepare once for a candidate
 
 Choose model names available to the subscriptions. Both the coordinator and fixture OH
@@ -18,17 +25,17 @@ python3 integrations/e2e_fixture.py prepare --codex-model MODEL --claude-model M
 
 This prints a fresh temporary directory and frozen snapshot. It creates three repositories
 per host (delivery, planning, choice), separate OH data, private planning space, and an
-empty Codex authentication profile. It launches nothing and never activates normal oh-dev.
+isolated candidate configuration. It launches nothing and never activates normal oh-dev.
 `trial.json` identifies the exact candidate, fixture root and build. Keep that root until
 the trial finishes. A source change requires a new candidate; do not relabel an old pass.
 
 Open the installed native CLI in the corresponding fixture repository, using the candidate
 plugin and fixture data. Verify the available controls with the actual installed CLI's help.
-For Codex, use the fixture's `codex-home` as `CODEX_HOME`, run
-`codex plugin add o-harness@oh-dev` in that environment, and start a fresh CLI session.
-Declaring the marketplace and enablement alone does not install its plugin. Sign in through the native login
-(or use an explicitly authorized temporary copy of existing subscription authentication),
-and review the candidate hooks in `/hooks`. Do not copy or synthesize hook trust.
+For Codex, run `python3 integrations/e2e_fixture.py setup-codex TRIAL` once per
+candidate. It checks the dedicated login, applies the fixture configuration, installs
+the local plugin and verifies its version and source. Launch checks the selected plugin
+again, including on resume. Review changed hook definitions in the native `/hooks`
+screen for this profile. Do not copy authentication or synthesize hook trust.
 For Claude, load `<build>/claude/plugins/o-harness` with `--plugin-dir`, use the supplied
 `claude-settings.json` and `--setting-sources project,local`, and use normal subscription authentication.
 Excluding project sources also excludes `CLAUDE.md`; confirm the fixture memory appears
@@ -60,7 +67,7 @@ enabled; the launcher does not bypass permissions or hook trust.
 Live sanity is scenario D through its first completed-task checkpoint, followed by Stop.
 For shared execution changes, resume it and complete the second task too. Scenario Q is a
 cheap addition for menu/entry changes. Run only the scenario relevant to a focused edit;
-the full catalog is P, D, Q and C on both Mac CLIs at final acceptance. Reuse D's published
+before every PR, complete P, D, Q and C on both Mac CLIs and report all eight outcomes. Reuse D's published
 branch for C rather than delivering another project. Test tasks remain sequential.
 
 ## P — Propose and Design
@@ -142,7 +149,9 @@ alone cannot establish acceptance. Sanity is a subset, never a claim that the fu
 
 After acceptance: exit each CLI and verify its owned workers/processes ended; close the
 fixture PRs without merging and remove task-owned remote branches; remove the fixture root
-(including copied authentication) and its exact inactive snapshot. Remove only this trial's
+and its exact inactive snapshot. Use Codex's native `delete SESSION_ID` in the
+dedicated acceptance home for this trial's saved conversations, including child sessions.
+Retain the acceptance profile and its subscription login for the next trial. Remove only this trial's
 host project history if it was stored outside the isolated root, using native controls.
 Keep a concise sanitized result report outside the temporary root before deleting it.
 No wildcard cleanup of other OH projects, normal settings, drafts or active snapshots.

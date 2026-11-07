@@ -51,3 +51,35 @@ class E2EFixtureTest(unittest.TestCase):
                                 self.assertEqual(arguments[arguments.index('--setting-sources') + 1], 'project,local')
             finally:
                 os.chdir(previous)
+
+    def test_acceptance_profile_is_shared_but_wrong_candidate_cannot_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            home = root / 'acceptance'
+            home.mkdir()
+            trial = root / 'trial'
+            config = trial / 'codex-home/config.toml'
+            config.parent.mkdir(parents=True)
+            config.write_text('model = "fixture"\n', encoding='utf-8', newline='\n')
+            value = {'build': str(root / 'build'), 'candidate': {'version': 'fixture'},
+                     'codex_profile': 'acceptance'}
+            old = {'pluginId': 'o-harness@oh-dev', 'enabled': True, 'version': 'old',
+                   'source': {'path': str(root / 'old')}}
+            selected = old | {'version': 'fixture', 'source': {'path': str(root / 'build/codex/plugins/o-harness')}}
+            with patch.object(fixture, 'acceptance_home', return_value=home), patch.object(
+                    fixture, 'trial', return_value=(trial, value)), patch.dict(os.environ, {
+                        'CODEX_HOME': str(root / 'personal'), 'CODEX_ACCESS_TOKEN': 'fixture-only'}):
+                self.assertEqual(fixture.codex_home(root / 'another-trial', value), home)
+                env = fixture.codex_environment(home)
+                self.assertEqual(env['CODEX_HOME'], str(home))
+                self.assertNotIn('CODEX_ACCESS_TOKEN', env)
+                with patch.object(subprocess, 'check_output', return_value=json.dumps({'installed': [old]})):
+                    with self.assertRaisesRegex(ValueError, 'selected this snapshot'):
+                        fixture.check_codex_candidate(value, env)
+                with patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 0, 'Logged in using ChatGPT', '')) as run, patch.object(
+                        subprocess, 'check_output', return_value=json.dumps({'installed': [selected]})):
+                    fixture.setup_codex(trial)
+                    self.assertEqual(run.call_args_list[0].args[0], ['codex', 'login', 'status'])
+                    self.assertEqual(run.call_args_list[-1].kwargs['env']['CODEX_HOME'], str(home))
+                self.assertEqual((home / 'config.toml').read_bytes(), config.read_bytes())
