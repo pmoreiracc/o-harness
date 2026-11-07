@@ -28,7 +28,8 @@ bash integrations/test.sh syntax   # Python, JavaScript and shell syntax
 1. Fork the repository and branch from `main`.
 2. Read `config/invariants.json` and the code you are changing. Make the smallest complete
    change.
-3. Add tests for the behavior or regression you fix. Deterministic tests use temporary repositories and fake model responses. Live sanity uses the installed CLIs and disposable consumer projects.
+3. Follow [Choosing coverage for a change](docs/development-testing.md#choosing-coverage-for-a-change)
+   to select the tests for your fix or feature and decide where they run.
 4. For dashboard changes, check it in a browser at desktop and narrow widths.
 5. Run [full live sanity](docs/cli-acceptance.md#live-sanity) on both Mac CLIs before every PR.
    Open a PR against `main` that explains the problem, the new behavior, how you checked it

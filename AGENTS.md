@@ -82,6 +82,8 @@ scope or renews allowances. An unavoidable blocker must explain what happened an
 a concrete supported next step; an internal stop/restart requirement is not a complete solution.
 
 Before coding, state the approved outcome, boundaries and finite acceptance scenarios.
+For each fix or feature, follow [Choosing coverage for a change](docs/development-testing.md#choosing-coverage-for-a-change)
+to select the test type, owning module or live scenario, and suite. Include that coverage in the review evidence.
 Necessary supporting repairs stay within that outcome. A reviewer finding grants no
 scope expansion. Put unrelated defects and improvements in issues; do not turn a repair
 into historical-data hardening or a new control system. Challenge the requirement behind
