@@ -19,7 +19,9 @@ by itself, so this is your choice to run its checks: when OH delivers a task her
 tests the change affects (`integrations/test.sh affected`) and the syntax checks.
 
 ```sh
-bash integrations/test.sh native   # behavior tests
+bash integrations/test.sh sanity   # fast deterministic core during development
+bash integrations/test.sh pr origin/main  # final local selection, also used by PR CI
+bash integrations/test.sh native   # full deterministic suite, normally nightly/release
 bash integrations/test.sh syntax   # Python, JavaScript and shell syntax
 ```
 
@@ -44,7 +46,9 @@ unrelated directories and the root policy are preserved. Do not reset permission
 Use `system.temporary_directory` (or `make_temp_directory` for separately managed cleanup)
 for OH scratch directories so sandboxed Windows commands retain their parent's access too.
 
-Maintainers run an independent review of every PR before merging. Only maintainers merge.
+OH changes receive one independent review, followed by regression and live acceptance
+proof for any repairs. See [development testing](docs/development-testing.md) for scope,
+fast local checks, final verification and cleanup. Only maintainers merge.
 Maintainers decide when to publish releases. For local testing, see
 [local builds](docs/installation.md#local-build).
 

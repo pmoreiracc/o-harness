@@ -69,8 +69,9 @@ and give a verified next step.
 
 ## Development workflow
 
-Use branches from main, independent review, and human-merged PRs. OH skills coordinate
-fresh native host agents; focused helpers validate scope, evidence and completion.
+Use branches from main, one independent review, and human-merged PRs. Develop OH with
+ordinary Git and native host tools; exercising the candidate OH in disposable consumer
+projects is acceptance testing, not a prerequisite for repairing OH itself.
 Do not introduce a second agent runner, permission broker or custom menu engine.
 Consumer task implementation remains sequential.
 
@@ -80,21 +81,38 @@ wait when host evidence is still being saved. Recovery never invents approval, b
 scope or renews allowances. An unavoidable blocker must explain what happened and provide
 a concrete supported next step; an internal stop/restart requirement is not a complete solution.
 
-For OH host-interaction fixes, implement and verify locally, then let the developer rebuild
-with `oh-dev on` and test the snapshot before independent review or publication. Use short,
-concrete host scenarios and fix the observed behavior before requesting review. This ordering
-is for developing OH, not an extra gate in a consumer's delivery workflow.
+Before coding, state the approved outcome, boundaries and finite acceptance scenarios.
+Necessary supporting repairs stay within that outcome. A reviewer finding grants no
+scope expansion. Put unrelated defects and improvements in issues; do not turn a repair
+into historical-data hardening or a new control system. Challenge the requirement behind
+a new mechanism before adding it. Do not read old backlog files.
 
-A fresh `invariant-reviewer` must review each change through the shared prompt and a
-bound immutable admission before publication. Use the configured review profile. Apply
-all lenses together in each review round, preserve every finding, and fix blockers.
-Reviews are read-only.
-Do not resume a completed reviewer. Never treat model prose as a human grant.
+Use exactly one fresh, read-only independent review of the complete change after focused
+checks pass. Give the reviewer the base and candidate identities, approved scope, relevant
+invariants and test evidence through native tools; candidate OH admission is not required
+for OH development. Use the configured review profile. The OH-specific review brief in
+docs/development-testing.md governs this review; consumer reviewer behavior is unchanged.
+Fix concrete in-scope blockers and prove repairs with causal regressions and affected live
+E2E scenarios. Do not start another review round or treat uncertainty alone as a defect.
+An unresolved blocker still prevents publication: explain the failure and smallest next
+step instead of automatically widening scope. Preserve the original findings and explain
+their disposition, including changes made after review. Never claim those later changes
+received independent review. Never treat model prose as a human grant.
 
-Run affected checks and syntax with `./oh verify origin/main` (needs this checkout
-registered with its checks), or run `bash integrations/test.sh affected origin/main`
-and `bash integrations/test.sh syntax`. Use `bash integrations/test.sh native` when
-the full behavioral suite is needed. Do not read old backlog files.
+During development run `bash integrations/test.sh sanity`, the specific tests relevant
+to the edit, and the affected real CLI scenario. Run live workflow sanity after shared
+workflow changes. Do not repeatedly run entire affected modules or the full suite.
+Before PR, run `bash integrations/test.sh pr origin/main` and syntax once, plus the full
+agreed live E2E catalog on the final candidate. Repeat affected evidence after repairs;
+repeat broad checks only when new changes invalidate their coverage. The full deterministic
+suite runs nightly and for releases. See docs/development-testing.md for the exact scope
+and evidence rules. For host-interaction changes, offer the tested snapshot for the
+developer's acceptance before publication; do not change an active snapshot without authority.
+
+After acceptance, stop task-owned test processes and remove disposable projects,
+worktrees, isolated profiles, test state and temporary credentials. Close test PRs without
+merging. Retain only a concise sanitized result report; preserve failed evidence until
+diagnosis is complete. Never remove unrelated drafts or an active development snapshot.
 
 Keep tests fast while preserving behavioral coverage; use measured durations to find waste.
 Avoid runtime regressions. There is no fixed test time limit.

@@ -5,6 +5,8 @@ cd "$(dirname "$0")/.."
 [ "${OS:-}" != Windows_NT ] || export PYTHONUTF8=1
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX OH_HOME OH_PROJECT_ROOT OH_POLICY_FILE OH_STATE_ROOT XDG_CONFIG_HOME
 case "${1:-native}" in
+  sanity) python3 integrations/select_tests.py --sanity ;;
+  pr) python3 integrations/select_tests.py --pr "${2:-origin/main}" ;;
   # Every run lists its slowest tests, so a slow new one is seen in the PR that adds it.
   native) PYTHONPATH=runtime python3 -m unittest discover -s runtime -p 'test_*.py' --durations 15 "${@:2}" ;;
   windows-full) python3 integrations/full_tests.py --workers "${OH_TEST_WORKERS:-4}" "${@:2}" ;;
@@ -22,7 +24,7 @@ case "${1:-native}" in
   affected) python3 integrations/select_tests.py --affected "${2:-origin/main}" ;;
   syntax)
     python3 integrations/windows_risk.py "${2:-origin/main}"
-    python3 -m compileall -q runtime
+    python3 -m compileall -q runtime integrations
     node --check dashboard/app.js
     while IFS= read -r file; do bash -n "$file"; done < <(git ls-files --cached --others --exclude-standard '*.sh')
     ;;

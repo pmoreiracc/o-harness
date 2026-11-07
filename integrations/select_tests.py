@@ -18,9 +18,13 @@ Locally (and as the check OH runs on this repository's deliveries, when its `che
 learned from the pre-separation harness's verify-change.sh: each changed path maps to what it needs (OWNERS),
 explanatory text needs nothing, a runtime module needs the test modules that import it (directly or through other
 modules), and a path no rule names stops the run with its name, so its owner is added here rather than guessed.
-Two test processes run at a time. The full suite still runs before every push and in CI.
+Two test processes run at a time. PR checks combine affected tests with a small core;
+full discovery runs nightly and before releases. Sanity is a fast deterministic check,
+not evidence that the native CLI workflows passed.
 
   python3 integrations/select_tests.py --affected [base] [--list]   run (or list) the affected test modules
+  python3 integrations/select_tests.py --sanity   run the deterministic core
+  python3 integrations/select_tests.py --pr [base] [--list]   run the PR selection
 """
 import ast
 from hashlib import sha256
@@ -39,6 +43,19 @@ CORE = {'test_system', 'test_integration', 'test_installation', 'test_controls',
 # Writing an LF fixture is ordinary setup. Select CRLF, translation, and real platform behavior.
 PLATFORM = re.compile(r"""os\.name|sys\.platform|[Ww]indows|\\r\\n|CRLF|newline\s*=\s*(?!['"]\\n['"])\S|chmod|st_mode|rmtree|symlink|os\.sep|\.cmd\b|\.exe\b|signal\.|kill\(""")
 FIXTURE_PREFIX = 'test_fixtures_'
+
+# Existing causal cases: native answers, bounded scope, sequential workers, checks,
+# Stop, and exact reviewed completion. Keep this list small; live sanity is separate.
+SANITY = (
+    'oh.test_gates',
+    'oh.test_delivery.DeliveryRequestTest',
+    'oh.test_config.ConfigTest.test_every_approval_names_its_limits',
+    'oh.test_workflow.NativeWorkflowTest.test_scope_needs_native_approval_and_preserves_its_immutable_task_window',
+    'oh.test_workflow.NativeWorkflowTest.test_native_admissions_are_sequential_fresh_and_use_explicit_profiles',
+    'oh.test_workflow.NativeWorkflowTest.test_review_requires_completed_work_and_passing_checks_for_the_final_candidate',
+    'oh.test_workflow.NativeWorkflowTest.test_stop_refuses_unsettled_native_child_and_resume_never_renews_allowance',
+    'oh.test_workflow.NativeWorkflowTest.test_completion_commits_exact_reviewed_tree_once_and_task_grants_do_not_expand',
+)
 
 # Relative weights from the broad Windows runs on #142 and #147. Keep module fixtures
 # together and start expensive groups while all workers are available.
@@ -200,6 +217,7 @@ OWNERS = [
     ('.gitattributes', ('test_windows',)),
     ('integrations/select_tests.py', ('test_select_tests',)), ('integrations/test.sh', ('test_select_tests',)),
     ('integrations/oh_dev.py', ('test_installation',)),
+    ('integrations/e2e_fixture.py', ('test_e2e_fixture',)),
     ('integrations/windows-*.ps1', ('test_windows',)), ('integrations/*', ()),  # the rest run only in CI
     ('prompts/*', ('native',)), ('workflows/*', ('native', 'installation', 'mcp_server')), ('config/*', ('config',)),
     ('plugins/*', ('installation', 'test_gates', 'test_plugin_transitions', 'test_windows')),
@@ -252,6 +270,18 @@ def affected(paths, sources):
     return sorted(m for m in tests if not m.startswith(FIXTURE_PREFIX))
 
 
+def pr_selection(paths, sources):
+    # An unknown path or a change to selection itself must not silently drop tests.
+    broad = any(needs(path) is None or path in (
+        'integrations/select_tests.py', 'integrations/full_tests.py', 'integrations/test.sh',
+    ) for path in paths)
+    modules = (sorted(m for m in sources if m.startswith('test_') and not m.startswith(FIXTURE_PREFIX))
+               if broad else affected(paths, sources))
+    names = ['oh.' + module for module in modules]
+    # A module subsumes its individual smoke cases; execute each test only once.
+    return names + [name for name in SANITY if '.'.join(name.split('.')[:2]) not in names]
+
+
 def run(names, workers=2, report=False, shard=None):
     """Run the exact selected names, grouped by module, in separate processes; True when every group passed."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -293,10 +323,18 @@ def run(names, workers=2, report=False, shard=None):
             print(f"{'ok' if not result.returncode else 'FAILED'}  {module}", flush=True)
             if result.returncode:passed = False
             if report or result.returncode:print(result.stdout + result.stderr, flush=True)
+    if report:print(f'Selected tests completed in {monotonic() - started:.1f}s', flush=True)
     return passed
 
 
-if __name__ == '__main__' and sys.argv[1:2] == ['--affected']:
+if __name__ == '__main__' and sys.argv[1:2] in (['--sanity'], ['--pr']):
+    base = next((arg for arg in sys.argv[2:] if arg != '--list'), 'origin/main')
+    sources = {p.stem: p.read_text(encoding='utf-8') for p in sorted(TESTS.glob('*.py'))}
+    names = list(SANITY) if sys.argv[1] == '--sanity' else pr_selection(changed(base), sources)
+    if '--list' in sys.argv:
+        print('\n'.join(names));sys.exit()
+    sys.exit(0 if run(names, workers=2, report=True) else 1)
+elif __name__ == '__main__' and sys.argv[1:2] == ['--affected']:
     base = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != '--list' else 'origin/main'
     sources = {p.stem: p.read_text(encoding='utf-8') for p in sorted(TESTS.glob('*.py'))}
     modules = affected(changed(base), sources)

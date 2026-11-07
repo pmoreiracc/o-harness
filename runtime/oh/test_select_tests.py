@@ -7,6 +7,24 @@ selector = importlib.util.module_from_spec(spec);spec.loader.exec_module(selecto
 
 
 class SelectTestsTest(unittest.TestCase):
+    def test_pr_selection_keeps_core_and_affected_tests_and_unknown_changes_run_everything(self):
+        sources = {'gates': '', 'test_gates': 'from . import gates',
+                   'test_other': 'import os', 'test_fixtures_one': 'value = 1'}
+        docs = selector.pr_selection(['docs/usage.md'], sources)
+        self.assertEqual(docs, list(selector.SANITY))
+        changed = selector.pr_selection(['runtime/oh/gates.py'], sources)
+        self.assertEqual(changed.count('oh.test_gates'), 1)
+        self.assertNotIn('oh.test_other', changed)
+        for paths in (['new/unmapped.py'], ['integrations/select_tests.py'],
+                      ['integrations/test.sh'], ['runtime/oh/deleted.py']):
+            selected = selector.pr_selection(paths, sources)
+            self.assertIn('oh.test_gates', selected)
+            self.assertIn('oh.test_other', selected)
+            self.assertNotIn('oh.test_fixtures_one', selected)
+        cases = selector.test_cases(list(selector.SANITY), strict=True)
+        self.assertTrue(cases)
+        self.assertEqual(len(cases), len({case.id() for case in cases}))
+
     def test_an_edited_module_runs_with_its_importers_and_every_id_loads(self):
         old = {'test_base': 'def fixture():\n    return 1\n', 'test_user': 'from . import test_base as fixtures\n',
                'test_far': 'from .test_user import x\n', 'test_other': 'import os\n'}
