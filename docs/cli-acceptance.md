@@ -1,9 +1,9 @@
-# Real CLI acceptance catalog
+# Real CLI acceptance
 
-These are explicitly launched subscription tests, never scheduled AI jobs. The operator
-may be the developer or their authorized development agent using native CLI tools. Choices
-must travel through the actual host; never write synthetic approvals or successful reports
-into OH state. An automated test choice is not evidence of a physical human click.
+Run native subscription sessions against a frozen candidate in disposable consumers.
+The developer or authorized operator sends actual host choices. Verify files, saved
+decisions, checks, reviewed commits and PRs. Fixture setup or an agent's final message
+alone cannot establish a pass. Typed CLI choices prove the CLI path.
 
 ## Sign in once on each Mac
 
@@ -15,16 +15,16 @@ you sign out. Finish one candidate's sessions before setting up another on this 
 ## Prepare once for a candidate
 
 Choose model names available to the subscriptions. Both the coordinator and fixture OH
-roles use the specified model; all fixture roles use medium effort and two review rounds.
+roles use the specified model; the catalog uses medium effort and sanity uses low effort. Both allow two consumer review rounds.
 The two-round limit belongs to the consumer workflow being tested. It is separate from
 the one independent review of OH's implementation. Never renew the fixture limit automatically.
 
 ```sh
-python3 integrations/e2e_fixture.py prepare --codex-model MODEL --claude-model MODEL
+python3 integrations/e2e_fixture.py prepare --suite sanity --codex-model MODEL --claude-model MODEL
 ```
 
-This prints a fresh temporary directory and frozen snapshot. It creates three repositories
-per host (delivery, planning, choice), separate OH data, private planning space, and an
+This prints a fresh temporary directory and frozen snapshot. It creates separate delivery, planning and choice repositories per host (plus a Design
+repository for sanity), separate OH data, private planning space, and an
 isolated candidate configuration. It launches nothing and never activates normal oh-dev.
 `trial.json` identifies the exact candidate, fixture root and build. Keep that root until
 the trial finishes. A source change requires a new candidate; do not relabel an old pass.
@@ -62,13 +62,51 @@ For a saved native conversation, pass `--resume SESSION_ID --prompt 'actual answ
 Only do so after its prior native process has exited. Native approval review remains
 enabled; the launcher does not bypass permissions or hook trust.
 
-## Sanity and focused development
+## Live sanity
 
-Live sanity is scenario D through its first completed-task checkpoint, followed by Stop.
-For shared execution changes, resume it and complete the second task too. Scenario Q is a
-cheap addition for menu/entry changes. Run only the scenario relevant to a focused edit;
-before every PR, complete P, D, Q and C on both Mac CLIs and report all eight outcomes. Reuse D's published
-branch for C rather than delivering another project. Test tasks remain sequential.
+Use the `sanity` fixture for the pre-PR run. Run the following slices in both installed
+Mac CLIs. Independent projects and hosts may run concurrently. During development
+choose the affected slices; add a focused real CLI regression for a change these do
+not exercise. After the single implementation review run every slice on the final candidate.
+
+| Slice | Action in the real host | Check the effect |
+| --- | --- | --- |
+| Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The approved row is recorded in M1, validates and passes review; application files stay at baseline. |
+| Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
+| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then Stop at the selection boundary before workers. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; resume preserves it, only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The checkpoint identifies excluded other-track work. One PR links the reviewed HEAD and passes CI. |
+| Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, decline it. | No implementation, approval, edits or publication. |
+
+The independent Design fixture contains a normal roadmap initiative only. The host still drafts, checks, reviews and accepts its design. Nightly P also exercises the direct handoff from the newly created proposal.
+
+Use a unique base branch in a dedicated private fixture repository, set its name as
+the fixture project's configured base, and push only this trial's starting tree to it.
+Use `python3 check.py` for hosted sanity. For scenario C also require release readiness.
+After the run close the fixture PR unmerged and delete only its trial branches.
+In the sanity delivery project the second track exists only to test selection; it
+is outside the chosen scope. Fault injection, additional batches and failed hosted CI
+belong to the longer catalog. Measure preparation, each slice, slowest host and overall
+wall time. Timings guide optimization; an overrun never converts a pass into a failure.
+For a new E2E case document whether it protects an essential ordinary workflow (sanity
+and nightly) or adds a variant or fault (nightly). Prefer extending an existing path.
+
+## Nightly live regression
+
+Prepare with `--suite catalog`. Run P/D/Q/C below on both Mac CLIs using fresh consumers.
+D and C share a real PR. The broader D includes the same delivery fundamentals with an
+interruption and an extra task batch; Q covers selection, Stop and quick-fix refusal.
+The catalog also covers changes graduated from incident regressions. Record gaps and
+extend this catalog when adding a distinct workflow option.
+
+A local Codex project automation schedules the live catalog at 03:00 America/Sao_Paulo.
+It needs an awake authenticated Mac, both installed subscription CLIs, GitHub access
+to the dedicated private fixtures, and native hook review when definitions change.
+The separate GitHub Actions schedule covers deterministic Linux/Windows regression.
+Live runs test a clean isolated checkout of fetched main. Leave normal oh-dev and
+developer checkouts alone. If another trial owns the acceptance profile, report the
+nightly as deferred; never displace that trial or report skipped work as passed.
+Record each attempted outcome with a sanitized report, triage failures against the
+tested revision, and clean owned resources. No live nightly status is a PR or release
+dependency. A confirmed relevant defect still requires a release decision.
 
 ## P — Propose and Design
 
@@ -103,7 +141,7 @@ committed HEAD and remaining allowance, then resume in a fresh native session. C
 next batch through its actual decision. Exactly tasks 1 and 2 finish; original evidence,
 commit and spent allowances survive. No third task or unrelated file change is allowed.
 
-For final catalog acceptance, configure a dedicated private GitHub fixture repository before
+For catalog delivery, configure a dedicated private GitHub fixture repository before
 starting D: push only this fixture's initial main, set origin, then let normal publication
 create its one PR after the actual checkpoint choice. Never use a real product repository.
 Check the clickable link, saved URL and actual remote HEAD. Do not merge the test PR.

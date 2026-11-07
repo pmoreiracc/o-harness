@@ -11,7 +11,7 @@
 
 ## Development
 
-You need Python 3.12+, Git, Node.js and Bash. Tests need no AI subscription or API key.
+You need Python 3.12+, Git, Node.js and Bash. Deterministic checks need no AI credentials. Live sanity and the nightly catalog use native subscriptions.
 
 To develop OH with OH, import this repository's settings once in your fresh clone, before any OH
 command: `oh profile-import integrations/oh-profile.json`. OH never reads settings from a repository
@@ -19,19 +19,18 @@ by itself, so this is your choice to run its checks: when OH delivers a task her
 tests the change affects (`integrations/test.sh affected`) and the syntax checks.
 
 ```sh
-bash integrations/test.sh sanity   # fast deterministic core during development
+bash integrations/test.sh core     # fast deterministic core during development
 bash integrations/test.sh pr origin/main  # final local selection, also used by PR CI
-bash integrations/test.sh native   # full deterministic suite, normally nightly/release
+bash integrations/test.sh native   # full deterministic suite, normally nightly
 bash integrations/test.sh syntax   # Python, JavaScript and shell syntax
 ```
 
 1. Fork the repository and branch from `main`.
 2. Read `config/invariants.json` and the code you are changing. Make the smallest complete
    change.
-3. Add tests for the behavior or regression you fix. Tests use temporary repositories and
-   fake model responses; never use a real project as a fixture.
+3. Add tests for the behavior or regression you fix. Deterministic tests use temporary repositories and fake model responses. Live sanity uses the installed CLIs and disposable consumer projects.
 4. For dashboard changes, check it in a browser at desktop and narrow widths.
-5. Run the [full CLI catalog](docs/cli-acceptance.md) on both Mac CLIs before every PR.
+5. Run [full live sanity](docs/cli-acceptance.md#live-sanity) on both Mac CLIs before every PR.
    Open a PR against `main` that explains the problem, the new behavior, how you checked it
    and any limits. Keep docs in sync with what the code actually does.
 
@@ -66,8 +65,7 @@ digest that the required check uses to verify the two jobs agreed on the split.
 When comparing Windows test performance, use the same expanded test IDs on the
 baseline and candidate and repeat on the same runner image. Compare test time
 and total job time separately. For coverage changes, account for which cases
-moved between PR and full-suite coverage. The nightly and release runs retain
-full Windows discovery.
+moved between PR and full-suite coverage. Nightly retains full Windows discovery. Release verifies the candidate package and installation on all three operating systems.
 
 ## Try the local source in Claude Code and Codex
 

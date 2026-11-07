@@ -14,19 +14,18 @@ the approved guarantees. Do not promise exhaustive protection against every host
 
 ## Feedback during development
 
-- `bash integrations/test.sh sanity` runs a small deterministic core using existing tests.
+- `bash integrations/test.sh core` runs a small deterministic core using existing tests.
   It is not live host acceptance. Aim for a 1–2 minute local feedback loop; report measured
   time and improve slow fixtures rather than deleting unique protection to meet a number.
 - Run the specific causal tests for the edit using `PYTHONPATH=runtime python3 -m unittest
   oh.test_MODULE.Class.test_case`. Use `affected` to inspect broader impact, not after every edit.
-- Exercise the changed behavior through a real Claude or Codex CLI. Shared host behavior
-  needs both. Use the [scenario catalog and disposable fixtures](cli-acceptance.md).
+- Exercise the changed behavior through a real Claude or Codex CLI. Exercise the affected sanity paths on both hosts. Use the [scenario catalog and disposable fixtures](cli-acceptance.md).
 - After changing shared entry, handoff or control behavior, run live sanity: skill entry,
   actual approval, a tiny delivered task and its checkpoint, plus Stop/resume when affected.
 
 Real AI runs have variable duration and subscription usage. Measure both where available;
-unknown usage remains unknown. No API fallback, scheduled model calls, automatic review
-renewal or retry-until-green. A failure remains evidence even if a later trial passes.
+unknown usage remains unknown. The scheduled live catalog is a separate subscription run on the authenticated Mac. Use no API fallback,
+automatic review renewal or retry-until-green. A failure remains evidence even if a later trial passes.
 
 ## One review
 
@@ -43,8 +42,12 @@ label what remains unknown rather than defaulting to a violation. An unproved re
 approval, Stop or publication guarantee can still block readiness. Naming preferences,
 speculative combinations and optional architecture improvements cannot expand this change.
 
-Preserve all findings. Repair in-scope blockers and add or extend their causal regression;
-exercise relevant repairs in real CLI E2E. No second review round. If proof cannot be
+Preserve every finding. For a real bug in scope, show the failure on the reviewed candidate
+before editing it, then prove the same behavior passes after repair. Prefer extending an
+existing scenario. Use deterministic and/or live coverage appropriate to the failure;
+host claims require live CLI evidence. If faithful reproduction is intermittent, keep the
+original observation and state which part the repeatable regression proves. Classify each
+new E2E as fundamental (sanity and nightly) or extended (nightly); explain why. No second review round. If proof cannot be
 established, stop publication with a concrete remedy; a round limit never turns a failure
 into success. The PR identifies the reviewed candidate and summarizes post-review repairs
 and their evidence. It must not claim independent review of the final repaired tree.
@@ -56,22 +59,24 @@ whether they prevent proving this change's approved outcome from a separate prod
 
 1. Run `bash integrations/test.sh pr origin/main` and `bash integrations/test.sh syntax` on
    the final candidate. PR selection is the deterministic core plus affected modules.
-   Selection infrastructure and unknown paths trigger full discovery rather than a silent skip.
-2. Before every PR, exercise P, D, Q and C from the [live catalog](cli-acceptance.md)
-   on both macOS CLIs. Include the eight outcomes in the PR description. Record a
-   reproduced product failure with its impact and issue as described above. If a
-   scenario has not been exercised, finish it before opening the PR. Focused tests,
-   hosted CI and personal trial decisions do not replace any catalog entry.
-3. After both hosts finish, present their results and limits together. For a
-   host-interaction change, offer the developer one personal snapshot trial then.
-   Declining that trial waives only the personal trial.
-4. Open the PR and follow hosted checks. PR CI uses the same deterministic selection on
-   Linux and retains Windows platform coverage. Broad Linux/Windows discovery runs nightly
-   at 03:00 America/Sao_Paulo and before releases. GitHub may delay scheduled starts.
+   Known runner changes exercise their own selection tests and the core. Unknown impact triggers full discovery.
+2. After the single review, run full [live sanity](cli-acceptance.md#live-sanity) on
+   both Mac CLIs. Record candidate, outcomes, any recovery and wall time per host. An
+   unfinished path remains untested. After a repair repeat the evidence it invalidated.
+3. For host-interaction changes offer one personal snapshot trial with both results.
+4. Open the PR and follow CI. Aim for nine minutes of deterministic CI and roughly ten
+   minutes of full live sanity wall time. These are targets for improving fixtures and
+   scheduling. Keep valuable coverage if its best measured implementation runs longer;
+   report why. Time alone does not determine the verdict.
+5. Nightly runs the full deterministic suites and the full live catalog, independently
+   of PRs and releases. Release keeps candidate-specific package/install checks on all
+   supported OSes. Triage relevant nightly failures before shipping.
 
-Changes after verification invalidate the affected evidence. Rerun those scenarios/tests;
-unchanged unrelated results need no repetition. This reuse applies to results from the full catalog already exercised for this PR. Full test discovery remains available with
-`bash integrations/test.sh native`; it is not mandatory before each local commit.
+For focused development, list affected modules with `bash integrations/test.sh affected
+origin/main --list` and choose the causal cases. The PR selector conservatively expands
+unknown impact to full discovery. Inspect `bash integrations/test.sh pr origin/main --list`
+and CI durations before pruning any check. Optimize expensive setup or move redundant
+broad coverage to nightly once its unique risks still have a regression.
 
 ## What live acceptance proves
 

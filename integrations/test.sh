@@ -5,12 +5,13 @@ cd "$(dirname "$0")/.."
 [ "${OS:-}" != Windows_NT ] || export PYTHONUTF8=1
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX OH_HOME OH_PROJECT_ROOT OH_POLICY_FILE OH_STATE_ROOT XDG_CONFIG_HOME
 case "${1:-native}" in
-  sanity) python3 integrations/select_tests.py --sanity ;;
-  pr) python3 integrations/select_tests.py --pr "${2:-origin/main}" ;;
+  core) python3 integrations/select_tests.py --core ;;
+  sanity) echo "Sanity runs on the real Mac CLIs. Follow docs/cli-acceptance.md (prepare --suite sanity). Use core for deterministic checks." >&2; exit 2 ;;
+  pr) python3 integrations/select_tests.py --pr "${2:-origin/main}" "${@:3}" ;;
   # Every run lists its slowest tests, so a slow new one is seen in the PR that adds it.
   native) PYTHONPATH=runtime python3 -m unittest discover -s runtime -p 'test_*.py' --durations 15 "${@:2}" ;;
   windows-full) python3 integrations/full_tests.py --workers "${OH_TEST_WORKERS:-4}" "${@:2}" ;;
-  # The tests a PR must pass on Windows (see integrations/select_tests.py); the full suite runs nightly and before a release.
+  # The tests a PR must pass on Windows (see integrations/select_tests.py); the full suite runs nightly.
   windows)
     tests=$(python3 integrations/select_tests.py "${2:-origin/main}" --explain)
     # unittest ignores -k for tests named one by one, so filter the names here.
@@ -21,7 +22,7 @@ case "${1:-native}" in
     python3 integrations/select_tests.py --run-selected "${OH_TEST_WORKERS:-4}" "${shard[@]}" <<<"$tests"
     ;;
   # Only the test modules this change affects (see integrations/select_tests.py).
-  affected) python3 integrations/select_tests.py --affected "${2:-origin/main}" ;;
+  affected) python3 integrations/select_tests.py --affected "${2:-origin/main}" "${@:3}" ;;
   syntax)
     python3 integrations/windows_risk.py "${2:-origin/main}"
     python3 -m compileall -q runtime integrations

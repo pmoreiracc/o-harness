@@ -92,24 +92,30 @@ checks pass. Give the reviewer the base and candidate identities, approved scope
 invariants and test evidence through native tools; candidate OH admission is not required
 for OH development. Use the configured review profile. The OH-specific review brief in
 docs/development-testing.md governs this review; consumer reviewer behavior is unchanged.
-Fix concrete in-scope blockers and prove repairs with causal regressions and affected live
-E2E scenarios. Do not start another review round or treat uncertainty alone as a defect.
+For each confirmed in-scope reviewer bug, reproduce the wrong outcome on the reviewed
+candidate before repairing it. Extend an existing deterministic or real CLI scenario
+when possible, then run the same case on the repair. If a live failure is intermittent,
+retain the original failing evidence and explain the limit. A new live scenario belongs
+in sanity only when it protects a fundamental workflow; otherwise add it to the nightly
+catalog. Record that choice and its cost. Do not start another review round or treat uncertainty alone as a defect.
 An unresolved blocker still prevents publication: explain the failure and smallest next
 step instead of automatically widening scope. Preserve the original findings and explain
 their disposition, including changes made after review. Never claim those later changes
 received independent review. Never treat model prose as a human grant.
 
-During development run `bash integrations/test.sh sanity`, the specific tests relevant
-to the edit, and the affected real CLI scenario. Run live workflow sanity after shared
-workflow changes. Do not repeatedly run entire affected modules or the full suite.
-Before every PR, run `bash integrations/test.sh pr origin/main` and syntax once, and
-exercise the full live catalog (P, D, Q and C) on both macOS CLIs for this change.
-Record each host/scenario outcome in the PR. A focused run, green CI or a waived personal
-trial cannot stand in for an unrun scenario. Repeat affected evidence after repairs;
-repeat broad checks only when new changes invalidate their coverage. The full deterministic
-suite runs nightly and for releases. See docs/development-testing.md for the exact scope
-and evidence rules. Once both hosts' catalog results are available, offer the tested
-snapshot for developer acceptance for host-interaction changes; do not change an active snapshot without authority.
+During development exercise the affected slice of real CLI sanity on both Mac hosts
+and the focused deterministic tests for the edit. Inspect broad selections with `--list`
+before running them. Take one independent review, repair and verify its findings, then
+run full live sanity on the final candidate on both Mac CLIs before opening a PR.
+Report the observed results and elapsed time. Offer the personal trial for host changes
+after those results are available. Follow docs/cli-acceptance.md for the exact scenarios.
+
+Use the deterministic core plus relevant checks for PR CI. Broad deterministic regression
+and the full live catalog run nightly at 03:00 Brasília outside the PR and release gates.
+Keep package/install and platform evidence for the release candidate. Triage nightly
+failures; hold a release for an established relevant blocker. Timing targets guide
+optimization. A measured overrun alone never fails a test, drops coverage, or blocks
+publication. Document the tradeoff when a slower test earns its place.
 
 After acceptance, stop task-owned test processes and remove disposable projects,
 worktrees, isolated profiles, test state and temporary credentials. Close test PRs without
@@ -129,7 +135,7 @@ Avoid runtime regressions. There is no fixed test time limit.
 - A PR runs the Windows tests `integrations/select_tests.py` picks: OH's platform layer,
   platform-sensitive tests, every test module the PR changes and the test modules that
   import it. The full Windows suite
-  runs nightly on main, before a release and on demand (Actions > full suite, with a
+  runs nightly on main and on demand (Actions > full suite, with a
   choice of suite and an optional test-name pattern).
 Do not commit local state, receipts, tokens or raw host transcripts. Documentation must
 reflect completed, verified behavior. If blocked, explain a concrete recovery step.

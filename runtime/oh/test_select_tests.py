@@ -9,14 +9,17 @@ selector = importlib.util.module_from_spec(spec);spec.loader.exec_module(selecto
 class SelectTestsTest(unittest.TestCase):
     def test_pr_selection_keeps_core_and_affected_tests_and_unknown_changes_run_everything(self):
         sources = {'gates': '', 'test_gates': 'from . import gates',
-                   'test_other': 'import os', 'test_fixtures_one': 'value = 1'}
+                   'test_other': 'import os', 'test_select_tests': '', 'test_fixtures_one': 'value = 1'}
         docs = selector.pr_selection(['docs/usage.md'], sources)
         self.assertEqual(docs, list(selector.SANITY))
         changed = selector.pr_selection(['runtime/oh/gates.py'], sources)
         self.assertEqual(changed.count('oh.test_gates'), 1)
         self.assertNotIn('oh.test_other', changed)
-        for paths in (['new/unmapped.py'], ['integrations/select_tests.py'],
-                      ['integrations/test.sh'], ['runtime/oh/deleted.py']):
+        for script in ('test.sh', 'select_tests.py', 'full_tests.py'):
+            selected = selector.pr_selection(['integrations/' + script], sources)
+            self.assertIn('oh.test_select_tests', selected)
+            self.assertNotIn('oh.test_other', selected)
+        for paths in (['new/unmapped.py'], ['runtime/oh/deleted.py']):
             selected = selector.pr_selection(paths, sources)
             self.assertIn('oh.test_gates', selected)
             self.assertIn('oh.test_other', selected)

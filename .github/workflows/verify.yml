@@ -43,7 +43,7 @@ jobs:
         if: matrix.suite == 'syntax'
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
   # The full Windows suite is slow: a pull request runs the tests that can break on Windows,
-  # and the full suite (full.yml) runs all of them nightly and on demand, as a release does.
+  # and the full suite (full.yml) runs all of them nightly and on demand.
   windows-a:
     if: github.event_name == 'pull_request'
     runs-on: windows-latest

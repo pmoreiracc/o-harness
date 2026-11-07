@@ -185,7 +185,7 @@ def prepare(api, version, bot, pause=time.sleep):
     else:
         notes = api('POST', 'releases/generate-notes', {'tag_name': f'v{version}', 'target_commitish': main})['body']
         pr = api('POST', 'pulls', {'base': 'main', 'head': branch, 'title': f'Release {version}',
-            'body': f'Pedro requested **{version}** in the Release workflow. The release App merges only this version change after required checks pass. Full Windows and installation checks still gate publication.\n\n{notes}'})
+            'body': f'Pedro requested **{version}** in the Release workflow. The release App merges only this version change after required checks pass. The candidate must pass package and installation checks on Linux, macOS and Windows before publication.\n\n{notes}'})
     print(f'Release PR: {pr["html_url"]}', flush=True)
     sha = merge_pr(api, pr, sha, bot, pause)
     require(manifests(api, sha)[0] == version, 'The merged plugin versions differ from the request.')
