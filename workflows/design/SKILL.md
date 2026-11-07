@@ -83,5 +83,8 @@ the existing human review-allowance decision, never an automatic renewal.
 
 Use `complete` only for the exact reviewed candidate and retained approval required
 by its location. Private completion needs no commit, PR or extra Stop question. Give
-the artifact path, actual review result and Deliver command. Repository publication
+the artifact path, actual review result and Deliver command using the artifact's
+four-digit design number: Claude `/o-harness:oh-deliver NNNN` or Codex
+`$oh-deliver NNNN`. Read the number from the actual design filename; an initiative
+slug or saved-run ID is not a Deliver selector. Repository publication
 follows `workflows/publication.md`.
