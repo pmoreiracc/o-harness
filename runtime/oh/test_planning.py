@@ -10,12 +10,13 @@ from .test_fixtures_plans import BODY
 
 
 class PlanningTest(NativeFixture,unittest.TestCase):
-    def planning(self,workflow,location,request=None):
+    def planning(self,workflow,location,request=None,before=None):
         change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
         change(self.root,'plans.location',location)
         self.where=plans.layout(self.root)
         plans.start_roadmap(self.where,'Fixture');plans.add_milestone(self.root,self.where,'M1','First','It works')
         plans.add_initiative(self.root,self.where,'M1','auth','Sign-in',[])
+        if before:before()
         if location=='repo':self.git('add','.');self.git('commit','-qm','planning context')
         manifest={'tasks':[{'id':workflow,'title':'Plan the sign-in flow','instructions':'Write the requested bounded plan.'}]}
         prompt=request or ('Plan the sign-in flow.' if workflow=='design' else 'Propose the sign-in flow.')
@@ -51,6 +52,68 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         self.assertEqual(self.git('status','--porcelain'),'')
         self.assertEqual(load_run(self.root)[1]['done'],['design'])
         self.assertTrue(review['artifacts'])
+        self.assertEqual(self.document.read_text(),original)
+        self.assertEqual(plans.approval(self.root,self.where,'0001'),'approved')
+        from .delivery import selection
+        selected,_=selection(self.root,'0001',claim=False)
+        self.assertTrue(selected['tasks'])
+
+    def test_private_design_repair_to_draft_cannot_complete_until_reviewed_and_accepted_ready(self):
+        self.planning('design','private',request='/oh-design auth')
+        with self.assertRaisesRegex(Refused,'design linked from its initiative'):
+            native.candidate(self.root)
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        number,path=plans.write_design(self.root,self.where,'auth','Sign-in',BODY,'draft')
+        plans.claim(self.root,self.where,'auth',number);document=Path(path)
+        self.finish_attempt('analysis',{'summary':'Wrote the design.'})
+        first=self.reviewed({'verdict':'blocking','summary':'Revert premature approval.',
+            'findings':[{'severity':'blocking','family':'provisional-status','description':'Revert status to draft.'}]})
+        self.finish_attempt('analysis',{'summary':'Reverted the provisional status.'},
+            edit=lambda:document.write_text(document.read_text().replace('status: approved','status: draft'),newline='\n'))
+        # Reproduce the old failure: repair verifies/reviews draft bytes without
+        # preparing a new candidate; actual acceptance still must not finish it.
+        native.verify(self.root)
+        draft_review=self.finish_attempt('review',{'verdict':'clean','summary':'Reviewed the draft.','findings':[]})
+        native.decision(self.root,'approve-private',self.human('approve'),attempt=draft_review['id'])
+        accepted=document.read_bytes()
+        with self.assertRaisesRegex(Refused,'run candidate and verify'):
+            native.complete(self.root,draft_review['id'])
+        self.assertEqual(document.read_bytes(),accepted)
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        self.assertEqual(plans.approval(self.root,self.where,number),'draft')
+        self.assertFalse(plans.approvals_file(self.root).exists())
+        # Ordinary recovery preserves history and finite allowance; only a new
+        # exact review and real acceptance allow the prepared bytes to complete.
+        ready=self.reviewed()
+        with self.assertRaisesRegex(Refused,'human must approve'):
+            native.complete(self.root,ready['id'])
+        native.decision(self.root,'approve-private',self.human('approve'),attempt=ready['id'])
+        accepted=document.read_bytes()
+        native.complete(self.root,ready['id'])
+        self.assertEqual(document.read_bytes(),accepted)
+        self.assertEqual(plans.approval(self.root,self.where,number),'approved')
+        from .delivery import selection
+        self.assertTrue(selection(self.root,number,claim=False)[0]['tasks'])
+        state=load_run(self.root)[1]
+        self.assertEqual(state['done'],['design'])
+        self.assertEqual([a['id'] for a in state['attempts'] if a['role']=='review'],[first['id'],draft_review['id'],ready['id']])
+
+    def test_private_existing_draft_can_be_accepted_without_unrelated_rewrites(self):
+        def existing():
+            number,path=plans.write_design(self.root,self.where,'auth','Sign-in',BODY,'draft')
+            plans.claim(self.root,self.where,'auth',number);self.document=Path(path)
+        self.planning('design','private',request='/oh-design auth',before=existing)
+        original=self.document.read_text()
+        self.finish_attempt('analysis',{'summary':'Preserved the existing design.'})
+        review=self.reviewed()
+        self.assertEqual(self.document.read_text(),original.replace('status: draft','status: approved'))
+        native.decision(self.root,'approve-private',self.human('approve'),attempt=review['id'])
+        accepted=self.document.read_bytes()
+        native.complete(self.root,review['id'])
+        self.assertEqual(self.document.read_bytes(),accepted)
+        self.assertEqual(plans.approval(self.root,self.where,'0001'),'approved')
+        from .delivery import selection
+        self.assertTrue(selection(self.root,'0001',claim=False)[0]['tasks'])
 
     def test_proposal_approval_does_not_replace_review_or_grant_product_implementation(self):
         self.planning('propose','repo')
