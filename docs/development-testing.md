@@ -12,6 +12,41 @@ defects; record unrelated work separately. A finding is evidence to evaluate, no
 instruction to add machinery. Prefer removing an unnecessary dependency when that preserves
 the approved guarantees. Do not promise exhaustive protection against every host behavior.
 
+## Choosing coverage for a change
+
+For every fix or feature, name the behavior a user or caller relies on and the
+observable result that would distinguish success from the bug or a partial implementation.
+Find the existing tests and live scenario for that behavior before editing. Extend them
+where coverage is missing. For a bug, reproduce the wrong result first when possible
+and run the same case on the fix. For a feature, exercise its normal entry point and
+any consequential boundary it introduces, such as declining an approval.
+
+| What needs proof? | Test to use | Where it belongs |
+| --- | --- | --- |
+| A rule with controlled inputs, such as whether a stale decision matches | Unit test calling the rule directly | The existing behavior-specific `runtime/oh/test_*.py` module |
+| A handoff between components, such as a decision changing saved run state | Deterministic integration test using the real components and a minimal temporary project | The module covering the workflow, such as `runtime/oh/test_recovery.py`. Create a new test module only for distinct behavior without an existing home. |
+| Behavior a person experiences through an installed skill, including menus, prompts and host hooks | Real CLI E2E on both Mac hosts. Drive the actual input and inspect the effect. | Extend the corresponding scenario in [CLI acceptance](cli-acceptance.md). Change `integrations/e2e_fixture.py` only when the scenario needs different setup. |
+
+Use the layers that expose distinct risks. For example, a deterministic case can
+prove a stale answer grants nothing. A live quick-fix scenario can prove that the
+user sees a readable choice, answers Stop once, and gets the promised handoff with
+no workers or edits. Unchanged files alone would also occur if OH rejected the answer.
+An existing case that already distinguishes the outcomes is sufficient. For an edit
+limited to contributor prose, verify its instructions, paths and examples.
+
+**Choose when the case runs.** A focused case runs during development even if its
+permanent home is nightly. For deterministic tests, confirm the owning module appears
+in `bash integrations/test.sh pr origin/main --list` for the change. Update the
+[selector](../integrations/select_tests.py) if the changed surface lacks coverage in
+that selection. Reserve the always-run deterministic core for cheap checks of behavior
+many changes can break. For live E2E, extend **sanity** when failure would break a
+fundamental journey such as entering a skill, accepting, declining, resuming or
+delivering reviewed work. Cover additional variants and injected failures in the
+**nightly catalog**. For a new fundamental journey, include it in both suites.
+
+In the PR, name the tests or scenarios used, what they proved, and why any new case
+belongs in its chosen suite. Include the measured cost of additions to the core or live suites.
+
 ## Feedback during development
 
 - `bash integrations/test.sh core` runs a small deterministic core using existing tests.
@@ -19,9 +54,9 @@ the approved guarantees. Do not promise exhaustive protection against every host
   time and improve slow fixtures rather than deleting unique protection to meet a number.
 - Run the specific causal tests for the edit using `PYTHONPATH=runtime python3 -m unittest
   oh.test_MODULE.Class.test_case`. Use `affected` to inspect broader impact, not after every edit.
-- Exercise the changed behavior through a real Claude or Codex CLI. Exercise the affected sanity paths on both hosts. Use the [scenario catalog and disposable fixtures](cli-acceptance.md).
-- After changing shared entry, handoff or control behavior, run live sanity: skill entry,
-  actual approval, a tiny delivered task and its checkpoint, plus Stop/resume when affected.
+- Exercise affected workflow paths on both Mac CLIs, including the relevant entry,
+  handoff or recovery step. Use the [scenario catalog and disposable fixtures](cli-acceptance.md).
+  Run full live sanity after the independent review as described under Final verification and CI.
 
 Real AI runs have variable duration and subscription usage. Measure both where available;
 unknown usage remains unknown. The scheduled live catalog is a separate subscription run on the authenticated Mac. Use no API fallback,
