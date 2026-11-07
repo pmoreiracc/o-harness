@@ -212,6 +212,41 @@ def selection(root,doc,track='',*,claim=True):
                          'status':status,'approvals':approvals,'authority':approved}})
 
 
+def checkpoint_progress(state):
+    """Explain the whole saved design without selecting or authorizing more work."""
+    bound=state.get('delivery')
+    if not bound:return ''
+    source=state.get('scope_snapshot',{}).get('documents',{}).get(bound['path'])
+    # Older saved runs already retained their starting design in delivery authority.
+    if source is None:source=bound.get('authority',{}).get('start_text')
+    if source is None:
+        return '\nDesign completion unknown: this saved run lacks its starting design. Preserve completed evidence and re-enter Deliver against an approved design revision.'
+    from .delivery_verify import parsed
+    _,rows=parsed(source)
+    completed={n for n,row in rows.items() if row[1]=='done'}|set(state['done'])
+    remaining=[row for n,row in rows.items() if n not in completed]
+    if not remaining:return '\nDesign complete: all approved design tasks are complete.'
+    pending={t['id'] for t in state['tasks'] if t['id'] not in state['done']}
+    text='\n'+('Selected work is complete; the approved design still has pending tasks.' if not pending
+                else 'The approved design still has pending tasks beyond the completed batch.')
+    excluded=False
+    for number,_,owner,needs,blocked,title in remaining:
+        reasons=[]
+        other=bool(state.get('track') and owner!=state['track'])
+        if other:reasons.append('belongs to another track: '+owner)
+        if blocked:reasons.append('blocked on '+blocked)
+        missing=[n for n in needs.split(',') if n and n not in completed]
+        if missing:reasons.append('requires completed task(s): '+', '.join(missing))
+        if number in pending:reasons.append('in the saved selection')
+        elif not other:excluded=True
+        text+='\nPending task '+number+' — '+title+': '+('; '.join(reasons) or 'outside the saved selection')+'.'
+    if excluded:
+        text+='\nContinue cannot authorize excluded tasks. Resolve the named prerequisites and open design decisions, get the revised design approved through Design, then re-enter Deliver against that approved revision. Preserve completed task evidence and use the normal publication workflow to carry completed code forward.'
+    if any(state.get('track') and row[2]!=state['track'] for row in remaining):
+        text+='\nWork on another track requires a separate Deliver selection after its prerequisites are met.'
+    return text
+
+
 def listing(root):
     result={'ready':[],'unavailable':[],'source':'checkout',
             'freshness':'Use entry and inspect material saved/local/base differences before treating this local readiness view as current.'}
