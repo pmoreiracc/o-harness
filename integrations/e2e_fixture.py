@@ -75,7 +75,7 @@ def setup_codex(path):
     print('Selected', value['candidate']['version'], 'in', home)
 
 
-def prepare(codex_model, claude_model, suite="catalog"):
+def prepare(codex_model, claude_model, suite):
     sanity = suite == "sanity"
     effort = "low" if sanity else "medium"
     base = Path(tempfile.mkdtemp(prefix='oh-cli-acceptance-')).resolve()
@@ -261,7 +261,8 @@ def main():
     setup = sub.add_parser('setup-codex', help='install and verify this trial snapshot in the acceptance profile')
     setup.add_argument('directory')
     new = sub.add_parser('prepare')
-    new.add_argument('--suite', choices=('sanity', 'catalog'), default='catalog')
+    new.add_argument('--suite', choices=('sanity', 'catalog'), default='sanity',
+                     help='prepare sanity by default; select catalog for nightly regression')
     new.add_argument('--codex-model', required=True)
     new.add_argument('--claude-model', required=True)
     observe = sub.add_parser('inspect')
