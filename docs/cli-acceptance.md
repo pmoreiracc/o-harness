@@ -20,10 +20,10 @@ The two-round limit belongs to the consumer workflow being tested. It is separat
 the one independent review of OH's implementation. Never renew the fixture limit automatically.
 
 ```sh
-python3 integrations/e2e_fixture.py prepare --suite sanity --codex-model MODEL --claude-model MODEL
+python3 integrations/e2e_fixture.py prepare --codex-model MODEL --claude-model MODEL
 ```
 
-This prints a fresh temporary directory and frozen snapshot. It creates separate delivery, planning and choice repositories per host (plus a Design
+The default suite is sanity. This prints a fresh temporary directory and frozen snapshot. It creates separate delivery, planning and choice repositories per host (plus a Design
 repository for sanity), separate OH data, private planning space, and an
 isolated candidate configuration. It launches nothing and never activates normal oh-dev.
 `trial.json` identifies the exact candidate, fixture root and build. Keep that root until

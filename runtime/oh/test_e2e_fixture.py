@@ -18,6 +18,13 @@ spec.loader.exec_module(fixture)
 
 
 class E2EFixtureTest(unittest.TestCase):
+    def test_prepare_defaults_to_sanity_and_accepts_explicit_catalog(self):
+        command = ['e2e_fixture.py', 'prepare', '--codex-model', 'test', '--claude-model', 'test']
+        for extra, suite in (([], 'sanity'), (['--suite', 'catalog'], 'catalog')):
+            with self.subTest(suite=suite), patch.object(sys, 'argv', command + extra), patch.object(fixture, 'prepare') as prepare:
+                fixture.main()
+                prepare.assert_called_once_with('test', 'test', suite)
+
     def test_foreign_git_and_agent_context_cannot_select_another_project(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory).resolve()
