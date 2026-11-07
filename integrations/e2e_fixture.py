@@ -92,8 +92,10 @@ def prepare(codex_model, claude_model, suite="catalog"):
     profiles = {host: {role: {'model': model, 'effort': effort}
                       for role in ('simple', 'standard', 'complex', 'review', 'insights')}
                 for host, model in (('codex', codex_model), ('claude', claude_model))}
+    # Isolate the two sanity planning paths so their real sessions can overlap.
+    scenarios = ('delivery', 'planning', 'choice', 'design') if sanity else ('delivery', 'planning', 'choice')
     for host in ('codex', 'claude'):
-        for scenario in ('delivery', 'planning', 'choice'):
+        for scenario in scenarios:
             root = base / f'{host}-{scenario}';root.mkdir()
             git(root, 'init', '-q', '-b', 'main')
             git(root, 'config', 'user.name', 'OH Acceptance')
@@ -132,14 +134,17 @@ def prepare(codex_model, claude_model, suite="catalog"):
             git(root, 'add', '.');git(root, 'commit', '-qm', 'tiny acceptance fixture')
             register(root, f'Acceptance {host} {scenario}')
             edit(root, 'project', lambda c: c.update({
-                'plans': {'location': 'private' if scenario == 'planning' else 'repo',
+                'plans': {'location': 'private' if scenario in ('planning', 'design') else 'repo',
                           'private_folder': str(base / 'plans')},
                 'base_branch': 'main', 'tasks_per_batch': 1, 'review_rounds': 2,
                 'checks': [{'name': 'answer', 'command': [sys.executable, 'check.py']}], 'models': profiles}))
             where = plans.layout(root)
             plans.start_roadmap(where, 'Tiny acceptance')
             plans.add_milestone(root, where, 'M1', 'First', 'One small useful change')
-            if scenario != 'planning':
+            if scenario == 'design':
+                plans.add_initiative(root, where, 'M1', 'greeting',
+                                     'Change answer.txt from before to after; preserve other application files.', [])
+            elif scenario != 'planning':
                 plans.add_initiative(root, where, 'M1', 'trial', 'Tiny delivery', [])
                 body = ('## Why\n\nVerify ordinary delivery.\n\n## Tasks\n\n### Core track\n\n'
                         '- [ ] **1.** Change answer.txt to exactly after followed by one newline. '
@@ -154,7 +159,7 @@ def prepare(codex_model, claude_model, suite="catalog"):
                 git(root, 'add', '.');git(root, 'commit', '-qm', 'approved acceptance design')
             git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
     (base / 'codex-home').mkdir()
-    roots = [base / f'codex-{scenario}' for scenario in ('delivery', 'planning', 'choice')]
+    roots = [base / f'codex-{scenario}' for scenario in scenarios]
     (base / 'codex-home/config.toml').write_text(
         f'model = {json.dumps(codex_model)}\nmodel_reasoning_effort = "{effort}"\n'
         'sandbox_mode = "workspace-write"\napproval_policy = "on-request"\n'
@@ -202,7 +207,7 @@ def inspect(path, host, scenario):
               'git_status': git(root, 'status', '--porcelain'),
               'publication': {key: state.get('published', {}).get(key) for key in ('url', 'observed_head')},
               'retained_hashes': 'verified'}
-    if scenario == 'planning':
+    if scenario in ('planning', 'design'):
         from oh import plans, delivery
         from oh.storage import Refused
         where = plans.layout(root, claim=False)
@@ -261,10 +266,10 @@ def main():
     new.add_argument('--claude-model', required=True)
     observe = sub.add_parser('inspect')
     observe.add_argument('directory');observe.add_argument('--host', choices=('codex', 'claude'), required=True)
-    observe.add_argument('--scenario', choices=('delivery', 'planning', 'choice'), required=True)
+    observe.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design'), required=True)
     start = sub.add_parser('launch', help='open the native CLI; operator answers its actual questions')
     start.add_argument('directory');start.add_argument('--host', choices=('codex', 'claude'), required=True)
-    start.add_argument('--scenario', choices=('delivery', 'planning', 'choice'), required=True)
+    start.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design'), required=True)
     start.add_argument('--prompt', required=True);start.add_argument('--resume')
     args = parser.parse_args()
     if args.command == 'login-codex':codex_login()

@@ -23,8 +23,8 @@ the one independent review of OH's implementation. Never renew the fixture limit
 python3 integrations/e2e_fixture.py prepare --suite sanity --codex-model MODEL --claude-model MODEL
 ```
 
-This prints a fresh temporary directory and frozen snapshot. It creates three repositories
-per host (delivery, planning, choice), separate OH data, private planning space, and an
+This prints a fresh temporary directory and frozen snapshot. It creates separate delivery, planning and choice repositories per host (plus a Design
+repository for sanity), separate OH data, private planning space, and an
 isolated candidate configuration. It launches nothing and never activates normal oh-dev.
 `trial.json` identifies the exact candidate, fixture root and build. Keep that root until
 the trial finishes. A source change requires a new candidate; do not relabel an old pass.
@@ -67,13 +67,16 @@ enabled; the launcher does not bypass permissions or hook trust.
 Use the `sanity` fixture for the pre-PR run. Run the following slices in both installed
 Mac CLIs. Independent projects and hosts may run concurrently. During development
 choose the affected slices; add a focused real CLI regression for a change these do
-not exercise. After the single implementation review run all three on the final candidate.
+not exercise. After the single implementation review run every slice on the final candidate.
 
 | Slice | Action in the real host | Check the effect |
 | --- | --- | --- |
-| Planning | Follow P below in the private planning project. Approve the tiny greeting proposal and reviewed design. | Private documents validate; design is accepted and selectable for Deliver; application files remain at baseline. |
+| Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The approved row is recorded in M1, validates and passes review; application files stay at baseline. |
+| Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
 | Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then Stop at the selection boundary before workers. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; resume preserves it, only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The checkpoint identifies excluded other-track work. One PR links the reviewed HEAD and passes CI. |
 | Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, decline it. | No implementation, approval, edits or publication. |
+
+The independent Design fixture contains a normal roadmap initiative only. The host still drafts, checks, reviews and accepts its design. Nightly P also exercises the direct handoff from the newly created proposal.
 
 Use a unique base branch in a dedicated private fixture repository, set its name as
 the fixture project's configured base, and push only this trial's starting tree to it.
