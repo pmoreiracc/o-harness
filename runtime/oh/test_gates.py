@@ -48,6 +48,41 @@ class GateTest(unittest.TestCase):
             for choice in ('Investigate CI failures','Re-run failed checks','Stop and take over','Keep planning','Approve this scope'):
                 with self.subTest(choice=choice),self.assertRaises(Refused):
                     verify_scope(self.root,scope,{'decision':key},source|{'prompt':choice})
+            # A CLI can typeset the title or omit its short reference in chat.
+            # Only the same exchange's native preparation can identify an unmarked refusal.
+            title=offered['question'].split(' [ref ')[0].replace('“','"').replace('”','"')
+            chat=title+'\nApprove and fix / Stop and take over'
+            for host in ('claude','codex'):
+                folder='.claude/projects/p' if host=='claude' else '.codex/sessions'
+                path=self.home/folder/'scopechat.jsonl';path.parent.mkdir(parents=True,exist_ok=True)
+                common={'sessionId':'scopechat','cwd':str(self.root)}
+                returned={'type':'tool_result','tool_use_id':'prepare','content':json.dumps(offered)}
+                if host=='claude':
+                    prefix=[]
+                    result=common|{'type':'user','message':{'content':[returned]}}
+                    display=common|{'type':'assistant','message':{'content':[{'type':'text','text':chat}]}}
+                    reply=common|{'type':'user','promptId':'answer','message':{'role':'user','content':'Stop and take over'}}
+                else:
+                    prefix=[{'type':'session_meta','payload':{'id':'scopechat','cwd':str(self.root),'source':'cli'}}]
+                    result={'type':'response_item','payload':{'type':'function_call_output','call_id':'prepare','output':returned['content']}}
+                    display={'type':'response_item','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':chat}]}}
+                    reply={'type':'event_msg','payload':{'type':'user_message','turn_id':'answer','message':'Stop and take over'}}
+                for prepared_result in (False,True):
+                    initiating=(common|{'type':'user','promptId':'initial','message':{'role':'user','content':'Prepare a fix'}} if host=='claude'
+                                else {'type':'event_msg','payload':{'type':'user_message','turn_id':'initial','message':'Prepare a fix'}})
+                    rows=([result] if prepared_result else [])+[display,reply]
+                    records=prefix+[initiating|{'timestamp':'2026-11-05T11:59:59Z'}]
+                    records.extend(r|{'timestamp':f'2026-11-05T12:00:0{i}Z'} for i,r in enumerate(rows,1))
+                    path.write_text(''.join(json.dumps(x)+'\n' for x in records),newline='\n')
+                    locator={'host':host,'session':'scopechat','transcript_path':str(path),'decision':key}
+                    observed=native_human(self.root,locator)
+                    if prepared_result:
+                        verify_scope(self.root,scope,locator,observed,decline=True)
+                        ambiguous=observed|{'prepared_offer':observed['prepared_offer']|{'ambiguous':True}}
+                        with self.assertRaises(Refused):verify_scope(self.root,scope,locator,ambiguous,decline=True)
+                        with self.assertRaises(Refused):verify_scope(self.root,scope,locator,observed|{'prompt':'Approve and fix'})
+                    else:
+                        with self.assertRaises(Refused):verify_scope(self.root,scope,locator,observed,decline=True)
             # The new label must not reinterpret an outstanding old question.
             old={'kind':'approve-scope','scope':digest(scope),'label':'Approve this scope',
                  'question':'Approve the previously shown scope?','created_at':'2026-11-05T12:00:00Z'}

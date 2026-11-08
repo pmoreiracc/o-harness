@@ -210,22 +210,31 @@ def state_head(root):
 
 def _verify_display(value,source,*,need_disclosure=True):
     """Verify the identified human choice and any extra disclosure its effect needs."""
-    from .authority import newer, presented_question_at, question_text
+    from .authority import menu_text, newer, presented_question_at, question_text, shown_offer_reference
     question=value['question']
+    expected=shown_offer_reference({'question':question})
+    visible=shown_offer_reference(source)
+    returned=source.get('prepared_offer') or {}
+    # Only an already-authorized continuation or a refusal can use the native
+    # preparation record if the host omitted the visible fingerprint.
+    implicit=(not need_disclosure and visible is None and not returned.get('ambiguous') and returned.get('decision')==digest(value)
+              and returned.get('reference')==expected and newer(returned.get('at'),value['created_at'])
+              and newer(value['created_at'],returned.get('exchange_at')))
+    title=question.rsplit(' [ref ',1)[0] if implicit else question
     if source.get('via')=='question':
-        if question_text(source.get('question',''))!=question_text(question):
+        if menu_text(source.get('question',''))!=menu_text(title):
             raise Refused('This native question does not match the prepared offer')
         if sorted(source.get('question_options') or [])!=sorted(value['menu_options']):
             raise Refused('Use the complete single-select menu for this prepared decision')
         asked=source.get('question_at')
     else:
-        asked=presented_question_at(source,question)
+        asked=presented_question_at(source,title,normalize=menu_text)
         if not asked:raise Refused('Use the actual native question for this prepared offer')
         context=source.get('question_context') or [{'text':source['question'],'at':asked}]
         shown=question_text(' '.join(d['text'] for d in context if newer(d.get('at'),value['created_at'])))
         if any(label not in shown for label in value['menu_options']):
             raise Refused('Use the actual native question and its choices from the displayed offer')
-    if not newer(asked,value['created_at']):raise Refused('This native question predates the prepared decision')
+    if not newer(asked,returned['at'] if implicit else value['created_at']):raise Refused('This native question predates the prepared decision')
     if need_disclosure:
         at=presented_question_at(source,value['disclosure'],reference_text=question)
         if not newer(at,value['created_at']):

@@ -1346,7 +1346,7 @@ def _presented(root,locator,state=None):
     session=locator.get('session') or env or ((state or {}).get('human') or {}).get('session')
     if not host or not session:return locator
     options=prepared['menu_options'] if prepared.get('presentation') in ('checkpoint-menu','recovery-menu') and not prepared.get('bound_question') else None
-    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options)
+    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options,compact='disclosure' in prepared)
     except Refused:return locator
     consumed=(state or {}).get('decisions',{})
     for call in reversed(calls):
@@ -1356,7 +1356,8 @@ def _presented(root,locator,state=None):
             if not authority.newer(source.get('question_at'),prepared['created_at']):continue
             if 'disclosure' in prepared:
                 reference=authority.shown_offer_reference({'question':prepared['disclosure']+'\n'+question})
-                if authority.shown_offer_reference(source)!=reference:continue
+                visible=authority.shown_offer_reference(source)
+                if visible!=reference and (visible or (source.get('prepared_offer') or {}).get('decision')!=key):continue
             # Replay keeps a consumed answer; new authority still needs the latest input.
             human_key=_human_key(source,state)
             declined=prepared.get('kind')=='approve-scope' and (_home(root)/'scopes'/prepared['scope']/'declines'/(human_key+'.json')).exists()
@@ -1385,7 +1386,8 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             except Refused:pass
             else:
                 if (reply['prompt'].strip().casefold().rstrip('.!')=='stop and take over' and
-                        authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint)):
+                        (authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint) or
+                         (reply.get('prepared_offer') or {}).get('decision')==hint['decision'])):
                     locator=located
     if isinstance(locator,dict) and re.fullmatch(r'[0-9a-f]{64}',locator.get('decision') or ''):
         prepared=read_json(_home(root)/'decisions'/(locator['decision']+'.json'))

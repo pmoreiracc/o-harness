@@ -378,7 +378,7 @@ def _prepared_menu(root,host,payload):
     name=payload.get('tool_name','')
     args=payload.get('tool_input') or {}
     if name.split('.')[-1] not in ('AskUserQuestion','request_user_input','request_user_input_async'):return None
-    from .authority import question_options,question_text
+    from .authority import menu_text,question_options,question_text
     path=checkout_file(root,'oh-recovery-menu.json')
     if not path.exists():return None
     prepared=read_json(path)
@@ -394,7 +394,7 @@ def _prepared_menu(root,host,payload):
         if context is None:return None  # Another conversation or an unrelated question.
         if len(expected)==1:
             return _deny('Use ordinary chat for this single action. Show the disclosure, question and action together and wait for the direct reply.')
-        if context and question_text(shown)==question_text(prepared['question']) and sorted(options)==sorted(expected):return None
+        if context and menu_text(shown)==menu_text(prepared['question']) and sorted(options)==sorted(expected):return None
         return _deny('Send the text below as your next ordinary assistant message. Bash output and hook feedback do not present it. '
                      'Wait for the direct reply, or offer the same short question in the native menu after the message.\n'+prepared['disclosure']+'\n'+
                      prepared['question']+'\n'+' / '.join(expected))

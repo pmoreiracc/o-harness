@@ -37,7 +37,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
             with patch('oh.authority._path',return_value=path):
                 path.write_text(json.dumps(record('other offer',True))+'\n',newline='\n')
                 self.assertEqual(cancellation.hook(self.root,host,payload),{})
-                with path.open('a',newline='\n') as stream:stream.write(json.dumps(record(offer['decision'],True))+'\n')
+                with path.open('a',newline='\n') as stream:stream.write(json.dumps(record(json.dumps(offer),True))+'\n')
                 denied=cancellation.hook(self.root,host,payload)
                 self.assertIn(offer['disclosure'],denied['hookSpecificOutput']['permissionDecisionReason'])
                 with path.open('a',newline='\n') as stream:stream.write(json.dumps(record(offer['disclosure']))+'\n')
