@@ -105,7 +105,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
 | Prepare bounded work | `scope prepare <manifest.json> [--workflow deliver\|design\|propose] [--human <locator.json>]` | `scope_prepare` |
 | Select approved design tasks | `scope prepare --doc NNNN [--track TRACK] --human <locator.json>` | `scope_prepare` |
-| Approve a quick-fix preview | `scope approve <scope-id> <locator.json>` | `scope_approve` |
+| Bind a quick-fix scope choice | `scope approve <scope-id> <locator.json>` | `scope_approve` |
 | Admit a fresh phase | `attempt admit assessment\|implementation\|analysis\|review` | `attempt_admit` |
 | Bind the launched native child | `attempt bind <attempt-id> <locator.json>` | `attempt_bind` |
 | Retain its original native result | `attempt retain <attempt-id> <locator.json>` | `attempt_retain` |

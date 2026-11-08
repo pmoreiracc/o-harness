@@ -19,6 +19,17 @@ Read `plans path`. If the repo/private location is undecided, call Claude
 `AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
 Show the actual folder for the selected location. Respect project policy.
 
+Before dependent drafting, read the initiative and nearby roadmap prose, relevant
+decision records and existing decision/Open lists, including an existing design's
+Open section. Identify known questions whose answers would change the approach.
+Discuss those choices with the person before drafting around them: explain the
+context, viable alternatives, consequences and recommendation so the question is
+answerable. Use ordinary discussion and actual free-text replies when short choices
+are inadequate; follow `workflows/decisions.md` for the native question surface.
+A request to discuss or review a proposed decision does not decide it, approve
+scope, renew reviews or authorize publication. Honor the consumer's decision and
+document conventions; OH requires no ADR or particular decision-log format.
+
 Prepare one bounded planning task for the requested initiative with `scope prepare
 <manifest.json> --workflow design --human <native-locator.json>` (Codex `scope_prepare`).
 Include `design: "<initiative-slug>"` in the manifest so the saved scope identifies
@@ -34,6 +45,14 @@ and required roadmap/log links, then validates documents with `plans check`, pre
 with `candidate`, and runs `verify` on that candidate. It does not run product tests or decide open product questions.
 Preserve direct human refinements when revising an existing plan; do not regenerate
 someone's edited prose merely to fit an author report schema.
+
+Research need not wait for every uncertainty to be settled. When evidence is needed
+to frame an approach choice, bound the analysis to research or a proposed decision,
+with alternatives and consequences, rather than a dependent design presented as ready.
+If analysis discovers a new approach-changing question, retain its result and discuss
+that choice before dependent drafting or spending a design review. Pass the person's
+actual decisions and remaining unknowns to subsequent authors and reviewers. Task-level
+questions may remain in Open and block their affected tasks; independent work may proceed.
 
 ## 3. Independently review
 
@@ -53,7 +72,19 @@ using `workflows/decisions.md`. Bind acceptance with `decision approve-private`.
 Refinement returns to scoped authoring, document checks and a fresh review. Accepting
 a proposed decision document does not decide its underlying product question.
 
+For a private design, `candidate` prepares the final `status: approved` bytes before
+verification and review. That status is provisional: only a matching native human
+approval record grants delivery authority. Preserve it during review/repair; if it
+is reverted to draft, prepare the candidate again before verification and review.
+Never rewrite accepted bytes at completion. Completion refuses a draft or missing
+initiative-linked design; repair the candidate and obtain review and acceptance of
+the corrected contents within the remaining allowance. An exhausted window needs
+the existing human review-allowance decision, never an automatic renewal.
+
 Use `complete` only for the exact reviewed candidate and retained approval required
 by its location. Private completion needs no commit, PR or extra Stop question. Give
-the artifact path, actual review result and Deliver command. Repository publication
+the artifact path, actual review result and Deliver command using the artifact's
+four-digit design number: Claude `/o-harness:oh-deliver NNNN` or Codex
+`$oh-deliver NNNN`. Read the number from the actual design filename; an initiative
+slug or saved-run ID is not a Deliver selector. Repository publication
 follows `workflows/publication.md`.

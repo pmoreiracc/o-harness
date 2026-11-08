@@ -92,6 +92,15 @@ invariant is worse than a missed one: it sends the implementer to fix the wrong 
 
 ## When the subject is a plan, not a diff
 
+Private Design candidates carry provisional `status: approved` so verification,
+review and native human acceptance cover the final bytes. That frontmatter alone
+grants no authority: Deliver requires the matching approval record. Do not request
+a revert to draft merely because acceptance is pending. Check the actual artifact
+and approval boundary. An unresolved approach-changing question must return to the
+person before a dependent design is presented as ready; task-level Open questions
+may remain when they block their affected tasks. Reviewing a proposed decision
+does not decide it. Follow the consumer's conventions; OH requires no ADR format.
+
 Sometimes you are given a plan — several changes, none of them written yet. The anchors are
 the same. The question is narrower, and it is the only one you answer:
 

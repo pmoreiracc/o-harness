@@ -8,7 +8,8 @@ Discovery never changes the selected run. Show the requested saved subject, bran
 next step and remaining allowance. Read `workflows/recovery.md` and `workflows/decisions.md`,
 then prepare `decision-request recover --run ID` for delivery, or `decision-request resume --run ID`
 for planning/review, before asking its returned question once. Delivery presents the
-available recovery choices, normally Continue, Start fresh and Stop and take over.
+returned disclosure in chat before its short question. For a single option use only
+the direct chat reply. The usual choices are Continue, Start fresh and Stop and take over.
 Bind the selected action from its returned `actions`
 map with `decision` and the same human locator. Call Claude `AskUserQuestion` or
 Codex Default mode `functions.request_user_input_async` following the shared fallback rules.

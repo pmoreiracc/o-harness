@@ -85,13 +85,12 @@ normal handback, cleanup continuation or delayed result into another Continue ga
 
 For an unfinished delivery, use `decision-request recover --run ID` (Codex
 `decision_request` with kind `recover`). It inspects Git and prepares one native
-question: **How would you like OH to proceed with this delivery?** Show the
-returned work, branch, affected paths, restart base and task allowance with its
+question. Copy its returned disclosure into chat, including the inspection link. Then ask its short question with its
 short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
 the returned options with Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async`, following the shared waiting and fallback rules.
 If a required input is missing, explain the reason returned with the question. If only
-Stop is available, show the full prepared question and bind the explicit chat answer.
+Stop is available, ask only in ordinary chat and bind the explicit answer.
 
 Bind the chosen action from the returned `actions` map with `decision` and that
 same human locator, including its decision ID. Continue uses `resume`, Start fresh
@@ -110,7 +109,7 @@ unavailable and do not prevent a fresh review of the current candidate. The next
 When the old branch is
 already merged and has no extra changes, it starts from the refreshed base on the
 delivery branch. Start fresh discards precisely the changes and branch work shown
-in the question, starts from its displayed base, and authorizes the displayed
+in the disclosure, starts from its displayed base, and authorizes the displayed
 bounded task batch. No backup is made; ignored files and other branches are not
 discarded. Repair approvals for restarted tasks are discarded with that work; their
 history, existing review usage and findings remain. Stop and take over revokes

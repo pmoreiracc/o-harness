@@ -247,6 +247,12 @@ def claude_history(path,session):
     return messages
 
 
+def _claude_choice(record,session):
+    result=record.get('toolUseResult')
+    return (record.get('type')=='user' and record.get('sessionId')==session and human(record,menu=True)
+            and isinstance(result,dict) and ('answers' in result or result.get('isAgent') is False and 'plan' in result))
+
+
 def _path(host, session, supplied=None, child=False):
     from .hosts import codex_home
     home=(codex_home()/'sessions' if host=='codex' else Path.home()/'.claude/projects').resolve()
@@ -259,14 +265,63 @@ def _path(host, session, supplied=None, child=False):
     return paths[0]
 
 
-def _records(path):
-    with Path(path).open(encoding='utf-8') as stream:
+def _records(path,*,tail_bytes=None):
+    with Path(path).open('rb') as stream:
+        if tail_bytes and path.stat().st_size>tail_bytes:
+            stream.seek(-tail_bytes,2)
+            stream.readline()  # Drop only the partial line from this preflight window.
         for line in stream:
             try:value=json.loads(line)
             except ValueError:
-                if not line.endswith('\n'):raise Saving('The native host is still saving its evidence; retry this operation')
+                if not line.endswith(b'\n'):raise Saving('The native host is still saving its evidence; retry this operation')
                 continue
             if isinstance(value,dict):yield value
+
+
+def _display(record, host, session, before_call=None):
+    """Read only visible parent assistant text, stopping at the native question."""
+    if host=='claude':
+        if (record.get('type')!='assistant' or record.get('sessionId')!=session
+                or record.get('isSidechain') or record.get('isMeta')):return None
+        parts=(record.get('message') or {}).get('content')
+    else:
+        item=record.get('payload') or {}
+        if record.get('type')=='event_msg' and item.get('type')=='item_completed' and item.get('thread_id')==session:
+            item=item.get('item') or {}
+            if item.get('type')!='AgentMessage':return None
+        elif record.get('type')!='response_item' or item.get('type')!='message' or item.get('role')!='assistant':return None
+        parts=item.get('content')
+    lines=[]
+    for part in parts if isinstance(parts,list) else []:
+        if not isinstance(part,dict):continue
+        if before_call and part.get('type')=='tool_use' and part.get('id')==before_call:break
+        if part.get('type') in ('text','output_text','Text'):lines.append(part.get('text',''))
+    if lines:return {'text':'\n'.join(lines),'at':record.get('timestamp'),'record_hash':digest(record)}
+
+
+def _offered(record,host,session,key,previous=None):
+    """Keep the last prepared offer returned in this human exchange, never a grant."""
+    if not key:return None
+    if host=='claude':
+        if record.get('type')!='user' or record.get('sessionId')!=session or record.get('isSidechain'):return None
+        parts=(record.get('message') or {}).get('content')
+        result=[p.get('content') for p in parts if isinstance(p,dict) and p.get('type')=='tool_result'] if isinstance(parts,list) else []
+    else:
+        item=record.get('payload') or {}
+        if record.get('type')=='event_msg' and item.get('type')=='item_completed' and item.get('thread_id')==session:
+            call=item.get('item') or {}
+            if (call.get('type')!='McpToolCall' or call.get('server')!='o-harness' or
+                    call.get('tool') not in ('scope_prepare','decision_request','prepare') or call.get('status')!='completed'):return None
+            result=call.get('result')
+        elif record.get('type')=='response_item' and item.get('type')=='function_call_output':
+            result=item.get('output')
+        else:return None
+    text=str(result)
+    refs=_OFFER_REFERENCE.findall(text)
+    if refs:
+        ambiguous=len(set(refs))!=1 or previous and (previous.get('ambiguous') or previous['reference']!=refs[-1])
+        return {'decision':key if key in text else None,'reference':refs[-1],'ambiguous':bool(ambiguous),
+                'at':record.get('timestamp'),'record_hash':digest(record)}
 
 
 def native_human(root, locator, *, since=None, subject=None, latest=True, retry_resume=False):
@@ -297,7 +352,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
         payload=dict(locator,hook_event_name='UserPromptSubmit',session_id=session,turn_id=locator.get('turn'))
         result=attest(host,payload,root,latest=latest,retry_resume=retry_resume)
         if since and not newer(result.get('at'),since):raise Refused('This human reply predates the subject it would approve')
-        context='';context_at=None;displays=[]
+        context='';context_at=None;displays=[];offer=None;exchange_at=None
         codex_plan_reply=host=='codex' and result['prompt']=='Implement the plan.'
         plan=None;plan_turn=None;implementation_turn=False
         for record in _records(result['transcript_path']):
@@ -313,7 +368,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
                 if (record.get('type')=='event_msg' and item.get('thread_id',session)==session
                         and (item.get('type')=='user_message' or item.get('type')=='item_completed'
                              and (item.get('item') or {}).get('type')=='UserMessage')):
-                    displays=[];context='';context_at=None
+                    displays=[];context='';context_at=None;offer=None;exchange_at=record.get('timestamp')
                     plan=None
                     continue
                 if (codex_plan_reply and plan_turn and record.get('type')=='event_msg'
@@ -321,22 +376,13 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
                         and item.get('thread_id',session)==session and (item.get('item') or {}).get('type')=='Plan'):
                     text=item['item'].get('text')
                     plan=(text,record) if isinstance(text,str) and text.strip() and (since is None or newer(record.get('timestamp'),since)) else None
-                if (record.get('type')=='event_msg' and item.get('type')=='item_completed'
-                        and item.get('thread_id')==session):
-                    item=item.get('item') or {}
-                    if item.get('type')!='AgentMessage':continue
-                elif record.get('type')!='response_item' or item.get('type')!='message' or item.get('role')!='assistant':continue
-                parts=item.get('content')
-            else:
-                if prompted(record,session):
-                    displays=[];context='';context_at=None
-                    continue
-                if record.get('type')!='assistant' or record.get('sessionId')!=session or record.get('isSidechain'):continue
-                parts=(record.get('message') or {}).get('content')
-            text='\n'.join(part.get('text','') for part in parts if isinstance(part,dict) and part.get('type') in ('text','output_text','Text')) if isinstance(parts,list) else ''
-            if text:
-                context=text;context_at=record.get('timestamp')
-                displays.append({'text':text,'at':context_at,'record_hash':digest(record)})
+            elif prompted(record,session) or _claude_choice(record,session):
+                displays=[];context='';context_at=None;offer=None;exchange_at=record.get('timestamp')
+                continue
+            offer=_offered(record,host,session,locator.get('decision'),offer) or offer
+            if shown:=_display(record,host,session):
+                context=shown['text'];context_at=shown['at']
+                displays.append(shown)
         if plan and implementation_turn:
             text,record=plan
             result.update(via='plan',accepted_plan=text,record_hashes=result['record_hashes']+[digest(record)])
@@ -345,12 +391,18 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
         result['question']=context
         result['question_at']=context_at
         result['question_context']=displays
+        if offer:result['prepared_offer']=offer|{'exchange_at':exchange_at}
         return result
     path=_path(host,session,locator.get('transcript_path'));call=None;answer=None;answered_text=None;superseded=False;inputs=[]
+    displays=[];offer=None;exchange_at=None
     for record in _records(path):
         # Supersession follows saved input order, including a human turn whose timestamp
         # is not yet saved. Tool output and notifications never supersede a human reply.
+        if host=='claude' and _claude_choice(record,session):
+            if not call:displays.clear();offer=None;exchange_at=record.get('timestamp')
+            if answer:superseded=True
         if host=='claude' and prompted(record,session):
+            if not call:displays.clear();offer=None;exchange_at=record.get('timestamp')
             content=(record.get('message') or {}).get('content')
             typed=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
             inputs.append((record.get('timestamp'),typed))
@@ -364,9 +416,13 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
                     content=item.get('content');text=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text') if isinstance(content,list) else None
             # Codex can save the same native reply as both user_message and UserMessage.
             if isinstance(text,str):
+                if not call:displays.clear();offer=None;exchange_at=record.get('timestamp')
                 inputs.append((record.get('timestamp'),text))
                 if answer and text!=answered_text and not (retry_resume and _resume_retry(text)):superseded=True
         if since and not newer(record.get('timestamp'),since):continue
+        if not call:offer=_offered(record,host,session,locator.get('decision'),offer) or offer
+        if not call and (shown:=_display(record,host,session,before_call=use)):
+            if locator.get('decision') or _OFFER_REFERENCE.search(shown['text']):displays.append(shown)
         if host=='claude':
             if record.get('sessionId')!=session or record.get('isSidechain') or record.get('isMeta'):continue
             if not within(record.get('cwd'),root):continue
@@ -426,6 +482,8 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
     answer['question_options']=question_options(request)
     answer['question_at']=call[0].get('timestamp')
     answer['question_call']=use
+    answer['question_context']=displays
+    if offer:answer['prepared_offer']=offer|{'exchange_at':exchange_at}
     if subject and answer.get('via')!='plan' and str(subject) not in answer['question']:
         raise Refused('This native question does not identify the reviewed artifact; ask about its actual path')
     return answer
@@ -474,38 +532,76 @@ def question_options(request):
 
 def question_text(text):
     """Ignore display-only Markdown and whitespace, preserving the actual words."""
+    text=re.sub(r'(?m)^#{1,6} +','',text)
+    text=re.sub(r'\]\(<([^>\n]+)>\)',r'](\1)',text)
     text=re.sub(r'\*\*([^*\n]+)\*\*',r'\1',text)
     text=re.sub(r'`([^`\n]+)`',r'\1',text)
     return ' '.join(text.split())
 
 
-_OFFER_REFERENCE=re.compile(r'\bDecision reference: ([0-9a-f]{64})\b')
+_OFFER_REFERENCE=re.compile(r'(?:\bDecision reference: |\[ref )([0-9a-f]{64}|[0-9a-f]{20})\b')
+
+
+def menu_text(text):
+    """Hosts typeset quotation marks in short menu titles; scope contents stay exact."""
+    return question_text(text).translate(str.maketrans({'“':'"','”':'"','‘':"'",'’':"'"}))
 
 
 def shown_offer_reference(source):
-    displays=source.get('question_context') or [{'text':source.get('question','')}]
+    displays=source.get('question_context') or []
+    if source.get('via')=='question' or not displays:displays=[*displays,{'text':source.get('question','')}]
     for shown in reversed(displays):
         refs=_OFFER_REFERENCE.findall(question_text(shown['text']))
         if refs:return refs[-1]
     return None
 
 
-def presented_question_at(source,question):
+def presented_question_at(source,question,*,reference_text=None,normalize=question_text):
     """Match the complete prepared text in this reply's verified display context.
 
     A native host may display the full question and its compact choices separately.
     Keep the time of the actual full display; later prose cannot refresh an old grant.
     """
-    expected=question_text(question)
-    reference=re.search(r'Decision reference: ([0-9a-f]{64})$',expected)
-    if shown_offer_reference(source)!=(reference[1] if reference else None):return None
+    expected=normalize(question)
+    references=_OFFER_REFERENCE.findall(reference_text or expected)
+    if shown_offer_reference(source)!=(references[-1] if references else None):return None
     displays=source.get('question_context') or [{'text':source.get('question',''),'at':source.get('question_at')}]
     for shown in reversed(displays):
-        if expected in question_text(shown['text']):return shown.get('at')
+        if expected in normalize(shown['text']):return shown.get('at')
     return None
 
 
-def question_calls(root, host, session, question, supplied=None, *, options=None):
+def pending_display(host,payload,offer):
+    """Preflight only a menu whose prepare result appeared in this exchange."""
+    session=payload.get('session_id')
+    if not payload.get('transcript_path'):return None
+    prepared=False;displays=[]
+    try:
+        path=_path(host,session,payload['transcript_path'])
+        for record in _records(path,tail_bytes=1024*1024):
+            if not newer(record.get('timestamp'),offer['created_at']):continue
+            item=record.get('payload') or {}
+            if host=='claude':
+                if record.get('sessionId')!=session or record.get('isSidechain'):continue
+                human_input=prompted(record,session) or _claude_choice(record,session)
+            else:
+                if item.get('thread_id',session)!=session:continue
+                human_input=record.get('type')=='event_msg' and (item.get('type')=='user_message' or
+                    item.get('type')=='item_completed' and (item.get('item') or {}).get('type')=='UserMessage')
+            if human_input:
+                prepared=False;displays.clear()
+            elif returned:=_offered(record,host,session,offer['decision']):
+                prepared=returned['decision']==offer['decision']
+            elif prepared and (shown:=_display(record,host,session)):
+                displays.append(shown)
+    except (Unavailable,Saving,OSError):return None
+    if not prepared:return None
+    context={'question_context':displays}
+    reference=offer['question'] if shown_offer_reference(context) and '[ref ' in offer['question'] else None
+    return bool(presented_question_at(context,offer['disclosure'],reference_text=reference))
+
+
+def question_calls(root, host, session, question, supplied=None, *, options=None, compact=False):
     """List native calls showing this prepared text or its complete checkpoint menu.
     Locating a call grants nothing; native_human still validates its saved answer."""
     path=_path(host,session,supplied);calls=[]
@@ -514,7 +610,10 @@ def question_calls(root, host, session, question, supplied=None, *, options=None
             shown=question_options(arguments)
             return shown is not None and set(shown)==set(options)
         questions=arguments.get('questions') if isinstance(arguments,dict) else None
-        return isinstance(questions,list) and questions and isinstance(questions[0],dict) and question_text(questions[0].get('question') or questions[0].get('title') or '')==question_text(question)
+        if not isinstance(questions,list) or not questions or not isinstance(questions[0],dict):return False
+        shown=questions[0].get('question') or questions[0].get('title') or ''
+        if compact:return menu_text(shown) in (menu_text(question),menu_text(question.rsplit(' [ref ',1)[0]))
+        return question_text(shown)==question_text(question)
     for record in _records(path):
         if host=='claude':
             if record.get('type')!='assistant' or record.get('sessionId')!=session or record.get('isSidechain') or not within(record.get('cwd'),root):continue

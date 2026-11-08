@@ -639,7 +639,7 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
            'workflow':workflow,'tasks':tasks,'design':doc or manifest.get('design'),'track':track,
            'documents':documents,'project_checks':project_checks(root),**config,**extra,
            **{k:manifest[k] for k in ('repair_source','pr_target') if k in manifest}}
-    if workflow=='deliver' and doc is None:value['preview_format']=1
+    if workflow=='deliver' and doc is None:value['preview_format']=2
     value['retained_work']=[{'run':s['id'],'workflow':s['workflow'],'subject':_saved_subject(s),
                              'branch':s['branch'],'journal':str(j.path),'findings':str(j.path/'index.md')}
                             for j,s in _saved_runs(root)]
@@ -678,8 +678,24 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     return result
 
 
-def _scope_preview(value):
+def _scope_preview(value,*,plan=True):
     from .prepared import limits
+    if value.get('preview_format')==2:
+        count=min(len(value['tasks']),value['config']['tasks_per_batch'])
+        rounds=value['config']['review_rounds']
+        sections=[f"Branch: {value['branch']}\nFirst batch: {count} task{'s' if count!=1 else ''}. "
+                  f"Up to {rounds} independent review{'s' if rounds!=1 else ''} per task before human renewal."]
+        sections.extend(f"{t['title']}\n\n{t['instructions']}" for t in value['tasks'])
+        if value['starting_edits']:sections.append('Included starting edits: '+', '.join(value['starting_edits']))
+        if target:=value.get('pr_target'):
+            sections.append(f"Update {target['url']} with the repair. Review the original work from "
+                            f"{target['review_base'][:12]} to {target['head'][:12]} with the changes.")
+        elif original:=value.get('original_work'):
+            sections.append(f"Include original branch work from {original['review_base'][:12]} to {original['head'][:12]}.")
+        if plan:
+            path=state_home()/'projects'/value['project']/'scopes'/digest(value)/'scope.json'
+            sections.append('[Scope details](<'+path.as_posix()+'>)')
+        return '\n\n'.join(sections)+'\n'
     sections=[f"# {value['workflow'].title()} scope",limits(len(value['tasks']),value['config'])]
     if value.get('preview_format')==1:
         sections.append(f"Branch: `{value['branch']}`\nScope: `{digest(value)}`")
@@ -700,7 +716,7 @@ def _verify_scope_plan(scope, source, *, replay=False):
     preview=_scope_preview(scope)
     accepted=source.get('accepted_plan','').replace('\r\n','\n')
     if source['host']=='codex':
-        if scope.get('preview_format')!=1 and not replay:
+        if scope.get('preview_format') not in (1,2) and not replay:
             raise Refused('Prepare the scope with its native plan identity before using Codex Plan approval.')
         # The native Plan item can add a framing newline.
         accepted,preview=accepted.strip('\n'),preview.strip('\n')
@@ -708,8 +724,52 @@ def _verify_scope_plan(scope, source, *, replay=False):
         raise Refused('The person accepted changed scope. Preserve the accepted plan and prepare its actual tasks; the old task projection is not approved.')
 
 
+def _scope_stop_locator(root,locator,scope_id=None):
+    """Resolve an omitted offer identity only from the person's actual scope refusal."""
+    if not isinstance(locator,dict) or locator.get('decision'):return locator
+    path=checkout_file(root,'oh-recovery-menu.json')
+    hint=read_json(path) if path.exists() else {}
+    if hint.get('kind')!='approve-scope':return locator
+    key=hint.get('decision')
+    if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key):return locator
+    if scope_id and read_json(_home(root)/'decisions'/(key+'.json')).get('scope')!=scope_id:return locator
+    located=_presented(root,locator|{'decision':key})
+    try:reply=authority.native_human(root,located,latest=False)
+    except Refused:return locator
+    if (reply['prompt'].strip().casefold().rstrip('.!')=='stop and take over' and
+            (authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint) or
+             (reply.get('prepared_offer') or {}).get('decision')==key)):
+        return located
+    return locator
+
+
+def _decline_scope(root,scope_id,scope,locator,source):
+    from .decisions import verify_scope
+    verify_scope(root,scope,locator,source,decline=True)
+    # Declining a preview has no run or grant to stop. Retain its actual reply.
+    receipt=_home(root)/'scopes'/scope_id/'declines'/(_human_key(source)+'.json')
+    result={'scope_id':scope_id,'decision':locator['decision'],'approved':False,'status':'declined'}
+    with _locked(root):
+        for _,entered in _saved_runs(root):
+            if entered.get('scope_id')==scope_id:
+                raise Refused('This scope already entered a delivery. To take over its saved work, prepare decision-request stop --run '+entered['id']+' and bind the actual run choice.')
+        if receipt.exists():
+            if read_json(receipt)['decision']!=locator['decision']:raise Refused('Retry the original scope decision')
+            return result
+        authority.coordinator(root,{'human':source,'host':source['host']},locator)
+        _immutable(receipt,{'decision':locator['decision'],'human':source})
+    return result
+
+
 def approve_scope(root, scope_id, locator, after=None):
     scope=_scope(root,scope_id)
+    # A scope's own offer is its question identity. It cannot be a run prerequisite.
+    if after and re.fullmatch(r'[0-9a-f]{64}',after) and locator.get('decision',after)==after:
+        offer=read_json(_home(root)/'decisions'/(after+'.json'))
+        if offer.get('kind')=='approve-scope' and offer.get('scope')==scope_id:
+            locator=locator|{'decision':after}
+            after=None
+    if after is None and not locator.get('decision'):locator=_scope_stop_locator(root,locator,scope_id)
     locator=_presented(root,locator)
     subject=None if locator.get('decision') else _home(root)/'scopes'/scope_id/'scope.md'
     from .workflow import active_file
@@ -733,6 +793,8 @@ def approve_scope(root, scope_id, locator, after=None):
     _verify_scope_plan(scope,source)
     if locator.get('decision') and source.get('via')!='plan':
         from .decisions import verify_scope
+        if source['prompt'].strip().casefold().rstrip('.!')=='stop and take over':
+            return _decline_scope(root,scope_id,scope,locator,source)
         verify_scope(root,scope,locator,source)
         source=source|{'decision':locator['decision']}
     elif source.get('via')!='plan' and authority.shown_offer_reference(source):
@@ -754,6 +816,11 @@ def _start(root,key,source,*,approved_preview=False):
             if prior.get('scope_id')==key and _human_key(source,prior)==prior.get('source'):
                 return _finish_entry(root,journal,prior,source)
             if prior.get('scope_id')==key and read_json(active_file(root)).get('run')==prior['id']:return select(root,prior['id'])
+        if approved_preview:
+            refusals=_home(root)/'scopes'/key/'declines'
+            for receipt in refusals.glob('*.json'):
+                if not authority.newer(source.get('at'),read_json(receipt)['human']['at']):
+                    raise Refused('A later refusal superseded this approval. Present the current scope and use a new native approval to start it.')
         _entry_order(root,source,saved)
         _switchable(root,[prior for _,prior in saved])
         if (saved and committed(scope) and not approved_preview and
@@ -1211,6 +1278,18 @@ def _author(root,state):
     _owner(root,state)
 
 
+def _private_design(root,state):
+    """The initiative's actual deliverable, rather than any changed planning file."""
+    from .plans import initiative,design_file
+    where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
+    slug=_initiative(state)
+    if not slug:raise Refused('Private Design needs its initiative slug; preserve the draft and prepare Design for that initiative')
+    number=initiative(root,where,slug,named=True)['design']
+    path=design_file(root,number,where) if number else None
+    if not path:raise Refused('Private Design needs a design linked from its initiative; link the actual draft, then prepare and verify the candidate before review')
+    return where,number,Path(path)
+
+
 def candidate(root):
     with _locked(root):
         journal,state=load_run(root);_idle(root);author=_author(root,state)
@@ -1224,13 +1303,12 @@ def candidate(root):
             from .plans import write
             write(Path(bound['path']),text)
         if state.get('plans',{}).get('location')=='private' and state['workflow']=='design':
-            from .plans import private_inputs,write
-            where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
-            original=state.get('scope_snapshot',{}).get('documents',{})
-            for name in private_inputs(where):
-                path=Path(name);text=path.read_text()
-                if path.parent==where['designs'] and text!=original.get(name) and re.search(r'^status:\s*draft\s*$',text,re.M):
-                    write(path,re.sub(r'^status:\s*draft\s*$', 'status: approved',text,count=1,flags=re.M))
+            from .plans import write
+            _,_,path=_private_design(root,state);text=path.read_text()
+            # Review and native acceptance cover the final bytes. This status
+            # alone grants nothing; completion records the exact human approval.
+            if re.search(r'^status:\s*draft\s*$',text,re.M):
+                write(path,re.sub(r'^status:\s*draft\s*$', 'status: approved',text,count=1,flags=re.M))
         value={'task':task['id'],**_subject(root,state)}
         journal.append('native.candidate',value)
         return value
@@ -1313,8 +1391,9 @@ def _presented(root,locator,state=None):
     host=locator.get('host') or ('codex' if os.environ.get('CODEX_THREAD_ID') else (state or {}).get('host'))
     session=locator.get('session') or env or ((state or {}).get('human') or {}).get('session')
     if not host or not session:return locator
+    locator=locator|{'host':host,'session':session}
     options=prepared['menu_options'] if prepared.get('presentation') in ('checkpoint-menu','recovery-menu') and not prepared.get('bound_question') else None
-    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options)
+    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options,compact='disclosure' in prepared)
     except Refused:return locator
     consumed=(state or {}).get('decisions',{})
     for call in reversed(calls):
@@ -1322,8 +1401,15 @@ def _presented(root,locator,state=None):
         try:
             source=authority.native_human(root,candidate,latest=False)
             if not authority.newer(source.get('question_at'),prepared['created_at']):continue
+            if 'disclosure' in prepared:
+                reference=authority.shown_offer_reference({'question':prepared['disclosure']+'\n'+question})
+                visible=authority.shown_offer_reference(source)
+                if visible!=reference and (visible or (source.get('prepared_offer') or {}).get('decision')!=key):continue
             # Replay keeps a consumed answer; new authority still needs the latest input.
-            if _human_key(source,state) not in consumed:authority.native_human(root,candidate,retry_resume=prepared.get('kind')=='resume')
+            human_key=_human_key(source,state)
+            declined=prepared.get('kind')=='approve-scope' and (_home(root)/'scopes'/prepared['scope']/'declines'/(human_key+'.json')).exists()
+            if human_key not in consumed and not declined:
+                authority.native_human(root,candidate,retry_resume=prepared.get('kind')=='resume')
         except Refused:continue
         return candidate
     return locator
@@ -1336,8 +1422,14 @@ def _recorded_choice(journal,key,kind):
 
 
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
+    if kind=='stop':locator=_scope_stop_locator(root,locator)
     if isinstance(locator,dict) and re.fullmatch(r'[0-9a-f]{64}',locator.get('decision') or ''):
         prepared=read_json(_home(root)/'decisions'/(locator['decision']+'.json'))
+        if kind=='stop' and prepared.get('kind')=='approve-scope':
+            scope=_scope(root,prepared['scope'])
+            locator=_presented(root,locator)
+            source=authority.native_human(root,locator,latest=False)
+            return _decline_scope(root,prepared['scope'],scope,locator,source)
         if prepared.get('presentation')=='recovery-menu':
             from .recovery import apply
             return apply(root,kind,locator,run=run)
@@ -1626,6 +1718,13 @@ def complete(root,attempt_id):
             raise Refused('The proposed additions were not approved before writing')
         if state['workflow']=='design' and state.get('plans',{}).get('location')=='private' and state.get('private_native_approval',{}).get('attempt')!=attempt_id:
             raise Refused('The human must approve the exact reviewed private plan')
+        private_design=None
+        if state['workflow']=='design' and state.get('plans',{}).get('location')=='private':
+            from .plans import status_of,verify_design,digest_of
+            where,number,path=private_design=_private_design(root,state)
+            if status_of(path)!='approved' or subject['artifacts'].get(str(path))!=digest_of(path):
+                raise Refused('The reviewed private design is not delivery-ready. Preserve it, run candidate and verify, then review and accept those exact contents within the remaining allowance before completion')
+            verify_design(root,where,number)
         from .publication import task_evidence,validate_evidence
         # A saved intent is not a commit. Validate current proof before every new
         # Git write; only an already-created exact commit recovers from its seal.
@@ -1657,13 +1756,10 @@ def complete(root,attempt_id):
                          'delivery_base':old.get('delivery_base',state['base']),'delivery_baseline':old.get('delivery_baseline',state['base']),
                          'delivery_no_code':not bool(git(root,'diff','--name-only',state['base'],value.get('commit',subject['head'])))}
             atomic_json(approvals_file(root),records|{bound['doc']:updated})
-        if state.get('plans',{}).get('location')=='private' and state['workflow']=='design':
+        if private_design:
             from .plans import approve
-            where={k:Path(v) if k!='location' else v for k,v in state['plans'].items()}
-            for path in subject['artifacts']:
-                number=re.match(r'([0-9]{4})-',Path(path).name)
-                if number and Path(path).parent==where['designs'] and Path(path).read_text()!=state['scope_snapshot'].get('documents',{}).get(path) and re.search(r'^status:\s*approved\s*$',Path(path).read_text(),re.M):
-                    approve(root,where,number[1],state['id'],False)
+            where,number,_=private_design
+            approve(root,where,number,state['id'],False)
         if correction:
             value.update(commit_key=key,correction_of=correction['prior_commit'])
             journal.append('correction.completed',value);journal.append('run.status',{'status':correction['return_status'],**({'head':git(root,'rev-parse','HEAD'),'tree':tree(root)} if correction['return_status']=='paused' else {})})
