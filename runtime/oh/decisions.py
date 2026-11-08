@@ -208,7 +208,7 @@ def state_head(root):
     return git(root,'rev-parse','HEAD')
 
 
-def _verify_display(value,source,*,need_disclosure=True):
+def _verify_display(value,source,*,need_disclosure=True,preview=None):
     """Verify the identified human choice and any extra disclosure its effect needs."""
     from .authority import menu_text, newer, presented_question_at, question_text, shown_offer_reference
     question=value['question']
@@ -229,6 +229,14 @@ def _verify_display(value,source,*,need_disclosure=True):
         asked=source.get('question_at')
     else:
         asked=presented_question_at(source,title,normalize=menu_text)
+        if not asked and implicit and preview:
+            # A direct refusal can name the exact immutable scope preview in
+            # the same displayed message as its choices, even if its title was paraphrased.
+            import re
+            last=source.get('question','')
+            paths={str(preview),preview.as_posix()}
+            exact_path=any(re.search(r'(?:^|[\s`<(])'+re.escape(path)+r'(?=$|[\s`>)\]]|[.,](?:\s|$))',last) for path in paths)
+            if exact_path and all(label in last for label in value['menu_options']):asked=source.get('question_at')
         if not asked:raise Refused('Use the actual native question for this prepared offer')
         context=source.get('question_context') or [{'text':source['question'],'at':asked}]
         shown=question_text(' '.join(d['text'] for d in context if newer(d.get('at'),value['created_at'])))
@@ -344,7 +352,8 @@ def verify_scope(root,scope,locator,source,*,decline=False):
     value=read_json(_home(root)/'decisions'/(key+'.json'))
     if digest(value)!=key or value.get('kind')!='approve-scope' or value['scope']!=digest(scope):raise Refused('This answer belongs to another scope')
     if 'disclosure' in value:
-        _verify_display(value,source,need_disclosure=not decline)
+        preview=_home(root)/'scopes'/value['scope']/'scope.md' if decline else None
+        _verify_display(value,source,need_disclosure=not decline,preview=preview)
     if decline:
         if source['prompt'].strip().casefold().rstrip('.!')!=TAKE_OVER.casefold():
             raise Refused('This answer does not decline the presented scope')

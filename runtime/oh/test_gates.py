@@ -85,6 +85,12 @@ class GateTest(unittest.TestCase):
                                 recovered=_presented(self.root,{'text':'Approve and fix','decision':key})
                                 self.assertEqual(native_human(self.root,recovered)['prompt'],'Stop and take over')
                         verify_scope(self.root,scope,locator,observed,decline=True)
+                        preview=self.home/'state/scopes'/digest(scope)/'scope.md'
+                        last=f'Inspect `{preview}`. Approve this scope? Approve and fix / Stop and take over'
+                        direct=observed|{'question':last,'question_context':[{'text':last,'at':observed['question_at']}]}
+                        verify_scope(self.root,scope,locator,direct,decline=True)
+                        with self.assertRaises(Refused):
+                            verify_scope(self.root,scope,locator,direct|{'question':last.replace('scope.md','scope.md.bak')},decline=True)
                         ambiguous=observed|{'prepared_offer':observed['prepared_offer']|{'ambiguous':True}}
                         with self.assertRaises(Refused):verify_scope(self.root,scope,locator,ambiguous,decline=True)
                         with self.assertRaises(Refused):verify_scope(self.root,scope,locator,observed|{'prompt':'Approve and fix'})
