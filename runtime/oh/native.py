@@ -639,7 +639,7 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
            'workflow':workflow,'tasks':tasks,'design':doc or manifest.get('design'),'track':track,
            'documents':documents,'project_checks':project_checks(root),**config,**extra,
            **{k:manifest[k] for k in ('repair_source','pr_target') if k in manifest}}
-    if workflow=='deliver' and doc is None:value['preview_format']=1
+    if workflow=='deliver' and doc is None:value['preview_format']=2
     value['retained_work']=[{'run':s['id'],'workflow':s['workflow'],'subject':_saved_subject(s),
                              'branch':s['branch'],'journal':str(j.path),'findings':str(j.path/'index.md')}
                             for j,s in _saved_runs(root)]
@@ -678,8 +678,24 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     return result
 
 
-def _scope_preview(value):
+def _scope_preview(value,*,plan=True):
     from .prepared import limits
+    if value.get('preview_format')==2:
+        count=min(len(value['tasks']),value['config']['tasks_per_batch'])
+        rounds=value['config']['review_rounds']
+        sections=[f"Branch: {value['branch']}\nFirst batch: {count} task{'s' if count!=1 else ''}. "
+                  f"Up to {rounds} independent review{'s' if rounds!=1 else ''} per task before human renewal."]
+        sections.extend(f"{t['title']}\n\n{t['instructions']}" for t in value['tasks'])
+        if value['starting_edits']:sections.append('Included starting edits: '+', '.join(value['starting_edits']))
+        if target:=value.get('pr_target'):
+            sections.append(f"Update {target['url']} with the repair. Review the original work from "
+                            f"{target['review_base'][:12]} to {target['head'][:12]} with the changes.")
+        elif original:=value.get('original_work'):
+            sections.append(f"Include original branch work from {original['review_base'][:12]} to {original['head'][:12]}.")
+        if plan:
+            path=state_home()/'projects'/value['project']/'scopes'/digest(value)/'scope.json'
+            sections.append('[Scope details](<'+path.as_posix()+'>)')
+        return '\n\n'.join(sections)+'\n'
     sections=[f"# {value['workflow'].title()} scope",limits(len(value['tasks']),value['config'])]
     if value.get('preview_format')==1:
         sections.append(f"Branch: `{value['branch']}`\nScope: `{digest(value)}`")
@@ -700,7 +716,7 @@ def _verify_scope_plan(scope, source, *, replay=False):
     preview=_scope_preview(scope)
     accepted=source.get('accepted_plan','').replace('\r\n','\n')
     if source['host']=='codex':
-        if scope.get('preview_format')!=1 and not replay:
+        if scope.get('preview_format') not in (1,2) and not replay:
             raise Refused('Prepare the scope with its native plan identity before using Codex Plan approval.')
         # The native Plan item can add a framing newline.
         accepted,preview=accepted.strip('\n'),preview.strip('\n')
@@ -754,6 +770,11 @@ def _start(root,key,source,*,approved_preview=False):
             if prior.get('scope_id')==key and _human_key(source,prior)==prior.get('source'):
                 return _finish_entry(root,journal,prior,source)
             if prior.get('scope_id')==key and read_json(active_file(root)).get('run')==prior['id']:return select(root,prior['id'])
+        if approved_preview:
+            refusals=_home(root)/'scopes'/key/'declines'
+            for receipt in refusals.glob('*.json'):
+                if not authority.newer(source.get('at'),read_json(receipt)['human']['at']):
+                    raise Refused('A later refusal superseded this approval. Present the current scope and use a new native approval to start it.')
         _entry_order(root,source,saved)
         _switchable(root,[prior for _,prior in saved])
         if (saved and committed(scope) and not approved_preview and
@@ -1333,8 +1354,14 @@ def _presented(root,locator,state=None):
         try:
             source=authority.native_human(root,candidate,latest=False)
             if not authority.newer(source.get('question_at'),prepared['created_at']):continue
+            if 'disclosure' in prepared:
+                reference=authority.shown_offer_reference({'question':prepared['disclosure']+'\n'+question})
+                if authority.shown_offer_reference(source)!=reference:continue
             # Replay keeps a consumed answer; new authority still needs the latest input.
-            if _human_key(source,state) not in consumed:authority.native_human(root,candidate,retry_resume=prepared.get('kind')=='resume')
+            human_key=_human_key(source,state)
+            declined=prepared.get('kind')=='approve-scope' and (_home(root)/'scopes'/prepared['scope']/'declines'/(human_key+'.json')).exists()
+            if human_key not in consumed and not declined:
+                authority.native_human(root,candidate,retry_resume=prepared.get('kind')=='resume')
         except Refused:continue
         return candidate
     return locator
@@ -1347,8 +1374,40 @@ def _recorded_choice(journal,key,kind):
 
 
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
+    if kind=='stop' and isinstance(locator,dict) and not locator.get('decision'):
+        # A coordinator may pass just the conversation locator. Resolve only a
+        # displayed scope refusal; a prompt or the checkout's hint alone cannot bind it.
+        hint_path=checkout_file(root,'oh-recovery-menu.json')
+        hint=read_json(hint_path) if hint_path.exists() else {}
+        if hint.get('kind')=='approve-scope':
+            located=_presented(root,locator|{'decision':hint['decision']})
+            try:reply=authority.native_human(root,located,latest=False)
+            except Refused:pass
+            else:
+                if (reply['prompt'].strip().casefold().rstrip('.!')=='stop and take over' and
+                        authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint)):
+                    locator=located
     if isinstance(locator,dict) and re.fullmatch(r'[0-9a-f]{64}',locator.get('decision') or ''):
         prepared=read_json(_home(root)/'decisions'/(locator['decision']+'.json'))
+        if kind=='stop' and prepared.get('kind')=='approve-scope':
+            from .decisions import verify_scope
+            scope=_scope(root,prepared['scope'])
+            locator=_presented(root,locator)
+            source=authority.native_human(root,locator,latest=False)
+            verify_scope(root,scope,locator,source,decline=True)
+            # Declining a preview has no run or grant to stop. Retain its actual reply.
+            receipt=_home(root)/'scopes'/prepared['scope']/'declines'/(_human_key(source)+'.json')
+            result={'scope_id':prepared['scope'],'decision':locator['decision'],'approved':False,'status':'declined'}
+            with _locked(root):
+                for _,entered in _saved_runs(root):
+                    if entered.get('scope_id')==prepared['scope']:
+                        raise Refused('This scope already entered a delivery. To take over its saved work, prepare decision-request stop --run '+entered['id']+' and bind the actual run choice.')
+                if receipt.exists():
+                    if read_json(receipt)['decision']!=locator['decision']:raise Refused('Retry the original scope decision')
+                    return result
+                authority.coordinator(root,{'human':source,'host':source['host']},locator)
+                _immutable(receipt,{'decision':locator['decision'],'human':source})
+            return result
         if prepared.get('presentation')=='recovery-menu':
             from .recovery import apply
             return apply(root,kind,locator,run=run)

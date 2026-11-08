@@ -22,14 +22,29 @@ class GateTest(unittest.TestCase):
         from .decisions import scope_request, verify_scope, save_offer
         from .storage import digest, read_json
         scope={'workflow':'deliver','design':None,'branch':'fix-ci',
-               'tasks':[{'title':'Repair the diagnosed CI failure'}],
-               'config':{'tasks_per_batch':1,'review_rounds':3}}
+               'project':'test','preview_format':2,'starting_edits':[],
+               'tasks':[{'id':'repair-task','title':'Repair narrow layout','instructions':
+                         'Cause: scrollbar reduces the available width.\n\nChange: fit the form.\n\nVerification: check the narrow layout.'}],
+               'config':{'tasks_per_batch':5,'review_rounds':3}}
         with patch.dict(os.environ,{'OH_DATA_HOME':str(self.home/'state')}),patch('oh.native._home',return_value=self.home/'state'), \
-                patch('oh.decisions.now',return_value='2026-11-05T12:00:00Z'):
+                patch('oh.storage.checkout_file',return_value=self.home/'hint.json'), patch('oh.decisions.now',return_value='2026-11-05T12:00:00Z'):
             offered=scope_request(self.root,scope)
             key=offered['decision']
             source={'via':'question','question':offered['question'],'question_at':'2026-11-05T12:00:01Z','prompt':'Approve and fix'}
+            source['question_options']=offered['options']
+            with self.assertRaisesRegex(Refused,'disclosure'):verify_scope(self.root,scope,{'decision':key},source)
+            self.assertTrue(offered['question'].startswith('Approve “Repair narrow layout”? [ref '))
+            self.assertIn('First batch: 1 task.',offered['disclosure'])
+            self.assertIn('3 independent reviews per task',offered['disclosure'])
+            self.assertNotIn('repair-task',offered['disclosure'])
+            shown=offered['disclosure'].replace('Repair narrow layout','## Repair narrow layout')
+            source.update(question_options=offered['options'],question_context=[{'text':shown,'at':source['question_at']}])
             verify_scope(self.root,scope,{'decision':key},source)
+            # The scoped title and user's explicit Stop are sufficient to decline.
+            declined=source|{'question_context':[],'prompt':'Stop and take over'}
+            verify_scope(self.root,scope,{'decision':key},declined,decline=True)
+            with self.assertRaises(Refused):
+                verify_scope(self.root,scope,{'decision':key},declined|{'question':'Approve another fix?'},decline=True)
             for choice in ('Investigate CI failures','Re-run failed checks','Stop and take over','Keep planning','Approve this scope'):
                 with self.subTest(choice=choice),self.assertRaises(Refused):
                     verify_scope(self.root,scope,{'decision':key},source|{'prompt':choice})

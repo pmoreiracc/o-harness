@@ -24,11 +24,26 @@ def stop_boundary(root,journal,state):
                                         'selection':_selection_boundary(journal)}
 
 
-def save_offer(root,value):
+def save_offer(root,value,*,details=None):
     from .native import _home, _immutable
-    value['question']+='\n\nDecision reference: '+digest(value)
+    if 'disclosure' in value:
+        reference=digest(value)
+        if details:
+            from .receipts import save
+            path=_home(root)/'decisions'/('decision-'+reference+'.md')
+            save(path,details,immutable=True)
+            value['details_file']={'path':str(path),'hash':digest(details)}
+            value['disclosure']+='\n[View all affected paths](<'+path.as_posix()+'>)'
+        # The native record carries a compact fingerprint. Storage and boundary checks use the full digest.
+        value['question']+=' [ref '+reference[:20]+']'
+    else:
+        value['question']+='\n\nDecision reference: '+digest(value)
     key=digest(value)
     _immutable(_home(root)/'decisions'/(key+'.json'),value)
+    if 'disclosure' in value:
+        from .storage import atomic_json, checkout_file
+        atomic_json(checkout_file(root,'oh-recovery-menu.json'),{'decision':key,'kind':value['kind'],'question':value['question'],
+                    'options':value['menu_options'],'disclosure':value['disclosure'],'created_at':value['created_at']})
     return key
 
 
@@ -76,7 +91,8 @@ def _checkpoint(root,state,kind,details):
     choices['stop']=TAKE_OVER
     details+='\nStop preserves local work and commits; it does not push or open a PR.'
     menu=list(choices.values())
-    return {'question':details+'\n\nWhat would you like to do next?', 'choices':choices,
+    question=f'What next on {state["branch"]}?' if len(menu)>1 else f'Hand off {state["branch"]}?'
+    return {'disclosure':details, 'question':question, 'choices':choices,
             'presentation':'checkpoint-menu','menu_options':menu,
             'coordinator':{k:state['human'][k] for k in ('host','session')},
             'checkpoint_status':state['status'],'publication_destination':dest,'unavailable':unavailable}
@@ -156,7 +172,8 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         if entry_request:value['entry_request']=entry_request
         if kind=='grant-review':value['rounds']=count
         if kind=='approve-repair':value.update(task=task['id'],repair=repair.strip())
-        checkpoint=_checkpoint(root,state,kind,details) if also is None and attempt is None else None
+        compact_details=details.replace('\n'+reference,'',1)
+        checkpoint=_checkpoint(root,state,kind,compact_details) if also is None and attempt is None else None
         if checkpoint:value.update(checkpoint,bound_question=True)
         elif kind=='publish' and not dest:destination(root,required=True)
         actions={}
@@ -170,6 +187,8 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         elif kind=='stop':
             options=[label]
             actions={label:kind}
+            value.update(disclosure=compact_details+'\nStop preserves local work and existing grants.',
+                         question=f'Hand off {subject} on {state["branch"]}?',menu_options=options)
         else:
             options=[label,TAKE_OVER]
             actions={label:kind,TAKE_OVER:'stop'}
@@ -179,6 +198,7 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         if 'stop' in actions.values():value['stop_boundary']=stop_boundary(root,journal,state)
         key=save_offer(root,value)
         return {'decision':key,'question':value['question'],'options':options,
+                **({'disclosure':value['disclosure']} if 'disclosure' in value else {}),
                 **({'actions':actions} if actions else {}),
                 'human_locator':'Include decision in the native human locator. The native host displays this question; OH displays no menu.'}
 
@@ -186,6 +206,30 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
 def state_head(root):
     from .storage import git
     return git(root,'rev-parse','HEAD')
+
+
+def _verify_display(value,source,*,need_disclosure=True):
+    """Verify the identified human choice and any extra disclosure its effect needs."""
+    from .authority import newer, presented_question_at, question_text
+    question=value['question']
+    if source.get('via')=='question':
+        if question_text(source.get('question',''))!=question_text(question):
+            raise Refused('This native question does not match the prepared offer')
+        if sorted(source.get('question_options') or [])!=sorted(value['menu_options']):
+            raise Refused('Use the complete single-select menu for this prepared decision')
+        asked=source.get('question_at')
+    else:
+        asked=presented_question_at(source,question)
+        if not asked:raise Refused('Use the actual native question for this prepared offer')
+        context=source.get('question_context') or [{'text':source['question'],'at':asked}]
+        shown=question_text(' '.join(d['text'] for d in context if newer(d.get('at'),value['created_at'])))
+        if any(label not in shown for label in value['menu_options']):
+            raise Refused('Use the actual native question and its choices from the displayed offer')
+    if not newer(asked,value['created_at']):raise Refused('This native question predates the prepared decision')
+    if need_disclosure:
+        at=presented_question_at(source,value['disclosure'],reference_text=question)
+        if not newer(at,value['created_at']):
+            raise Refused('The answer does not match the prepared offer disclosure. Use the original displayed decision and native reply.')
 
 
 def verify(root,state,kind,locator,source,attempt=None,replay=False):
@@ -202,9 +246,15 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     from .authority import question_text,presented_question_at
     question=question_text(source.get('question',''))
     shown_at=source.get('question_at')
-    if value.get('presentation') in ('checkpoint-menu','recovery-menu') and source.get('via')=='question':
-        if value['presentation']=='checkpoint-menu' and {k:source.get(k) for k in ('host','session')}!=value['coordinator']:
-            raise Refused('This checkpoint belongs to its saved coordinator; resume the work before presenting a new checkpoint')
+    if value.get('presentation')=='checkpoint-menu' and source.get('via')=='question' and {k:source.get(k) for k in ('host','session')}!=value['coordinator']:
+        raise Refused('This checkpoint belongs to its saved coordinator; resume the work before presenting a new checkpoint')
+    if 'disclosure' in value:
+        # The identified short question names the handoff or ordinary
+        # keep-edits continuation. A reset, new grant, destination or carried
+        # request additionally needs the complete material effects in chat.
+        ordinary=not value.get('entry_request') and (kind=='stop' or kind=='resume' and value.get('keep_edits_question'))
+        _verify_display(value,source,need_disclosure=not ordinary)
+    elif value.get('presentation') in ('checkpoint-menu','recovery-menu') and source.get('via')=='question':
         shown=source.get('question_options')
         expected=value['menu_options']
         if not isinstance(shown,list) or len(shown)!=len(expected) or set(shown)!=set(expected):
@@ -227,9 +277,14 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     if source['prompt'].strip().casefold().rstrip('.!') not in accepted:
         raise Refused('This native answer does not accept the presented effect; preserve it and resolve the actual choice')
     from .authority import newer
-    if not newer(shown_at,value['created_at']):
+    if 'disclosure' not in value and not newer(shown_at,value['created_at']):
         raise Refused('This native question predates the prepared decision')
     if not replay:
+        if kind=='restart' and (detail:=value.get('details_file')):
+            from .system import Path
+            path=Path(detail['path'])
+            if not path.is_file() or digest(path.read_text(encoding='utf-8'))!=detail['hash']:
+                raise Refused('The disclosed list of affected paths changed. Prepare a current recovery decision before discarding work.')
         if value.get('presentation') in ('checkpoint-menu','recovery-menu') and not value.get('bound_question'):
             raise Refused('This pending historical menu lacks its saved run binding. Preserve the answer and present the current prepared question.')
         if value.get('presentation')=='checkpoint-menu' and {k:state['human'].get(k) for k in ('host','session')}!=value['coordinator']:
@@ -255,29 +310,41 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
 
 
 def scope_request(root,scope):
-    titles='; '.join(t['title'] for t in scope['tasks'][:3])
-    if len(scope['tasks'])>3:titles+=f'; and {len(scope["tasks"])-3} more tasks in the shown preview'
+    from .native import _scope_preview
     fix=scope.get('workflow')=='deliver' and not scope.get('design')
     label='Approve and fix' if fix else 'Approve this scope'
-    question=(f'Scope: {titles}\nBranch: {scope["branch"]}\n'
-              f'Task batch: {scope["config"]["tasks_per_batch"]}; review rounds per task: {scope["config"]["review_rounds"]}.\n\n'
-              +('Approve this fix?' if fix else 'Approve this scope?'))
-    value={'kind':'approve-scope','scope':digest(scope),'label':label,'question':question,'created_at':now()}
+    options=[label,TAKE_OVER]
+    from textwrap import shorten
+    title=shorten(scope['tasks'][0]['title'],width=64,placeholder='…')
+    value={'kind':'approve-scope','scope':digest(scope),'label':label,
+           'disclosure':_scope_preview(scope,plan=False).rstrip()+'\n\nStop and take over leaves this scope unapproved.',
+           'question':f'Approve “{title}”?' if len(scope['tasks'])==1 else 'Approve this scope?',
+           'menu_options':options,'created_at':now()}
     key=save_offer(root,value)
-    return {'decision':key,'question':value['question'],'options':[value['label'],TAKE_OVER]}
+    return {'decision':key,'disclosure':value['disclosure'],'question':value['question'],'options':options,
+            'present':'Copy disclosure into visible chat first. Then show the short question and its choices.',
+            'actions':{label:'approve-scope',TAKE_OVER:'stop'}}
 
 
-def verify_scope(root,scope,locator,source):
+def verify_scope(root,scope,locator,source,*,decline=False):
     from .native import _home
     import re
     key=locator.get('decision')
     if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key):raise Refused('Use the prepared scope approval question')
     value=read_json(_home(root)/'decisions'/(key+'.json'))
     if digest(value)!=key or value.get('kind')!='approve-scope' or value['scope']!=digest(scope):raise Refused('This answer belongs to another scope')
+    if 'disclosure' in value:
+        _verify_display(value,source,need_disclosure=not decline)
+    if decline:
+        if source['prompt'].strip().casefold().rstrip('.!')!=TAKE_OVER.casefold():
+            raise Refused('This answer does not decline the presented scope')
+    elif source['prompt'].strip().casefold().rstrip('.!') not in (value.get('label','Approve this scope').casefold(),'yes','yes please'):
+        raise Refused('This answer does not approve the presented scope')
+    if 'disclosure' in value:return
     from .authority import question_text,presented_question_at
     question=question_text(source.get('question',''))
     shown_at=source.get('question_at') if source.get('via')=='question' else presented_question_at(source,value['question'])
-    if (question!=question_text(value['question']) if source.get('via')=='question' else shown_at is None) or source['prompt'].strip().casefold().rstrip('.!') not in (value.get('label','Approve this scope').casefold(),'yes','yes please'):
+    if (question!=question_text(value['question']) if source.get('via')=='question' else shown_at is None):
         raise Refused('This answer does not approve the presented scope')
     from .authority import newer
     if not newer(shown_at,value['created_at']):raise Refused('This question predates the prepared scope')

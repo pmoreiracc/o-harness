@@ -153,6 +153,45 @@ class NativeWorkflowTest(NativeFixture):
             self.assertEqual(native.decision(self.root,'stop',answer(repair))['status'],'stopped')
         self.assertEqual(note.read_text(),'Preserve this edit.\n')
 
+    def test_quick_fix_stop_binds_once_without_selecting_or_creating_a_run(self):
+        from . import native
+        from .storage import now
+        from .workflow import active_file
+        for prior in (None,'stopped'):
+            if prior:
+                self.approve()
+                native.decision(self.root,'stop',self.human('stop'))
+            active=active_file(self.root)
+            selection=active.read_bytes() if active.exists() else None
+            scope=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+            offer=scope['approval']
+            earlier=self.offered_answer(offer,'Approve and fix',session='previous',at=now())
+            answer=self.offered_answer(offer,'Stop and take over',via='text' if prior else 'question',at=now())
+            before=[journal.records() for journal,_ in native._saved_runs(self.root)]
+            with self.assertRaises(Refused):native.decision(self.root,'stop',answer|{'prompt':'Approve and fix'})
+            conversation=answer.copy();conversation.pop('decision')
+            self.assertEqual(native.decision(self.root,'stop',conversation)['status'],'declined')
+            self.assertFalse(native.decision(self.root,'stop',answer)['approved'])
+            with self.assertRaisesRegex(Refused,'later refusal'):
+                native.approve_scope(self.root,scope['scope_id'],earlier)
+            receipts=list((Path(scope['preview']).parent/'declines').glob('*.json'))
+            self.assertEqual(len(receipts),1)
+            self.assertEqual(json.loads(receipts[0].read_text())['decision'],offer['decision'])
+            self.assertEqual([journal.records() for journal,_ in native._saved_runs(self.root)],before)
+            self.assertEqual(active.read_bytes() if active.exists() else None,selection)
+            self.assertEqual(self.git('status','--porcelain'),'')
+
+        # A later genuine approval can enter. Stale scope-only Stop is not a run Stop.
+        approved=self.offered_answer(offer,'Approve and fix',session='renewed',at=now())
+        entered=native.approve_scope(self.root,scope['scope_id'],approved)
+        journal,state=load_run(self.root);before=journal.records()
+        self.assertEqual(entered['granted'],['1'])
+        for stale in (answer,self.offered_answer(offer,'Stop and take over',session='other')):
+            with self.assertRaisesRegex(Refused,'decision-request stop --run '+state['id']):
+                native.decision(self.root,'stop',stale)
+        self.assertEqual(journal.records(),before)
+        self.assertEqual(native.approve_scope(self.root,scope['scope_id'],approved)['run'],entered['run'])
+
     def test_codex_plan_approval_binds_the_latest_native_plan_to_the_exact_scope(self):
         from datetime import datetime, timedelta
         from . import native
@@ -292,19 +331,19 @@ class NativeWorkflowTest(NativeFixture):
         self.assertEqual(prepared['approval']['options'],['Approve and fix','Stop and take over'])
         for text in ('Investigate CI failures','Stop and take over'):
             with self.subTest(choice=text),self.assertRaisesRegex(Refused,'does not approve the presented scope'):
-                native.approve_scope(self.root,prepared['scope_id'],self.human(text,
-                    question=prepared['approval']['question'],question_at=now(),decision=prepared['approval']['decision']))
+                native.approve_scope(self.root,prepared['scope_id'],self.offered_answer(prepared['approval'],text))
         self.assertFalse(active_file(self.root).exists())
-        without_identity=self.human('approve',question=prepared['approval']['question'])
+        without_identity=self.offered_answer(prepared['approval'],'approve',via='text')
+        without_identity.pop('decision')
         with self.assertRaisesRegex(Refused,'original prepared scope decision'):
             native.approve_scope(self.root,prepared['scope_id'],without_identity)
         other=native.prepare_scope(self.root,{'tasks':[self.tasks[0]|{'instructions':'Different scope.'},self.tasks[1]]})
         folder=native._home(self.root)/'decisions'
         historical=read_json(folder/(other['approval']['decision']+'.json'))
-        historical['question']=historical['question'].split('\n\nDecision reference: ')[0]
+        historical.pop('disclosure')
+        historical['question']='Approve the previously prepared scope?'
         key=digest(historical)
         native._immutable(folder/(key+'.json'),historical)
-        self.assertTrue(prepared['approval']['question'].startswith(historical['question']))
         with self.assertRaisesRegex(Refused,'does not approve the presented scope'):
             native.approve_scope(self.root,other['scope_id'],
                                  self.human('Approve this scope',question=prepared['approval']['question'],question_at=now(),decision=key))
@@ -326,7 +365,7 @@ class NativeWorkflowTest(NativeFixture):
         atomic_json(checkout_file(self.root,'oh-active-run.json'),
                     {'project':self.project_id,'run':unused.path.name,'checkout':checkout_id(self.root)})
         approval=prepared['approval']
-        native.approve_scope(self.root,prepared['scope_id'],self.human('Approve and fix',session='fresh-parent',question=approval['question'],question_at=now(),decision=approval['decision']))
+        native.approve_scope(self.root,prepared['scope_id'],self.offered_answer(approval,'Approve and fix',session='fresh-parent'))
         journal,state=load_run(self.root);original=journal.records()
         self.assertEqual(read_json(journal.path/'scope'/'approval.json')['decision'],approval['decision'])
         self.assertEqual(state['granted'],['1'])
@@ -957,14 +996,15 @@ class NativeWorkflowTest(NativeFixture):
         # Missing publication configuration must not hide Continue or Stop.
         unavailable=decision_request(self.root,'continue')
         self.assertEqual(set(unavailable['actions'].values()),{'continue','stop'})
-        self.assertIn('PR unavailable',unavailable['question'])
+        self.assertIn('PR unavailable',unavailable['disclosure'])
         self.git('remote','add','origin','https://github.com/example/product.git')
         offer=decision_request(self.root,'continue')
         self.assertEqual(offer['options'],['Continue with the next task batch','Open PR with completed tasks','Stop and take over'])
-        self.assertIn('Continue authorizes tasks: 2',offer['question'])
-        self.assertIn(self.git('rev-parse','HEAD'),offer['question'])
+        self.assertIn('Continue authorizes tasks: 2',offer['disclosure'])
+        self.assertIn(self.git('rev-parse','HEAD'),offer['disclosure'])
         history=load_run(self.root)[0].records()
-        unbound=self.human('Continue',question=offer['question'],question_at=now())
+        unbound=self.offered_answer(offer,'Continue',via='text')
+        unbound.pop('decision')
         with self.assertRaisesRegex(Refused,'bound decision effect'):
             native.decision(self.root,'continue',unbound)
         # The same native question supports all three effects on both hosts.
@@ -981,7 +1021,7 @@ class NativeWorkflowTest(NativeFixture):
                     if host=='claude':
                         path=home/'.claude/projects/checkpoint.jsonl'
                         common={'sessionId':'checkpoint','cwd':str(self.root)}
-                        rows=[common|{'type':'assistant','timestamp':asked,'message':{'content':[{'type':'tool_use','id':'menu','name':'AskUserQuestion',
+                        rows=[common|{'type':'assistant','timestamp':asked,'message':{'content':[{'type':'text','text':menu_offer['disclosure']},{'type':'tool_use','id':'menu','name':'AskUserQuestion',
                             'input':{'questions':[{'question':question,'multiSelect':False,'options':[{'label':x} for x in menu_offer['options']]}]}}]}},
                               common|{'type':'user','timestamp':answered,'toolUseResult':{'answers':{question:label}},
                                       'message':{'content':[{'type':'tool_result','tool_use_id':'menu','content':'Answered.'}]}}]
@@ -989,6 +1029,7 @@ class NativeWorkflowTest(NativeFixture):
                         path=home/'.codex/sessions/checkpoint.jsonl'
                         reply='<send_user_message_question_reply>'+json.dumps([{'questionItemId':json.dumps(['request_user_input_async','menu',0]),'answer':label}])+'</send_user_message_question_reply>'
                         rows=[{'type':'session_meta','payload':{'id':'checkpoint','cwd':str(self.root),'source':'vscode'}},
+                              {'type':'response_item','timestamp':asked,'payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':menu_offer['disclosure']}]}},
                               {'type':'response_item','timestamp':asked,'payload':{'type':'function_call','name':'request_user_input_async',
                                'call_id':'menu','arguments':json.dumps({'questions':[{'title':question,'options':menu_offer['options']}]})}},
                               {'type':'event_msg','timestamp':answered,'payload':{'type':'user_message','turn_id':'answer','message':reply}}]
@@ -1002,7 +1043,7 @@ class NativeWorkflowTest(NativeFixture):
                     with patch('oh.authority.native_human',side_effect=self.native_human_original):
                         self.assertEqual(native._presented(self.root,hook,state)['tool_use_id'],'menu')
                     with self.assertRaisesRegex(Refused,'does not match the prepared offer'):
-                        verify_decision(self.root,state,kind,locator,source|{'question':question.replace(state['id'],'another-run')})
+                        verify_decision(self.root,state,kind,locator,source|{'question':'Another question?'})
                     for labels in (None,menu_offer['options'][:1],menu_offer['options']+['Other action'],
                                    menu_offer['options'][:-1]+[menu_offer['options'][0]]):
                         with self.subTest(host=host,labels=labels),self.assertRaisesRegex(Refused,'complete single-select'):
@@ -1018,13 +1059,13 @@ class NativeWorkflowTest(NativeFixture):
                     for invalid in ('Yes','Not now','Continue with the next task batch, Open PR with completed tasks'):
                         with self.assertRaises(Refused):verify_decision(self.root,state,kind,locator,source|{'prompt':invalid})
         self.assertEqual(load_run(self.root)[0].records(),history)
-        publish=self.human('Open PR with completed tasks',session='fresh-parent',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        publish=self.offered_answer(offer,'Open PR with completed tasks',session='fresh-parent')
         self.git('remote','set-url','origin','https://github.com/example/elsewhere.git')
         with self.assertRaisesRegex(Refused,'destination changed'):native.decision(self.root,'publish',publish)
         self.git('remote','set-url','origin','https://github.com/example/product.git')
         (self.root/'new-edit.txt').write_text('Preserve this later edit.',newline='\n')
         with self.assertRaisesRegex(Refused,'subject changed'):native.decision(self.root,'publish',publish)
-        stop=self.human('Stop and take over',session='fresh-parent',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        stop=self.offered_answer(offer,'Stop and take over',session='fresh-parent')
         native.decision(self.root,'stop',stop);native.decision(self.root,'stop',stop)
         self.assertEqual((self.root/'new-edit.txt').read_text(),'Preserve this later edit.')
         (self.root/'new-edit.txt').unlink()
@@ -1035,7 +1076,7 @@ class NativeWorkflowTest(NativeFixture):
         with self.assertRaisesRegex(Refused,'checkpoint changed'):native.decision(self.root,'publish',publish)
         native.resume(self.root,self.resume_choice())
         offer=decision_request(self.root,'continue')
-        locator=self.human('Continue with the next task batch',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        locator=self.offered_answer(offer,'Continue with the next task batch')
         native.decision(self.root,'continue',locator)
         native.decision(self.root,'continue',locator)
         state=load_run(self.root)[1]
@@ -1054,9 +1095,9 @@ class NativeWorkflowTest(NativeFixture):
         final=decision_request(self.root,'publish')
         self.assertEqual(final['options'],['Stop and take over'])
         self.assertEqual(final['actions'],{'Stop and take over':'stop'})
-        self.assertIn('PR unavailable',final['question'])
+        self.assertIn('PR unavailable',final['disclosure'])
         self.assertEqual(verify_decision(self.root,load_run(self.root)[1],'stop',{'decision':final['decision']},
-                         {'prompt':'Stop and take over','question':final['question'],'question_at':now()})['kind'],'stop')
+                         self.offered_answer(final,'Stop and take over',via='text'))['kind'],'stop')
         self.git('remote','add','origin','https://github.com/example/product.git')
         self.git('update-ref','refs/remotes/origin/main',head)
         second_commit=self.git('rev-parse','HEAD');original_summaries=load_run(self.root)[1]['summaries']
@@ -1493,7 +1534,7 @@ class NativeWorkflowTest(NativeFixture):
         self.assertNotIn('repair_source',scope)
         self.assertEqual(scope['pr_target']['covers'],[manual])
         self.assertEqual(scope['pr_target']['review_base'],base)
-        self.assertIn(manual,Path(selected['preview']).read_text())
+        self.assertIn(manual[:12],Path(selected['preview']).read_text())
         native.approve_scope(self.root,selected['scope_id'],self.human())
         self.assess();self.implement()
         # This report used to exceed the PR budget when OH copied its finding
@@ -1521,7 +1562,7 @@ class NativeWorkflowTest(NativeFixture):
         from .storage import now
         offer=decision_request(self.root,'publish')
         self.assertEqual(offer['options'],['Open PR with completed tasks','Stop and take over'])
-        choice=self.human('Open PR with completed tasks',question=offer['question'],question_options=offer['options'],question_at=now(),via='question',decision=offer['decision'])
+        choice=self.offered_answer(offer,'Open PR with completed tasks')
         native.decision(self.root,'publish',choice)
         native.decision(self.root,'publish',choice)
         journal,state=load_run(self.root);grant=state['publication'];attempts=state['attempts']

@@ -34,7 +34,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                 native.complete(self.root,review['id'])
                 (self.root/'later notes.txt').write_text('keep the newer checkout edits',newline='\n')
                 gate=decisions.prepare(self.root,'recover',run=old['id'])
-                self.assertIn('restoring its parked changes',gate['question'])
+                self.assertIn('restoring its parked changes',gate['disclosure'])
                 answer=self.answer(gate,'Continue',host=host)
                 # This loop starts another host immediately; do not date its prior answer in the future.
                 answered_at=now()
@@ -63,7 +63,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.git('remote','add','origin',str(Path(self.temp.name)/'unavailable-origin'))
         gate=decisions.prepare(self.root,'recover')
         self.assertEqual(gate['base_observation']['freshness'],'unavailable')
-        self.assertIn('Base freshness: unavailable',gate['question'])
+        self.assertIn('Base freshness: unavailable',gate['disclosure'])
         self.assertEqual(set(gate['options']),{'Continue','Start fresh','Stop and take over'})
         after=load_run(self.root)[1]
         for key in ('id','human','granted','attempts','config'):self.assertEqual(after[key],before[key])
@@ -74,14 +74,18 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.git('update-ref','-d','refs/remotes/origin/main')
         gate=decisions.prepare(self.root,'recover')
         self.assertEqual(gate['options'],['Stop and take over'])
-        self.assertIn('fetch origin main',gate['question'])
-        result=native.decision(self.root,'stop',self.answer(gate,'Stop and take over')|{'via':'text'})
+        self.assertIn('fetch origin main',gate['disclosure'])
+        answer=self.answer(gate,'Stop and take over')|{'via':'text'}
+        display=answer['question_context'][0]
+        display['text']=gate['question'].replace('Hand off','Publish')+'\nStop and take over'
+        with self.assertRaisesRegex(Refused,'actual native question'):native.decision(self.root,'stop',answer)
+        display['text']=gate['question']+'\nStop and take over'
+        result=native.decision(self.root,'stop',answer)
         self.assertEqual(result['status'],'stopped')
 
     def answer(self, gate, label, host='claude', session='new-parent'):
         at=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
-        return self.human(label,host=host,session=session,decision=gate['decision'],
-            question=gate['question'],question_at=at,at=at,via='question',question_options=gate['options'])
+        return self.offered_answer(gate,label,host=host,session=session,at=at)
 
     def test_recovery_menu_cannot_reclaim_a_newer_selection_with_an_old_answer(self):
         from .storage import digest, read_json
@@ -89,7 +93,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.approve();old_journal,old=load_run(self.root)
         current=decisions.prepare(self.root,'recover')
         stored=read_json(native._home(self.root)/'decisions'/(current['decision']+'.json'))
-        historical={k:v for k,v in stored.items() if k not in ('bound_question','stop_boundary')}
+        historical={k:v for k,v in stored.items() if k not in ('bound_question','stop_boundary','disclosure')}
         historical['question']=historical['question'].replace('Saved run: '+old['id']+'\n','')
         identity=digest(historical)
         native._immutable(native._home(self.root)/'decisions'/(identity+'.json'),historical)
@@ -470,7 +474,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
             home_patch=patch('pathlib.Path.home',return_value=home);home_patch.start();self.addCleanup(home_patch.stop)
             new_parent=home/'.claude/projects/new-parent.jsonl';new_parent.parent.mkdir(parents=True)
             common={'sessionId':'new-parent','cwd':str(self.root),'timestamp':locator['at'],'entrypoint':'cli'}
-            rows=[common|{'type':'assistant','message':{'content':[{'type':'tool_use','id':'recovery-answer',
+            rows=[common|{'type':'assistant','message':{'content':[{'type':'text','text':gate['disclosure']},{'type':'tool_use','id':'recovery-answer',
                 'name':'AskUserQuestion','input':{'questions':[{'question':gate['question'],'multiSelect':False,
                 'options':[{'label':option,'description':option} for option in gate['options']]}]}}]}},
                 common|{'type':'user','toolUseResult':{'answers':{gate['question']:locator['prompt']}},
@@ -670,15 +674,26 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         (self.root/'surprise.txt').write_text('new user edit',newline='\n')
         with self.assertRaisesRegex(Refused,'changed since'):native.decision(self.root,'restart',answer)
         self.assertTrue((self.root/'surprise.txt').exists())
+        for i in range(12):
+            (self.root/f'changed-file-{i}.txt').write_text('local work',newline='\n')
         displayed=decisions.prepare(self.root,'recover')
         (self.root/'surprise.txt').write_text('More edits at the same path',newline='\n')
         updated=decisions.prepare(self.root,'recover')
+        self.assertNotIn('changed-file-',displayed['disclosure'])
+        self.assertNotIn('changed-file-',displayed['question'])
+        details=Path(displayed['disclosure'].rsplit('](<',1)[1].split('>)',1)[0]).read_text()
+        self.assertIn('changed-file-11.txt',details)
+        self.assertIn('without making a new backup',displayed['disclosure'])
+        formatted=self.answer(displayed,'Start fresh')
+        formatted['question_context'][0]['text']=formatted['question_context'][0]['text'].replace('](<','](').replace('>)',')')
+        decisions.verify(self.root,load_run(self.root)[1],'restart',formatted,formatted,replay=True)
         self.assertEqual(displayed['options'],updated['options'])
         self.assertNotEqual(displayed['question'],updated['question'])
+        self.assertNotEqual(displayed['disclosure'],updated['disclosure'])
         with self.assertRaisesRegex(Refused,'does not match the prepared offer'):
             native.decision(self.root,'restart',self.answer(displayed,'Start fresh')|{'decision':updated['decision']})
         typed=self.answer(displayed,'Start fresh')|{'via':'text','question_context':[
-            {'text':offer['question'],'at':now()} for offer in (displayed,updated)]}
+            {'text':offer['disclosure']+'\n'+offer['question'],'at':now()} for offer in (displayed,updated)]}
         with self.assertRaisesRegex(Refused,'actual native question'):
             native.decision(self.root,'restart',typed)
         self.assertEqual((self.root/'surprise.txt').read_text(),'More edits at the same path')
@@ -760,7 +775,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         path.unlink()
         unavailable=decisions.prepare(self.root,'recover')
         self.assertEqual(unavailable['options'],['Stop and take over'])
-        self.assertIn('Restore the required recovery input',unavailable['question'])
+        self.assertIn('Restore the required recovery input',unavailable['disclosure'])
         stopped=native.decision(self.root,'stop',self.answer(unavailable,'Stop and take over')|{'via':'text'})
         self.assertEqual(stopped['status'],'stopped')
         self.assertFalse(path.exists())

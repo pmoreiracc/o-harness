@@ -73,7 +73,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
         subject = None
         unavailable = str(exc)
     branch = subject['branch'] if subject else state['branch']
-    details = (f'Work: {native._saved_subject(state)}\nBranch: {branch}\nSaved run: {state["id"]}\n'
+    details = (f'Work: {native._saved_subject(state)}\nBranch: {branch}\n'
                'Stop and take over ends OH execution and leaves the files unchanged.\n'
                'Old execution is settled before any action. Review usage and findings remain recorded.\n')
     if observed:
@@ -88,7 +88,8 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
         details += 'Continue keeps existing changes, including approved repairs, and finishes the approved delivery.\n'
         if git(root,'branch','--show-current')!=state['branch']:
             details+='Current checkout work is saved before switching here to '+state['branch']+' and restoring its parked changes. No parallel folder is created.\n'
-        details += 'Affected paths: '+(', '.join(sorted(paths)) or 'none')+'\n'
+        details += ('Affected paths: '+(', '.join(sorted(paths)) or 'none') if len(paths)<=3 else
+                    f'{len(paths)} affected paths. See the full list below.')+'\n'
         if subject['base'] and subject['branch'] in (state['branch'],state.get('recovery_intent',{}).get('branch')):
             try:
                 private_restart = _private_restart(root, state, subject['base'])
@@ -98,7 +99,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
                 details += 'Start fresh unavailable. Restore the saved restart evidence before trying again. '+str(exc)+'\n'
             else:
                 choices['restart'] = 'Start fresh'
-                details += 'Start fresh discards the listed local changes and this branch’s unmerged delivery work; no new backup of discarded work is made. Earlier workspace safety copies remain retained.\n'
+                details += 'Start fresh discards the affected local changes and this branch’s unmerged work without making a new backup.\n'
                 if state.get('approved_repairs'):
                     details += 'Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
                 details += 'Restart base: '+subject['base_ref']+' ('+subject['base'][:12]+').\n'
@@ -106,20 +107,20 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     else:
         details += 'Continue and Start fresh unavailable. Restore the required recovery input before trying again. '+unavailable+'\n'
     choices['stop'] = TAKE_OVER
-    details += '\nHow would you like OH to proceed with this delivery?'
+    question=f'Continue {native._saved_subject(state)} on {branch} with its existing edits?' if len(choices)>1 else f'Hand off {branch}?'
     value = {'kind': 'recover', 'run': state['id'], 'attempt': None, 'presentation': 'recovery-menu',
              'boundary': boundary(root,state,'resume'),
              'stop_boundary': stop_boundary, 'bound_question': True,
-             'subject': subject, 'base_observation':observed, 'question': details, 'choices': choices,
+             'subject': subject, 'base_observation':observed, 'disclosure':details.rstrip(), 'question':question, 'choices': choices,
+             'affected_paths':sorted(paths) if subject else [],
              'menu_options': list(choices.values()), 'created_at': now()}
+    if subject and git(root,'branch','--show-current')==state['branch']:
+        value['keep_edits_question']=True
     if entry_request:value['entry_request']=entry_request
     if 'restart' in choices:value['private_restart'] = private_restart
-    key = save_offer(root,value)
-    # Presentation hint only; accepted answers still validate the immutable offer.
-    from .storage import checkout_file,atomic_json
-    atomic_json(checkout_file(root,'oh-recovery-menu.json'),
-                {'run':state['id'],'question':value['question'],'options':value['menu_options']})
-    return {'decision': key, 'question': value['question'], 'options': value['menu_options'],
+    path_list=''.join('\n- '+repr(path) for path in value['affected_paths'])
+    key = save_offer(root,value,details='Affected paths\n'+path_list+'\n' if len(value['affected_paths'])>3 else None)
+    return {'decision': key, 'question': value['question'], 'disclosure': value['disclosure'], 'options': value['menu_options'],
             'base_observation':observed,
             'actions': {label: action for action, label in choices.items()},
             'human_locator': 'Bind the selected action from this one native question with decision.'}

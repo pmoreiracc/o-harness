@@ -67,12 +67,12 @@ Interpret the requested work as follows:
 Read `workflows/decisions.md` before presenting scope. For a quick fix, use Claude's
 native plan viewer **Accept** or Codex Plan mode's native **Implement** when that plan
 surface is available. Show the complete unchanged scope preview there and bind the
-actual acceptance with `scope approve`. In Codex Default mode, show the preview and
+actual acceptance with `scope approve`. For a menu or chat reply, show the returned `approval.disclosure` once, then its short question and choices. In Codex Default mode,
 call `functions.request_user_input_async` with the returned `approval` question and
 choices. Retain its decision identity and use the shared direct-reply fallback. An initiating
 human locator identifies the request and does not replace this scope acceptance.
 For quick-fix menus, **Approve and fix** accepts the shown scope; **Stop and take over**
-leaves it unapproved and ends the handoff without asking for further planning input.
+binds `decision stop` with the same scope decision ID (no run argument) and ends the handoff.
 Honor the saved labels of older prepared questions. For CI corrections, first complete
 the authorized investigation described in `workflows/publication.md`; a preliminary
 failure summary is not an established repair plan.

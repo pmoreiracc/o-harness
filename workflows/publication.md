@@ -72,18 +72,21 @@ present a speculative repair as ready for approval.
 
 If changes are needed, prepare an existing-PR quick-fix scope from those conclusions,
 preserving this PR's destination and original reviewed work. Describe the required
-outcome and acceptance checks without turning unproven implementation guesses into
-scope restrictions. Preparing the proposal is part of the accepted investigation, even
+outcome in the task instructions as three short paragraphs: **Cause**, **Change**,
+and **Verification**. Name the reproduced failure, authorized files or behavior,
+exclusions that matter, and the actual check. These paragraphs are the task
+instructions that workers receive. Keep scratch paths, investigation logs and
+routine workflow directions out of the task. Preparing the proposal is part of the accepted investigation, even
 when the proposed repair needs new scope. It makes no repair and grants no execution
 authority. Once the remedy is justified, prepare its scope and present the actual preview
-and returned approval question below. Do not end at a recommendation or ask permission
+as the returned disclosure, followed by its short approval question and choices. Do not end at a recommendation or ask permission
 to prepare the proposal; this approval is the person's decision about the proposed fix:
 
 - **Approve and fix** binds that prepared scope through the existing `scope approve`
   path. Then follow normal assessment, implementation, checks and fresh review before
   updating the same PR through the existing publication process. This is the repair
   approval; do not ask a third time whether to start the fix.
-- **Stop and take over** starts no correction and leaves the prepared scope available.
+- **Stop and take over** binds the actual refusal through `decision stop` with the prepared scope decision ID. End the handoff.
 
 Use the host's native plan acceptance when that surface is available, as described in
 `workflows/deliver/SKILL.md`; it replaces this repair menu rather than adding another gate.

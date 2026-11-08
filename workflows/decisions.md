@@ -12,32 +12,32 @@ that different count, never because the agent predicts that one more will suffic
 When combining this with a routine action such as creating an issue, `--also TEXT`
 includes that instruction in the same presented choice. The runtime grants only the
 bound consequential effect; the host carries out the accompanying authorized action.
-It binds the current subject and effect without granting anything. Present its returned
-question and positive choice through the native host, preserving its words and effect;
-Markdown emphasis, inline code and whitespace may change. Apart from those display changes,
-keep the full question unchanged, including its decision reference, and keep all
-returned choices. The reference binds the answer to this prepared effect even if
-another question has the same wording. Explanations and full previews belong in the
-surrounding conversation.
-When the helper returns `actions`, bind the selected action with its original decision ID.
-**Stop and take over** binds `decision stop` for the same run and preserves local work and grants.
-It authorizes no part of the positive choice. Dismissal and legacy **Not now** answers
-leave the decision unresolved. If Stop is the only available action, show the complete
-prepared question and its single action in chat and bind the explicit direct answer. Include its `decision` identity in the actual
-human locator when calling `decision` (or `resume`); OH locates the native question that
-showed it, so the conversation locator is enough. A direct Yes about this same shown
-question also works when a menu is unavailable. Preserve the prepared identity and actual
-answer across recoverable failures; do not regenerate the question after it was answered.
-The full plain-chat question and its compact choices may be separate assistant messages
-before the reply. OH checks that displayed context together; a following menu does not
-erase the question or require a second answer.
+Preparation binds the current subject and effects. When the helper returns a
+`disclosure`, copy it into visible chat before asking. Keep its short reference and any affected-paths link. Show the returned short `question` and
+all `options` in chat so a typed answer works too. Use only that short question
+as the native menu title. Keep the prepared words and links intact. A tool result or a Claude option description alone is not visible chat disclosure. For older offers and decisions without a
+separate disclosure, present the complete returned question, including its reference.
+
+**One option means ordinary chat only on both hosts.** Show the disclosure, ask
+the returned question with its single action, end the turn and bind the actual
+reply. Never add a synonym or a second button to satisfy a host's menu minimum.
+For multiple options use the host control below when available.
+
+Use the chosen label in `actions` with the original decision ID. Stop on a saved
+run binds `decision stop` for that run and preserves local work and grants.
+The short scope question names the proposed work and carries its reference. Copy it
+unchanged. Stop on a prepared scope binds `decision stop` with its scope decision ID and
+no run argument. It ends the handoff without starting a run. For positive scope
+approval use `scope approve`. Dismissal and legacy **Not now** leave the choice
+unresolved. Supply the decision identity in the actual native human locator.
+Reuse that identity and answer on technical retries.
 If the person changes the requested scope/count, prepare that actual effect and ask only
 for the changed boundary. Do not infer grants from a model's paraphrase of free text.
 
 ## Delivery recovery
 
-Use `decision-request recover --run ID` for an unfinished delivery. Show its Git
-context and discard effect, then call Claude `AskUserQuestion` or Codex Default mode
+Use `decision-request recover --run ID` for an unfinished delivery. Show its returned disclosure with the affected paths or their inspection link.
+For multiple choices call Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async` with Continue, Start fresh and Stop and take over. Use the returned `actions` map with `decision`;
 the existing `continue` action is a task-batch grant, not this recovery's Continue.
 Recovery's Continue maps to `resume`, Start fresh to `restart`, and Stop to `stop`.
@@ -58,15 +58,14 @@ returns one question with an `actions` map and all available choices:
 - **Stop and take over** stops OH and preserves local work and commits; it does not push,
   publish or grant another task.
 
-Show the completed work, next authorized task IDs, branch and publication destination
-in the surrounding conversation. Present every returned option unchanged with Claude `AskUserQuestion` or Codex
-Default mode `functions.request_user_input_async`. Use the direct reply for a single
-action. Copy the full returned question into the native tool, including the saved run,
-so an answer cannot move between menus with identical options. Both hosts use the
+Show the returned disclosure with the completed work, next authorized tasks and
+publication destination. Use its short question and all returned options. For
+multiple options use Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async`. For one option use only chat. Both hosts use the
 same decision validator. If publication is unavailable, report the helper's actual
 prerequisite while retaining Continue/Stop as applicable. All-tasks-complete checkpoints
 omit Continue; private planning completion needs no PR checkpoint. Selected work being
-complete does not mean the whole design is complete. The prepared question explains
+complete does not mean the whole design is complete. The disclosure explains
 pending tasks from the saved starting design, their blockers/dependencies and other
 tracks. Excluded tasks gain no authority. Resolve open design decisions through Design,
 get the revised design approved, then re-enter Deliver against that revision, preserving
@@ -83,14 +82,9 @@ Yes, cancellation, silence or several selected actions grants nothing at this me
 If the person supplies an ambiguous free-text answer, clarify the intended action;
 never interpret Continue as publication authority or Not now as Stop.
 
-Checkpoint and recovery menus require the complete prepared question and options.
-A native Stop and take over answer to another menu also requires its complete options.
-Replay a recorded historical decision from its original receipt. If a pending
-historical menu lacks its saved-run binding, preserve its answer and present the
-current prepared question.
-Ordinary-chat answers still require
-the complete prepared context, because they carry no native menu evidence.
-A changed candidate, task window or publication destination needs a new question
+Checkpoint and recovery menus bind the visible disclosure, actual question and
+choices to the saved decision. For historical offers, use their original question
+and receipt. A changed candidate, task window or publication destination needs a new question
 before approval. Stop still applies to the same saved run and preserves its current
 files. Preserve prior answers as history.
 If a missing candidate prerequisite prevents preparing a menu, explain the prerequisite
@@ -163,7 +157,7 @@ conversation locator; OH resolves the saved plan acceptance. If supplying `tool_
 use the `ExitPlanMode` call ID, not a human turn or result UUID. This display
 copy is not a consumer design. An edited preview needs refreshed scope and approval;
 rejection or interruption grants nothing. If native plan tools are unavailable, show
-the preview and its prepared approval question in chat, then bind the direct reply
+its returned disclosure, short approval question and options in chat, then bind the direct reply
 using that same decision ID.
 
 When Codex is in native Plan mode, present the complete unchanged scope preview in

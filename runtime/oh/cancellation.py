@@ -373,16 +373,32 @@ def _deny(reason):
             'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
 
 
-def _recovery_menu(root,name,args):
-    """Catch a malformed OH recovery display before the person answers it."""
+def _prepared_menu(root,host,payload):
+    """Repair a prepared display before a person answers. This hint grants nothing."""
+    name=payload.get('tool_name','')
+    args=payload.get('tool_input') or {}
     if name.split('.')[-1] not in ('AskUserQuestion','request_user_input','request_user_input_async'):return None
     from .authority import question_options,question_text
     path=checkout_file(root,'oh-recovery-menu.json')
     if not path.exists():return None
     prepared=read_json(path)
-    if 'Continue' not in prepared['options'] or question_options(args)!=prepared['options']:return None
-    question=args['questions'][0]
-    shown=question.get('question') or question.get('title') or ''
+    questions=args.get('questions')
+    if not isinstance(questions,list) or not questions or not isinstance(questions[0],dict):return None
+    shown=questions[0].get('question') or questions[0].get('title') or ''
+    options=question_options(args) or []
+    if 'disclosure' in prepared:
+        expected=prepared['options']
+        if shown!=prepared['question'] and not set(expected)<=set(options):return None
+        from .authority import pending_display
+        context=pending_display(host,payload,prepared)
+        if context is None:return None  # Another conversation or an unrelated question.
+        if len(expected)==1:
+            return _deny('Use ordinary chat for this single action. Show the disclosure, question and action together and wait for the direct reply.')
+        if context and question_text(shown)==question_text(prepared['question']) and sorted(options)==sorted(expected):return None
+        return _deny('Send the text below as your next ordinary assistant message. Bash output and hook feedback do not present it. '
+                     'Wait for the direct reply, or offer the same short question in the native menu after the message.\n'+prepared['disclosure']+'\n'+
+                     prepared['question']+'\n'+' / '.join(expected))
+    if 'Continue' not in prepared['options'] or options!=prepared['options']:return None
     if prepared['run'] not in shown:return None
     if question_text(shown)==question_text(prepared['question']):return None
     return _deny('OH recovery question was reformatted. Retry this native question before asking the person; '
@@ -403,6 +419,8 @@ def hook(root, host, payload):
         if 'not registered' in str(exc):
             return {}
         raise
+    if payload.get('hook_event_name')=='PreToolUse' and not payload.get('agent_id'):
+        if malformed:=_prepared_menu(root,host,payload):return malformed
     if not path.exists():
         return {}
     # Resolve registration once for this synchronous callback. Repeated Git
@@ -481,7 +499,6 @@ def _hook(root,host,payload):
             return {}
         name = payload.get('tool_name', '')
         args = payload.get('tool_input') or {}
-        if not actor and (malformed:=_recovery_menu(root,name,args)):return malformed
         targets=_resume_targets(value,host,payload)
         if targets:
             if len(targets)!=1:return _deny('This native name is ambiguous. Address the original OH child by its native ID.')

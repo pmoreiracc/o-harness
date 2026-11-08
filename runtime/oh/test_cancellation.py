@@ -19,25 +19,31 @@ from .workflow import load_run
 
 
 class CancellationTest(NativeFixture, unittest.TestCase):
-    def test_recovery_menu_format_is_repaired_before_native_question_on_both_hosts(self):
+    def test_missing_disclosure_is_repaired_before_native_question_on_both_hosts(self):
         from .decisions import prepare
-        self.approve()
-        offer=prepare(self.root,'recover')
+        # A first-ever quick fix has no execution control file or run.
+        offer=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})['approval']
         for host,name,text_key in (('claude','AskUserQuestion','question'),('codex','request_user_input_async','title')):
             options=([{'label':s,'description':s} for s in offer['options']] if host=='claude' else offer['options'])
-            args={'questions':[{text_key:'Resume '+load_run(self.root)[1]['id']+'?','options':options}]}
-            denied=cancellation._recovery_menu(self.root,name,args)
-            self.assertIn(offer['question'],denied['hookSpecificOutput']['permissionDecisionReason'])
-            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'],'deny')
-            args['questions'][0][text_key]=offer['question']
-            self.assertIsNone(cancellation._recovery_menu(self.root,name,args))
-            args['questions'][0][text_key]='Another unrelated question'
-            self.assertIsNone(cancellation._recovery_menu(self.root,name,args))
-            # A later standalone Stop is not this recovery's Continue menu.
-            args['questions'][0][text_key]='Stop '+load_run(self.root)[1]['id']+'?'
-            args['questions'][0]['options']=['Stop and take over']
-            with patch.object(cancellation,'read_json',return_value={'options':['Stop and take over']}):
-                self.assertIsNone(cancellation._recovery_menu(self.root,name,args))
+            args={'questions':[{text_key:offer['question'],'options':options}]}
+            path=Path(self.temp.name)/(host+'.jsonl')
+            payload={'session_id':'s','transcript_path':str(path),'hook_event_name':'PreToolUse','tool_name':name,'tool_input':args}
+            def record(text,tool=False):
+                if host=='claude':
+                    return {'sessionId':'s','timestamp':now(),'type':'user' if tool else 'assistant',
+                            'message':{'content':[{'type':'tool_result','content':text} if tool else {'type':'text','text':text}]}}
+                return {'type':'response_item','timestamp':now(),'payload':{'type':'function_call_output','output':text}
+                        if tool else {'type':'message','role':'assistant','content':[{'type':'output_text','text':text}]}}
+            with patch('oh.authority._path',return_value=path):
+                path.write_text(json.dumps(record('other offer',True))+'\n',newline='\n')
+                self.assertEqual(cancellation.hook(self.root,host,payload),{})
+                with path.open('a',newline='\n') as stream:stream.write(json.dumps(record(offer['decision'],True))+'\n')
+                denied=cancellation.hook(self.root,host,payload)
+                self.assertIn(offer['disclosure'],denied['hookSpecificOutput']['permissionDecisionReason'])
+                with path.open('a',newline='\n') as stream:stream.write(json.dumps(record(offer['disclosure']))+'\n')
+                self.assertEqual(cancellation.hook(self.root,host,payload),{})
+                args['questions'][0][text_key]='Different question'
+                self.assertEqual(cancellation.hook(self.root,host,payload)['hookSpecificOutput']['permissionDecision'],'deny')
 
     def setUp(self):
         super().setUp()
