@@ -332,6 +332,7 @@ def scope_request(root,scope):
     key=save_offer(root,value)
     return {'decision':key,'disclosure':value['disclosure'],'question':value['question'],'options':options,
             'present':'Copy disclosure into visible chat first. Then show the short question and its choices.',
+            'bind':'Use scope approve (scope_approve) with the scope_id and human locator including this decision for either answer.',
             'actions':{label:'approve-scope',TAKE_OVER:'stop'}}
 
 

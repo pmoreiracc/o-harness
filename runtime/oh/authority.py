@@ -308,8 +308,14 @@ def _offered(record,host,session,key,previous=None):
         result=[p.get('content') for p in parts if isinstance(p,dict) and p.get('type')=='tool_result'] if isinstance(parts,list) else []
     else:
         item=record.get('payload') or {}
-        if record.get('type')!='response_item' or item.get('type')!='function_call_output':return None
-        result=item.get('output')
+        if record.get('type')=='event_msg' and item.get('type')=='item_completed' and item.get('thread_id')==session:
+            call=item.get('item') or {}
+            if (call.get('type')!='McpToolCall' or call.get('server')!='o-harness' or
+                    call.get('tool') not in ('scope_prepare','decision_request','prepare') or call.get('status')!='completed'):return None
+            result=call.get('result')
+        elif record.get('type')=='response_item' and item.get('type')=='function_call_output':
+            result=item.get('output')
+        else:return None
     text=str(result)
     refs=_OFFER_REFERENCE.findall(text)
     if refs:

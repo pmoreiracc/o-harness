@@ -72,7 +72,7 @@ call `functions.request_user_input_async` with the returned `approval` question 
 choices. Retain its decision identity and use the shared direct-reply fallback. An initiating
 human locator identifies the request and does not replace this scope acceptance.
 For quick-fix menus, **Approve and fix** accepts the shown scope; **Stop and take over**
-binds `decision stop` with the same scope decision ID (no run argument) and ends the handoff.
+records the refusal and ends the handoff. Bind either answer with `scope approve` and the original scope decision identity.
 Honor the saved labels of older prepared questions. For CI corrections, first complete
 the authorized investigation described in `workflows/publication.md`; a preliminary
 failure summary is not an established repair plan.

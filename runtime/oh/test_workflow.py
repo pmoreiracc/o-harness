@@ -170,7 +170,9 @@ class NativeWorkflowTest(NativeFixture):
             before=[journal.records() for journal,_ in native._saved_runs(self.root)]
             with self.assertRaises(Refused):native.decision(self.root,'stop',answer|{'prompt':'Approve and fix'})
             conversation=answer.copy();conversation.pop('decision')
-            self.assertEqual(native.decision(self.root,'stop',conversation)['status'],'declined')
+            resolved=(native.approve_scope(self.root,scope['scope_id'],conversation) if prior else
+                      native.decision(self.root,'stop',conversation))
+            self.assertEqual(resolved['status'],'declined')
             self.assertFalse(native.decision(self.root,'stop',answer)['approved'])
             with self.assertRaisesRegex(Refused,'later refusal'):
                 native.approve_scope(self.root,scope['scope_id'],earlier)
@@ -329,9 +331,12 @@ class NativeWorkflowTest(NativeFixture):
         self.assertFalse(active_file(self.root).exists())
         self.assertIn('approval',prepared)
         self.assertEqual(prepared['approval']['options'],['Approve and fix','Stop and take over'])
-        for text in ('Investigate CI failures','Stop and take over'):
-            with self.subTest(choice=text),self.assertRaisesRegex(Refused,'does not approve the presented scope'):
-                native.approve_scope(self.root,prepared['scope_id'],self.offered_answer(prepared['approval'],text))
+        with self.assertRaisesRegex(Refused,'does not approve the presented scope'):
+            native.approve_scope(self.root,prepared['scope_id'],self.offered_answer(prepared['approval'],'Investigate CI failures'))
+        refused=self.offered_answer(prepared['approval'],'Stop and take over')
+        key=refused.pop('decision')
+        result=native.approve_scope(self.root,prepared['scope_id'],refused,after=key)
+        self.assertEqual((result['status'],result['approved']),('declined',False))
         self.assertFalse(active_file(self.root).exists())
         without_identity=self.offered_answer(prepared['approval'],'approve',via='text')
         without_identity.pop('decision')

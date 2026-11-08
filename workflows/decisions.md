@@ -25,10 +25,10 @@ For multiple options use the host control below when available.
 
 Use the chosen label in `actions` with the original decision ID. Stop on a saved
 run binds `decision stop` for that run and preserves local work and grants.
-The short scope question names the proposed work and carries its reference. Copy it
-unchanged. Stop on a prepared scope binds `decision stop` with its scope decision ID and
-no run argument. It ends the handoff without starting a run. For positive scope
-approval use `scope approve`. Dismissal and legacy **Not now** leave the choice
+For a prepared scope, send either answer to `scope approve` (Codex `scope_approve`)
+with its `scope_id` and `human.decision` from `approval.decision`. It records
+the verified refusal or starts the approved work. The existing `decision stop`
+route also binds a refusal with this scope decision ID and no run argument. Dismissal and legacy **Not now** leave the choice
 unresolved. Supply the decision identity in the actual native human locator.
 Reuse that identity and answer on technical retries.
 If the person changes the requested scope/count, prepare that actual effect and ask only

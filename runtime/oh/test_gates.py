@@ -64,7 +64,9 @@ class GateTest(unittest.TestCase):
                     reply=common|{'type':'user','promptId':'answer','message':{'role':'user','content':'Stop and take over'}}
                 else:
                     prefix=[{'type':'session_meta','payload':{'id':'scopechat','cwd':str(self.root),'source':'cli'}}]
-                    result={'type':'response_item','payload':{'type':'function_call_output','call_id':'prepare','output':returned['content']}}
+                    result={'type':'event_msg','payload':{'type':'item_completed','thread_id':'scopechat',
+                            'item':{'type':'McpToolCall','server':'o-harness','tool':'scope_prepare','status':'completed',
+                                    'result':{'content':[{'type':'text','text':returned['content']}]}}}}
                     display={'type':'response_item','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':chat}]}}
                     reply={'type':'event_msg','payload':{'type':'user_message','turn_id':'answer','message':'Stop and take over'}}
                 for prepared_result in (False,True):
@@ -77,6 +79,11 @@ class GateTest(unittest.TestCase):
                     locator={'host':host,'session':'scopechat','transcript_path':str(path),'decision':key}
                     observed=native_human(self.root,locator)
                     if prepared_result:
+                        if host=='codex':
+                            from .native import _presented
+                            with patch.dict(os.environ,{'CODEX_THREAD_ID':'scopechat'}):
+                                recovered=_presented(self.root,{'text':'Approve and fix','decision':key})
+                                self.assertEqual(native_human(self.root,recovered)['prompt'],'Stop and take over')
                         verify_scope(self.root,scope,locator,observed,decline=True)
                         ambiguous=observed|{'prepared_offer':observed['prepared_offer']|{'ambiguous':True}}
                         with self.assertRaises(Refused):verify_scope(self.root,scope,locator,ambiguous,decline=True)

@@ -724,8 +724,52 @@ def _verify_scope_plan(scope, source, *, replay=False):
         raise Refused('The person accepted changed scope. Preserve the accepted plan and prepare its actual tasks; the old task projection is not approved.')
 
 
+def _scope_stop_locator(root,locator,scope_id=None):
+    """Resolve an omitted offer identity only from the person's actual scope refusal."""
+    if not isinstance(locator,dict) or locator.get('decision'):return locator
+    path=checkout_file(root,'oh-recovery-menu.json')
+    hint=read_json(path) if path.exists() else {}
+    if hint.get('kind')!='approve-scope':return locator
+    key=hint.get('decision')
+    if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key):return locator
+    if scope_id and read_json(_home(root)/'decisions'/(key+'.json')).get('scope')!=scope_id:return locator
+    located=_presented(root,locator|{'decision':key})
+    try:reply=authority.native_human(root,located,latest=False)
+    except Refused:return locator
+    if (reply['prompt'].strip().casefold().rstrip('.!')=='stop and take over' and
+            (authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint) or
+             (reply.get('prepared_offer') or {}).get('decision')==key)):
+        return located
+    return locator
+
+
+def _decline_scope(root,scope_id,scope,locator,source):
+    from .decisions import verify_scope
+    verify_scope(root,scope,locator,source,decline=True)
+    # Declining a preview has no run or grant to stop. Retain its actual reply.
+    receipt=_home(root)/'scopes'/scope_id/'declines'/(_human_key(source)+'.json')
+    result={'scope_id':scope_id,'decision':locator['decision'],'approved':False,'status':'declined'}
+    with _locked(root):
+        for _,entered in _saved_runs(root):
+            if entered.get('scope_id')==scope_id:
+                raise Refused('This scope already entered a delivery. To take over its saved work, prepare decision-request stop --run '+entered['id']+' and bind the actual run choice.')
+        if receipt.exists():
+            if read_json(receipt)['decision']!=locator['decision']:raise Refused('Retry the original scope decision')
+            return result
+        authority.coordinator(root,{'human':source,'host':source['host']},locator)
+        _immutable(receipt,{'decision':locator['decision'],'human':source})
+    return result
+
+
 def approve_scope(root, scope_id, locator, after=None):
     scope=_scope(root,scope_id)
+    # A scope's own offer is its question identity. It cannot be a run prerequisite.
+    if after and re.fullmatch(r'[0-9a-f]{64}',after) and locator.get('decision',after)==after:
+        offer=read_json(_home(root)/'decisions'/(after+'.json'))
+        if offer.get('kind')=='approve-scope' and offer.get('scope')==scope_id:
+            locator=locator|{'decision':after}
+            after=None
+    if after is None and not locator.get('decision'):locator=_scope_stop_locator(root,locator,scope_id)
     locator=_presented(root,locator)
     subject=None if locator.get('decision') else _home(root)/'scopes'/scope_id/'scope.md'
     from .workflow import active_file
@@ -749,6 +793,8 @@ def approve_scope(root, scope_id, locator, after=None):
     _verify_scope_plan(scope,source)
     if locator.get('decision') and source.get('via')!='plan':
         from .decisions import verify_scope
+        if source['prompt'].strip().casefold().rstrip('.!')=='stop and take over':
+            return _decline_scope(root,scope_id,scope,locator,source)
         verify_scope(root,scope,locator,source)
         source=source|{'decision':locator['decision']}
     elif source.get('via')!='plan' and authority.shown_offer_reference(source):
@@ -1345,6 +1391,7 @@ def _presented(root,locator,state=None):
     host=locator.get('host') or ('codex' if os.environ.get('CODEX_THREAD_ID') else (state or {}).get('host'))
     session=locator.get('session') or env or ((state or {}).get('human') or {}).get('session')
     if not host or not session:return locator
+    locator=locator|{'host':host,'session':session}
     options=prepared['menu_options'] if prepared.get('presentation') in ('checkpoint-menu','recovery-menu') and not prepared.get('bound_question') else None
     try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options,compact='disclosure' in prepared)
     except Refused:return locator
@@ -1375,41 +1422,14 @@ def _recorded_choice(journal,key,kind):
 
 
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
-    if kind=='stop' and isinstance(locator,dict) and not locator.get('decision'):
-        # A coordinator may pass just the conversation locator. Resolve only a
-        # displayed scope refusal; a prompt or the checkout's hint alone cannot bind it.
-        hint_path=checkout_file(root,'oh-recovery-menu.json')
-        hint=read_json(hint_path) if hint_path.exists() else {}
-        if hint.get('kind')=='approve-scope':
-            located=_presented(root,locator|{'decision':hint['decision']})
-            try:reply=authority.native_human(root,located,latest=False)
-            except Refused:pass
-            else:
-                if (reply['prompt'].strip().casefold().rstrip('.!')=='stop and take over' and
-                        (authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint) or
-                         (reply.get('prepared_offer') or {}).get('decision')==hint['decision'])):
-                    locator=located
+    if kind=='stop':locator=_scope_stop_locator(root,locator)
     if isinstance(locator,dict) and re.fullmatch(r'[0-9a-f]{64}',locator.get('decision') or ''):
         prepared=read_json(_home(root)/'decisions'/(locator['decision']+'.json'))
         if kind=='stop' and prepared.get('kind')=='approve-scope':
-            from .decisions import verify_scope
             scope=_scope(root,prepared['scope'])
             locator=_presented(root,locator)
             source=authority.native_human(root,locator,latest=False)
-            verify_scope(root,scope,locator,source,decline=True)
-            # Declining a preview has no run or grant to stop. Retain its actual reply.
-            receipt=_home(root)/'scopes'/prepared['scope']/'declines'/(_human_key(source)+'.json')
-            result={'scope_id':prepared['scope'],'decision':locator['decision'],'approved':False,'status':'declined'}
-            with _locked(root):
-                for _,entered in _saved_runs(root):
-                    if entered.get('scope_id')==prepared['scope']:
-                        raise Refused('This scope already entered a delivery. To take over its saved work, prepare decision-request stop --run '+entered['id']+' and bind the actual run choice.')
-                if receipt.exists():
-                    if read_json(receipt)['decision']!=locator['decision']:raise Refused('Retry the original scope decision')
-                    return result
-                authority.coordinator(root,{'human':source,'host':source['host']},locator)
-                _immutable(receipt,{'decision':locator['decision'],'human':source})
-            return result
+            return _decline_scope(root,prepared['scope'],scope,locator,source)
         if prepared.get('presentation')=='recovery-menu':
             from .recovery import apply
             return apply(root,kind,locator,run=run)
