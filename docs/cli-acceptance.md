@@ -74,7 +74,7 @@ not exercise. After the single implementation review run every slice on the fina
 | Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The approved row is recorded in M1, validates and passes review; application files stay at baseline. |
 | Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
 | Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then Stop at the selection boundary before workers. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; resume preserves it, only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The checkpoint identifies excluded other-track work. One PR links the reviewed HEAD and passes CI. |
-| Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, decline it. | No implementation, approval, edits or publication. |
+| Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, decline it. | One actual Stop binds a scope decline. Verify its receipt, no new run, no implementation, approval, edits or publication. |
 
 The independent Design fixture contains a normal roadmap initiative only. The host still drafts, checks, reviews and accepts its design. Nightly P also exercises the direct handoff from the newly created proposal.
 
@@ -151,8 +151,10 @@ Check the clickable link, saved URL and actual remote HEAD. Do not merge the tes
 Use `<host>-choice`. Invoke Deliver `0001`, select Core through the actual track question,
 and confirm only task 1 is selected. Stop before implementation using the native Stop
 decision. Inspect that application files and grants were not expanded. Then request a tiny
-new quick fix; dismiss or decline its proposed scope, and confirm it makes no changes and
-does not treat dismissal as acceptance. Resume a pending question only through supported
+new quick fix and choose Stop and take over once. Check the decline receipt, the previous
+stopped journal and unchanged files. For recovery, inspect the path list through its inspection
+link, then choose Continue once. Check the same grant is retained. At a checkpoint
+with only Stop, require a single direct chat answer. Resume a pending question only through supported
 host controls. Missing clickable cards may use OH's documented direct-reply fallback;
 record which surface was actually exercised.
 

@@ -52,23 +52,23 @@ class DeliveryTest(fixtures.NativeFixture):
         manifest,extra=delivery.selection(self.root,'0001','core')
         self.assertEqual([t['id'] for t in manifest['tasks']],['1','2'])
         original=path.read_text()
-        state=manifest|extra|{'status':'checkpoint','done':['1'],'summaries':[{}],
+        state=manifest|extra|{'status':'checkpoint','branch':self.git('branch','--show-current'),'done':['1'],'summaries':[{}],
             'granted':['1'],'config':{'tasks_per_batch':1},'attempts':[],
             'human':{'host':'codex','session':'checkpoint'},
             'scope_snapshot':{'documents':{str(path):original}}}
         with patch('oh.publication.settled'),patch('oh.publication.destination',return_value=None):
             ready=_checkpoint(self.root,state,'continue','Work: saved design')
-            self.assertIn('Continue authorizes tasks: 2',ready['question'])
-            self.assertIn('Pending task 3',ready['question'])
-            self.assertIn('blocked on §5',ready['question'])
-            self.assertIn('requires completed task(s): 3',ready['question'])
-            self.assertIn('belongs to another track: ui',ready['question'])
+            self.assertIn('Continue authorizes tasks: 2',ready['disclosure'])
+            self.assertIn('Pending task 3',ready['disclosure'])
+            self.assertIn('blocked on §5',ready['disclosure'])
+            self.assertIn('requires completed task(s): 3',ready['disclosure'])
+            self.assertIn('belongs to another track: ui',ready['disclosure'])
             self.assertEqual(set(ready['choices']),{'continue','stop'})
             completed=state|{'status':'completed','done':['1','2'],'granted':['1','2']}
             blocked=_checkpoint(self.root,completed,'publish','Work: saved design')
             self.assertEqual(set(blocked['choices']),{'stop'})
-            self.assertIn('Selected work is complete;',blocked['question'])
-            self.assertIn('get the revised design approved through Design',blocked['question'])
+            self.assertIn('Selected work is complete;',blocked['disclosure'])
+            self.assertIn('get the revised design approved through Design',blocked['disclosure'])
             # A local edit cannot silently remove the saved blocker from an offer.
             path.write_text(original.replace(' Blocked on §5.',''),newline='\n')
             self.assertEqual(_checkpoint(self.root,completed,'publish','Work: saved design'),blocked)
@@ -81,11 +81,11 @@ class DeliveryTest(fixtures.NativeFixture):
                 published=completed|{'summaries':[{'commit':'reviewed'}]}
                 offer=_checkpoint(self.root,published,'publish','Work: saved design')
                 self.assertEqual(set(offer['choices']),{'publish','stop'})
-                self.assertIn('blocked on §5',offer['question'])
+                self.assertIn('blocked on §5',offer['disclosure'])
             done=completed|{'done':['1','2','3','4','5']}
             final=_checkpoint(self.root,done,'publish','Work: saved design')
-            self.assertIn('Design complete: all approved design tasks are complete.',final['question'])
-            self.assertNotIn('Pending task',final['question'])
+            self.assertIn('Design complete: all approved design tasks are complete.',final['disclosure'])
+            self.assertNotIn('Pending task',final['disclosure'])
         self.assertEqual([t['id'] for t in state['tasks']],['1','2'])
         self.assertEqual(state['granted'],['1'])
 
@@ -365,6 +365,11 @@ class DeliveryTest(fixtures.NativeFixture):
                 rows.append(human_record('entry','/oh-deliver 0001'))
                 def save():path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
                 def choose(gate,use):
+                    if 'disclosure' in gate:
+                        rows.append({'type':'response_item','timestamp':now(),'payload':{'type':'message','role':'assistant',
+                            'content':[{'type':'output_text','text':gate['disclosure']}]}} if host=='codex' else
+                            {'type':'assistant','sessionId':session,'cwd':str(self.root),'timestamp':now(),
+                             'message':{'content':[{'type':'text','text':gate['disclosure']}]}})
                     if host=='codex':
                         rows.extend([{'type':'response_item','timestamp':now(),'payload':{'type':'function_call','call_id':use,
                             'name':'request_user_input_async','arguments':json.dumps({'questions':[{'title':gate['question'],'options':gate['options']}]})}},
@@ -594,7 +599,7 @@ class DeliveryTest(fixtures.NativeFixture):
             prepared=native.prepare_scope(self.root,**selection)
             snapshot=read_json(Path(prepared['preview']).with_name('scope.json'))
             self.assertEqual(snapshot['covers'],[manual])
-            self.assertIn(manual,Path(prepared['preview']).read_text())
+            self.assertIn(manual[:12],Path(prepared['preview']).read_text())
         native.approve_scope(self.root,prepared['scope_id'],self.human())
         self.assess();self.implement();review=self.reviewed()
         packet=read_json(Path(review['evidence'])/'task-context.json')

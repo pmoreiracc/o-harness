@@ -129,6 +129,14 @@ class NativeFixture(WorkflowFixture):
         self.turn+=1
         return {'host':'codex','session':'s','turn':str(self.turn),'prompt':prompt,**extra}
 
+    def offered_answer(self,offer,label,*,via='question',**extra):
+        from .storage import now
+        at=now()
+        shown='\n'.join([offer.get('disclosure',''),offer['question'],*offer['options']])
+        return self.human(label,decision=offer['decision'],via=via,question=offer['question'],
+                          question_options=offer['options'],question_at=at,
+                          question_context=[{'text':shown,'at':at}],**extra)
+
     def resume_choice(self,*,run=None,**extra):
         from . import native
         state=load_run(self.root,run or native.resume(self.root)['run'])[1]

@@ -113,7 +113,7 @@ def prepare(codex_model, claude_model, suite):
                         'end the turn, and wait for the actual native reply through exec resume.\n')
                 if scenario == 'delivery' and sanity:
                     instructions.write('\nSanity trial: on initial track selection stop at the prepared scope '
-                                       'before workers. Present the native Stop choice. In a fresh session '
+                                       'before workers. Prepare decision-request stop and present its single action in ordinary chat. In a fresh session '
                                        'after actual Resume, deliver the approved task normally.\n')
                 elif scenario == 'delivery':
                     instructions.write('\nAcceptance coordinator: in the FIRST implementation admission only, '
@@ -123,7 +123,8 @@ def prepare(codex_model, claude_model, suite):
                         'Do not repeat it or manufacture a capacity error.\n')
                 elif scenario == 'choice':
                     instructions.write('\nAcceptance coordinator: after the actual track answer prepares '
-                        'its scope, present the normal bound Stop decision and wait. Do not launch workers '
+                        'a design scope, prepare decision-request stop and wait for its single action in ordinary chat. '
+                        'For a new quick fix use the scope’s own prepared approval question. Do not launch workers '
                         'in this selection-only probe.\n')
             (root / 'CLAUDE.md').write_text('Read AGENTS.md.\n', encoding='utf-8', newline='\n')
             for file, value in (('answer.txt', 'before'), ('marker.txt', 'before'), ('release.txt', 'pending')):
