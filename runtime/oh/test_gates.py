@@ -30,7 +30,7 @@ class GateTest(unittest.TestCase):
                 patch('oh.storage.checkout_file',return_value=self.home/'hint.json'), patch('oh.decisions.now',return_value='2026-11-05T12:00:00Z'):
             offered=scope_request(self.root,scope)
             key=offered['decision']
-            source={'via':'question','question':offered['question'],'question_at':'2026-11-05T12:00:01Z','prompt':'Approve and fix'}
+            source={'via':'question','question':offered['question'],'question_at':'2026-11-05T12:00:01Z','prompt':offered['options'][0]}
             source['question_options']=offered['options']
             with self.assertRaisesRegex(Refused,'identify the prepared choice'):verify_scope(self.root,scope,{'decision':key},source)
             self.assertEqual(offered['question'],'Approve “Repair narrow layout”?')
@@ -43,8 +43,10 @@ class GateTest(unittest.TestCase):
             verify_scope(self.root,scope,{'decision':key},source)
             # A real answer to an unrelated question cannot approve the previously prepared work.
             unrelated=source|{'question':'Approve the README correction?', 'question_context':[],
+                              'prompt':'Approve fix · README correction','question_options':['Approve fix · README correction','Stop and take over'],
                               'option_descriptions':'Edit the README only.'}
             with self.assertRaises(Refused):verify_scope(self.root,scope,{'decision':key},unrelated)
+            verify_scope(self.root,scope,{'decision':key},source|{'question':'Ready to make the change?', 'question_context':[]})
             # The scoped title and user's explicit Stop are sufficient to decline.
             declined=source|{'question_context':[],'prompt':'Stop and take over'}
             verify_scope(self.root,scope,{'decision':key},declined,decline=True)

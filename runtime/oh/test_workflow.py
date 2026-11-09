@@ -165,7 +165,7 @@ class NativeWorkflowTest(NativeFixture):
             selection=active.read_bytes() if active.exists() else None
             scope=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
             offer=scope['approval']
-            earlier=self.offered_answer(offer,'Approve and fix',session='previous',at=now())
+            earlier=self.offered_answer(offer,offer['options'][0],session='previous',at=now())
             answer=self.offered_answer(offer,'Stop and take over',via='text' if prior else 'question',at=now())
             before=[journal.records() for journal,_ in native._saved_runs(self.root)]
             with self.assertRaises(Refused):native.decision(self.root,'stop',answer|{'prompt':'Approve and fix'})
@@ -184,7 +184,7 @@ class NativeWorkflowTest(NativeFixture):
             self.assertEqual(self.git('status','--porcelain'),'')
 
         # A later genuine approval can enter. Stale scope-only Stop is not a run Stop.
-        approved=self.offered_answer(offer,'Approve and fix',session='renewed',at=now())
+        approved=self.offered_answer(offer,offer['options'][0],session='renewed',at=now())
         entered=native.approve_scope(self.root,scope['scope_id'],approved)
         journal,state=load_run(self.root);before=journal.records()
         self.assertEqual(entered['granted'],['1'])
@@ -331,7 +331,7 @@ class NativeWorkflowTest(NativeFixture):
         self.assertFalse(active_file(self.root).exists())
         self.assertIn('approval',prepared)
         self.assertIn(prepared['approval']['decision'],'\n'.join(json.dumps(prepared,indent=2).splitlines()[:60]))
-        self.assertEqual(prepared['approval']['options'],['Approve and fix','Stop and take over'])
+        self.assertEqual(prepared['approval']['options'],['Approve 2 tasks · '+self.tasks[0]['title'],'Stop and take over'])
         with self.assertRaisesRegex(Refused,'named action'):
             native.approve_scope(self.root,prepared['scope_id'],self.offered_answer(prepared['approval'],'Investigate CI failures'))
         refused=self.offered_answer(prepared['approval'],'Stop and take over')
@@ -372,7 +372,7 @@ class NativeWorkflowTest(NativeFixture):
         atomic_json(checkout_file(self.root,'oh-active-run.json'),
                     {'project':self.project_id,'run':unused.path.name,'checkout':checkout_id(self.root)})
         approval=prepared['approval']
-        native.approve_scope(self.root,prepared['scope_id'],self.offered_answer(approval,'Approve and fix',session='fresh-parent'))
+        native.approve_scope(self.root,prepared['scope_id'],self.offered_answer(approval,approval['options'][0],session='fresh-parent'))
         journal,state=load_run(self.root);original=journal.records()
         self.assertEqual(read_json(journal.path/'scope'/'approval.json')['decision'],approval['decision'])
         self.assertEqual(state['granted'],['1'])
@@ -1389,7 +1389,7 @@ class NativeWorkflowTest(NativeFixture):
         from .decisions import prepare as decision_request
         from .storage import now
         offer=decision_request(self.root,'accept-concerns',attempt=review['id'])
-        self.assertEqual(offer['options'],['Accept these concerns','Fix concerns'])
+        self.assertEqual(offer['options'],['Accept concerns · '+self.tasks[0]['title'],'Fix concerns'])
         before=load_run(self.root)[1]
         for answer in ('Fix concerns','Not now'):
             with self.assertRaises(Refused):

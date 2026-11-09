@@ -82,7 +82,7 @@ authority. Once the remedy is justified, prepare its scope and present the actua
 in plain language, then ask which action the person wants. Use the returned action labels. Do not end at a recommendation or ask permission
 to prepare the proposal; this approval is the person's decision about the proposed fix:
 
-- **Approve and fix** binds that prepared scope through the existing `scope approve`
+- The returned **Approve fix** action binds that prepared scope through the existing `scope approve`
   path. Then follow normal assessment, implementation, checks and fresh review before
   updating the same PR through the existing publication process. This is the repair
   approval; do not ask a third time whether to start the fix.

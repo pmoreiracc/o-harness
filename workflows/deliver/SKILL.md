@@ -70,7 +70,7 @@ actual acceptance with `scope approve`. For a menu or chat reply, explain the bo
 call `functions.request_user_input_async` with the returned `approval` question and
 choices. Retain its decision identity and use the shared direct-reply fallback. An initiating
 human locator identifies the request and does not replace this scope acceptance.
-For quick-fix menus, **Approve and fix** accepts the shown scope; **Stop and take over**
+For quick-fix menus, the returned **Approve fix** action accepts the shown scope; **Stop and take over**
 records the refusal and ends the handoff. Bind approval with `scope approve`; bind refusal with `decision stop` using the original scope decision ID and no run argument.
 Honor the saved labels of older prepared questions. For CI corrections, first complete
 the authorized investigation described in `workflows/publication.md`; a preliminary

@@ -22,7 +22,7 @@ A person reading just the menu should understand the decision. Never show an
 internal decision ID or fingerprint. Leave lists and supporting detail in chat or
 the supplied details link. For destructive restart, show the branch, restart
 base and discarded paths or their link before asking. For a reviewed proposal,
-plan, scope or repair, show the actual material to be approved. Put the supplied Markdown preview or review link in a short chat message before opening the menu. Use its readable link title. Native menu titles and descriptions are plain text: keep raw URLs, absolute paths and internal IDs out of them. If the work changes during discussion, prepare the revised choice before asking.
+plan, scope or repair, show the actual material to be approved. Put the supplied Markdown preview or review link in a short chat message before opening the menu. Use its readable link title. A named design or proposal action identifies the reviewed subject without requiring a link in the menu. Native menu titles and descriptions are plain text: keep raw URLs, absolute paths and internal IDs out of them. If the work changes during discussion, prepare the revised choice before asking.
 Use the actual preparation result in this conversation before asking.
 When handling a pending offer from an older installed version, preserve its
 original binding and never silently replace a valid answer.
@@ -144,10 +144,11 @@ Native Pause/Stop commands remain immediately usable. Older already-presented ca
 choices remain readable for recovery; do not build new wording around that compatibility.
 Routine clarification, issue tracking and follow-up bookkeeping need no durable grant.
 For concern-only reviews, call Claude `AskUserQuestion` or Codex Default mode
-`functions.request_user_input_async` with the returned **Accept these concerns / Fix concerns** choices. Fix concerns continues the existing scoped repair, verification and fresh-review
+`functions.request_user_input_async` with the returned subject-specific **Accept concerns / Fix concerns** choices. Fix concerns continues the existing scoped repair, verification and fresh-review
 path within the remaining allowance; it does not accept the findings or renew that allowance.
 Do not submit that choice as `accept-concerns`. A dismissal or a legacy Not now answer
 alone does not request repairs; follow the person's actual choice without inventing one.
+A dismissed or rejected native plan remains unapproved. End the handoff on an explicit Stop in plan feedback; the native plan rejection already records that no plan was accepted. Do not invent a menu receipt for it.
 An instruction to create an issue and allow another review needs only the review allowance
 recorded as a grant; recording the authorized issue URL does not consume the human answer
 or require a second confirmation. The person controls publication, scope and allowances.

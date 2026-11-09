@@ -1,4 +1,5 @@
 """Bind a native answer to a presented effect, without interpreting natural-language grants."""
+from textwrap import shorten
 from .storage import Refused, digest, now, read_json
 from .workflow import load_run, next_task, review_limit
 
@@ -146,15 +147,15 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         elif kind=='accept-concerns':
             review=_attempt(state,attempt)
             if not any(f['severity']=='concern' for f in review.get('findings',[])):raise Refused('This review has no concerns to accept')
-            label='Accept these concerns'
+            label='Accept concerns · '+shorten(task['title'],width=48,placeholder='…')
             count=sum(f['severity']=='concern' for f in review['findings'])
             details+=f'\nAccept the {count} concerns shown in the review report for this candidate, leaving them unfixed.'
         elif kind=='approve-proposal':
             _attempt(state,attempt)
-            label='Apply these proposed additions';details+='\nApply the complete proposal preview shown above.'
+            label='Apply proposal · '+shorten(subject,width=48,placeholder='…');details+='\nApply the complete proposal preview shown above.'
         elif kind=='approve-private':
             review=_attempt(state,attempt)
-            label='Approve this design';details+='\nDesign artifacts: '+', '.join(review.get('artifacts',{}))
+            label='Approve design · '+shorten(subject,width=48,placeholder='…');details+='\nDesign artifacts: '+', '.join(review.get('artifacts',{}))
         elif kind=='publish':
             from .publication import destination
             dest=destination(root)
@@ -195,6 +196,7 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
             value['takeover']=True
         if not checkpoint and kind!='stop':
             title=f'{label} for {subject}?'
+            if kind in ('approve-proposal','approve-private'):title=f'How would you like to proceed with {subject}?'
             if kind=='accept-concerns':title=f'How should we handle the findings for {subject}?'
             if kind=='approve-repair':title=f'Expand task {task["id"]} to include the proposed repair?'
             value.update(disclosure=compact_details,question=title,menu_options=options)
@@ -207,7 +209,6 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
             if kind=='approve-private':
                 folder=Path(state.get('plans',{}).get('designs',''))
                 artifact=next((Path(name) for name in evidence.get('artifacts',{}) if Path(name).parent==folder),artifact)
-            value['approval_material']=str(artifact)
             value['disclosure']+='\n[View the reviewed work](<'+artifact.as_posix()+'>)'
         elif kind=='approve-repair':
             value['approval_material']=repair.strip()
@@ -359,6 +360,7 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     if kind=='resume':accepted+=('resume','resume the saved work','yes, resume saved work','please resume saved work')
     from .authority import action_text
     answer=action_text(source['prompt']) if value.get('menu_version')==2 else source['prompt'].strip().casefold().rstrip('.!')
+    if value.get('menu_version')==2:accepted=tuple(map(action_text,accepted))
     if answer not in accepted:
         raise Refused('This native answer does not accept the presented effect; preserve it and resolve the actual choice')
     from .authority import newer
@@ -397,17 +399,19 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
 def scope_request(root,scope):
     from .native import _scope_preview
     fix=scope.get('workflow')=='deliver' and not scope.get('design')
-    label='Approve and fix' if fix else 'Approve this scope'
+    title=shorten(scope['tasks'][0]['title'],width=48,placeholder='…')
+    count=len(scope['tasks'])
+    action=('Approve fix' if fix else 'Approve scope') if count==1 else f'Approve {count} tasks'
+    label=action+' · '+title
     options=[label,TAKE_OVER]
-    from textwrap import shorten
-    title=shorten(scope['tasks'][0]['title'],width=64,placeholder='…')
     value={'kind':'approve-scope','scope':digest(scope),'label':label,
            'disclosure':_scope_preview(scope,plan=False).rstrip()+'\n\nStop and take over leaves this scope unapproved.',
            'question':f'Approve “{title}”?' if len(scope['tasks'])==1 else f'Approve {len(scope["tasks"])} tasks starting with “{title}”?',
            'menu_options':options,'created_at':now()}
     from .native import _home
     preview=_home(root)/'scopes'/value['scope']/'scope.md'
-    value['approval_material']=str(preview)
+    if count>1 or title!=' '.join(scope['tasks'][0]['title'].split()) or scope.get('original_work') or scope.get('pr_target') or scope.get('starting_edits'):
+        value['approval_material']=str(preview)
     value['disclosure']+='\n[View the prepared scope](<'+preview.as_posix()+'>)'
     key=save_offer(root,value)
     return {'decision':key,'disclosure':value['disclosure'],'question':value['question'],'options':options,
@@ -433,7 +437,7 @@ def verify_scope(root,scope,locator,source,*,decline=False):
     if decline:
         if answer!=TAKE_OVER.casefold():
             raise Refused('This answer does not decline the presented scope')
-    elif answer not in (value.get('label','Approve this scope').casefold(),'yes','yes please'):
+    elif answer not in (action_text(value.get('label','Approve this scope')),'yes','yes please'):
         raise Refused('This answer does not approve the presented scope')
     if 'disclosure' in value:return
     from .authority import question_text,presented_question_at
