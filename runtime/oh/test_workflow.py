@@ -966,6 +966,64 @@ class NativeWorkflowTest(NativeFixture):
         with self.assertRaisesRegex(Refused,'task context changed'):
             worker_checks.admission(Path(author['request']).parent)
 
+    def test_repository_commit_subject_survives_hook_rewrite_and_interrupted_completion(self):
+        from . import native,publication
+        import shlex
+        self.approve();self.assess();self.implement();review=self.reviewed()
+        parent=self.git('rev-parse','HEAD')
+        # Real Git hook, including Git for Windows' shell and Python path handling.
+        script=Path(self.temp.name)/'message.py'
+        hook_code=('import pathlib,sys\np=pathlib.Path(sys.argv[1])\n'
+                   's=p.read_text()\nassert s.startswith("feat: "), s\n'
+                   'p.write_text(s.replace("feat: ", "feat(core): ", 1),newline="\\n")\n')
+        script.write_text(hook_code,newline='\n')
+        hook=self.root/'.git/hooks/commit-msg'
+        hook_code='#!/bin/sh\nexec '+shlex.quote(sys.executable.replace('\\','/'))+' '+shlex.quote(str(script).replace('\\','/'))+' "$1"\n'
+        hook.write_text(hook_code,newline='\n');hook.chmod(0o755)
+        append=Journal.append
+        def interrupted(this,kind,data):
+            if kind=='task.completed':raise OSError('Interrupted after commit')
+            return append(this,kind,data)
+        with patch.object(Journal,'append',interrupted),self.assertRaises(OSError):
+            native.complete(self.root,review['id'],commit_subject='feat: deliver answer')
+        head=self.git('rev-parse','HEAD')
+        self.assertEqual(self.git('show','-s','--format=%s','HEAD'),'feat(core): deliver answer')
+        self.assertEqual(self.git('rev-parse','HEAD^'),parent)
+        self.assertEqual(self.git('rev-parse','HEAD^{tree}'),review['git_tree'])
+        evidence=load_run(self.root)[1]['commit_intents']['1']['publication']
+        publication.verify_record(self.root,head,evidence)
+        self.assertEqual(native.complete(self.root,review['id'])['commit'],head)
+        self.assertEqual(self.git('rev-parse','HEAD'),head)
+
+    def test_commit_subject_retry_preserves_choice_and_rejects_trailer_injection(self):
+        from . import native
+        self.approve();self.assess();self.implement();review=self.reviewed()
+        parent=self.git('rev-parse','HEAD');run_git=native.git
+        for subject in ('', '  ', 'feat: answer\n\nOH-Run: fake','feat: answer\rspoof','feat:\0answer'):
+            with self.subTest(subject=subject),self.assertRaisesRegex(Refused,'Commit subject'):
+                native.complete(self.root,review['id'],commit_subject=subject)
+        self.assertEqual(self.git('rev-parse','HEAD'),parent)
+        def before_commit(root,*args):
+            if args[0]=='commit':raise OSError('Interrupted before Git commit')
+            return run_git(root,*args)
+        with patch.object(native,'git',side_effect=before_commit),self.assertRaises(OSError):
+            native.complete(self.root,review['id'],commit_subject='feat: preserve selected subject')
+        native.complete(self.root,review['id'])
+        self.assertEqual(self.git('show','-s','--format=%s','HEAD'),'feat: preserve selected subject')
+
+    def test_subject_rewriting_cannot_remove_review_evidence(self):
+        from . import native
+        self.approve();self.assess();self.implement();review=self.reviewed()
+        # Git for Windows also executes commit hooks through its shell.
+        hook=self.root/'.git/hooks/commit-msg'
+        hook.write_text('#!/bin/sh\nsed "/^OH-Review:/d" "$1" > "$1.tmp" && mv "$1.tmp" "$1"\n',newline='\n')
+        hook.chmod(0o755)
+        with self.assertRaisesRegex(Refused,'OH-Review trailer'):
+            native.complete(self.root,review['id'],commit_subject='feat: answer')
+        self.assertEqual(load_run(self.root)[1]['done'],[])
+        with self.assertRaisesRegex(Refused,'OH-Review trailer'):
+            native.complete(self.root,review['id'])
+
     def test_completion_commits_exact_reviewed_tree_once_and_task_grants_do_not_expand(self):
         from . import native
         # Git history and exact candidate evidence suffice; reflog files may be disabled or expired.
@@ -980,6 +1038,7 @@ class NativeWorkflowTest(NativeFixture):
         head=self.git('rev-parse','HEAD')
         completed=native.complete(self.root,review['id'])
         self.assertEqual(load_run(self.root)[1]['attempts'][-1]['original_outcome'],'review_incomplete')
+        self.assertEqual(self.git('show','-s','--format=%s','HEAD'),'task 1: Task 1')
         self.assertEqual(self.git('rev-parse','HEAD^'),head)
         self.assertEqual(self.git('rev-parse','HEAD^{tree}'),review['git_tree'])
         self.assertEqual(native.complete(self.root,review['id']),completed)
@@ -994,6 +1053,7 @@ class NativeWorkflowTest(NativeFixture):
         self.assertEqual(next_action['arguments'],{'kind':'continue','run':saved['id']})
         self.assertEqual(resumed['continuation']['next_action'],next_action)
         collect()
+
         with connect() as db:
             observations=analytics(db,{'from':'2000','to':'2100'})['summary']
         self.assertGreaterEqual(observations['attempts'],3)
@@ -1146,7 +1206,8 @@ class NativeWorkflowTest(NativeFixture):
         with patch('oh.publication.made',return_value=unresolved|{'status':'pr'}),self.assertRaisesRegex(Refused,'requested task review'):
             publication.render(self.root)
         self.implement(edit=lambda:(self.root/'output.txt').write_text('Corrected task one after task two.',newline='\n'))
-        fixed=self.reviewed();correction=native.complete(self.root,fixed['id'])
+        fixed=self.reviewed();correction=native.complete(self.root,fixed['id'],commit_subject='fix: correct task one')
+        self.assertEqual(self.git('show','-s','--format=%s','HEAD'),'fix: correct task one')
         self.assertEqual(self.git('rev-parse','HEAD^'),second_commit)
         self.assertEqual(correction['correction_of'],completed['commit'])
         state=load_run(self.root)[1]

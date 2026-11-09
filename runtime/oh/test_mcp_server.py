@@ -129,6 +129,12 @@ class CodexToolsTest(unittest.TestCase):
         argv=command('decision_request',{'kind':'approve-repair','repair':repair},self.root)
         self.assertEqual(argv,['decision-request','--repair',repair,'--','approve-repair'])
         from .cli import main
+        subject='feat: preserve $(literal) and `text`'
+        completed=command('complete',{'attempt':'review','commit_subject':subject},self.root)
+        self.assertEqual(completed,['complete','--commit-subject',subject,'--','review'])
+        with patch('oh.native.complete',return_value=None) as complete,patch('sys.stdout',new=io.StringIO()):
+            main(['--root',str(self.root)]+completed)
+        self.assertEqual(complete.call_args.args[1:],('review',subject))
         with patch('oh.decisions.prepare',return_value=None) as prepare,patch('sys.stdout',new=io.StringIO()):
             main(['--root',str(self.root)]+argv)
         self.assertEqual(prepare.call_args.args[6],repair)

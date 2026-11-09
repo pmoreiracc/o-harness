@@ -1,6 +1,8 @@
 # Publication and CI
 
 Read when reviewed work reaches publication, or when recovering an existing PR handoff.
+If the native host denies a command, read the host-denial section in
+`workflows/recovery.md`; a persistent Bash allow rule is not the default recovery.
 Read `workflows/decisions.md` before the publication question.
 Follow the `continuation` returned by `complete`: a local commit with a pending
 publication decision still needs that checkpoint. Call Claude `AskUserQuestion`
@@ -13,7 +15,11 @@ existing decision identity and proceed; do not request a second publication appr
 Publication requires the human decision bound to reviewed HEAD and destination. Use
 `publication` to reconcile the existing PR before pushing or creating one. A failed
 lookup is not permission to create another. Use `pr-summary` as verified facts for a
-human-readable PR body, rather than copying an audit dump. Per task, explain the
+human-readable PR body, rather than copying an audit dump. Read applicable repository
+instructions and PR templates before drafting the title and body. Follow their format
+and place the relevant verified facts in their sections; use OH's readable default
+below where no convention applies. Do not copy unfulfilled template claims as facts.
+Per task, explain the
 completed behavior, review round count, final receipt identity and elapsed time,
 verification, final verdict, and concise findings with their actual dispositions.
 Read the complete final review receipt and summarize its evidence: anchors read,
@@ -29,7 +35,10 @@ summarize and group the findings further; never split approved work or rerun rev
 because of description length. Write the finished body to an external file, push
 the authorized head/branch without force, and create or update only the matching
 PR with `--body-file`. Re-run publication reconciliation after an uncertain
-response. Include a clickable Markdown link, `[PR #N](URL)`, in the first published
+response. Read back the submitted PR title and body from GitHub and compare them with
+the intended repository-compliant content. Repair an incomplete update on that same
+PR before claiming publication is finished; the identity comment alone does not prove
+the prose was submitted correctly. Include a clickable Markdown link, `[PR #N](URL)`, in the first published
 update and the final handoff, using the URL returned by GitHub or the saved receipt.
 Keep that link visible when reporting pending CI or a reconciliation error.
 Attach the PR in Codex with `attach_artifact` when available; the attachment does

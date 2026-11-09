@@ -161,7 +161,10 @@ Then call `ExitPlanMode` without an
 extra `AskUserQuestion`. Bind that actual acceptance with `scope approve` using the same
 conversation locator; OH resolves the saved plan acceptance. If supplying `tool_use_id`,
 use the `ExitPlanMode` call ID, not a human turn or result UUID. This display
-copy is not a consumer design. An edited preview needs refreshed scope and approval;
+copy is not a consumer design. If the native host denies the binding command after
+acceptance, follow the command-specific permission recovery in `workflows/recovery.md`;
+do not treat it as an OH rejection or request the same scope acceptance again.
+An edited preview needs refreshed scope and approval;
 rejection or interruption grants nothing. If native plan tools are unavailable, show
 its returned disclosure, short approval question and options in chat, then bind the direct reply
 using that same decision ID.

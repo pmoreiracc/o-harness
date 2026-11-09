@@ -141,6 +141,12 @@ def prompted(x,session):
     """Whether a Claude record is something the person typed in this conversation: a prompt or a command, not a
     tool result, a menu answer or a summary Claude wrote."""
     content=(x.get('message') or {}).get('content')
+    # Native permission inspection is a local host control, not a replacement
+    # task instruction. Claude also saves its local UI output in user rows.
+    # Ordinary text (including a typed retry or cancellation) stays consequential.
+    if isinstance(content,str) and (saved_command(content)==('permissions','') or
+                                   re.fullmatch(r'<local-command-stdout>.*</local-command-stdout>',content.strip(),re.S)):
+        return False
     typed=isinstance(content,str) or isinstance(content,list) and any(isinstance(c,dict) and c.get('type')!='tool_result' for c in content)
     return (x.get('type')=='user' and x.get('sessionId')==session and bool(x.get('promptId')) and typed
             and not x.get('isCompactSummary') and human(x))

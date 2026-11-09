@@ -187,6 +187,23 @@ pending until the separate actual repair approval. Approve changing only that fi
 Follow actual GitHub checks to green on the updated head. No weakening the check, additional
 approval to prepare the proposal, duplicate PR or fabricated successful CI observation.
 
+On Claude, exercise the repair approval through the native plan viewer with normal auto
+permissions. Inspect the separate actual acceptance and the subsequent scope-approval
+call. A generic menu approval does not establish this path. If the host denies the call,
+retain the denial and distinguish host permission classification from OH rejecting the
+native evidence; do not bypass it or add blanket permissions. This fault variant remains
+in the nightly catalog and runs during development of approval repairs.
+
+For commit/PR presentation changes, run D/C in a project whose instructions require
+Conventional Commit subjects and a PR template with named sections. Add a commit hook
+that checks the convention and rewrites the subject while preserving evidence trailers.
+Verify both the task and repair commit's actual subject, reviewed tree, parent and
+trailers. Inspect the submitted GitHub title/body for the instructed format, verified
+facts and unchanged publication identity. Recover an interrupted completion/publication
+against that same PR. Also run ordinary D with OH defaults. These additional presentation
+variants belong in the nightly catalog; they extend D/C without adding another sanity
+journey. Record their measured cost separately.
+
 ## Menu coverage in the live catalog
 
 Use the real question on each host, with a readable introduction and action descriptions.

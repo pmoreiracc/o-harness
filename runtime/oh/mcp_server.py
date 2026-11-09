@@ -60,7 +60,7 @@ TOOLS = [
     tool('evidence', 'Attach evidence', 'Retain supplementary evidence references for implementation and review; grants no authority.',
          {'attachment':OBJECT}, ['attachment']),
     tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate. Follow continuation.next_action and present the returned checkpoint before ending, including local-only work.',
-         {'attempt':TEXT}, ['attempt']),
+         {'attempt':TEXT,'commit_subject':{'type':'string','description':'Repository-compliant commit subject. Omit to use the saved subject or OH default; evidence trailers are added by OH.'}}, ['attempt']),
     tool('decision_request', 'Bind decision effect', 'Prepare native human choices. Use recover for delivery recovery: Continue, Start fresh, Stop and take over. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions. Bind the returned action from the same answer. Displays no menu and grants nothing.',
          {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1,
           'description':'Omit to renew the run’s configured review window. Supply only when the person explicitly requests a different number of additional rounds.'},'run':TEXT,'also':TEXT,
@@ -143,7 +143,7 @@ def command(name, arguments, root):
         return ['attempt',name.split('_',1)[1],'--',text('attempt',True),payload(root,arguments.get('source'))]
     if name=='review_check':return ['review-check','--',payload(root,{'report':text('report',True)})]
     if name=='evidence':return ['evidence','--',payload(root,arguments.get('attachment'))]
-    if name=='complete':return ['complete','--',text('attempt',True)]
+    if name=='complete':return ['complete']+(['--commit-subject',text('commit_subject',True)] if 'commit_subject' in arguments else [])+['--',text('attempt',True)]
     if name=='decision_request':
         args=['decision-request']
         for key in ('attempt','run','also','repair','after'):
