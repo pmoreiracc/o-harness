@@ -98,7 +98,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
             except (OSError, Refused, ValueError, SubprocessError) as exc:
                 details += 'Start fresh unavailable. Restore the saved restart evidence before trying again. '+str(exc)+'\n'
             else:
-                choices['restart'] = 'Start fresh'
+                choices['restart'] = f'Discard local work on {branch} and restart at {subject["base_ref"]}'
                 details += 'Start fresh discards the affected local changes and this branch’s unmerged work without making a new backup.\n'
                 if state.get('approved_repairs'):
                     details += 'Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
@@ -123,7 +123,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     return {'decision': key, 'question': value['question'], 'disclosure': value['disclosure'], 'options': value['menu_options'],
             'base_observation':observed,
             'actions': {label: action for action, label in choices.items()},
-            'human_locator': 'Bind the selected action from this one native question with decision.'}
+            'human_locator': 'Explain the consequences in the menu. Keep decision internal and bind the actual selection with it.'}
 
 
 def _settle(root, journal, state, source):

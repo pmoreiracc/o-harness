@@ -79,7 +79,7 @@ instructions that workers receive. Keep scratch paths, investigation logs and
 routine workflow directions out of the task. Preparing the proposal is part of the accepted investigation, even
 when the proposed repair needs new scope. It makes no repair and grants no execution
 authority. Once the remedy is justified, prepare its scope and present the actual preview
-as the returned disclosure, followed by its short approval question and choices. Do not end at a recommendation or ask permission
+in plain language, then ask which action the person wants. Use the returned action labels. Do not end at a recommendation or ask permission
 to prepare the proposal; this approval is the person's decision about the proposed fix:
 
 - **Approve and fix** binds that prepared scope through the existing `scope approve`

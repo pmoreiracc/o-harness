@@ -85,7 +85,7 @@ normal handback, cleanup continuation or delayed result into another Continue ga
 
 For an unfinished delivery, use `decision-request recover --run ID` (Codex
 `decision_request` with kind `recover`). It inspects Git and prepares one native
-question. Copy its returned disclosure into chat, including the inspection link. Then ask its short question with its
+question. Explain the effects in plain language, including the affected paths or inspection link before a discard. Then ask its short question with its
 short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
 the returned options with Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async`, following the shared waiting and fallback rules.

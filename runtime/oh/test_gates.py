@@ -32,19 +32,24 @@ class GateTest(unittest.TestCase):
             key=offered['decision']
             source={'via':'question','question':offered['question'],'question_at':'2026-11-05T12:00:01Z','prompt':'Approve and fix'}
             source['question_options']=offered['options']
-            with self.assertRaisesRegex(Refused,'disclosure'):verify_scope(self.root,scope,{'decision':key},source)
-            self.assertTrue(offered['question'].startswith('Approve “Repair narrow layout”? [ref '))
+            with self.assertRaisesRegex(Refused,'identify the prepared choice'):verify_scope(self.root,scope,{'decision':key},source)
+            self.assertEqual(offered['question'],'Approve “Repair narrow layout”?')
+            source['prepared_offer']={'decision':key}
             self.assertIn('First batch: 1 task.',offered['disclosure'])
             self.assertIn('3 independent reviews per task',offered['disclosure'])
             self.assertNotIn('repair-task',offered['disclosure'])
             shown=offered['disclosure'].replace('Repair narrow layout','## Repair narrow layout')
             source.update(question_options=offered['options'],question_context=[{'text':shown,'at':source['question_at']}])
             verify_scope(self.root,scope,{'decision':key},source)
+            # A real answer to an unrelated question cannot approve the previously prepared work.
+            unrelated=source|{'question':'Approve the README correction?', 'question_context':[],
+                              'option_descriptions':'Edit the README only.'}
+            with self.assertRaises(Refused):verify_scope(self.root,scope,{'decision':key},unrelated)
             # The scoped title and user's explicit Stop are sufficient to decline.
             declined=source|{'question_context':[],'prompt':'Stop and take over'}
             verify_scope(self.root,scope,{'decision':key},declined,decline=True)
             with self.assertRaises(Refused):
-                verify_scope(self.root,scope,{'decision':key},declined|{'question':'Approve another fix?'},decline=True)
+                verify_scope(self.root,scope,{'decision':key},declined|{'prepared_offer':{'decision':'another scope'}},decline=True)
             for choice in ('Investigate CI failures','Re-run failed checks','Stop and take over','Keep planning','Approve this scope'):
                 with self.subTest(choice=choice),self.assertRaises(Refused):
                     verify_scope(self.root,scope,{'decision':key},source|{'prompt':choice})
@@ -90,10 +95,10 @@ class GateTest(unittest.TestCase):
                         direct=observed|{'question':last,'question_context':[{'text':last,'at':observed['question_at']}]}
                         verify_scope(self.root,scope,locator,direct,decline=True)
                         with self.assertRaises(Refused):
-                            verify_scope(self.root,scope,locator,direct|{'question':last.replace('scope.md','scope.md.bak')},decline=True)
+                            verify_scope(self.root,scope,locator,direct|{'prepared_offer':{'decision':'a different preview'}},decline=True)
                         ambiguous=observed|{'prepared_offer':observed['prepared_offer']|{'ambiguous':True}}
                         with self.assertRaises(Refused):verify_scope(self.root,scope,locator,ambiguous,decline=True)
-                        with self.assertRaises(Refused):verify_scope(self.root,scope,locator,observed|{'prompt':'Approve and fix'})
+                        with self.assertRaises(Refused):verify_scope(self.root,scope,locator,observed|{'prompt':'Approve and fix'},decline=True)
                     else:
                         with self.assertRaises(Refused):verify_scope(self.root,scope,locator,observed,decline=True)
             # The new label must not reinterpret an outstanding old question.

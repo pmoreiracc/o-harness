@@ -1,5 +1,11 @@
 # Reconcile entry evidence
 
+For every choice, tell the person in one sentence what you found and why a decision is needed.
+Use the native menu for multiple actions. Make its title and descriptions understandable in
+isolation: name the work and what each action changes. Keep internal IDs in tool calls.
+For a grant or handoff, follow `workflows/decisions.md` and bind the actual answer.
+
+
 For current planning/delivery advice, listing ready work or recovery, call `entry`
 (Codex `entry`) before choosing a path or reporting current tasks/blockers. It reads
 saved work and the checkout, and fetches the configured origin base without pulling,

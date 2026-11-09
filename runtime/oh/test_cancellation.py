@@ -19,7 +19,7 @@ from .workflow import load_run
 
 
 class CancellationTest(NativeFixture, unittest.TestCase):
-    def test_missing_disclosure_is_repaired_before_native_question_on_both_hosts(self):
+    def test_presentation_prose_does_not_block_native_questions_on_either_host(self):
         from .decisions import prepare
         # A first-ever quick fix has no execution control file or run.
         offer=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})['approval']
@@ -38,12 +38,11 @@ class CancellationTest(NativeFixture, unittest.TestCase):
                 path.write_text(json.dumps(record('other offer',True))+'\n',newline='\n')
                 self.assertEqual(cancellation.hook(self.root,host,payload),{})
                 with path.open('a',newline='\n') as stream:stream.write(json.dumps(record(json.dumps(offer),True))+'\n')
-                denied=cancellation.hook(self.root,host,payload)
-                self.assertIn(offer['disclosure'],denied['hookSpecificOutput']['permissionDecisionReason'])
+                self.assertEqual(cancellation.hook(self.root,host,payload),{})
                 with path.open('a',newline='\n') as stream:stream.write(json.dumps(record(offer['disclosure']))+'\n')
                 self.assertEqual(cancellation.hook(self.root,host,payload),{})
                 args['questions'][0][text_key]='Different question'
-                self.assertEqual(cancellation.hook(self.root,host,payload)['hookSpecificOutput']['permissionDecision'],'deny')
+                self.assertEqual(cancellation.hook(self.root,host,payload),{})
 
     def setUp(self):
         super().setUp()
@@ -335,6 +334,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
                          'mcp__o_harness__decision_request'):
                 parent_tool(session, turn, name)
             prepared = prepare(self.root, 'resume')
+            append(self.offer_record('codex',session,prepared,now()))
             args = {'questions': [{'title': prepared['question'], 'options': prepared['options']}]}
             parent_tool(session, turn, 'request_user_input_async', args)
             # Preparing and displaying a question cannot launch replacement work.

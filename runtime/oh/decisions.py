@@ -24,25 +24,20 @@ def stop_boundary(root,journal,state):
                                         'selection':_selection_boundary(journal)}
 
 
-def save_offer(root,value,*,details=None):
+def save_offer(root,value,*,details=None,details_title='View all affected paths'):
     from .native import _home, _immutable
-    if 'disclosure' in value:
-        reference=digest(value)
-        if details:
-            from .receipts import save
-            path=_home(root)/'decisions'/('decision-'+reference+'.md')
-            save(path,details,immutable=True)
-            value['details_file']={'path':str(path),'hash':digest(details)}
-            value['disclosure']+='\n[View all affected paths](<'+path.as_posix()+'>)'
-        # The native record carries a compact fingerprint. Storage and boundary checks use the full digest.
-        value['question']+=' [ref '+reference[:20]+']'
-    else:
-        value['question']+='\n\nDecision reference: '+digest(value)
+    if 'menu_options' in value:value['menu_version']=2
+    if details:
+        from .receipts import save
+        path=_home(root)/'decisions'/('decision-'+digest(value)+'.md')
+        save(path,details,immutable=True)
+        value['details_file']={'path':str(path),'hash':digest(details)}
+        value['disclosure']+='\n['+details_title+'](<'+path.as_posix()+'>)'
     key=digest(value)
     _immutable(_home(root)/'decisions'/(key+'.json'),value)
     if 'disclosure' in value:
         from .storage import atomic_json, checkout_file
-        atomic_json(checkout_file(root,'oh-recovery-menu.json'),{'decision':key,'kind':value['kind'],'question':value['question'],
+        atomic_json(checkout_file(root,'oh-recovery-menu.json'),{'decision':key,'menu_version':2,'kind':value['kind'],'question':value['question'],
                     'options':value['menu_options'],'disclosure':value['disclosure'],'created_at':value['created_at']})
     return key
 
@@ -75,14 +70,15 @@ def _checkpoint(root,state,kind,details):
     from .delivery import checkpoint_progress
     details+=checkpoint_progress(state)
     if pending:
-        choices['continue']='Continue with the next task batch'
+        batch=pending[:state['config']['tasks_per_batch']]
+        choices['continue']=('Start task ' if len(batch)==1 else 'Start tasks ')+', '.join(batch)
         details+='\nContinue authorizes tasks: '+', '.join(pending[:state['config']['tasks_per_batch']])
     dest=destination(root)
     unavailable=None
     if dest and not changes(root) and state['summaries'][-1].get('commit')==state_head(root):
         from .branches import trunk
         dest=dest|{'base_branch':trunk(root,state['config'])}
-        choices['publish']='Open PR with completed tasks'
+        choices['publish']='Open PR to '+dest['destination'].removeprefix('https://github.com/').removesuffix('.git')+' → '+dest['base_branch']
         details+='\nRepository: '+dest['destination']+'\nBase branch: '+dest['base_branch']+'\nReviewed HEAD: '+state_head(root)
     else:
         dest=None
@@ -91,7 +87,9 @@ def _checkpoint(root,state,kind,details):
     choices['stop']=TAKE_OVER
     details+='\nStop preserves local work and commits; it does not push or open a PR.'
     menu=list(choices.values())
-    question=f'What next on {state["branch"]}?' if len(menu)>1 else f'Hand off {state["branch"]}?'
+    completed=('Task ' if len(state['done'])==1 else 'Tasks ')+', '.join(state['done'])
+    question=f'{completed} finished on {state["branch"]}. What would you like to do next?'
+    if len(menu)==1:question=f'{completed} finished on {state["branch"]}. Hand off this work?'
     return {'disclosure':details, 'question':question, 'choices':choices,
             'presentation':'checkpoint-menu','menu_options':menu,
             'coordinator':{k:state['human'][k] for k in ('host','session')},
@@ -166,7 +164,7 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         if also is not None:
             if not isinstance(also,str) or not also.strip():raise Refused('The accompanying native action must be readable text')
             details+='\nRequested action: '+label+'\nAlso: '+also.strip()
-            label='Approve both actions'
+            label+=' and '+also.strip()
         value={'kind':kind,'run':state['id'],'attempt':attempt,'boundary':boundary(root,state,kind,attempt),
                'question':details+'\n\n'+label+'?','label':label,'created_at':now()}
         if entry_request:value['entry_request']=entry_request
@@ -175,7 +173,9 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         compact_details=details.replace('\n'+reference,'',1)
         checkpoint=_checkpoint(root,state,kind,compact_details) if also is None and attempt is None else None
         if checkpoint:value.update(checkpoint,bound_question=True)
-        elif kind=='publish' and not dest:destination(root,required=True)
+        elif kind=='publish':
+            from .branches import trunk
+            value['publication_destination']=destination(root,required=True)|{'base_branch':trunk(root,state['config'])}
         actions={}
         if checkpoint:
             options=value['menu_options']
@@ -193,19 +193,80 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
             options=[label,TAKE_OVER]
             actions={label:kind,TAKE_OVER:'stop'}
             value['takeover']=True
-            value['menu_options']=options
-            value['question']=details+'\nStop preserves local work and existing grants.\n\n'+label+'?'
+        if not checkpoint and kind!='stop':
+            title=f'{label} for {subject}?'
+            if kind=='accept-concerns':title=f'How should we handle the findings for {subject}?'
+            if kind=='approve-repair':title=f'Expand task {task["id"]} to include the proposed repair?'
+            value.update(disclosure=compact_details,question=title,menu_options=options)
+        # The existing immutable scope or reviewed artifact gives a generic
+        # affirmative button a concrete subject without prescribing its wording.
+        if kind in ('approve-private','approve-proposal','accept-concerns'):
+            from .system import Path
+            evidence=_attempt(state,attempt)
+            artifact=Path(evidence['evidence'])/'result.json'
+            if kind=='approve-private':
+                folder=Path(state.get('plans',{}).get('designs',''))
+                artifact=next((Path(name) for name in evidence.get('artifacts',{}) if Path(name).parent==folder),artifact)
+            value['approval_material']=str(artifact)
+            value['disclosure']+='\n[View the reviewed work](<'+artifact.as_posix()+'>)'
+        elif kind=='approve-repair':
+            value['approval_material']=repair.strip()
         if 'stop' in actions.values():value['stop_boundary']=stop_boundary(root,journal,state)
-        key=save_offer(root,value)
+        key=save_offer(root,value,details=compact_details if kind=='approve-repair' else None,
+                       details_title='View the proposed repair')
         return {'decision':key,'question':value['question'],'options':options,
                 **({'disclosure':value['disclosure']} if 'disclosure' in value else {}),
                 **({'actions':actions} if actions else {}),
-                'human_locator':'Include decision in the native human locator. The native host displays this question; OH displays no menu.'}
+                'human_locator':'Keep decision internal. Explain the action and share any supplied Markdown review link in a separate chat message before asking. Keep file paths and IDs out of the native menu. Bind the actual answer.'}
 
 
 def state_head(root):
     from .storage import git
     return git(root,'rev-parse','HEAD')
+
+
+def _path_shown(path,text):
+    import re
+    return re.search(r"(?<![\w./-])"+re.escape(path)+r"(?![\w./-])",text) is not None
+
+
+def _verify_menu(value,source,*,discard=False):
+    """Correlate the actual input with its prepared effect. Presentation prose is agent-owned."""
+    from .authority import menu_text,newer
+    offer=source.get('prepared_offer') or {}
+    if offer.get('decision')!=digest(value) or offer.get('ambiguous'):
+        raise Refused('This answer does not identify the prepared choice. Recover its original native question and preparation.')
+    if not newer(source.get('question_at'),value['created_at']):
+        raise Refused('This question predates the prepared choice')
+    from .authority import action_text
+    selected=action_text(source['prompt'])
+    if selected not in map(action_text,value['menu_options']):
+        raise Refused('Choose the named action before granting its effect')
+    if source.get('via')=='question':
+        options=source.get('question_options') or []
+        if list(map(action_text,options)).count(selected)!=1:
+            raise Refused('The native single-select menu must contain the chosen action')
+    else:
+        displays=[d['text'] for d in source.get('question_context',[]) if newer(d.get('at'),value['created_at'])]
+        shown=menu_text(' '.join(displays+[source.get('question','')])).casefold()
+        if selected not in shown:
+            raise Refused('The typed answer needs its original visible action')
+    material=value.get('approval_material')
+    if discard or (material and selected==action_text(value['label'])):
+        parts=[d['text'] for d in source.get('question_context',[]) if newer(d.get('at'),value['created_at'])]
+        parts.extend([source.get('question',''),source.get('option_descriptions' if discard else 'selected_description','')])
+        shown=' '.join(parts)
+        if material and not discard:
+            anchors=[material,material.replace('\\','/')]
+            if detail:=value.get('details_file'):anchors.extend([detail['path'],detail['path'].replace('\\','/')])
+            if not any(anchor in shown for anchor in anchors):
+                raise Refused('Show the supplied link to the prepared work before approval, then bind the actual answer.')
+            return
+        paths=value['affected_paths']
+        link=value.get('details_file',{}).get('path')
+        if paths and not (link in shown if link else all(_path_shown(path,shown) for path in paths)):
+            raise Refused('Show the affected paths or their inspection link before discarding work.')
+
 
 
 def _verify_display(value,source,*,need_disclosure=True,preview=None):
@@ -265,7 +326,12 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     shown_at=source.get('question_at')
     if value.get('presentation')=='checkpoint-menu' and source.get('via')=='question' and {k:source.get(k) for k in ('host','session')}!=value['coordinator']:
         raise Refused('This checkpoint belongs to its saved coordinator; resume the work before presenting a new checkpoint')
-    if 'disclosure' in value:
+    old_checkpoint=(value.get('presentation')=='checkpoint-menu' and source.get('via')=='question'
+                    and (source.get('prepared_offer') or {}).get('decision')==key
+                    and source.get('question')==value['question'])
+    if value.get('menu_version')==2 or old_checkpoint:
+        _verify_menu(value,source,discard=kind=='restart')
+    elif 'disclosure' in value:
         # The identified short question names the handoff or ordinary
         # keep-edits continuation. A reset, new grant, destination or carried
         # request additionally needs the complete material effects in chat.
@@ -283,7 +349,7 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     elif source.get('via')!='question':
         shown_at=presented_question_at(source,value['question'])
         if shown_at is None:raise Refused('Use the actual native question for this prepared decision')
-    if takeover and source.get('via')=='question':
+    if takeover and value.get('menu_version')!=2 and source.get('via')=='question':
         shown=source.get('question_options')
         if not isinstance(shown,list) or sorted(shown)!=sorted(value['menu_options']):
             raise Refused('Use the complete single-select menu for this takeover decision')
@@ -291,7 +357,9 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     label=TAKE_OVER if takeover else choices[kind] if choices else value['label']
     accepted=(label.casefold(),) if choices or takeover else (label.casefold(),'yes','yes please')
     if kind=='resume':accepted+=('resume','resume the saved work','yes, resume saved work','please resume saved work')
-    if source['prompt'].strip().casefold().rstrip('.!') not in accepted:
+    from .authority import action_text
+    answer=action_text(source['prompt']) if value.get('menu_version')==2 else source['prompt'].strip().casefold().rstrip('.!')
+    if answer not in accepted:
         raise Refused('This native answer does not accept the presented effect; preserve it and resolve the actual choice')
     from .authority import newer
     if 'disclosure' not in value and not newer(shown_at,value['created_at']):
@@ -335,12 +403,16 @@ def scope_request(root,scope):
     title=shorten(scope['tasks'][0]['title'],width=64,placeholder='…')
     value={'kind':'approve-scope','scope':digest(scope),'label':label,
            'disclosure':_scope_preview(scope,plan=False).rstrip()+'\n\nStop and take over leaves this scope unapproved.',
-           'question':f'Approve “{title}”?' if len(scope['tasks'])==1 else 'Approve this scope?',
+           'question':f'Approve “{title}”?' if len(scope['tasks'])==1 else f'Approve {len(scope["tasks"])} tasks starting with “{title}”?',
            'menu_options':options,'created_at':now()}
+    from .native import _home
+    preview=_home(root)/'scopes'/value['scope']/'scope.md'
+    value['approval_material']=str(preview)
+    value['disclosure']+='\n[View the prepared scope](<'+preview.as_posix()+'>)'
     key=save_offer(root,value)
     return {'decision':key,'disclosure':value['disclosure'],'question':value['question'],'options':options,
-            'present':'Copy disclosure into visible chat first. Then show the short question and its choices.',
-            'bind':'Use scope approve (scope_approve) with the scope_id and human locator including this decision for either answer.',
+            'present':'Explain the bounded change in your own words. Put [View the prepared scope](...) in a separate chat message before asking. Keep file paths and IDs out of the native menu. Show the actions and wait.',
+            'bind':'For approval use scope approve (scope_approve). For refusal use decision stop with this decision ID and no run argument.',
             'actions':{label:'approve-scope',TAKE_OVER:'stop'}}
 
 
@@ -351,13 +423,17 @@ def verify_scope(root,scope,locator,source,*,decline=False):
     if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key):raise Refused('Use the prepared scope approval question')
     value=read_json(_home(root)/'decisions'/(key+'.json'))
     if digest(value)!=key or value.get('kind')!='approve-scope' or value['scope']!=digest(scope):raise Refused('This answer belongs to another scope')
-    if 'disclosure' in value:
+    if value.get('menu_version')==2:
+        _verify_menu(value,source)
+    elif 'disclosure' in value:
         preview=_home(root)/'scopes'/value['scope']/'scope.md' if decline else None
         _verify_display(value,source,need_disclosure=not decline,preview=preview)
+    from .authority import action_text
+    answer=action_text(source['prompt'])
     if decline:
-        if source['prompt'].strip().casefold().rstrip('.!')!=TAKE_OVER.casefold():
+        if answer!=TAKE_OVER.casefold():
             raise Refused('This answer does not decline the presented scope')
-    elif source['prompt'].strip().casefold().rstrip('.!') not in (value.get('label','Approve this scope').casefold(),'yes','yes please'):
+    elif answer not in (value.get('label','Approve this scope').casefold(),'yes','yes please'):
         raise Refused('This answer does not approve the presented scope')
     if 'disclosure' in value:return
     from .authority import question_text,presented_question_at

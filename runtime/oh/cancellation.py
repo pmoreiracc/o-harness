@@ -382,6 +382,7 @@ def _prepared_menu(root,host,payload):
     path=checkout_file(root,'oh-recovery-menu.json')
     if not path.exists():return None
     prepared=read_json(path)
+    if prepared.get('menu_version')==2:return None
     questions=args.get('questions')
     if not isinstance(questions,list) or not questions or not isinstance(questions[0],dict):return None
     shown=questions[0].get('question') or questions[0].get('title') or ''

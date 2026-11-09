@@ -124,7 +124,7 @@ def prepare(codex_model, claude_model, suite):
                 elif scenario == 'choice':
                     instructions.write('\nAcceptance coordinator: after the actual track answer prepares '
                         'a design scope, prepare decision-request stop and wait for its single action in ordinary chat. '
-                        'For a new quick fix use the scope’s own prepared approval question. Do not launch workers '
+                        'For a new quick fix use its normal host approval surface. Do not launch workers '
                         'in this selection-only probe.\n')
             (root / 'CLAUDE.md').write_text('Read AGENTS.md.\n', encoding='utf-8', newline='\n')
             for file, value in (('answer.txt', 'before'), ('marker.txt', 'before'), ('release.txt', 'pending')):
@@ -150,10 +150,10 @@ def prepare(codex_model, claude_model, suite):
                 body = ('## Why\n\nVerify ordinary delivery.\n\n## Tasks\n\n### Core track\n\n'
                         '- [ ] **1.** Change answer.txt to exactly after followed by one newline. '
                         'Preserve other application files. Run python3 check.py.\n')
-                if scenario == 'delivery' and not sanity:
+                if scenario == 'delivery':
                     body += ('- [ ] **2.** Change marker.txt to exactly done followed by one newline. '
                              'Preserve other application files. Run python3 check.py. *Depends on task 1.*\n')
-                else:
+                if sanity or scenario != 'delivery':
                     body += '\n### Other track\n\n- [ ] **3.** Change marker.txt to done followed by one newline.\n'
                 number, _ = plans.write_design(root, where, 'trial', 'Tiny delivery', body, 'approved')
                 plans.claim(root, where, 'trial', number)
@@ -185,6 +185,34 @@ def trial(path):
     return base, value
 
 
+def sanity_publication(root,journal,state):
+    """Count actual publication replies, including failed attempts before the successful bind."""
+    from oh import authority
+    from oh.storage import read_json
+    receipt=read_json(journal.path/'decisions'/(state['publication']['source']+'.json'))
+    offer=receipt['prepared']
+    if set(offer['choices'])!={'continue','publish','stop'}:
+        raise ValueError('Expected a three-way checkpoint with a runnable next batch')
+    label=offer['choices']['publish']
+    human=receipt['human']
+    host,session=human['host'],human['session']
+    path,calls=authority.question_calls(root,host,session,offer['question'],human['transcript_path'],offered_actions=[label])
+    history=authority.claude_history(path,session) if host=='claude' else authority.codex_history(path,session)[2]
+    def published(prompt):
+        return authority.action_text(prompt)==authority.action_text(label)
+    replies=sum(published(m['prompt']) for m in history)
+    for call in calls:
+        try:
+            answer=authority.native_human(root,{'host':host,'session':session,'tool_use_id':call,
+                                                'transcript_path':str(path)},latest=False)
+        except authority.Saving:
+            continue  # No recorded answer to this call.
+        replies+=published(answer['prompt'])
+    if replies!=1:
+        raise ValueError(f'Expected one publication answer before the fixture PR; observed {replies}')
+    return {'answers':replies,'choices':offer['menu_options']}
+
+
 def inspect(path, host, scenario):
     base, value = trial(path)
     from oh.workflow import load_run
@@ -196,7 +224,7 @@ def inspect(path, host, scenario):
             ref = attempt.get(key)
             if ref and digest(read_json(ref['path'])) != ref['hash']:
                 raise ValueError('Retained evidence hash changed')
-    # Observation, not a PASS oracle: the operator also checks the native UI and
+    # The operator also checks the quality of the native presentation and
     # the earlier run when publication repair created a second run.
     result = {'candidate': value['candidate']['version'], 'host': host, 'scenario': scenario,
               'run': state['id'], 'workflow': state['workflow'], 'status': state['status'],
@@ -208,6 +236,9 @@ def inspect(path, host, scenario):
               'git_status': git(root, 'status', '--porcelain'),
               'publication': {key: state.get('published', {}).get(key) for key in ('url', 'observed_head')},
               'retained_hashes': 'verified'}
+    if value.get('suite')=='sanity' and scenario=='delivery' and state.get('published'):
+        if host=='codex':os.environ['CODEX_HOME']=str(codex_home(base,value))
+        result['checkpoint']=sanity_publication(root,journal,state)
     if scenario in ('planning', 'design'):
         from oh import plans, delivery
         from oh.storage import Refused

@@ -33,10 +33,11 @@ def requested(source,doc,track,command):
         if (selected.get('kind'),selected.get('doc'),selected.get('track'))!=('design',doc,track):
             raise Refused('The native request selects a different design or track')
         return
-    text=source['prompt'].strip()
+    from .authority import action_text
+    text=action_text(source['prompt'])
     direct=re.fullmatch(r'(?i)(?:(?:can|could|would) you |please )?(?:deliver|implement|build|finish)\s+'
         r'(?:(?:the )?(?:approved )?design\s+)?([0-9]{4})(?:\s+(?:track\s+)?([a-zA-Z0-9_-]+))?[.!?]?',text)
-    if direct and not menu:
+    if direct and (not menu or text in map(action_text,source.get('question_options') or [])):
         if (direct[1],(direct[2] or '').casefold())!=(doc,track.casefold()):
             raise Refused('The native request selects a different design or track')
         return

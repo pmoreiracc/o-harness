@@ -126,14 +126,25 @@ class NativeFixture(WorkflowFixture):
         catalog.start();self.addCleanup(catalog.stop)
 
     def human(self,prompt='approve',**extra):
+        from .storage import now
         self.turn+=1
+        if extra.get('decision') and 'prepared_offer' not in extra:
+            # Simulated host evidence; transcript parsing is exercised separately.
+            extra['prepared_offer']={'decision':extra['decision'],'at':extra.get('question_at') or now()}
         return {'host':'codex','session':'s','turn':str(self.turn),'prompt':prompt,**extra}
+
+    def offer_record(self,host,session,offer,at):
+        text=json.dumps(offer)
+        if host=='claude':
+            return {'sessionId':session,'cwd':str(self.root),'type':'user','timestamp':at,
+                    'message':{'content':[{'type':'tool_result','tool_use_id':'prepare','content':text}]}}
+        return {'type':'response_item','timestamp':at,'payload':{'type':'function_call_output','call_id':'prepare','output':text}}
 
     def offered_answer(self,offer,label,*,via='question',**extra):
         from .storage import now
         at=now()
         shown='\n'.join([offer.get('disclosure',''),offer['question'],*offer['options']])
-        return self.human(label,decision=offer['decision'],via=via,question=offer['question'],
+        return self.human(label,decision=offer['decision'],via=via,question=offer['question'] if via=='question' else shown,
                           question_options=offer['options'],question_at=at,
                           question_context=[{'text':shown,'at':at}],**extra)
 

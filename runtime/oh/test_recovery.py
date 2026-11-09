@@ -64,7 +64,8 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         gate=decisions.prepare(self.root,'recover')
         self.assertEqual(gate['base_observation']['freshness'],'unavailable')
         self.assertIn('Base freshness: unavailable',gate['disclosure'])
-        self.assertEqual(set(gate['options']),{'Continue','Start fresh','Stop and take over'})
+        self.assertEqual(set(gate['actions'].values()),{'resume','restart','stop'})
+        self.assertTrue(gate['options'][1].startswith('Discard local work'))
         after=load_run(self.root)[1]
         for key in ('id','human','granted','attempts','config'):self.assertEqual(after[key],before[key])
 
@@ -78,13 +79,15 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         answer=self.answer(gate,'Stop and take over')|{'via':'text'}
         display=answer['question_context'][0]
         display['text']=gate['question'].replace('Hand off','Publish')+'\nStop and take over'
-        with self.assertRaisesRegex(Refused,'actual native question'):native.decision(self.root,'stop',answer)
-        display['text']=gate['question']+'\nStop and take over'
+        with self.assertRaises(Refused):native.decision(self.root,'stop',answer|{'prepared_offer':{}})
+        # The saved native preparation and the displayed action identify the handoff.
+        answer['question']=display['text']
         result=native.decision(self.root,'stop',answer)
         self.assertEqual(result['status'],'stopped')
 
     def answer(self, gate, label, host='claude', session='new-parent'):
         at=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
+        if label=='Start fresh':label=next((k for k,v in gate['actions'].items() if v=='restart'),label)
         return self.offered_answer(gate,label,host=host,session=session,at=at)
 
     def test_recovery_menu_cannot_reclaim_a_newer_selection_with_an_old_answer(self):
@@ -93,7 +96,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         self.approve();old_journal,old=load_run(self.root)
         current=decisions.prepare(self.root,'recover')
         stored=read_json(native._home(self.root)/'decisions'/(current['decision']+'.json'))
-        historical={k:v for k,v in stored.items() if k not in ('bound_question','stop_boundary','disclosure')}
+        historical={k:v for k,v in stored.items() if k not in ('menu_version','bound_question','stop_boundary','disclosure')}
         historical['question']=historical['question'].replace('Saved run: '+old['id']+'\n','')
         identity=digest(historical)
         native._immutable(native._home(self.root)/'decisions'/(identity+'.json'),historical)
@@ -215,7 +218,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                     if route in ('resume','recover'):
                         native.decision(self.root,'stop',self.human('stop',host=host,session=old['human']['session']))
                         gate=decisions.prepare(self.root,'resume' if route=='resume' else 'recover')
-                        source=self.answer(gate,'Resume' if route=='resume' else 'Continue',host=host,session='new-'+host+route)
+                        source=self.answer(gate,gate['options'][0],host=host,session='new-'+host+route)
                         action=lambda:native.decision(self.root,'resume',source)
                     elif route=='scope':
                         scope=native.prepare_scope(self.root,{'tasks':[{'id':'new','title':'After '+host+route,
@@ -261,7 +264,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                     self.assertIn('superseded work selection',cancellation.hook(self.root,host,stale)['hookSpecificOutput']['permissionDecisionReason'])
             # A Stop in the proposed conversation still wins before an owner
             # write is repaired, including Claude's transcript-only occurrence.
-            gate=decisions.prepare(self.root,'resume');source=self.answer(gate,'Resume',host=host,session='stopped-proposal-'+host)
+            gate=decisions.prepare(self.root,'resume');source=self.answer(gate,gate['options'][0],host=host,session='stopped-proposal-'+host)
             transcript=Path(self.temp.name)/('stopped-'+host+'.jsonl');transcript.write_text('',newline='\n')
             at=datetime.now(timezone.utc).isoformat()
             source=source|{'at':at,'question_at':at,'record_hashes':['native-human'],'transcript_path':str(transcript)}
@@ -464,7 +467,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
 
     def recover(self, action, *, host='claude', native_answer=False):
         gate=decisions.prepare(self.root,'recover')
-        self.assertEqual(gate['options'],['Continue','Start fresh','Stop and take over'])
+        self.assertEqual(gate['options'],['Continue',next(k for k,v in gate['actions'].items() if v=='restart'),'Stop and take over'])
         locator=self.answer(gate,{'resume':'Continue','restart':'Start fresh','stop':'Stop and take over'}[action],host)
         # New human records remain available even though the old chat was deleted.
         new_parent=Path(self.temp.name)/'new-parent.jsonl';new_parent.write_text('',newline='\n')
@@ -479,6 +482,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
                 'options':[{'label':option,'description':option} for option in gate['options']]}]}}]}},
                 common|{'type':'user','toolUseResult':{'answers':{gate['question']:locator['prompt']}},
                 'message':{'content':[{'type':'tool_result','tool_use_id':'recovery-answer','content':'Answered'}]}}]
+            rows.insert(0,self.offer_record('claude','new-parent',gate,locator['at']))
             new_parent.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
             locator={'host':'claude','session':'new-parent','decision':gate['decision'],'transcript_path':str(new_parent)}
             for name,callback in [('native_human',self.native_human_original),('coordinator',native_coordinator)]:
@@ -687,14 +691,20 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         formatted=self.answer(displayed,'Start fresh')
         formatted['question_context'][0]['text']=formatted['question_context'][0]['text'].replace('](<','](').replace('>)',')')
         decisions.verify(self.root,load_run(self.root)[1],'restart',formatted,formatted,replay=True)
+        # The visible inspection link may be in either option's description.
+        in_menu=formatted|{'question_context':[],'option_descriptions':displayed['disclosure']}
+        decisions.verify(self.root,load_run(self.root)[1],'restart',in_menu,in_menu,replay=True)
+        with self.assertRaisesRegex(Refused,'affected paths'):
+            decisions.verify(self.root,load_run(self.root)[1],'restart',in_menu,in_menu|{'option_descriptions':''},replay=True)
         self.assertEqual(displayed['options'],updated['options'])
-        self.assertNotEqual(displayed['question'],updated['question'])
+        self.assertEqual(displayed['question'],updated['question'])
+        self.assertNotEqual(displayed['decision'],updated['decision'])
         self.assertNotEqual(displayed['disclosure'],updated['disclosure'])
-        with self.assertRaisesRegex(Refused,'does not match the prepared offer'):
+        with self.assertRaisesRegex(Refused,'identify the prepared choice'):
             native.decision(self.root,'restart',self.answer(displayed,'Start fresh')|{'decision':updated['decision']})
         typed=self.answer(displayed,'Start fresh')|{'via':'text','question_context':[
             {'text':offer['disclosure']+'\n'+offer['question'],'at':now()} for offer in (displayed,updated)]}
-        with self.assertRaisesRegex(Refused,'actual native question'):
+        with self.assertRaises(Refused):
             native.decision(self.root,'restart',typed)
         self.assertEqual((self.root/'surprise.txt').read_text(),'More edits at the same path')
         with cancellation._edit(self.root) as value:
