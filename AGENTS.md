@@ -137,7 +137,7 @@ Avoid runtime regressions. There is no fixed test time limit.
 - A PR runs the Windows tests `integrations/select_tests.py` picks: OH's platform layer,
   platform-sensitive tests, every test module the PR changes and the test modules that
   import it. The full Windows suite
-  runs nightly on main and on demand (Actions > full suite, with a
+  runs nightly on main and on demand (Actions > nightly regression, with a
   choice of suite and an optional test-name pattern).
 Do not commit local state, receipts, tokens or raw host transcripts. Documentation must
 reflect completed, verified behavior. If blocked, explain a concrete recovery step.

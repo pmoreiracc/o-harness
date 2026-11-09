@@ -1,4 +1,4 @@
-name: full suite
+name: nightly regression
 # Every test on Linux and Windows: nightly at 03:00 Brasília time, and on demand.
 on:
   schedule:
