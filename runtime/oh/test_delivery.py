@@ -581,6 +581,45 @@ class DeliveryTest(fixtures.NativeFixture):
         with self.assertRaisesRegex(Refused,'No ready pending tasks'):
             delivery.selection(self.root,'0001')
 
+    def test_external_merge_of_saved_checkpoint_selects_next_task_without_resume(self):
+        from . import native
+        from .entry import inspect
+        self.documents()
+        first=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001'))
+        self.assess();self.implement();review=self.reviewed()
+        native.complete(self.root,review['id'])
+        journal,old=load_run(self.root);records=journal.records()
+        branch=self.git('branch','--show-current')
+        origin=Path(self.temp.name)/'origin.git'
+        self.git('clone','--bare',str(self.root),str(origin));self.git('remote','add','origin',str(origin))
+        self.git('fetch','origin','main')
+        before=inspect(self.root)
+        self.assertTrue(next(item for item in before['saved_work'] if item['run']==old['id'])['resumable'])
+        self.git('switch','main');self.git('merge','--no-ff','--no-edit',branch)
+        self.git('push','origin','main');self.git('switch',branch)
+        # The original path treats the historical checkpoint as resumable.
+        with patch('oh.delivery.merged_batch',return_value=None):
+            stale=inspect(self.root)
+            self.assertTrue(next(item for item in stale['saved_work'] if item['run']==old['id'])['resumable'])
+        (self.root/'notes.txt').write_text('Keep these local edits',newline='\n')
+        dirty=inspect(self.root)
+        self.assertTrue(next(item for item in dirty['saved_work'] if item['run']==old['id'])['resumable'])
+        (self.root/'notes.txt').unlink()
+        facts=inspect(self.root)
+        saved=next(item for item in facts['saved_work'] if item['run']==old['id'])
+        self.assertFalse(saved['resumable'])
+        compact={'saved_work':[{'run':old['id'],'resumable':True}]}
+        with patch('oh.native.saved_work',return_value=compact):
+            self.assertEqual(inspect(self.root)['saved_work'][0]['next_action']['arguments']['doc'],'0001')
+        from .decisions import prepare
+        self.assertFalse(prepare(self.root,'recover',run=old['id'])['recovery_required'])
+        selected=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001',session='fresh'))
+        self.assertNotEqual(selected['run'],first['run'])
+        self.assertEqual(selected['task']['id'],'2')
+        self.assertEqual(selected['granted'],['2'])
+        self.assertIsNone(old.get('published'))
+        self.assertEqual(journal.records(),records)
+
     def test_entry_discovers_merged_progress_before_reconciled_delivery_selection(self):
         from . import native
         from .entry import inspect

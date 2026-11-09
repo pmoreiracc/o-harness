@@ -5,6 +5,8 @@ saved/local/origin facts. Preserve local work while gathering information. Deliv
 recovery questions report their observed base freshness separately from the selected
 discard/continuation effect; a cached base is not verified current origin.
 
+If entry reports a merged batch, use its next-task guidance. A stale unpublished checkpoint does not require Resume when its completed batch is on the refreshed base and its saved branch has no additional work. Read the approved plan on that base and use the current invocation with scope prepare. Preserve the old journal as history.
+
 ## Idle history and selection
 
 Discovery and selected reads use the same `status` and `execution` facts. Workflow

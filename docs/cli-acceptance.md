@@ -89,6 +89,22 @@ wall time. Timings guide optimization; an overrun never converts a pass into a f
 For a new E2E case document whether it protects an essential ordinary workflow (sanity
 and nightly) or adds a variant or fault (nightly). Prefer extending an existing path.
 
+## External merge re-entry
+
+The `merged` fixture on each host exercises this additional sanity and nightly path.
+Use a unique base in a dedicated private test repository. Deliver Core task 1 and
+choose Stop at its completed checkpoint. The operator opens and merges a fixture PR
+through native Git/GitHub, leaving OH's run unpublished. In a fresh CLI invoke Deliver
+for the same design. It must fetch the base, identify the merged batch and select task 2
+without a Resume/discard question for task 1. Stop before task 2 workers and inspect
+that its grant is exactly task 2, product files still reflect task 1 only, and the old
+journal keeps its original allowances/results/publication state. No record is fabricated
+to make OH look like it published. The fixture-only merge is part of this test.
+
+This extends sanity because returning after a human merge is a fundamental delivery
+entry. It adds one tiny implementation/review and an external hosted merge per host.
+Additional dirty/unmerged variants have focused deterministic coverage.
+
 ## Nightly live regression
 
 Prepare with `--suite catalog`. Run P/D/Q/C below on both Mac CLIs using fresh consumers.

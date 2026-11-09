@@ -54,7 +54,15 @@ def inspect(root):
         ahead,behind=map(int,git(root,'rev-list','--left-right','--count',head+'...'+base['commit']).split())
         checkout.update(ahead=ahead,behind=behind)
     checkout['base_checkout']=str(other) if selected['name'] and (other:=holder(root,selected['name'])) else None
-    value={'saved_work':saved_work(root)['saved_work'],'checkout':checkout,'base':base,
+    saved=saved_work(root)['saved_work']
+    from .delivery import merged_batch
+    from .workflow import load_run
+    for item in saved:
+        state=load_run(root,item['run'])[1]
+        if merged:=merged_batch(root,state,base):
+            item.update(resumable=False,merged_batch=merged,next_action={'tool':'scope_prepare',
+                        'arguments':{'doc':state['design'],'track':state.get('track') or ''},'instruction':merged['next']})
+    value={'saved_work':saved,'checkout':checkout,'base':base,
             'authority':'Observation only. Saved labels are historical; inspect execution/ownership before deciding what can continue. '
                         'A newer base does not make local changes disposable. Use native Git to inspect full diffs and local commits; '
                         'the displayed paths are bounded. Fetching refs grants no discard, task, continuation or publication authority.'}

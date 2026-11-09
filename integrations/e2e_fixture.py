@@ -93,7 +93,7 @@ def prepare(codex_model, claude_model, suite):
                       for role in ('simple', 'standard', 'complex', 'review', 'insights')}
                 for host, model in (('codex', codex_model), ('claude', claude_model))}
     # Isolate the two sanity planning paths so their real sessions can overlap.
-    scenarios = ('delivery', 'planning', 'choice', 'design') if sanity else ('delivery', 'planning', 'choice')
+    scenarios = ('delivery', 'planning', 'choice', 'design', 'merged') if sanity else ('delivery', 'planning', 'choice', 'merged')
     for host in ('codex', 'claude'):
         for scenario in scenarios:
             root = base / f'{host}-{scenario}';root.mkdir()
@@ -121,6 +121,8 @@ def prepare(codex_model, claude_model, suite):
                         'or checks. Preserve that real failed attempt and continue with a fresh author under '
                         'existing scope. Tell subsequent authors that this one-time injection is already done. '
                         'Do not repeat it or manufacture a capacity error.\n')
+                elif scenario == 'merged':
+                    instructions.write('\nExternal-merge trial: deliver the first batch normally. At its checkpoint wait for the actual Stop. The operator publishes and merges that batch outside OH. On the fresh invocation select the next eligible task from the fetched base, then prepare Stop before launching its workers so the operator can inspect the selection. Never edit OH state to simulate publication or merge.\n')
                 elif scenario == 'choice':
                     instructions.write('\nAcceptance coordinator: after the actual track answer prepares '
                         'a design scope, prepare decision-request stop and wait for its single action in ordinary chat. '
@@ -150,7 +152,7 @@ def prepare(codex_model, claude_model, suite):
                 body = ('## Why\n\nVerify ordinary delivery.\n\n## Tasks\n\n### Core track\n\n'
                         '- [ ] **1.** Change answer.txt to exactly after followed by one newline. '
                         'Preserve other application files. Run python3 check.py.\n')
-                if scenario == 'delivery':
+                if scenario in ('delivery','merged'):
                     body += ('- [ ] **2.** Change marker.txt to exactly done followed by one newline. '
                              'Preserve other application files. Run python3 check.py. *Depends on task 1.*\n')
                 if sanity or scenario != 'delivery':
@@ -239,6 +241,14 @@ def inspect(path, host, scenario):
     if value.get('suite')=='sanity' and scenario=='delivery' and state.get('published'):
         if host=='codex':os.environ['CODEX_HOME']=str(codex_home(base,value))
         result['checkpoint']=sanity_publication(root,journal,state)
+    if scenario=='merged' and state['tasks'][0]['id']=='2':
+        from oh.native import _saved_runs
+        previous=[old for _,old in _saved_runs(root) if old['id']!=state['id'] and old.get('design')==state.get('design')]
+        if state['granted']!=['2'] or state['attempts'] or state.get('entry_prerequisite') or state.get('recovery_decision'):
+            raise ValueError('Merged re-entry must select only task 2 from the invocation before any worker or recovery grant')
+        if not any(old['done']==['1'] and not old.get('published') for old in previous):
+            raise ValueError('Expected the retained unpublished first batch after external merge')
+        result['external_merge_reentry']='verified: task 2 only, no Resume, first batch still unpublished in OH'
     if scenario in ('planning', 'design'):
         from oh import plans, delivery
         from oh.storage import Refused
@@ -299,10 +309,10 @@ def main():
     new.add_argument('--claude-model', required=True)
     observe = sub.add_parser('inspect')
     observe.add_argument('directory');observe.add_argument('--host', choices=('codex', 'claude'), required=True)
-    observe.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design'), required=True)
+    observe.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design', 'merged'), required=True)
     start = sub.add_parser('launch', help='open the native CLI; operator answers its actual questions')
     start.add_argument('directory');start.add_argument('--host', choices=('codex', 'claude'), required=True)
-    start.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design'), required=True)
+    start.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design', 'merged'), required=True)
     start.add_argument('--prompt', required=True);start.add_argument('--resume')
     args = parser.parse_args()
     if args.command == 'login-codex':codex_login()

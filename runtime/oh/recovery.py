@@ -58,6 +58,9 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     from .branches import contained, fetch_base, trunk
     if state['workflow'] != 'deliver' or state.get('published'):
         raise Refused('This recovery gate is for unpublished delivery; use the saved planning or publication step')
+    from .delivery import merged_batch
+    if merged:=merged_batch(root,state):
+        return {'recovery_required':False,'merged_batch':merged,'next':merged['next']}
     observed = None
     unavailable = ''
     try:

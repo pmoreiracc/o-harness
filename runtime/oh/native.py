@@ -507,7 +507,12 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
         if state.get('published') and workflow!='design':continue
         if workflow=='review' and _finished(state):continue
         if workflow=='design' and design and design==_initiative(state):matches.append(state)
-        elif workflow=='deliver' and design==state.get('design') and design and (not track or track==(state.get('track') or '')):matches.append(state)
+        elif workflow=='deliver' and design==state.get('design') and design and (not track or track==(state.get('track') or '')):
+            from .delivery import merged_batch
+            # Preserve exact entry retries. A new invocation selects remaining work
+            # after an externally merged batch instead of reviving its checkpoint.
+            if _human_key(source,state)!=state.get('source') and merged_batch(root,state):continue
+            matches.append(state)
         elif workflow=='review' and selected and _same_review_subject(selected,state):matches.append(state)
     if len(matches)==1:
         state=matches[0]
