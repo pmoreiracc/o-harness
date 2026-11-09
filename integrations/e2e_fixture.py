@@ -242,8 +242,7 @@ def inspect(path, host, scenario):
         if host=='codex':os.environ['CODEX_HOME']=str(codex_home(base,value))
         result['checkpoint']=sanity_publication(root,journal,state)
     if scenario=='merged' and state['tasks'][0]['id']=='2':
-        from oh.native import _saved_runs
-        previous=[old for _,old in _saved_runs(root) if old['id']!=state['id'] and old.get('design')==state.get('design')]
+        previous=[load_run(root,item['run'])[1] for item in state.get('retained_work',[]) if item.get('workflow')=='deliver']
         if state['granted']!=['2'] or state['attempts'] or state.get('entry_prerequisite') or state.get('recovery_decision'):
             raise ValueError('Merged re-entry must select only task 2 from the invocation before any worker or recovery grant')
         if not any(old['done']==['1'] and not old.get('published') for old in previous):

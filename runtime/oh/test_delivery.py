@@ -617,6 +617,12 @@ class DeliveryTest(fixtures.NativeFixture):
         self.assertNotEqual(selected['run'],first['run'])
         self.assertEqual(selected['task']['id'],'2')
         self.assertEqual(selected['granted'],['2'])
+        (self.root/'notes.txt').write_text('Unfinished task 2 work',newline='\n')
+        again=inspect(self.root)
+        self.assertTrue(all(not item['resumable'] for item in again['saved_work'] if item['run']==old['id']))
+        continued=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001',session='another'))
+        self.assertEqual(continued['run'],selected['run'])
+        self.assertTrue(continued['resume_required'])
         self.assertIsNone(old.get('published'))
         self.assertEqual(journal.records(),records)
 
