@@ -258,14 +258,15 @@ def _verify_menu(value,source,*,discard=False):
         parts.extend([source.get('question',''),source.get('option_descriptions' if discard else 'selected_description','')])
         shown=' '.join(parts)
         if material and not discard:
-            anchors=[material,material.replace('\\','/')]
-            if detail:=value.get('details_file'):anchors.extend([detail['path'],detail['path'].replace('\\','/')])
-            if not any(anchor in shown for anchor in anchors):
+            anchors=[material]
+            if detail:=value.get('details_file'):anchors.append(detail['path'])
+            if not any(anchor.replace('\\','/') in shown.replace('\\','/') for anchor in anchors):
                 raise Refused('Show the supplied link to the prepared work before approval, then bind the actual answer.')
             return
         paths=value['affected_paths']
         link=value.get('details_file',{}).get('path')
-        if paths and not (link in shown if link else all(_path_shown(path,shown) for path in paths)):
+        linked=bool(link) and link.replace('\\','/') in shown.replace('\\','/')
+        if paths and not (linked if link else all(_path_shown(path,shown) for path in paths)):
             raise Refused('Show the affected paths or their inspection link before discarding work.')
 
 

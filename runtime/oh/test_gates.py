@@ -10,6 +10,28 @@ from .storage import Refused
 
 
 class GateTest(unittest.TestCase):
+    def test_windows_inspection_links_match_the_displayed_forward_slashes(self):
+        from .decisions import _verify_menu
+        from .storage import digest
+        link=str(PureWindowsPath('C:/OH state/affected paths.md'))
+        value={'kind':'recover','created_at':'2026-11-05T12:00:00Z',
+               'menu_options':['Discard local work'], 'affected_paths':['notes.txt'],
+               'details_file':{'path':link}}
+        source={'prompt':'Discard local work','via':'question',
+                'question_at':'2026-11-05T12:00:01Z','question_options':['Discard local work'],
+                'question':'Discard local work?', 'option_descriptions':'Inspect '+PureWindowsPath(link).as_posix(),
+                'prepared_offer':{'decision':digest(value)}}
+        _verify_menu(value,source,discard=True)
+        with self.assertRaises(Refused):
+            _verify_menu(value,source|{'option_descriptions':'Inspect C:/different/file.md'},discard=True)
+        approval=value|{'label':'Approve repair','menu_options':['Approve repair'],'approval_material':link}
+        accepted=source|{'prompt':'Approve repair','question_options':['Approve repair'],
+                         'selected_description':source['option_descriptions'],
+                         'prepared_offer':{'decision':digest(approval)}}
+        _verify_menu(approval,accepted)
+        with self.assertRaises(Refused):
+            _verify_menu(approval,accepted|{'selected_description':'Inspect C:/different/file.md'})
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.home=Path(self.temp.name);self.root=self.home/'project';self.root.mkdir()
