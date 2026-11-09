@@ -507,7 +507,12 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
         if state.get('published') and workflow!='design':continue
         if workflow=='review' and _finished(state):continue
         if workflow=='design' and design and design==_initiative(state):matches.append(state)
-        elif workflow=='deliver' and design==state.get('design') and design and (not track or track==(state.get('track') or '')):matches.append(state)
+        elif workflow=='deliver' and design==state.get('design') and design and (not track or track==(state.get('track') or '')):
+            from .delivery import merged_batch
+            # Preserve exact entry retries. A new invocation selects remaining work
+            # after an externally merged batch instead of reviving its checkpoint.
+            if _human_key(source,state)!=state.get('source') and merged_batch(root,state):continue
+            matches.append(state)
         elif workflow=='review' and selected and _same_review_subject(selected,state):matches.append(state)
     if len(matches)==1:
         state=matches[0]
@@ -674,7 +679,8 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
         return _start(root,key,source)|{'scope_id':key,'approved':True}
     if workflow=='deliver':
         from .decisions import scope_request
-        result['approval']=scope_request(root,value)
+        # Put the actionable offer before the verbose configuration in terminal output.
+        return {'approval':scope_request(root,value),**result}
     return result
 
 
@@ -736,8 +742,8 @@ def _scope_stop_locator(root,locator,scope_id=None):
     located=_presented(root,locator|{'decision':key})
     try:reply=authority.native_human(root,located,latest=False)
     except Refused:return locator
-    if (reply['prompt'].strip().casefold().rstrip('.!')=='stop and take over' and
-            (authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint) or
+    if (authority.action_text(reply['prompt'])=='stop and take over' and
+            ((authority.shown_offer_reference(hint) and authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint)) or
              (reply.get('prepared_offer') or {}).get('decision')==key)):
         return located
     return locator
@@ -793,11 +799,11 @@ def approve_scope(root, scope_id, locator, after=None):
     _verify_scope_plan(scope,source)
     if locator.get('decision') and source.get('via')!='plan':
         from .decisions import verify_scope
-        if source['prompt'].strip().casefold().rstrip('.!')=='stop and take over':
+        if authority.action_text(source['prompt'])=='stop and take over':
             return _decline_scope(root,scope_id,scope,locator,source)
         verify_scope(root,scope,locator,source)
         source=source|{'decision':locator['decision']}
-    elif source.get('via')!='plan' and authority.shown_offer_reference(source):
+    elif source.get('via')!='plan' and (authority.shown_offer_reference(source) or after is None and source.get('prepared_offer')):
         raise Refused('Use the original prepared scope decision identity with this answer.')
     elif source.get('via')!='plan' and not _affirmed(source['prompt'],'approve',source.get('question','')):
         raise Refused('The native human reply did not approve this scope; no work was granted')
@@ -1393,7 +1399,8 @@ def _presented(root,locator,state=None):
     if not host or not session:return locator
     locator=locator|{'host':host,'session':session}
     options=prepared['menu_options'] if prepared.get('presentation') in ('checkpoint-menu','recovery-menu') and not prepared.get('bound_question') else None
-    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options,compact='disclosure' in prepared)
+    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options,compact='disclosure' in prepared,
+                                            offered_actions=prepared['menu_options'] if prepared.get('menu_version')==2 else None)
     except Refused:return locator
     consumed=(state or {}).get('decisions',{})
     for call in reversed(calls):
@@ -1401,7 +1408,9 @@ def _presented(root,locator,state=None):
         try:
             source=authority.native_human(root,candidate,latest=False)
             if not authority.newer(source.get('question_at'),prepared['created_at']):continue
-            if 'disclosure' in prepared:
+            if prepared.get('menu_version')==2:
+                if (source.get('prepared_offer') or {}).get('decision')!=key:continue
+            elif 'disclosure' in prepared:
                 reference=authority.shown_offer_reference({'question':prepared['disclosure']+'\n'+question})
                 visible=authority.shown_offer_reference(source)
                 if visible!=reference and (visible or (source.get('prepared_offer') or {}).get('decision')!=key):continue
@@ -1471,7 +1480,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .decisions import verify as verify_decision
             prepared=verify_decision(root,state,kind,locator,source,attempt,replay=True)
         elif (kind=='stop' and source.get('via')=='question'
-              or authority.shown_offer_reference(source) and not _command(source)
+              or (authority.shown_offer_reference(source) or source.get('prepared_offer')) and not _command(source)
               or not _affirmed(source['prompt'],kind,source.get('question',''))):
             if key not in state['decisions'] or not _recorded_choice(journal,key,kind):
                 raise Refused('This reply needs its bound decision effect. Include the decision identity returned before the question in the same native locator and retry; do not ask the person to answer again.')
@@ -1603,7 +1612,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .publication import destination as publication_destination,commits,made
             from .branches import main_ref,trunk
             dest=publication_destination(root,required=True)|{'base_branch':trunk(root,state['config'])}
-            if prepared and prepared.get('presentation')=='checkpoint-menu':
+            if prepared and prepared.get('publication_destination'):
                 # The verified native menu binds this destination and the exact
                 # work boundary. Its concise heading need not repeat those facts.
                 if prepared['publication_destination']!=dest:

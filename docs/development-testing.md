@@ -92,13 +92,16 @@ whether they prevent proving this change's approved outcome from a separate prod
 
 ## Final verification and CI
 
-1. Run `bash integrations/test.sh pr origin/main` and `bash integrations/test.sh syntax` on
-   the final candidate. PR selection is the deterministic core plus affected modules.
+1. During repairs, rerun the causal deterministic cases and affected live paths. Once focused live
+   testing has stabilized the candidate and the single review and its repairs are complete,
+   run `bash integrations/test.sh pr origin/main` and `bash integrations/test.sh syntax` on the final candidate.
+   Repeat broad checks only when subsequent edits invalidate their evidence. PR selection is the deterministic core plus affected modules.
    Known runner changes exercise their own selection tests and the core. Unknown impact triggers full discovery.
 2. After the single review, run full [live sanity](cli-acceptance.md#live-sanity) on
    both Mac CLIs. Record candidate, outcomes, any recovery and wall time per host. An
    unfinished path remains untested. After a repair repeat the evidence it invalidated.
 3. For host-interaction changes offer one personal snapshot trial with both results.
+   Keep the snapshot available and wait for the developer's reply before opening the PR. If they choose the trial, wait for their verdict.
 4. Open the PR and follow CI. Aim for nine minutes of deterministic CI and roughly ten
    minutes of full live sanity wall time. These are targets for improving fixtures and
    scheduling. Keep valuable coverage if its best measured implementation runs longer;

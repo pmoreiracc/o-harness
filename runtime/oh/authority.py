@@ -299,11 +299,10 @@ def _display(record, host, session, before_call=None):
     if lines:return {'text':'\n'.join(lines),'at':record.get('timestamp'),'record_hash':digest(record)}
 
 
-def _offered(record,host,session,key,previous=None):
-    """Keep the last prepared offer returned in this human exchange, never a grant."""
-    if not key:return None
+def _offered(record,host,session):
+    """Identify a prepared menu returned in this conversation, independently of its displayed title."""
     if host=='claude':
-        if record.get('type')!='user' or record.get('sessionId')!=session or record.get('isSidechain'):return None
+        if record.get('type')!='user' or record.get('sessionId')!=session or record.get('isSidechain') or record.get('isMeta'):return None
         parts=(record.get('message') or {}).get('content')
         result=[p.get('content') for p in parts if isinstance(p,dict) and p.get('type')=='tool_result'] if isinstance(parts,list) else []
     else:
@@ -317,11 +316,14 @@ def _offered(record,host,session,key,previous=None):
             result=item.get('output')
         else:return None
     text=str(result)
+    if 'question' not in text or 'options' not in text:return None
+    # Only an offer returned before the question can identify its subject.
+    # A later hook rejection or a question result quoting the title is not a preparation.
+    ids=re.findall(r"""["']decision["']\s*:\s*["']([0-9a-f]{64})["']""",text.replace(r'\"','"'))
+    if not ids:return None
     refs=_OFFER_REFERENCE.findall(text)
-    if refs:
-        ambiguous=len(set(refs))!=1 or previous and (previous.get('ambiguous') or previous['reference']!=refs[-1])
-        return {'decision':key if key in text else None,'reference':refs[-1],'ambiguous':bool(ambiguous),
-                'at':record.get('timestamp'),'record_hash':digest(record)}
+    return {'decision':ids[-1], 'reference':refs[-1] if refs else None, 'ambiguous':len(set(ids))!=1,
+            'at':record.get('timestamp'), 'record_hash':digest(record)}
 
 
 def native_human(root, locator, *, since=None, subject=None, latest=True, retry_resume=False):
@@ -368,7 +370,8 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
                 if (record.get('type')=='event_msg' and item.get('thread_id',session)==session
                         and (item.get('type')=='user_message' or item.get('type')=='item_completed'
                              and (item.get('item') or {}).get('type')=='UserMessage')):
-                    displays=[];context='';context_at=None;offer=None;exchange_at=record.get('timestamp')
+                    displays=[];context='';context_at=None;exchange_at=record.get('timestamp')
+                    if not locator.get('decision'):offer=None
                     plan=None
                     continue
                 if (codex_plan_reply and plan_turn and record.get('type')=='event_msg'
@@ -377,9 +380,10 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
                     text=item['item'].get('text')
                     plan=(text,record) if isinstance(text,str) and text.strip() and (since is None or newer(record.get('timestamp'),since)) else None
             elif prompted(record,session) or _claude_choice(record,session):
-                displays=[];context='';context_at=None;offer=None;exchange_at=record.get('timestamp')
+                displays=[];context='';context_at=None;exchange_at=record.get('timestamp')
+                if not locator.get('decision'):offer=None
                 continue
-            offer=_offered(record,host,session,locator.get('decision'),offer) or offer
+            offer=_offered(record,host,session) or offer
             if shown:=_display(record,host,session):
                 context=shown['text'];context_at=shown['at']
                 displays.append(shown)
@@ -399,10 +403,14 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
         # Supersession follows saved input order, including a human turn whose timestamp
         # is not yet saved. Tool output and notifications never supersede a human reply.
         if host=='claude' and _claude_choice(record,session):
-            if not call:displays.clear();offer=None;exchange_at=record.get('timestamp')
+            if not call:
+                displays.clear();exchange_at=record.get('timestamp')
+                if not locator.get('decision'):offer=None
             if answer:superseded=True
         if host=='claude' and prompted(record,session):
-            if not call:displays.clear();offer=None;exchange_at=record.get('timestamp')
+            if not call:
+                displays.clear();exchange_at=record.get('timestamp')
+                if not locator.get('decision'):offer=None
             content=(record.get('message') or {}).get('content')
             typed=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
             inputs.append((record.get('timestamp'),typed))
@@ -416,11 +424,13 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
                     content=item.get('content');text=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text') if isinstance(content,list) else None
             # Codex can save the same native reply as both user_message and UserMessage.
             if isinstance(text,str):
-                if not call:displays.clear();offer=None;exchange_at=record.get('timestamp')
+                if not call:
+                    displays.clear();exchange_at=record.get('timestamp')
+                    if not locator.get('decision'):offer=None
                 inputs.append((record.get('timestamp'),text))
                 if answer and text!=answered_text and not (retry_resume and _resume_retry(text)):superseded=True
         if since and not newer(record.get('timestamp'),since):continue
-        if not call:offer=_offered(record,host,session,locator.get('decision'),offer) or offer
+        if not call:offer=_offered(record,host,session) or offer
         if not call and (shown:=_display(record,host,session,before_call=use)):
             if locator.get('decision') or _OFFER_REFERENCE.search(shown['text']):displays.append(shown)
         if host=='claude':
@@ -443,6 +453,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
                         if not isinstance(text,str) or not isinstance(plan_path,str):continue
                         answer={'prompt':'approve','accepted_plan':text,'accepted_plan_path':plan_path,'via':'plan'}
                     else:
+                        if call[1].get('input',{}).get('answers'):continue
                         answers=native.get('answers')
                         if not isinstance(answers,dict) or len(answers)!=1 or not all(isinstance(v,str) for v in answers.values()):continue
                         answer={'prompt':next(iter(answers.values())),'via':'question'}
@@ -480,6 +491,11 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
     questions=request.get('questions',[]) if isinstance(request,dict) else []
     answer['question']=(questions[0].get('question') or questions[0].get('title') or '') if questions and isinstance(questions[0],dict) else ''
     answer['question_options']=question_options(request)
+    if questions and isinstance(questions[0],dict):
+        descriptions={option.get('label'):option['description'] for option in questions[0].get('options') or []
+                      if isinstance(option,dict) and isinstance(option.get('description'),str)}
+        answer['option_descriptions']='\n'.join(descriptions.values())
+        answer['selected_description']=descriptions.get(answer['prompt'],'')
     answer['question_at']=call[0].get('timestamp')
     answer['question_call']=use
     answer['question_context']=displays
@@ -547,6 +563,11 @@ def menu_text(text):
     return question_text(text).translate(str.maketrans({'“':'"','”':'"','‘':"'",'’':"'"}))
 
 
+def action_text(label):
+    """Compare an action name independently of the host's presentation markup."""
+    return menu_text(label).casefold().removesuffix(' (recommended)').rstrip('.!')
+
+
 def shown_offer_reference(source):
     displays=source.get('question_context') or []
     if source.get('via')=='question' or not displays:displays=[*displays,{'text':source.get('question','')}]
@@ -590,7 +611,7 @@ def pending_display(host,payload,offer):
                     item.get('type')=='item_completed' and (item.get('item') or {}).get('type')=='UserMessage')
             if human_input:
                 prepared=False;displays.clear()
-            elif returned:=_offered(record,host,session,offer['decision']):
+            elif returned:=_offered(record,host,session):
                 prepared=returned['decision']==offer['decision']
             elif prepared and (shown:=_display(record,host,session)):
                 displays.append(shown)
@@ -601,11 +622,14 @@ def pending_display(host,payload,offer):
     return bool(presented_question_at(context,offer['disclosure'],reference_text=reference))
 
 
-def question_calls(root, host, session, question, supplied=None, *, options=None, compact=False):
+def question_calls(root, host, session, question, supplied=None, *, options=None, compact=False, offered_actions=None):
     """List native calls showing this prepared text or its complete checkpoint menu.
     Locating a call grants nothing; native_human still validates its saved answer."""
     path=_path(host,session,supplied);calls=[]
     def matches(arguments):
+        if offered_actions is not None:
+            labels=question_options(arguments) or []
+            return bool(set(map(action_text,labels)).intersection(map(action_text,offered_actions)))
         if options is not None:
             shown=question_options(arguments)
             return shown is not None and set(shown)==set(options)

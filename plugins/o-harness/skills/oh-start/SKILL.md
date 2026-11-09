@@ -3,6 +3,9 @@ name: oh-start
 description: Choose an OH workflow only when explicitly invoked.
 disable-model-invocation: true
 ---
+When a choice is needed, introduce the work or setting and explain each option's effect
+in the native menu itself. Keep internal identifiers in tool calls. Wait for the person's choice.
+
 Load `workflows/oh/SKILL.md` through OH's resource entry. Select the requested
 workflow after saved-work discovery; show unfinished work before asking for a missing
 subject. For concrete work choices call Claude `AskUserQuestion` or Codex

@@ -5,6 +5,8 @@ saved/local/origin facts. Preserve local work while gathering information. Deliv
 recovery questions report their observed base freshness separately from the selected
 discard/continuation effect; a cached base is not verified current origin.
 
+If entry reports a merged batch, use its next-task guidance. A stale unpublished checkpoint does not require Resume when its completed batch is on the refreshed base and its saved branch has no additional work. Read the approved plan on that base and use the current invocation with scope prepare. Preserve the old journal as history.
+
 ## Idle history and selection
 
 Discovery and selected reads use the same `status` and `execution` facts. Workflow
@@ -85,7 +87,7 @@ normal handback, cleanup continuation or delayed result into another Continue ga
 
 For an unfinished delivery, use `decision-request recover --run ID` (Codex
 `decision_request` with kind `recover`). It inspects Git and prepares one native
-question. Copy its returned disclosure into chat, including the inspection link. Then ask its short question with its
+question. Explain the effects in plain language, including the affected paths or inspection link before a discard. Then ask its short question with its
 short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
 the returned options with Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async`, following the shared waiting and fallback rules.

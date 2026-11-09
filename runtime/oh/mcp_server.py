@@ -44,7 +44,7 @@ TOOLS = [
          {'manifest':OBJECT,'workflow':{'type':'string','enum':['deliver','design','propose']},'doc':TEXT,'track':TEXT,'human':OBJECT,
           'keep_checkout':{'type':'boolean','description':'Keep the checkout deliberately selected after inspecting entry facts; all scope/approval/ownership checks still apply.'},
           'after':{'type':'string','description':'Accepted prerequisite decision retaining the same initiating human request.'}}),
-    tool('scope_approve', 'Bind scope choice', 'Verify the actual native reply to this scope. Approve and fix starts the approved work. Stop and take over records a refusal. Put approval.decision in human.decision with the conversation locator.',
+    tool('scope_approve', 'Bind scope choice', 'Verify the actual native reply to this scope. The named affirmative action starts the approved work. Stop and take over records a refusal. Put approval.decision in human.decision with the conversation locator.',
          {'scope':TEXT,'human':OBJECT,'after':{'type':'string','description':'Only for a separately accepted run prerequisite that retained this original scope reply.'}}, ['scope','human']),
     tool('attempt_admit', 'Admit native agent', 'Bind a fresh agent attempt and its packet; review admission consumes its allowance once.',
          {'role':{'type':'string','enum':['assessment','implementation','analysis','review']}}, ['role']),

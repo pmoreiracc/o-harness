@@ -73,8 +73,8 @@ not exercise. After the single implementation review run every slice on the fina
 | --- | --- | --- |
 | Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The approved row is recorded in M1, validates and passes review; application files stay at baseline. |
 | Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
-| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then Stop at the selection boundary before workers. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; resume preserves it, only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The checkpoint identifies excluded other-track work. One PR links the reviewed HEAD and passes CI. |
-| Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, decline it. | One actual Stop binds a scope decline. Verify its receipt, no new run, no implementation, approval, edits or publication. |
+| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then Stop at the selection boundary before workers. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; resume preserves it, only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers the next runnable Core task, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; the next Core task and excluded track remain untouched. |
+| Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, and decline it in the prepared scope menu. | One actual Stop binds a scope decline. Verify its receipt, no new run, no implementation, approval, edits or publication. |
 
 The independent Design fixture contains a normal roadmap initiative only. The host still drafts, checks, reviews and accepts its design. Nightly P also exercises the direct handoff from the newly created proposal.
 
@@ -82,12 +82,28 @@ Use a unique base branch in a dedicated private fixture repository, set its name
 the fixture project's configured base, and push only this trial's starting tree to it.
 Use `python3 check.py` for hosted sanity. For scenario C also require release readiness.
 After the run close the fixture PR unmerged and delete only its trial branches.
-In the sanity delivery project the second track exists only to test selection; it
+In sanity, Core has a second runnable task so all three checkpoint actions are available. The second track exists only to test selection; it
 is outside the chosen scope. Fault injection, additional batches and failed hosted CI
 belong to the longer catalog. Measure preparation, each slice, slowest host and overall
 wall time. Timings guide optimization; an overrun never converts a pass into a failure.
 For a new E2E case document whether it protects an essential ordinary workflow (sanity
 and nightly) or adds a variant or fault (nightly). Prefer extending an existing path.
+
+## External merge re-entry
+
+The `merged` fixture on each host exercises this additional sanity and nightly path.
+Use a unique base in a dedicated private test repository. Deliver Core task 1 and
+choose Stop at its completed checkpoint. The operator opens and merges a fixture PR
+through native Git/GitHub, leaving OH's run unpublished. In a fresh CLI invoke Deliver
+for the same design. It must fetch the base, identify the merged batch and select task 2
+without a Resume/discard question for task 1. Stop before task 2 workers and inspect
+that its grant is exactly task 2, product files still reflect task 1 only, and the old
+journal keeps its original allowances/results/publication state. No record is fabricated
+to make OH look like it published. The fixture-only merge is part of this test.
+
+This extends sanity because returning after a human merge is a fundamental delivery
+entry. It adds one tiny implementation/review and an external hosted merge per host.
+Additional dirty/unmerged variants have focused deterministic coverage.
 
 ## Nightly live regression
 
@@ -171,6 +187,29 @@ pending until the separate actual repair approval. Approve changing only that fi
 Follow actual GitHub checks to green on the updated head. No weakening the check, additional
 approval to prepare the proposal, duplicate PR or fabricated successful CI observation.
 
+## Menu coverage in the live catalog
+
+Use the real question on each host, with a readable introduction and action descriptions.
+The question must make sense without an internal reference. Vary the title and the order
+of options between hosts. Inspect the native call, the first actual answer and its effect.
+Record a repeated question, rejected valid answer or extra grant as a failed path even if a
+later attempt succeeds. Run the affected variants during development; keep the extended
+paths below in the nightly catalog.
+
+| Exercise in a disposable consumer | Outcome to inspect |
+| --- | --- |
+| P: refine or cancel a proposed roadmap addition before accepting the revised preview; discuss a Design choice before approving private Design | Discussion and cancellation grant nothing. Only the accepted additions and reviewed design become usable. |
+| D: select a named design/track; at the first completed task choose the next batch, then publish the completed work | Only the selected track and displayed task window run. One publication answer opens one PR at the reviewed commit and destination. |
+| D recovery: leave a harmless uncommitted fixture file, stop, resume, and select the explicit discard action after inspecting the affected file list | Continue preserves existing edits; on a separate disposable run an actual restart discards only the disclosed contents. Changing those contents before acting invalidates restart. |
+| Q: decline a new fix with an earlier run stopped; accept a distinct one-file fix through the normal plan or menu in a fresh fixture | Decline never approves anything, starts a worker or modifies the earlier journal. Approval executes only the actual scope. A dismissed question remains pending. In the Claude plan viewer decline using feedback and verify that the scope stays unapproved and no worker runs. The host records a rejected plan separately from a menu Stop. |
+| Review: use a tiny manual change with a real optional concern. Request review, choose Fix concerns, and on a separate concern choose acceptance. If a repair would exceed the task or review allowance, decline it, then exercise an explicit bounded grant in a separate trial | Acceptance records the reviewed subject. Fix concerns repairs within the grant. A supporting repair or additional round requires its own actual choice; observe the exact changed scope or count. |
+| C: select investigation of a failed fixture check, inspect the actual cause, then decline or approve the proposed correction. When a failed hosted check is safe to rerun unchanged, select rerun in a separate trial | Investigation grants diagnosis; only the repair approval can change the PR. Rerun repeats the intended check at its existing head. |
+| Other routing and configuration choices: for a touched skill, exercise its normal entry with multiple eligible options; choose an option, discuss, or dismiss on the native surface | Verify the resulting selected work or setting. Discussion and dismissal leave it unchanged. |
+
+Record a variant as unexercised if its prerequisite never occurred. The ordinary
+Propose, Design, three-way Delivery checkpoint, recovery and quick-fix refusal remain
+in pre-PR sanity. Extended variants reuse those fixtures and may run independently.
+
 ## Evidence and finish
 
 Use the read-only fixture observation command at checkpoints:
@@ -179,6 +218,7 @@ Use the read-only fixture observation command at checkpoints:
 python3 integrations/e2e_fixture.py inspect TRIAL --host codex --scenario delivery
 ```
 
+For a published sanity delivery it also requires a three-way checkpoint and exactly one recorded publication answer. Inspect the native presentation for clarity.
 It checks retained report hashes and prints files, actual task IDs, attempts, status and
 publication evidence. It is not a pass oracle. The operator also inspects native questions,
 the original delivery run when C creates a correction run, and actual GitHub check results.

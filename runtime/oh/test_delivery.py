@@ -21,6 +21,17 @@ class DeliveryRequestTest(unittest.TestCase):
                 delivery.requested(source|{'question':'Which design should I inspect before we deliver 0001?'},'0001','',None)
 
 
+    def test_action_identifies_selected_design_even_with_an_agent_written_question(self):
+        choice='Deliver 0001 core'
+        menu={'via':'question','question':'Which work would you like to start?', 'prompt':choice,
+              'question_options':['Deliver 0001 other',choice]}
+        delivery.requested(menu,'0001','core',None)
+        recommended=menu|{'prompt':choice+' (Recommended)','question_options':[choice+' (Recommended)','Deliver 0001 other']}
+        delivery.requested(recommended,'0001','core',None)
+        with self.assertRaises(Refused):delivery.requested(recommended,'0001','other',None)
+        with self.assertRaises(Refused):delivery.requested(menu,'0001','other',None)
+        with self.assertRaises(Refused):delivery.requested(menu|{'question_options':['Inspect 0001 core']},'0001','core',None)
+
     def test_explicit_typed_request_binds_design_and_track(self):
         from .native import _command
         for text in ('Deliver 0001 core','Please implement design 0001 track core.','/oh-deliver 0001 core'):
@@ -147,7 +158,9 @@ class DeliveryTest(fixtures.NativeFixture):
             self.assertEqual(self.git('branch','--show-current'),branch)
             if not typed:
                 for label in ('Deliver 0001 core','/oh-deliver 0001 core'):
-                    path.write_text(saved.replace(question,'Which track should I inspect before we deliver 0001?').replace(answer,label),newline='\n')
+                    altered=saved.replace(question,'Which track should I inspect before we deliver 0001?').splitlines()
+                    altered[-1]=altered[-1].replace(answer,label)
+                    path.write_text('\n'.join(altered)+'\n',newline='\n')
                     for selected_track in ('core','ui'):
                         with self.subTest(label=label,track=selected_track),self.assertRaisesRegex(Refused,'Request delivery'):
                             native.prepare_scope(self.root,doc='0001',track=selected_track,human=reply)
@@ -191,7 +204,7 @@ class DeliveryTest(fixtures.NativeFixture):
         with self.assertRaisesRegex(Refused,'configured checks'):native.admit(self.root,'review')
         before=load_run(self.root)[1]
         gate=decisions.prepare(self.root,'approve-repair',repair='Restore the shared fixture required by the credential-store checks; preserve all assertions.')
-        answer=self.human(gate['options'][0],decision=gate['decision'],question=gate['question'],question_at=now(),via='question')
+        answer=self.offered_answer(gate,gate['options'][0])
         native.decision(self.root,'approve-repair',answer)
         journal,approved=load_run(self.root);records=journal.records()
         native.decision(self.root,'approve-repair',answer)
@@ -365,6 +378,7 @@ class DeliveryTest(fixtures.NativeFixture):
                 rows.append(human_record('entry','/oh-deliver 0001'))
                 def save():path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
                 def choose(gate,use):
+                    rows.append(self.offer_record(host,session,gate,now()))
                     if 'disclosure' in gate:
                         rows.append({'type':'response_item','timestamp':now(),'payload':{'type':'message','role':'assistant',
                             'content':[{'type':'output_text','text':gate['disclosure']}]}} if host=='codex' else
@@ -566,6 +580,51 @@ class DeliveryTest(fixtures.NativeFixture):
         self.git('commit','-qam','both tracks blocked');self.git('update-ref','refs/remotes/origin/main','HEAD')
         with self.assertRaisesRegex(Refused,'No ready pending tasks'):
             delivery.selection(self.root,'0001')
+
+    def test_external_merge_of_saved_checkpoint_selects_next_task_without_resume(self):
+        from . import native
+        from .entry import inspect
+        self.documents()
+        first=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001'))
+        self.assess();self.implement();review=self.reviewed()
+        native.complete(self.root,review['id'])
+        journal,old=load_run(self.root);records=journal.records()
+        branch=self.git('branch','--show-current')
+        origin=Path(self.temp.name)/'origin.git'
+        self.git('clone','--bare',str(self.root),str(origin));self.git('remote','add','origin',str(origin))
+        self.git('fetch','origin','main')
+        before=inspect(self.root)
+        self.assertTrue(next(item for item in before['saved_work'] if item['run']==old['id'])['resumable'])
+        self.git('switch','main');self.git('merge','--no-ff','--no-edit',branch)
+        self.git('push','origin','main');self.git('switch',branch)
+        # The original path treats the historical checkpoint as resumable.
+        with patch('oh.delivery.merged_batch',return_value=None):
+            stale=inspect(self.root)
+            self.assertTrue(next(item for item in stale['saved_work'] if item['run']==old['id'])['resumable'])
+        (self.root/'notes.txt').write_text('Keep these local edits',newline='\n')
+        dirty=inspect(self.root)
+        self.assertTrue(next(item for item in dirty['saved_work'] if item['run']==old['id'])['resumable'])
+        (self.root/'notes.txt').unlink()
+        facts=inspect(self.root)
+        saved=next(item for item in facts['saved_work'] if item['run']==old['id'])
+        self.assertFalse(saved['resumable'])
+        compact={'saved_work':[{'run':old['id'],'resumable':True}]}
+        with patch('oh.native.saved_work',return_value=compact):
+            self.assertEqual(inspect(self.root)['saved_work'][0]['next_action']['arguments']['doc'],'0001')
+        from .decisions import prepare
+        self.assertFalse(prepare(self.root,'recover',run=old['id'])['recovery_required'])
+        selected=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001',session='fresh'))
+        self.assertNotEqual(selected['run'],first['run'])
+        self.assertEqual(selected['task']['id'],'2')
+        self.assertEqual(selected['granted'],['2'])
+        (self.root/'notes.txt').write_text('Unfinished task 2 work',newline='\n')
+        again=inspect(self.root)
+        self.assertTrue(all(not item['resumable'] for item in again['saved_work'] if item['run']==old['id']))
+        continued=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001',session='another'))
+        self.assertEqual(continued['run'],selected['run'])
+        self.assertTrue(continued['resume_required'])
+        self.assertIsNone(old.get('published'))
+        self.assertEqual(journal.records(),records)
 
     def test_entry_discovers_merged_progress_before_reconciled_delivery_selection(self):
         from . import native
