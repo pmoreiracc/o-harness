@@ -174,8 +174,20 @@ class AuthorityTest(unittest.TestCase):
             self.assertEqual((found['prompt'],found['via'],found['accepted_plan']),('approve','plan',plan))
             self.assertEqual(found['accepted_plan_path'],'native.md')
             self.assertEqual(len(found['record_hashes']),2)
+            # Claude's native permission UI records its command and output as
+            # local user rows; neither is a new instruction about this task.
+            controls=[base|{'type':'user','entrypoint':'cli','promptId':'permissions',
+                           'timestamp':'2026-10-13T20:00:02+00:00','message':{'role':'user','content':text}}
+                      for text in ('<command-name>/permissions</command-name>\n<command-message>permissions</command-message>\n<command-args></command-args>',
+                                   '<local-command-stdout>(no content)</local-command-stdout>')]
+            controls.append(controls[0]|{'isMeta':True,'message':{'role':'user','content':
+                'Permission granted for this exact command only. This adds no rule.'}})
+            self.assertEqual(read(records+controls),found)
             cancelled=base|{'type':'user','entrypoint':'cli','promptId':'cancel','timestamp':'2026-10-13T20:00:03+00:00',
                 'message':{'role':'user','content':'No. Cancel that scope; do not implement it.'}}
+            with self.assertRaises(Refused):read(records+controls+[cancelled])
+            retry=cancelled|{'message':{'role':'user','content':'I authorize you to retry that exact scope approve command now.'}}
+            with self.assertRaises(Refused):read(records+controls+[retry])
             with self.assertRaises(Refused):read(records+[cancelled])
             with self.assertRaises(Refused):recover()
             self.assertEqual(native_human(root,locator,since=since,latest=False),found)

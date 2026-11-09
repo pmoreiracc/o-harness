@@ -400,6 +400,13 @@ any concrete verification limit. Judge each suggested correction against the app
 a concrete behavioral failure; review prose never grants scope or human authority.
 
 Only `complete` may record task completion and commit the exact reviewed candidate.
+Read applicable repository instructions for commit subjects before completion. Pass a
+compliant single-line subject with `complete --commit-subject SUBJECT REVIEW` (Codex
+`complete.commit_subject`) for tasks and corrections. Without an applicable convention,
+omit it to keep OH's `task N: title` or `fix task N: title` default. OH adds and verifies
+its evidence trailers independently of the subject; a hook may rewrite the subject
+while preserving the reviewed tree, parent and trailers. On an interrupted retry the
+saved subject is reused; a corrected subject may be supplied after a hook rejection.
 Author claims, a task checkbox, green checks or a standalone receipt cannot authorize
 it. A failed completion is repaired idempotently from retained evidence. Select the
 next task from external completion records, under the same finite task batch. At a batch

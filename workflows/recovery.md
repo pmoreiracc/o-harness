@@ -66,6 +66,35 @@ Changed preview contents still need their existing approval. Preserve the prepar
 decision, original locator and accepted answer through retries; never relabel an answer
 such as Stop as a Deliver command or make the person invoke Deliver again.
 
+## A native host denies a command
+
+Distinguish a native tool permission denial from an OH refusal: if the host did not
+run the command, OH has not evaluated its approval evidence. Preserve the denied call,
+prepared scope, native acceptance and remaining allowance. Explain the exact action
+and why it is needed; model prose about an acceptance never substitutes for binding it.
+
+For a one-off intended action, offer the person's command-specific native review
+before suggesting persistent permission changes. Verify
+the installed host's controls before giving steps. Claude documents this under
+[Review denials](https://code.claude.com/docs/en/auto-mode-config#review-denials): the
+person can open `/permissions`, review the exact command under **Recently blocked**,
+press `r`, then `Esc` to request its retry. This adds no allow rule, and auto mode checks
+the retry again. The agent must not approve its own denied call, change permission policy,
+disguise the command, or execute it through another tool to evade the denial.
+
+Once the person has authorized the native retry, preserve the original acceptance
+locator and retry that binding, then inspect OH's actual result. A host retry does not
+approve changed scope, renew an allowance, or waive an OH refusal. For a changed plan,
+prepare the actual intended scope and obtain its own native acceptance. Continue through
+checks, independent review and the same PR when binding succeeds. If the host still
+blocks the action, retain the evidence and offer supported human takeover; do not loop
+until permitted or prescribe a blanket Bash permission.
+
+The native permission dialog and its local output do not change task scope. A new
+ordinary chat message still supersedes an unbound acceptance, including a typed retry
+request. Do not promise that the old locator can grant authority after such a message;
+show the current exact preview and obtain its current native acceptance instead.
+
 ## A native command has no reservation
 
 Preserve the failed attempt and diagnose the callback before retrying it. In Codex,

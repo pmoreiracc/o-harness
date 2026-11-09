@@ -1683,7 +1683,10 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
         return select(root,state['id'])
 
 
-def complete(root,attempt_id):
+def complete(root,attempt_id,commit_subject=None):
+    if commit_subject is not None and (not isinstance(commit_subject,str) or not commit_subject.strip() or
+                                       any(ord(c)<32 or ord(c)==127 for c in commit_subject)):
+        raise Refused('Commit subject must be one non-empty line without control characters')
     with _locked(root):
         journal,state=load_run(root);_owner(root,state);_idle(root);review=_attempt(state,attempt_id)
         if review.get('superseded'):raise Refused('Recovery changed the reviewed subject; finish fresh checks and review before completion')
@@ -1746,15 +1749,21 @@ def complete(root,attempt_id):
         value={'task':task['id'],'review':attempt_id,'summary':review['summary'],'evidence':review.get('native_source',[]),'tree':subject['git_tree']}
         if committed(state):
             if not recovered:
+                title=commit_subject if commit_subject is not None else (intent or {}).get('commit_subject')
+                if title is None:title=('fix ' if correction else '')+f"task {task['id']}: {task['title']}"
                 if not intent:
-                    intent={'task':task['id'],'key':key,'review':attempt_id,'git_tree':subject['git_tree'],'parent':subject['head'],'publication':evidence}
+                    intent={'task':task['id'],'key':key,'review':attempt_id,'git_tree':subject['git_tree'],'parent':subject['head'],'publication':evidence,'commit_subject':title}
+                    journal.append('commit.intent',intent)
+                elif commit_subject is not None and intent.get('commit_subject')!=title:
+                    intent=intent|{'commit_subject':title}
                     journal.append('commit.intent',intent)
                 git(root,'add','--all',*whole(root))
                 if git(root,'write-tree')!=subject['git_tree']:raise Refused('Staged tree differs from independently reviewed candidate')
-                title=('fix ' if correction else '')+f"task {task['id']}: {task['title']}"
                 git(root,'commit','--allow-empty','-m',f"{title}\n\nOH-Run: {state['id']}\nOH-Review: {attempt_id}\nOH-Reviewed-Tree: {subject['git_tree']}\nOH-Evidence: {digest(evidence)}")
                 if git(root,'rev-parse','HEAD^{tree}')!=subject['git_tree'] or git(root,'rev-parse','HEAD^')!=subject['head']:
                     raise Refused('Commit hooks changed the reviewed candidate or parent')
+                from .publication import verify_record
+                verify_record(root,git(root,'rev-parse','HEAD'),evidence)
             value['commit']=git(root,'rev-parse','HEAD')
         else:value['artifact']={'files':subject['artifacts']}
         bound=state.get('delivery')
