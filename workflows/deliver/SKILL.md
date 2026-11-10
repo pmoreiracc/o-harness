@@ -55,8 +55,13 @@ Interpret the requested work as follows:
   an external manifest of ordered tasks with `id`, `title`, `instructions` and optional
   `needs`. Preserve included original unreviewed edits in one coherent task; do not
   split an existing dirty change across partially completed repair tasks. Call
-  `scope prepare <manifest.json>` and present its actual scope preview and finite
-  task/review limits. Difficulty and model selection stay outside that manifest.
+  `scope prepare <manifest.json>`. If it reports `execution_branch_required`, resolve
+  the safe execution branch and reprepare there, preserving the included edits, before
+  presenting approval; that preview has no approval offer. `keep_checkout` does not
+  waive the base-branch guard. Then show
+  the executable scope preview and finite task/review limits; do not spend a human
+  answer on a preview that cannot enter delivery. Difficulty and model selection stay
+  outside that manifest.
 - Existing prepared or interrupted work: use the matching retained scope and remaining
   allowance through `resume`; never convert a preparation ID or agent text into a
   human approval. A complete saved batch proceeds to its actual decision/publication.

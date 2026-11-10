@@ -34,6 +34,12 @@ Follow the host's actual connection controls; `/mcp` availability depends on the
 interface. Setup requires an explicit invocation. Native scope, ownership and
 permission requirements still apply during recovery.
 
+For an explicit Stop, inspect the current saved state and bind that actual native
+input with `decision stop`; settle owned execution through the normal helpers under
+that request. An unapproved preview uses its existing scope-refusal offer. Do not
+turn Stop into a Resume, new scope or confirmation question, even when no Stop
+question was prepared. Keep the original input through technical retries.
+
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
 workflow and standalone review without selecting either or registering a new checkout.
@@ -95,6 +101,11 @@ when large; read the needed fields and referenced artifacts rather than guessing
 
 Use these focused operations, through their equivalent named OH tools in Codex:
 
+When preparing a scope or decision through the CLI, retain the complete returned
+approval object. Do not filter its output: the native preparation record identifies
+the later human choice. Inspection links help the person review the work; approval
+binding does not require repeating an internal path or byte-identical disclosure.
+
 | Purpose | Claude command | Codex tool |
 | --- | --- | --- |
 | Discover saved work | `status --saved` | `status` with `saved: true` |
@@ -105,6 +116,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
 | Prepare bounded work | `scope prepare <manifest.json> [--workflow deliver\|design\|propose] [--human <locator.json>]` | `scope_prepare` |
 | Select approved design tasks | `scope prepare --doc NNNN [--track TRACK] --human <locator.json>` | `scope_prepare` |
+| Prepare a review or existing-PR repair | `prepare <manifest.json> [--review RUN_ID] [--pr N]` | Use the packaged CLI; its checked source/target is retained in the scope |
 | Bind a quick-fix scope choice | `scope approve <scope-id> <locator.json>` | `scope_approve` |
 | Admit a fresh phase | `attempt admit assessment\|implementation\|analysis\|review` | `attempt_admit` |
 | Bind the launched native child | `attempt bind <attempt-id> <locator.json>` | `attempt_bind` |

@@ -210,8 +210,6 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
                 folder=Path(state.get('plans',{}).get('designs',''))
                 artifact=next((Path(name) for name in evidence.get('artifacts',{}) if Path(name).parent==folder),artifact)
             value['disclosure']+='\n[View the reviewed work](<'+artifact.as_posix()+'>)'
-        elif kind=='approve-repair':
-            value['approval_material']=repair.strip()
         if 'stop' in actions.values():value['stop_boundary']=stop_boundary(root,journal,state)
         key=save_offer(root,value,details=compact_details if kind=='approve-repair' else None,
                        details_title='View the proposed repair')
@@ -231,38 +229,58 @@ def _path_shown(path,text):
     return re.search(r"(?<![\w./-])"+re.escape(path)+r"(?![\w./-])",text) is not None
 
 
-def _verify_menu(value,source,*,discard=False):
+def menu_actions(value):
+    if value.get('choices'):return {label:kind for kind,label in value['choices'].items()}
+    actions={value['label']:value['kind']}
+    if value.get('takeover') or value['kind']=='approve-scope':actions[TAKE_OVER]='stop'
+    return actions
+
+
+def _verify_menu(value,source,*,discard=False,action=None,publication_pr=None):
     """Correlate the actual input with its prepared effect. Presentation prose is agent-owned."""
-    from .authority import menu_text,newer
+    from .authority import menu_text,newer,action_matches
+    action=action or value['kind']
+    label=(value.get('choices') or {}).get(action)
+    if label is None:
+        label=TAKE_OVER if action=='stop' else value.get('label')
+    if label is None:
+        label=next((option for option in value['menu_options'] if action_matches(source['prompt'],option,action)),'')
     offer=source.get('prepared_offer') or {}
     if offer.get('decision')!=digest(value) or offer.get('ambiguous'):
         raise Refused('This answer does not identify the prepared choice. Recover its original native question and preparation.')
+    # An explicit refusal grants nothing and needs no repeated presentation.
+    if action=='stop' and action_matches(source['prompt'],TAKE_OVER,'stop'):
+        if not newer(source.get('at') or source.get('question_at'),value['created_at']):
+            raise Refused('This refusal predates the prepared choice')
+        return
     if not newer(source.get('question_at'),value['created_at']):
         raise Refused('This question predates the prepared choice')
-    from .authority import action_text
+    from .authority import action_text,action_names,publication_update
     selected=action_text(source['prompt'])
-    if selected not in map(action_text,value['menu_options']):
+    if action=='publish' and (update:=publication_update(selected)):
+        if not publication_pr or update[1] and int(update[1])!=publication_pr:
+            raise Refused('This update choice does not identify the approved existing PR')
+    if not action_matches(selected,label,action):
         raise Refused('Choose the named action before granting its effect')
     if source.get('via')=='question':
         options=source.get('question_options') or []
-        if list(map(action_text,options)).count(selected)!=1:
+        if (list(map(action_text,options)).count(selected)!=1
+                and sum(action_matches(option,label,action) for option in options)!=1):
             raise Refused('The native single-select menu must contain the chosen action')
     else:
         displays=[d['text'] for d in source.get('question_context',[]) if newer(d.get('at'),value['created_at'])]
         shown=menu_text(' '.join(displays+[source.get('question','')])).casefold()
-        if selected not in shown:
+        import re
+        if selected not in shown and not any(
+                re.search(r'(?<!\w)'+re.escape(action_text(option))+r'(?!\w)',shown)
+                for option in action_names(label,action)):
             raise Refused('The typed answer needs its original visible action')
-    material=value.get('approval_material')
-    if discard or (material and selected==action_text(value['label'])):
+    # The coordinator owns readable approval context. Destructive restart still
+    # needs its concrete affected paths or inspection link before the answer.
+    if discard:
         parts=[d['text'] for d in source.get('question_context',[]) if newer(d.get('at'),value['created_at'])]
-        parts.extend([source.get('question',''),source.get('option_descriptions' if discard else 'selected_description','')])
+        parts.extend([source.get('question',''),source.get('option_descriptions','')])
         shown=' '.join(parts)
-        if material and not discard:
-            anchors=[material]
-            if detail:=value.get('details_file'):anchors.append(detail['path'])
-            if not any(anchor.replace('\\','/') in shown.replace('\\','/') for anchor in anchors):
-                raise Refused('Show the supplied link to the prepared work before approval, then bind the actual answer.')
-            return
         paths=value['affected_paths']
         link=value.get('details_file',{}).get('path')
         linked=bool(link) and link.replace('\\','/') in shown.replace('\\','/')
@@ -332,7 +350,7 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
                     and (source.get('prepared_offer') or {}).get('decision')==key
                     and source.get('question')==value['question'])
     if value.get('menu_version')==2 or old_checkpoint:
-        _verify_menu(value,source,discard=kind=='restart')
+        _verify_menu(value,source,discard=kind=='restart',action=kind,publication_pr=(state.get('pr_target') or state.get('published') or {}).get('number'))
     elif 'disclosure' in value:
         # The identified short question names the handoff or ordinary
         # keep-edits continuation. A reset, new grant, destination or carried
@@ -359,10 +377,10 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     label=TAKE_OVER if takeover else choices[kind] if choices else value['label']
     accepted=(label.casefold(),) if choices or takeover else (label.casefold(),'yes','yes please')
     if kind=='resume':accepted+=('resume','resume the saved work','yes, resume saved work','please resume saved work')
-    from .authority import action_text
+    from .authority import action_text,action_matches
     answer=action_text(source['prompt']) if value.get('menu_version')==2 else source['prompt'].strip().casefold().rstrip('.!')
     if value.get('menu_version')==2:accepted=tuple(map(action_text,accepted))
-    if answer not in accepted:
+    if answer not in accepted and not (value.get('menu_version')==2 and action_matches(answer,label,kind)):
         raise Refused('This native answer does not accept the presented effect; preserve it and resolve the actual choice')
     from .authority import newer
     if 'disclosure' not in value and not newer(shown_at,value['created_at']):
@@ -411,8 +429,6 @@ def scope_request(root,scope):
            'menu_options':options,'created_at':now()}
     from .native import _home
     preview=_home(root)/'scopes'/value['scope']/'scope.md'
-    if count>1 or title!=' '.join(scope['tasks'][0]['title'].split()) or scope.get('original_work') or scope.get('pr_target') or scope.get('starting_edits'):
-        value['approval_material']=str(preview)
     value['disclosure']+='\n[View the prepared scope](<'+preview.as_posix()+'>)'
     key=save_offer(root,value)
     return {'decision':key,'disclosure':value['disclosure'],'question':value['question'],'options':options,
@@ -429,16 +445,16 @@ def verify_scope(root,scope,locator,source,*,decline=False):
     value=read_json(_home(root)/'decisions'/(key+'.json'))
     if digest(value)!=key or value.get('kind')!='approve-scope' or value['scope']!=digest(scope):raise Refused('This answer belongs to another scope')
     if value.get('menu_version')==2:
-        _verify_menu(value,source)
+        _verify_menu(value,source,action='stop' if decline else 'approve-scope')
     elif 'disclosure' in value:
         preview=_home(root)/'scopes'/value['scope']/'scope.md' if decline else None
         _verify_display(value,source,need_disclosure=not decline,preview=preview)
-    from .authority import action_text
+    from .authority import action_text,action_matches
     answer=action_text(source['prompt'])
     if decline:
-        if answer!=TAKE_OVER.casefold():
+        if not (answer==TAKE_OVER.casefold() or value.get('menu_version')==2 and action_matches(answer,TAKE_OVER,'stop')):
             raise Refused('This answer does not decline the presented scope')
-    elif answer not in (action_text(value.get('label','Approve this scope')),'yes','yes please'):
+    elif answer not in (action_text(value.get('label','Approve this scope')),'yes','yes please') and not (value.get('menu_version')==2 and action_matches(answer,value['label'],'approve-scope')):
         raise Refused('This answer does not approve the presented scope')
     if 'disclosure' in value:return
     from .authority import question_text,presented_question_at

@@ -25,6 +25,25 @@ class E2EFixtureTest(unittest.TestCase):
                 fixture.main()
                 prepare.assert_called_once_with('test', 'test', suite)
 
+    def test_publication_observation_counts_short_first_answers_and_recovery(self):
+        from types import SimpleNamespace
+        from . import authority
+        label='Open PR to example/project → main'
+        offer={'question':'Publish the greeting change?', 'choices':{'continue':'Start task 2','publish':label,'stop':'Stop and take over'},
+               'menu_options':['Start task 2',label,'Stop and take over']}
+        receipt={'prepared':offer,'human':{'host':'codex','session':'s','transcript_path':'native.jsonl'}}
+        journal=SimpleNamespace(path=Path('fixture-run'))
+        state={'publication':{'source':'actual-human'}}
+        with patch('oh.storage.read_json',return_value=receipt), patch.object(authority,'question_calls',return_value=(Path('native.jsonl'),[])), \
+                patch.object(authority,'codex_history',return_value=(None,None,[{'prompt':'Open PR'}],None)):
+            self.assertEqual(fixture.sanity_publication(Path('.'),journal,state)['answers'],1)
+        # A later successful recovery cannot hide the rejected first actual answer.
+        with patch('oh.storage.read_json',return_value=receipt), patch.object(authority,'question_calls',return_value=(Path('native.jsonl'),['retry'])), \
+                patch.object(authority,'codex_history',return_value=(None,None,[{'prompt':'Open PR'}],None)), \
+                patch.object(authority,'native_human',return_value={'prompt':label}):
+            with self.assertRaisesRegex(ValueError,'observed 2'):
+                fixture.sanity_publication(Path('.'),journal,state)
+
     def test_foreign_git_and_agent_context_cannot_select_another_project(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory).resolve()

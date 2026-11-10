@@ -310,6 +310,7 @@ class DeliveryTest(fixtures.NativeFixture):
         request=self.human('/oh-deliver 0001')
         preview=native.prepare_scope(self.root,doc='0001',keep_checkout=True)
         self.assertFalse(preview['approved']);self.assertTrue(preview['execution_branch_required'])
+        self.assertNotIn('approval',preview)
         with self.assertRaisesRegex(Refused,'execution branch'):
             native.prepare_scope(self.root,doc='0001',keep_checkout=True,human=request)
         for args in (command('scope_prepare',{'doc':'0001','human':request},self.root),
