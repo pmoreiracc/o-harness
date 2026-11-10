@@ -73,7 +73,7 @@ not exercise. After the single implementation review run every slice on the fina
 | --- | --- | --- |
 | Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The approved row is recorded in M1, validates and passes review; application files stay at baseline. |
 | Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
-| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then Stop at the selection boundary before workers. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; resume preserves it, only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers the next runnable Core task, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; the next Core task and excluded track remain untouched. |
+| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then send Stop at the selection boundary before workers, with no prepared Stop question. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; resume preserves it, only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers the next runnable Core task, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; the next Core task and excluded track remain untouched. |
 | Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, and decline it in the prepared scope menu. | One actual Stop binds a scope decline. Verify its receipt, no new run, no implementation, approval, edits or publication. |
 
 The independent Design fixture contains a normal roadmap initiative only. The host still drafts, checks, reviews and accepts its design. Nightly P also exercises the direct handoff from the newly created proposal.
@@ -85,7 +85,12 @@ After the run close the fixture PR unmerged and delete only its trial branches.
 In sanity, Core has a second runnable task so all three checkpoint actions are available. The second track exists only to test selection; it
 is outside the chosen scope. Fault injection, additional batches and failed hosted CI
 belong to the longer catalog. Measure preparation, each slice, slowest host and overall
-wall time. Timings guide optimization; an overrun never converts a pass into a failure.
+wall time. Report sanity separately from additional targeted/nightly variants, per host,
+and retain overall wall time. State whether each duration includes setup, human approvals,
+hosted CI and recovery. Use existing scenario boundaries and timestamps; never repeat an
+otherwise valid scenario just for a nicer timing number. Preserve failed first answers
+after recovery and link unrelated known failures, explaining their effect on scoped readiness.
+Timings guide optimization; an overrun never converts a pass into a failure.
 For a new E2E case document whether it protects an essential ordinary workflow (sanity
 and nightly) or adds a variant or fault (nightly). Prefer extending an existing path.
 
@@ -96,7 +101,7 @@ Use a unique base in a dedicated private test repository. Deliver Core task 1 an
 choose Stop at its completed checkpoint. The operator opens and merges a fixture PR
 through native Git/GitHub, leaving OH's run unpublished. In a fresh CLI invoke Deliver
 for the same design. It must fetch the base, identify the merged batch and select task 2
-without a Resume/discard question for task 1. Stop before task 2 workers and inspect
+without a Resume/discard question for task 1. Send the first actual Stop without a prepared question before task 2 workers and inspect
 that its grant is exactly task 2, product files still reflect task 1 only, and the old
 journal keeps its original allowances/results/publication state. No record is fabricated
 to make OH look like it published. The fixture-only merge is part of this test.
@@ -213,16 +218,22 @@ Record a repeated question, rejected valid answer or extra grant as a failed pat
 later attempt succeeds. Run the affected variants during development; keep the extended
 paths below in the nightly catalog.
 
-| Exercise in a disposable consumer | Outcome to inspect |
-| --- | --- |
-| P: refine or cancel a proposed roadmap addition before accepting the revised preview; discuss a Design choice before approving private Design | Discussion and cancellation grant nothing. Only the accepted additions and reviewed design become usable. |
-| D: select a named design/track; at the first completed task choose the next batch, then publish the completed work | Only the selected track and displayed task window run. One publication answer opens one PR at the reviewed commit and destination. |
-| D recovery: leave a harmless uncommitted fixture file, stop, resume, and select the explicit discard action after inspecting the affected file list | Continue preserves existing edits; on a separate disposable run an actual restart discards only the disclosed contents. Changing those contents before acting invalidates restart. |
-| Q: decline a new fix with an earlier run stopped; accept a distinct one-file fix through the normal plan or menu in a fresh fixture | Decline never approves anything, starts a worker or modifies the earlier journal. Approval executes only the actual scope. A dismissed question remains pending. In the Claude plan viewer decline using feedback and verify that the scope stays unapproved and no worker runs. The host records a rejected plan separately from a menu Stop. |
-| Review: use a tiny manual change with a real optional concern. Request review, choose Fix concerns, and on a separate concern choose acceptance. If a repair would exceed the task or review allowance, decline it, then exercise an explicit bounded grant in a separate trial | Acceptance records the reviewed subject. Fix concerns repairs within the grant. A supporting repair or additional round requires its own actual choice; observe the exact changed scope or count. |
-| C: select investigation of a failed fixture check, inspect the actual cause, then decline or approve the proposed correction. When a failed hosted check is safe to rerun unchanged, select rerun in a separate trial | Investigation grants diagnosis; only the repair approval can change the PR. Rerun repeats the intended check at its existing head. |
-| Other routing and configuration choices: for a touched skill, exercise its normal entry with multiple eligible options; choose an option, discuss, or dismiss on the native surface | Verify the resulting selected work or setting. Discussion and dismissal leave it unchanged. |
+| Exercise in a disposable consumer and useful context | Outcome to inspect | Golden-reference comparison |
+| --- | --- | --- |
+| P: refine or cancel a proposed roadmap addition before accepting the revised preview; discuss a Design choice before approving private Design | Discussion and cancellation grant nothing. Only the accepted additions and reviewed design become usable. | Propose step 3 separates Approve, Refine and Reconsider; only the accepted preview is written. Design leaves consequential choices to the person. OH private approval binds reviewed artifacts rather than a merge. |
+| D: select a named design/track; at the first completed task choose the next batch, then publish the completed work | Only the selected track and displayed task window run. One publication answer opens one PR at the reviewed commit and destination. | Deliver task checkpoints bind the exact next window or publication. OH Stop preserves work locally without pushing; the reference’s Stop-without-PR push is not OH policy. |
+| D recovery: leave a harmless uncommitted fixture file, stop, resume, and select the explicit discard action (including a readable Start fresh label) after inspecting the branch, restart base and affected file list | Continue preserves existing edits; on a separate disposable run an actual restart discards only the disclosed contents. Changing those contents before acting invalidates restart. | The shared recovery contract repairs operations within existing authority. A new choice never replenishes a task or review window; destructive cleanup still needs its disclosed effect. |
+| Q: decline a new fix with an earlier run stopped; accept a distinct one-file fix through the normal plan or menu in a fresh fixture | Decline never approves anything, starts a worker or modifies the earlier journal. Approval executes only the actual scope. A dismissed question remains pending. In the Claude plan viewer decline using feedback and verify that the scope stays unapproved and no worker runs. The host records a rejected plan separately from a menu Stop. For a technical approval retry, use the same actual native answer without a copied decision ID; verify the same run, unchanged journal/grants and no duplicate attempts. Do not ask again. | Human-only grants and non-granting cancellation are retained. OH also supports bounded quick fixes and native plan acceptance; it does not require the reference’s exact bare-command presentation. |
+| Review: use a tiny manual change with a real optional concern. Request review, choose Fix concerns, and on a separate concern choose acceptance. If a repair would exceed the task or review allowance, decline it, then exercise an explicit bounded grant in a separate trial | Acceptance records the reviewed subject. Fix concerns repairs within the grant. A supporting repair or additional round requires its own actual choice; observe the exact changed scope or count. | Deliver’s concern matrix separates fixes from exact-tree acceptance and explicit review-window grants. OH standalone feedback itself grants no repair or completion authority. |
+| C: select investigation of a failed fixture check, inspect the actual cause, then decline or approve the proposed correction. When a failed hosted check is safe to rerun unchanged, select rerun in a separate trial | Investigation grants diagnosis; only the repair approval can change the PR. Rerun repeats the intended check at its existing head. | Finish-with-PR follows actual current-head checks and preserves the task boundary during repairs. OH explicitly separates investigation, repair approval and unchanged-head rerun. |
+| Other routing and configuration choices: for a touched skill, exercise its normal entry with multiple eligible options; choose an option, discuss, or dismiss on the native surface | Verify the resulting selected work or setting. Discussion and dismissal leave it unchanged. | Consequential product choices stay with the person. Selection identifies work; discussion, dismissal and configuration prose never create a task or publication grant. |
 
+Compare against `my-geoffrey` at `b508bdc`: its Propose, Design and Deliver skills,
+`codex-gate.sh`, and `round-ledger.sh`. Retain native provenance, finite windows and
+non-granting alternatives; its product policies and exact-command menus are not OH requirements.
+
+For each row, record the actual host/version and candidate, trigger, readable subject,
+first answer, observed effect and any remaining host limit in the result report.
 Record a variant as unexercised if its prerequisite never occurred. The ordinary
 Propose, Design, three-way Delivery checkpoint, recovery and quick-fix refusal remain
 in pre-PR sanity. Extended variants reuse those fixtures and may run independently.

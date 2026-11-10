@@ -29,8 +29,134 @@ class GateTest(unittest.TestCase):
                          'selected_description':source['option_descriptions'],
                          'prepared_offer':{'decision':digest(approval)}}
         _verify_menu(approval,accepted)
+        # An approval's readable context need not repeat its inspection path.
+        _verify_menu(approval,accepted|{'selected_description':'Repair the required check input.'})
         with self.assertRaises(Refused):
-            _verify_menu(approval,accepted|{'selected_description':'Inspect C:/different/file.md'})
+            _verify_menu(approval,accepted|{'prepared_offer':{'decision':'another repair'}})
+
+    def test_cli_custom_output_identifies_the_latest_prepared_offer(self):
+        from .authority import _offered
+        current='b'*64
+        prepared={'decision':current,'question':'Approve repair?', 'options':['Approve repair','Stop']}
+        outputs=[json.dumps(prepared),
+                 [{'type':'input_text','text':str({'content':[{'type':'text','text':json.dumps(json.dumps(prepared))}]})}]]
+        for kind in ('function_call_output','custom_tool_call_output'):
+            for output in outputs:
+                with self.subTest(kind=kind,output=type(output).__name__):
+                    record={'type':'response_item','timestamp':'2026-11-09T12:00:00Z',
+                            'payload':{'type':kind,'call_id':'prepare','output':output}}
+                    self.assertEqual((_offered(record,'codex','s') or {}).get('decision'),current)
+        # The first actual reply belongs to the new CLI scope, not the older PR offer.
+        path=self.home/'.codex/sessions/cli.jsonl';path.parent.mkdir(parents=True)
+        rows=[{'type':'session_meta','payload':{'id':'cli','cwd':str(self.root),'source':'cli'}},
+              {'type':'event_msg','timestamp':'2026-11-09T11:59:59Z',
+               'payload':{'type':'user_message','turn_id':'initial','message':'Prepare the repair'}},
+              {'type':'response_item','timestamp':'2026-11-09T12:00:00Z',
+               'payload':{'type':'function_call_output','output':json.dumps(prepared|{'decision':'a'*64})}},
+              record|{'timestamp':'2026-11-09T12:00:01Z'},
+              {'type':'response_item','timestamp':'2026-11-09T12:00:02Z',
+               'payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':'Approve repair? Approve repair / Stop'}]}},
+              {'type':'event_msg','timestamp':'2026-11-09T12:00:03Z',
+               'payload':{'type':'user_message','turn_id':'answer','message':'Approve repair'}}]
+        path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
+        observed=native_human(self.root,{'host':'codex','session':'cli','turn':'answer','transcript_path':str(path)})
+        self.assertEqual(observed['prepared_offer']['decision'],current)
+        self.assertFalse(observed['prepared_offer']['ambiguous'])
+
+    def test_first_short_publication_action_and_unpresented_stop(self):
+        from .decisions import _verify_menu
+        from .storage import digest
+        value={'kind':'publish','label':'Open PR to example/project → main',
+               'menu_options':['Open PR to example/project → main','Stop and take over'],
+               'created_at':'2026-11-09T12:00:00Z'}
+        source={'via':'question','prompt':'Open PR','question':'Publish the greeting fix?',
+                'question_at':'2026-11-09T12:00:01Z','question_options':['Stop','Open PR'],
+                'selected_description':'Open the reviewed greeting fix in example/project against main.',
+                'prepared_offer':{'decision':digest(value)}}
+        _verify_menu(value,source)
+        # Claude's native custom-text answer is still the actual first answer
+        # to one offered publication action, rather than a manufactured label.
+        _verify_menu(value,source|{'question_options':value['menu_options']})
+        for action in ('continue','approve-scope','accept-concerns'):
+            with self.subTest(wrong_effect=action),self.assertRaises(Refused):
+                _verify_menu(value,source,action=action)
+        typed=source|{'via':'prompt','prompt':'Publish','question':value['menu_options'][0]}
+        _verify_menu(value,typed,action='publish')
+        with self.assertRaises(Refused):
+            _verify_menu(value,typed|{'question':'What should I do?'},action='publish')
+        stopped={'prompt':'Stop','via':'prompt','at':'2026-11-09T12:00:02Z',
+                 'prepared_offer':{'decision':digest(value)}}
+        _verify_menu(value,stopped,action='stop')
+        for prompt in ('Cancel','Not now','Yes','Continue'):
+            with self.subTest(prompt=prompt),self.assertRaises(Refused):
+                _verify_menu(value,source|{'prompt':prompt},action='publish')
+        with self.assertRaises(Refused):
+            _verify_menu(value,source|{'prepared_offer':{'decision':'c'*64}},action='publish')
+
+    def test_existing_pr_update_wording_keeps_its_checked_target(self):
+        from .decisions import _verify_menu
+        from .storage import digest
+        value={'kind':'publish','label':'Open PR to example/project → main',
+               'menu_options':['Open PR to example/project → main','Stop and take over'],
+               'created_at':'2026-11-09T12:00:00Z'}
+        source={'via':'question','prompt':'Update PR 6 (push repair)',
+                'question':'Publish the reviewed repair to the existing PR?',
+                'question_options':['Update PR 6 (push repair)','Stop and take over'],
+                'question_at':'2026-11-09T12:00:01Z','prepared_offer':{'decision':digest(value)}}
+        _verify_menu(value,source,publication_pr=6)
+        for target in (None,7):
+            with self.subTest(target=target),self.assertRaises(Refused):
+                _verify_menu(value,source,publication_pr=target)
+        with self.assertRaises(Refused):
+            _verify_menu(value,source|{'prompt':'Update PR 7 (push repair)'},publication_pr=6)
+
+    def test_clear_continue_and_restart_select_only_their_prepared_effect(self):
+        from .decisions import _verify_menu
+        from .storage import digest
+        for action,label,answer in (('continue','Start task 2','Continue'),
+                                    ('restart','Discard local work on feature and restart at origin/main','Start fresh')):
+            value={'kind':'recover' if action=='restart' else 'continue','choices':{action:label},
+                   'menu_options':[label,'Stop and take over'],'created_at':'2026-11-09T12:00:00Z',
+                   'affected_paths':['notes.txt']}
+            source={'prompt':answer,'via':'question','at':'2026-11-09T12:00:02Z',
+                    'question_at':'2026-11-09T12:00:01Z','question':'Continue the greeting change?',
+                    'question_options':[answer,'Stop'], 'option_descriptions':'Discard notes.txt on feature and restart at origin/main.',
+                    'prepared_offer':{'decision':digest(value)}}
+            with self.subTest(action=action):
+                _verify_menu(value,source,action=action,discard=action=='restart')
+                if action=='restart':
+                    # Native custom text selects the one clearly named discard action.
+                    rendered=source|{'question_options':['Continue','Discard and restart','Stop']}
+                    _verify_menu(value,rendered,action=action,discard=True)
+                    typed=rendered|{'via':'prompt','question':'Discard and restart / Continue / Stop',
+                                    'question_context':[{'text':'Discard notes.txt on feature and restart at origin/main.',
+                                                         'at':source['question_at']}]}
+                    _verify_menu(value,typed,action=action,discard=True)
+                if action=='restart':
+                    with self.assertRaises(Refused):
+                        _verify_menu(value,source|{'option_descriptions':''},action=action,discard=True)
+
+    def test_short_native_publication_question_is_found_without_copying_its_call_id(self):
+        from .decisions import menu_actions
+        from .authority import question_calls
+        value={'kind':'publish','label':'Open PR to example/project → main','takeover':True}
+        question='Publish the greeting fix to example/project?'
+        for host in ('claude','codex'):
+            path=self.home/('.claude/projects' if host=='claude' else '.codex/sessions')/(host+'.jsonl')
+            path.parent.mkdir(parents=True,exist_ok=True)
+            questions={'questions':[{'question':question,'title':question,
+                        'options':[{'label':'Stop'},{'label':'Open PR','description':'Publish the reviewed greeting fix.'}]}]}
+            if host=='claude':
+                rows=[{'sessionId':host,'cwd':str(self.root),'type':'assistant',
+                       'message':{'content':[{'type':'tool_use','id':'actual-question','name':'AskUserQuestion','input':questions}]}}]
+            else:
+                rows=[{'type':'session_meta','payload':{'id':host,'cwd':str(self.root),'source':'cli'}},
+                      {'type':'response_item','payload':{'type':'function_call','name':'request_user_input_async',
+                       'call_id':'actual-question','arguments':json.dumps(questions)}}]
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows),newline='\n')
+            _,calls=question_calls(self.root,host,host,'A differently worded prepared question',str(path),
+                                   offered_actions=menu_actions(value))
+            self.assertEqual(calls,['actual-question'])
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -44,7 +170,7 @@ class GateTest(unittest.TestCase):
         from .decisions import scope_request, verify_scope, save_offer
         from .storage import digest, read_json
         scope={'workflow':'deliver','design':None,'branch':'fix-ci',
-               'project':'test','preview_format':2,'starting_edits':[],
+               'project':'test','preview_format':2,'starting_edits':['README.md'],'starting_tree':'retained-original-work',
                'tasks':[{'id':'repair-task','title':'Repair narrow layout','instructions':
                          'Cause: scrollbar reduces the available width.\n\nChange: fit the form.\n\nVerification: check the narrow layout.'}],
                'config':{'tasks_per_batch':5,'review_rounds':3}}
@@ -63,6 +189,11 @@ class GateTest(unittest.TestCase):
             shown=offered['disclosure'].replace('Repair narrow layout','## Repair narrow layout')
             source.update(question_options=offered['options'],question_context=[{'text':shown,'at':source['question_at']}])
             verify_scope(self.root,scope,{'decision':key},source)
+            # The coordinator's readable scope includes the original work without
+            # making an internal inspection path part of the human's answer.
+            readable=source|{'question_context':[], 'question':'Approve the narrow layout repair, including the existing README edit?',
+                             'prompt':'Approve fix','question_options':['Approve fix','Stop']}
+            verify_scope(self.root,scope,{'decision':key},readable)
             # A real answer to an unrelated question cannot approve the previously prepared work.
             unrelated=source|{'question':'Approve the README correction?', 'question_context':[],
                               'prompt':'Approve fix · README correction','question_options':['Approve fix · README correction','Stop and take over'],

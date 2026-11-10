@@ -118,7 +118,14 @@ class PlanningTest(NativeFixture,unittest.TestCase):
     def test_proposal_approval_does_not_replace_review_or_grant_product_implementation(self):
         self.planning('propose','repo')
         author=self.finish_attempt('analysis',{'summary':'Propose a search initiative in the first milestone.'})
-        native.decision(self.root,'approve-proposal',self.human('approve'),attempt=author['id'])
+        from . import decisions
+        gate=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        answer=self.offered_answer(gate,'Apply proposal')
+        answer.update(question='Apply the sign-in proposal to M1?',question_options=['Cancel','Apply proposal'])
+        # The first real answer can recover its own native preparation without
+        # asking again or requiring an internal result.json path in the question.
+        answer.pop('decision')
+        native.decision(self.root,'approve-proposal',answer,attempt=author['id'])
         plans.add_initiative(self.root,self.where,'M1','search','Search notes',[])
         # An overnight checkpoint after intake must be included in the next review.
         self.git('add','.');self.git('commit','-qm','WIP checkpoint')

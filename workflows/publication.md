@@ -79,8 +79,11 @@ feature does not prove the behavior behind it works. Continue useful investigati
 the remedy is unresolved, or report the concrete blocker and supported next step. Do not
 present a speculative repair as ready for approval.
 
-If changes are needed, prepare an existing-PR quick-fix scope from those conclusions,
-preserving this PR's destination and original reviewed work. Describe the required
+If changes are needed, use the packaged CLI `prepare <manifest.json> --pr N` to prepare
+that existing-PR quick fix. It verifies and retains the PR identity, branch, head,
+destination and original review range in `pr_target`; mentioning the PR only in task
+prose does not bind it. Confirm the returned scope names that PR before presenting
+approval. Preserve its destination and original reviewed work. Describe the required
 outcome in the task instructions as three short paragraphs: **Cause**, **Change**,
 and **Verification**. Name the reproduced failure, authorized files or behavior,
 exclusions that matter, and the actual check. These paragraphs are the task

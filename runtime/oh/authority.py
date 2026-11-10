@@ -318,14 +318,14 @@ def _offered(record,host,session):
             if (call.get('type')!='McpToolCall' or call.get('server')!='o-harness' or
                     call.get('tool') not in ('scope_prepare','decision_request','prepare') or call.get('status')!='completed'):return None
             result=call.get('result')
-        elif record.get('type')=='response_item' and item.get('type')=='function_call_output':
+        elif record.get('type')=='response_item' and item.get('type') in ('function_call_output','custom_tool_call_output'):
             result=item.get('output')
         else:return None
     text=str(result)
     if 'question' not in text or 'options' not in text:return None
     # Only an offer returned before the question can identify its subject.
     # A later hook rejection or a question result quoting the title is not a preparation.
-    ids=re.findall(r"""["']decision["']\s*:\s*["']([0-9a-f]{64})["']""",text.replace(r'\"','"'))
+    ids=re.findall(r"""["']decision["']\s*:\s*["']([0-9a-f]{64})["']""",re.sub(r'''\\+(?=["'])''','',text))
     if not ids:return None
     refs=_OFFER_REFERENCE.findall(text)
     return {'decision':ids[-1], 'reference':refs[-1] if refs else None, 'ambiguous':len(set(ids))!=1,
@@ -574,6 +574,42 @@ def action_text(label):
     return menu_text(label).casefold().removesuffix(' (recommended)').rstrip('.!')
 
 
+def publication_update(answer):
+    """Read an existing-PR action's optional number and presentation annotation."""
+    return re.fullmatch(r'update (?:the )?(?:existing )?(?:pr|pull request)(?: #?([1-9][0-9]*))?(?: \([^()]*\))?',action_text(answer))
+
+
+def action_names(label,kind):
+    """Names of one effect, independent of its readable subject or host markup."""
+    return {
+        'stop':('stop','stop now','stop and take over'),
+        'publish':('open pr','open the pull request','publish'),
+        'approve-proposal':('apply proposal','approve proposal','apply the proposal'),
+        'approve-private':('approve design','approve the design'),
+        'accept-concerns':('accept concerns','accept these concerns'),
+        'approve-scope':('approve fix','approve scope','approve and fix'),
+        'approve-repair':('approve repair','approve repair and continue'),
+        'grant-review':('allow additional reviews','grant review'),
+        'resume':('continue','resume','resume saved work'),
+        'continue':('continue','start next task','continue with the next task batch'),
+        'restart':('start fresh','discard and restart','discard local work and restart'),
+        'pause':('pause','pause work'),
+    }.get(kind,())+(label,)
+
+
+def action_matches(answer,label,kind):
+    """Recognize a clear action without requiring the generated subject in its label.
+
+    The native offer binds scope, candidate and destination. Short action names
+    select an effect within that offer; unrelated or qualified labels stay exact.
+    """
+    actual=action_text(answer)
+    if kind=='stop' and re.match(r'^stop(?:[.!]|$)',actual):return True
+    if actual==action_text(label):return True
+    if kind=='publish' and publication_update(actual):return True
+    return actual in map(action_text,action_names(label,kind))
+
+
 def shown_offer_reference(source):
     displays=source.get('question_context') or []
     if source.get('via')=='question' or not displays:displays=[*displays,{'text':source.get('question','')}]
@@ -635,6 +671,9 @@ def question_calls(root, host, session, question, supplied=None, *, options=None
     def matches(arguments):
         if offered_actions is not None:
             labels=question_options(arguments) or []
+            if isinstance(offered_actions,dict):
+                return any(action_matches(label,offered,kind) for label in labels
+                           for offered,kind in offered_actions.items())
             return bool(set(map(action_text,labels)).intersection(map(action_text,offered_actions)))
         if options is not None:
             shown=question_options(arguments)

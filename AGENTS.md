@@ -89,7 +89,11 @@ scope expansion. Put unrelated defects and improvements in issues; do not turn a
 into historical-data hardening or a new control system. Challenge the requirement behind
 a new mechanism before adding it. Do not read old backlog files.
 
-Use exactly one fresh, read-only independent review of the complete change after focused
+Stabilize the affected deterministic cases and actual CLI paths on both Mac hosts before
+review. Do not start broad PR checks while a focused host path is still waiting for approval.
+Continue independent useful work and report that prerequisite.
+
+Use exactly one fresh, read-only independent review of the complete change after those focused
 checks pass. Give the reviewer the base and candidate identities, approved scope, relevant
 invariants and test evidence through native tools; candidate OH admission is not required
 for OH development. Use the configured review profile. The OH-specific review brief in
@@ -109,7 +113,11 @@ During development exercise the affected slice of real CLI sanity on both Mac ho
 and the focused deterministic tests for the edit. Inspect broad selections with `--list`
 before running them. Take one independent review, repair and verify its findings, then
 run full live sanity on the final candidate on both Mac CLIs before opening a PR.
-Report the observed results and elapsed time. Offer the personal trial for host changes
+Report sanity and additional targeted/nightly variants separately per host, with overall
+wall time retained. State whether setup, human approvals, hosted CI and recovery are included.
+Keep failed first-answer observations even after recovery; link unrelated known failures and
+explain whether they prevent proving this change. Never rerun valid evidence just for a cleaner
+timing number. Report the observed results and elapsed time. Offer the personal trial for host changes
 after those results are available. Follow docs/cli-acceptance.md for the exact scenarios.
 
 Use the deterministic core plus relevant checks for PR CI. Broad deterministic regression

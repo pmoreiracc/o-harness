@@ -1,5 +1,10 @@
 # Native decisions
 
+Bind an explicit unambiguous Stop immediately with `decision stop` and that actual
+native input. It needs no new question or confirmation, including when the Stop
+question was omitted. For an unapproved scope, use its existing scope-refusal offer;
+for saved work, stop the current run. Never prepare another question in response to Stop.
+
 Read before presenting a consequential question. The order is **prepare effect → show
 context and question → wait for the answer → bind that same answer**. Never prepare a
 different effect after the person has answered and ask them to repeat it.
@@ -14,8 +19,9 @@ includes that instruction in the same presented choice. The runtime grants only 
 bound consequential effect; the host carries out the accompanying authorized action.
 Keep the returned decision ID in tool calls. Tell the person what has finished,
 what needs deciding, and what each available action will do. Write the introduction
-and question in your own words. Keep the returned action labels so a click or
-typed answer identifies the effect. Arrange them in the order that best suits
+and question in your own words. Use clear action names and map the actual selected
+action to its returned effect; short names such as Open PR or Apply proposal do not
+need a generated subject suffix. Arrange them in the order that best suits
 the choice; put the relevant task, destination, scope or cost in each description.
 For Codex menus with string options, include essential context in the question.
 A person reading just the menu should understand the decision. Never show an
@@ -32,7 +38,7 @@ the returned question with its single action, end the turn and bind the actual
 reply. Never add a synonym or a second button to satisfy a host's menu minimum.
 For multiple options use the host control below when available.
 
-Use the chosen label in `actions` with the original decision ID. Stop on a saved
+Use the chosen action’s meaning in `actions` with the original decision ID. Stop on a saved
 run binds `decision stop` for that run and preserves local work and grants.
 For a prepared scope, bind approval with `scope approve` (Codex `scope_approve`).
 For a refusal use `decision stop` with the original scope decision ID and no run
@@ -49,7 +55,7 @@ For multiple choices call Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async` with all returned actions, including the explicit discard action when available. Use the returned `actions` map with `decision`;
 the existing `continue` action is a task-batch grant, not this recovery's Continue.
 Recovery's Continue maps to `resume`, Start fresh to `restart`, and Stop to `stop`.
-Use the exact selected label if answered in ordinary chat; a bare Yes does not
+Use an unambiguous action if answered in ordinary chat; a bare Yes does not
 choose among these different effects. Missing old transcripts never supply a
 successful result. The verified new decision authorizes retirement and recovery
 only after old execution is revoked and tracked operations are settled.
@@ -79,7 +85,7 @@ get the revised design approved, then re-enter Deliver against that revision, pr
 completed evidence and using normal publication to carry completed code forward.
 For a plain-chat checkpoint, show the same actions with their consequences and wait.
 
-After the native answer, use its label in the returned `actions` map to select the
+After the native answer, map its chosen action to the returned `actions` effect and select the
 existing `decision` kind (`continue`, `publish` or `stop`). Bind the same decision ID
 and actual native answer once. Preserve a valid answer through retries. Do not
 prepare a separate publish/stop question or ask

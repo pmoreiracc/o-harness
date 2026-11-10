@@ -64,7 +64,8 @@ automatic review renewal or retry-until-green. A failure remains evidence even i
 
 ## One review
 
-After focused checks, launch one fresh independent native reviewer with the configured
+After the affected deterministic cases and focused actual CLI paths have stabilized on both
+Mac hosts, launch one fresh independent native reviewer with the configured
 profile. Supply the approved outcome, boundaries, Git base/candidate, relevant instructions
 and verification evidence. It reads the complete change and affected callers. It must not
 edit or launch another reviewer. OH's own admission/retention workflow is not required to
@@ -95,11 +96,18 @@ whether they prevent proving this change's approved outcome from a separate prod
 1. During repairs, rerun the causal deterministic cases and affected live paths. Once focused live
    testing has stabilized the candidate and the single review and its repairs are complete,
    run `bash integrations/test.sh pr origin/main` and `bash integrations/test.sh syntax` on the final candidate.
-   Repeat broad checks only when subsequent edits invalidate their evidence. PR selection is the deterministic core plus affected modules.
+   Do not run this broad selection early while a focused host path is waiting for approval;
+   continue independent useful work and name the missing prerequisite. Repeat broad checks
+   only when subsequent edits invalidate their evidence. PR selection is the deterministic core plus affected modules.
    Known runner changes exercise their own selection tests and the core. Unknown impact triggers full discovery.
 2. After the single review, run full [live sanity](cli-acceptance.md#live-sanity) on
    both Mac CLIs. Record candidate, outcomes, any recovery and wall time per host. An
    unfinished path remains untested. After a repair repeat the evidence it invalidated.
+   Independent final selected checks and live sanity may overlap when safe. Report sanity
+   separately from targeted/nightly variants for each host, as well as overall wall time.
+   Identify whether setup, human approvals, hosted CI and recovery are included. Existing
+   scenario boundaries and timestamps suffice; do not rerun valid evidence to improve timing.
+   Preserve every failed first-answer observation after recovery.
 3. For host-interaction changes offer one personal snapshot trial with both results.
    Keep the snapshot available and wait for the developer's reply before opening the PR. If they choose the trial, wait for their verdict.
 4. Open the PR and follow CI. Aim for nine minutes of deterministic CI and roughly ten

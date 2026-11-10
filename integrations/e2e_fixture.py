@@ -112,8 +112,8 @@ def prepare(codex_model, claude_model, suite):
                         'input surface. Use OH plain-chat fallback: show the complete prepared question and choices, '
                         'end the turn, and wait for the actual native reply through exec resume.\n')
                 if scenario == 'delivery' and sanity:
-                    instructions.write('\nSanity trial: on initial track selection stop at the prepared scope '
-                                       'before workers. Prepare decision-request stop and present its single action in ordinary chat. In a fresh session '
+                    instructions.write('\nSanity trial: after initial track selection report the selected work and finite grants, '
+                                       'then wait before workers without preparing or asking a Stop question. The operator sends the actual Stop; bind it immediately without another question. In a fresh session '
                                        'after actual Resume, deliver the approved task normally.\n')
                 elif scenario == 'delivery':
                     instructions.write('\nAcceptance coordinator: in the FIRST implementation admission only, '
@@ -122,7 +122,7 @@ def prepare(codex_model, claude_model, suite):
                         'existing scope. Tell subsequent authors that this one-time injection is already done. '
                         'Do not repeat it or manufacture a capacity error.\n')
                 elif scenario == 'merged':
-                    instructions.write('\nExternal-merge trial: deliver the first batch normally. At its checkpoint wait for the actual Stop. The operator publishes and merges that batch outside OH. On the fresh invocation select the next eligible task from the fetched base, then prepare Stop before launching its workers so the operator can inspect the selection. Never edit OH state to simulate publication or merge.\n')
+                    instructions.write('\nExternal-merge trial: deliver the first batch normally. At its checkpoint wait for the actual Stop. The operator publishes and merges that batch outside OH. On the fresh invocation select the next eligible task from the fetched base, report its finite grants and wait before workers without preparing or asking a Stop question. Bind the operator\'s actual Stop immediately without another question. Never edit OH state to simulate publication or merge.\n')
                 elif scenario == 'choice':
                     instructions.write('\nAcceptance coordinator: after the actual track answer prepares '
                         'a design scope, prepare decision-request stop and wait for its single action in ordinary chat. '
@@ -198,10 +198,10 @@ def sanity_publication(root,journal,state):
     label=offer['choices']['publish']
     human=receipt['human']
     host,session=human['host'],human['session']
-    path,calls=authority.question_calls(root,host,session,offer['question'],human['transcript_path'],offered_actions=[label])
+    path,calls=authority.question_calls(root,host,session,offer['question'],human['transcript_path'],offered_actions={label:'publish'})
     history=authority.claude_history(path,session) if host=='claude' else authority.codex_history(path,session)[2]
     def published(prompt):
-        return authority.action_text(prompt)==authority.action_text(label)
+        return authority.action_matches(prompt,label,'publish')
     replies=sum(published(m['prompt']) for m in history)
     for call in calls:
         try:

@@ -81,7 +81,7 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         display['text']=gate['question'].replace('Hand off','Publish')+'\nStop and take over'
         with self.assertRaises(Refused):native.decision(self.root,'stop',answer|{'prepared_offer':{}})
         # The saved native preparation and the displayed action identify the handoff.
-        answer['question']=display['text']
+        answer.update(prompt='Stop',question='',question_context=[],question_at=None)
         result=native.decision(self.root,'stop',answer)
         self.assertEqual(result['status'],'stopped')
 
