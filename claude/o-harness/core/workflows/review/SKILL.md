@@ -42,8 +42,10 @@ requested; preserve each original receipt independently.
 
 For requested repairs, inspect findings against current code and propose only applicable
 bounded fixes through ordinary Deliver scope preparation, naming the review source.
-Explain obsolete findings and omit their repairs. Include original unreviewed edits or
-commits as one coherent task when they will be completed with the fixes. Do not create
+Explain obsolete findings and omit their repairs. Use the packaged CLI
+`prepare <manifest.json> --review <review-run-id>` to retain the checked review source in
+that repair scope. Include original unreviewed edits or commits as one coherent task
+when they will be completed with the fixes. Do not create
 a roadmap/design document or redesign classification just to repair manual work.
 Resolve real product choices in ordinary conversation before final scope approval.
 

@@ -33,7 +33,7 @@ TOOLS = [
          {'branch':TEXT,'base':TEXT,'human':OBJECT,'after':TEXT}, ['branch','human']),
     tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
     tool('admission', 'Validate review admission', 'Validate the immutable subject and request, recovering a missing native child binding when needed.', {'attempt_directory':TEXT}, ['attempt_directory']),
-    tool('command_format', 'Format native shell command', 'Return exact Bash and PowerShell quoting for an admitted worker command. Does not execute or authorize it. Pass an executable/argument array, then run the returned string unchanged with the native shell tool and its normal permissions.',
+    tool('command_format', 'Format native shell command', 'Return exact Bash and PowerShell quoting for an admitted worker command. Does not execute or authorize it. Pass an executable/argument array, then run the returned string unchanged with the native shell tool and its native permission mechanism.',
          {'attempt':TEXT,'argv':{'type':'array','minItems':1,'items':TEXT}}, ['attempt','argv'], read_only=True),
     tool('config', 'OH settings', 'Read project settings and configured checks.', read_only=True),
     tool('init', 'Register project', 'Register this checkout with OH.', {'name': TEXT}),
@@ -44,7 +44,7 @@ TOOLS = [
          {'manifest':OBJECT,'workflow':{'type':'string','enum':['deliver','design','propose']},'doc':TEXT,'track':TEXT,'human':OBJECT,
           'keep_checkout':{'type':'boolean','description':'Keep the checkout deliberately selected after inspecting entry facts; all scope/approval/ownership checks still apply.'},
           'after':{'type':'string','description':'Accepted prerequisite decision retaining the same initiating human request.'}}),
-    tool('scope_approve', 'Bind scope choice', 'Verify the actual native reply to this scope. Approve and fix starts the approved work. Stop and take over records a refusal. Put approval.decision in human.decision with the conversation locator.',
+    tool('scope_approve', 'Bind scope choice', 'Verify the actual native reply to this scope. The named affirmative action starts the approved work. Stop and take over records a refusal. Put approval.decision in human.decision with the conversation locator.',
          {'scope':TEXT,'human':OBJECT,'after':{'type':'string','description':'Only for a separately accepted run prerequisite that retained this original scope reply.'}}, ['scope','human']),
     tool('attempt_admit', 'Admit native agent', 'Bind a fresh agent attempt and its packet; review admission consumes its allowance once.',
          {'role':{'type':'string','enum':['assessment','implementation','analysis','review']}}, ['role']),
@@ -60,7 +60,7 @@ TOOLS = [
     tool('evidence', 'Attach evidence', 'Retain supplementary evidence references for implementation and review; grants no authority.',
          {'attachment':OBJECT}, ['attachment']),
     tool('complete', 'Complete reviewed task', 'Validate scope, verification and independent review before committing the exact reviewed candidate. Follow continuation.next_action and present the returned checkpoint before ending, including local-only work.',
-         {'attempt':TEXT}, ['attempt']),
+         {'attempt':TEXT,'commit_subject':{'type':'string','description':'Repository-compliant commit subject. Omit to use the saved subject or OH default; evidence trailers are added by OH.'}}, ['attempt']),
     tool('decision_request', 'Bind decision effect', 'Prepare native human choices. Use recover for delivery recovery: Continue, Start fresh, Stop and take over. At a completed-task boundary, continue/publish includes available Continue, PR and Stop actions. Bind the returned action from the same answer. Displays no menu and grants nothing.',
          {'kind':TEXT,'attempt':TEXT,'rounds':{'type':'integer','minimum':1,
           'description':'Omit to renew the run’s configured review window. Supply only when the person explicitly requests a different number of additional rounds.'},'run':TEXT,'also':TEXT,
@@ -143,7 +143,7 @@ def command(name, arguments, root):
         return ['attempt',name.split('_',1)[1],'--',text('attempt',True),payload(root,arguments.get('source'))]
     if name=='review_check':return ['review-check','--',payload(root,{'report':text('report',True)})]
     if name=='evidence':return ['evidence','--',payload(root,arguments.get('attachment'))]
-    if name=='complete':return ['complete','--',text('attempt',True)]
+    if name=='complete':return ['complete']+(['--commit-subject',text('commit_subject',True)] if 'commit_subject' in arguments else [])+['--',text('attempt',True)]
     if name=='decision_request':
         args=['decision-request']
         for key in ('attempt','run','also','repair','after'):

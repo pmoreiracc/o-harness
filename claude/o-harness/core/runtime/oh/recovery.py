@@ -58,6 +58,9 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     from .branches import contained, fetch_base, trunk
     if state['workflow'] != 'deliver' or state.get('published'):
         raise Refused('This recovery gate is for unpublished delivery; use the saved planning or publication step')
+    from .delivery import merged_batch
+    if merged:=merged_batch(root,state):
+        return {'recovery_required':False,'merged_batch':merged,'next':merged['next']}
     observed = None
     unavailable = ''
     try:
@@ -98,7 +101,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
             except (OSError, Refused, ValueError, SubprocessError) as exc:
                 details += 'Start fresh unavailable. Restore the saved restart evidence before trying again. '+str(exc)+'\n'
             else:
-                choices['restart'] = 'Start fresh'
+                choices['restart'] = f'Discard local work on {branch} and restart at {subject["base_ref"]}'
                 details += 'Start fresh discards the affected local changes and this branch’s unmerged work without making a new backup.\n'
                 if state.get('approved_repairs'):
                     details += 'Start fresh discards repair approvals for restarted tasks; their history remains saved.\n'
@@ -123,7 +126,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     return {'decision': key, 'question': value['question'], 'disclosure': value['disclosure'], 'options': value['menu_options'],
             'base_observation':observed,
             'actions': {label: action for action, label in choices.items()},
-            'human_locator': 'Bind the selected action from this one native question with decision.'}
+            'human_locator': 'Explain the consequences in the menu. Keep decision internal and bind the actual selection with it.'}
 
 
 def _settle(root, journal, state, source):
@@ -200,7 +203,7 @@ def apply(root, kind, locator, *, run=None):
                 native._resume_binding(root,state,write=True)
             from .receipts import index
             index(journal,state)
-            return native.select(root, state['id'])
+            return native.select(root, state['id'], continued=kind!='stop')
         source = authority.coordinator(root, state, locator, retry_resume=True)
         source = source | {'decision': locator['decision']}
         verify(root, state, kind, locator, source)
@@ -287,4 +290,4 @@ def apply(root, kind, locator, *, run=None):
         if kind != 'stop':native._resume_binding(root, updated, write=True)
         from .receipts import index
         index(journal, updated)
-        return native.select(root, state['id'])
+        return native.select(root, state['id'], continued=kind!='stop')

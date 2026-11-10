@@ -30,6 +30,8 @@ there is no extra approval merely to obtain a recommendation.
 Admit a fresh proposal agent (`analysis`) with the configured profile, bounded packet,
 `prompts/propose.md` and `prompts/proposal-routing.md`. It examines actual plans and code,
 then writes its preview/report externally, without modifying project planning documents.
+Require a structurally valid prospective preview before asking for approval, using the
+existing checker on an external temporary copy as described in `prompts/propose.md`.
 Retain its original native result and show the understanding, recommended route, evidence,
 complete additions and exact destinations. An improvement or unclear route can end here
 with the actual recommendation/question; no unnecessary document or review is required.
@@ -37,7 +39,7 @@ with the actual recommendation/question; no unnecessary document or review is re
 ## 3. Approve the actual additions
 
 Before additions are written, prepare `decision-request approve-proposal --attempt ID`
-for the retained analysis, then call Claude `AskUserQuestion` or Codex Default mode
+for the retained analysis. Summarize the proposed changes and post the supplied Markdown review link in chat before opening the menu. Then call Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async` with its approve/refine/cancel choices using
 `workflows/decisions.md`. Bind approval of the latest analysis report with `decision
 approve-proposal` and its actual native human locator. Refinement revises the unapproved
@@ -51,7 +53,9 @@ verifies documents without product tests. Retain its result, then admit a fresh
 invariant reviewer agent to challenge routing, dependencies, duplication and requirements.
 If review requires a different route or materially different additions, show the changed
 preview and obtain approval before applying it. Repair other scoped document failures
-within existing authority and remaining review allowance.
+within existing authority and remaining review allowance. Syntax-only corrections
+that preserve the accepted semantic additions do not need another approval; changed
+route, content, dependencies or destinations do.
 
 Read `workflows/findings.md` for outside-scope tracking after review. Related new work remains a follow-up;
 adding it to the proposal requires the same changed-preview approval as any other addition.

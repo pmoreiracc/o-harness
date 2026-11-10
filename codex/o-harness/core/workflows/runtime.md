@@ -34,6 +34,12 @@ Follow the host's actual connection controls; `/mcp` availability depends on the
 interface. Setup requires an explicit invocation. Native scope, ownership and
 permission requirements still apply during recovery.
 
+For an explicit Stop, inspect the current saved state and bind that actual native
+input with `decision stop`; settle owned execution through the normal helpers under
+that request. An unapproved preview uses its existing scope-refusal offer. Do not
+turn Stop into a Resume, new scope or confirmation question, even when no Stop
+question was prepared. Keep the original input through technical retries.
+
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
 workflow and standalone review without selecting either or registering a new checkout.
@@ -64,7 +70,8 @@ Start fresh, Stop and take over choices; bind its returned action with `decision
 Other workflows use Resume. Call Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async` at these questions. Settle prior native work,
 then bind the same answer;
-continue its actual phase without new scope, repeated questions or renewed allowances.
+continue its actual phase in the same turn without new scope, repeated questions or
+renewed allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
 If a real prerequisite question intervenes, retain its initiating request with
 `decision-request --request <native-locator.json>` (Codex `request`). After binding
@@ -95,6 +102,11 @@ when large; read the needed fields and referenced artifacts rather than guessing
 
 Use these focused operations, through their equivalent named OH tools in Codex:
 
+When preparing a scope or decision through the CLI, retain the complete returned
+approval object. Do not filter its output: the native preparation record identifies
+the later human choice. Inspection links help the person review the work; approval
+binding does not require repeating an internal path or byte-identical disclosure.
+
 | Purpose | Claude command | Codex tool |
 | --- | --- | --- |
 | Discover saved work | `status --saved` | `status` with `saved: true` |
@@ -105,6 +117,7 @@ Use these focused operations, through their equivalent named OH tools in Codex:
 | Continue selected work | `resume --run ID --human <locator.json>` | `resume` with `run` and `human` |
 | Prepare bounded work | `scope prepare <manifest.json> [--workflow deliver\|design\|propose] [--human <locator.json>]` | `scope_prepare` |
 | Select approved design tasks | `scope prepare --doc NNNN [--track TRACK] --human <locator.json>` | `scope_prepare` |
+| Prepare a review or existing-PR repair | `prepare <manifest.json> [--review RUN_ID] [--pr N]` | Use the packaged CLI; its checked source/target is retained in the scope |
 | Bind a quick-fix scope choice | `scope approve <scope-id> <locator.json>` | `scope_approve` |
 | Admit a fresh phase | `attempt admit assessment\|implementation\|analysis\|review` | `attempt_admit` |
 | Bind the launched native child | `attempt bind <attempt-id> <locator.json>` | `attempt_bind` |
@@ -220,7 +233,16 @@ scope/evidence files rather than pasting the parent history or full worker trans
 Require admission validation before the first working tool. Every role follows the
 packet’s `native_commands`. Copy the returned `admission_command` unchanged into the
 child's launch prompt as its first command; the child cannot read the packet before
-validation. Do not substitute the coordinator's plugin launcher. The admission result includes the verified, bounded
+validation. Include this permission instruction in that launch prompt before the first
+admission command (not only in the packet read afterwards):
+
+OH helpers write private coordination state even during read-only work. If that state
+is outside the sandbox's writable roots, request native permission for the unchanged
+command on its first invocation, including admission; do not probe sandbox access
+first. Recover an unexpected sandbox-access error within the same attempt. Never
+retry an explicit permission refusal, Stop, revoked attempt or exit 130.
+
+Do not substitute the coordinator's plugin launcher. The admission result includes the verified, bounded
 `task_context`; read it directly instead of bootstrapping another shell read. In Codex,
 use `command_format` with the executable/argument array and run its returned command
 unchanged through the corresponding native shell tool. The formatter executes nothing
@@ -230,8 +252,10 @@ Pass an explicit shell inside that array when shell syntax is needed. Never appe
 outer shell operators, nest OH helpers in the wrapper, or bypass a refused tool.
 The wrapper inherits the native tool’s permissions; it grants no permission. Do not
 launch detached services or use another execution tool to escape owned cleanup.
-A Stop refusal or exit 130 ends this worker. The coordinator can admit a fresh one
-only after the existing Resume decision and cleanup.
+A native permission refusal, Stop or exit 130 ends this worker. Do not retry the
+refused operation by admitting a replacement. Follow `workflows/recovery.md` for
+the person's supported native retry; replacement after Stop still needs the
+existing Resume decision and cleanup. Continuation never grants native access.
 
 - Codex: call native `spawn_agent` with `agent_type: "default"`, `fork_turns: "none"`,
   the admitted `model` and `reasoning_effort`, the returned `native_task_name` and the self-contained
@@ -252,8 +276,17 @@ starts and names the required settings. Launch that same admission again with ex
 those settings; nothing ran, so there is no attempt to retain or recover.
 
 Prefer a native background/asynchronous launch when supported so the coordinator can
-bind promptly, handle human controls and report progress. Await through native host tools;
-do not block on a foreground launch and leave a long-running child unable to use its
+bind promptly, handle human controls and report progress. Await through native host tools.
+Silence or elapsed time alone is not a reason to interrupt or replace a live child.
+Use native child status and its original saved outcome to distinguish active work,
+pending permission and terminal refusal before reporting progress or recovering.
+An empty native wait is inconclusive. Reconcile it with checked retention using
+the original child locator: a terminal outcome can be saved before its completion
+notification arrives. If retention says the result is not yet saved, await the same
+child; that is not a reason to cancel or replace it.
+Keep a pending permission request available for the person's answer; it is not a
+failure. Missing OH command activity does not establish that its native tool is idle.
+Do not block on a foreground launch and leave a long-running child unable to use its
 binding-dependent helpers. If a child reaches `candidate`, `verify` or `admission` before
 the binding is saved, bind promptly and retry that same operation after the short host-save
 delay. This is not a new attempt, model selection or approval.
@@ -400,6 +433,13 @@ any concrete verification limit. Judge each suggested correction against the app
 a concrete behavioral failure; review prose never grants scope or human authority.
 
 Only `complete` may record task completion and commit the exact reviewed candidate.
+Read applicable repository instructions for commit subjects before completion. Pass a
+compliant single-line subject with `complete --commit-subject SUBJECT REVIEW` (Codex
+`complete.commit_subject`) for tasks and corrections. Without an applicable convention,
+omit it to keep OH's `task N: title` or `fix task N: title` default. OH adds and verifies
+its evidence trailers independently of the subject; a hook may rewrite the subject
+while preserving the reviewed tree, parent and trailers. On an interrupted retry the
+saved subject is reused; a corrected subject may be supplied after a hook rejection.
 Author claims, a task checkbox, green checks or a standalone receipt cannot authorize
 it. A failed completion is repaired idempotently from retained evidence. Select the
 next task from external completion records, under the same finite task batch. At a batch

@@ -507,7 +507,12 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
         if state.get('published') and workflow!='design':continue
         if workflow=='review' and _finished(state):continue
         if workflow=='design' and design and design==_initiative(state):matches.append(state)
-        elif workflow=='deliver' and design==state.get('design') and design and (not track or track==(state.get('track') or '')):matches.append(state)
+        elif workflow=='deliver' and design==state.get('design') and design and (not track or track==(state.get('track') or '')):
+            from .delivery import merged_batch
+            # Preserve exact entry retries. A new invocation selects remaining work
+            # after an externally merged batch instead of reviving its checkpoint.
+            if _human_key(source,state)!=state.get('source') and merged_batch(root,state):continue
+            matches.append(state)
         elif workflow=='review' and selected and _same_review_subject(selected,state):matches.append(state)
     if len(matches)==1:
         state=matches[0]
@@ -667,14 +672,15 @@ def prepare_scope(root, manifest=None, doc=None, track='', workflow='deliver', h
     from .branches import trunk
     result['execution_branch_required']=committed(value) and value['branch']==trunk(root,value['config'])
     if result['execution_branch_required']:
-        result['next']='This is a preview on the base branch. Before admission, use default safe branch selection or create an execution branch and reprepare there; --keep-checkout preserves the base branch too.'
+        result['next']='This is a preview on the base branch. Before approval, use default safe branch selection or create an execution branch and reprepare there; --keep-checkout preserves the base branch too.'
     if doc is not None:
         result['next']=result.get('next','')+' A real explicit request for this approved design, passed as human, selects its batch directly; do not ask for another quick-fix scope approval after that request.'
     if human is not None and (workflow!='deliver' or doc is not None):
         return _start(root,key,source)|{'scope_id':key,'approved':True}
-    if workflow=='deliver':
+    if workflow=='deliver' and not result['execution_branch_required']:
         from .decisions import scope_request
-        result['approval']=scope_request(root,value)
+        # Put the actionable offer before the verbose configuration in terminal output.
+        return {'approval':scope_request(root,value),**result}
     return result
 
 
@@ -724,23 +730,34 @@ def _verify_scope_plan(scope, source, *, replay=False):
         raise Refused('The person accepted changed scope. Preserve the accepted plan and prepare its actual tasks; the old task projection is not approved.')
 
 
-def _scope_stop_locator(root,locator,scope_id=None):
-    """Resolve an omitted offer identity only from the person's actual scope refusal."""
+def _scope_choice_locator(root,locator,scope_id=None):
+    """Recover an omitted scope offer from its actual native approval or refusal."""
     if not isinstance(locator,dict) or locator.get('decision'):return locator
     path=checkout_file(root,'oh-recovery-menu.json')
     hint=read_json(path) if path.exists() else {}
-    if hint.get('kind')!='approve-scope':return locator
     key=hint.get('decision')
-    if not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key):return locator
-    if scope_id and read_json(_home(root)/'decisions'/(key+'.json')).get('scope')!=scope_id:return locator
-    located=_presented(root,locator|{'decision':key})
+    located=locator
+    if hint.get('kind')=='approve-scope' and isinstance(key,str) and re.fullmatch(r'[0-9a-f]{64}',key):
+        offer=read_json(_home(root)/'decisions'/(key+'.json'))
+        if not scope_id or offer.get('scope')==scope_id:
+            located=_presented(root,locator|{'decision':key})
     try:reply=authority.native_human(root,located,latest=False)
     except Refused:return locator
-    if (reply['prompt'].strip().casefold().rstrip('.!')=='stop and take over' and
-            (authority.shown_offer_reference(reply)==authority.shown_offer_reference(hint) or
-             (reply.get('prepared_offer') or {}).get('decision')==key)):
-        return located
-    return locator
+    returned=reply.get('prepared_offer') or {}
+    key=returned.get('decision')
+    if returned.get('ambiguous') or not isinstance(key,str) or not re.fullmatch(r'[0-9a-f]{64}',key):return locator
+    offer=read_json(_home(root)/'decisions'/(key+'.json'))
+    if offer.get('kind')!='approve-scope' or scope_id and offer.get('scope')!=scope_id:return locator
+    from .workflow import active_file
+    if active_file(root).exists():
+        _,selected=load_run(root)
+        # An old scope refusal must stop its admitted run, not decline its preview.
+        # A positive reply still needs its original offer for idempotent approval replay.
+        if (selected.get('scope_id')==offer.get('scope') and
+                authority.action_matches(reply['prompt'],'Stop and take over','stop')):return locator
+    explicit=(authority.action_matches(reply['prompt'],'Stop and take over','stop') or
+              scope_id and authority.action_matches(reply['prompt'],offer['label'],'approve-scope'))
+    return located|{'decision':key} if explicit else locator
 
 
 def _decline_scope(root,scope_id,scope,locator,source):
@@ -769,7 +786,7 @@ def approve_scope(root, scope_id, locator, after=None):
         if offer.get('kind')=='approve-scope' and offer.get('scope')==scope_id:
             locator=locator|{'decision':after}
             after=None
-    if after is None and not locator.get('decision'):locator=_scope_stop_locator(root,locator,scope_id)
+    if after is None and not locator.get('decision'):locator=_scope_choice_locator(root,locator,scope_id)
     locator=_presented(root,locator)
     subject=None if locator.get('decision') else _home(root)/'scopes'/scope_id/'scope.md'
     from .workflow import active_file
@@ -793,11 +810,11 @@ def approve_scope(root, scope_id, locator, after=None):
     _verify_scope_plan(scope,source)
     if locator.get('decision') and source.get('via')!='plan':
         from .decisions import verify_scope
-        if source['prompt'].strip().casefold().rstrip('.!')=='stop and take over':
+        if authority.action_matches(source['prompt'],'Stop and take over','stop'):
             return _decline_scope(root,scope_id,scope,locator,source)
         verify_scope(root,scope,locator,source)
         source=source|{'decision':locator['decision']}
-    elif source.get('via')!='plan' and authority.shown_offer_reference(source):
+    elif source.get('via')!='plan' and (authority.shown_offer_reference(source) or after is None and source.get('prepared_offer')):
         raise Refused('Use the original prepared scope decision identity with this answer.')
     elif source.get('via')!='plan' and not _affirmed(source['prompt'],'approve',source.get('question','')):
         raise Refused('The native human reply did not approve this scope; no work was granted')
@@ -863,7 +880,7 @@ def _start(root,key,source,*,approved_preview=False):
         return _finish_entry(root,journal,reduce(journal.records()),source)
 
 
-def select(root,run=None):
+def select(root,run=None,*,continued=False):
     journal,state=load_run(root,run);task=next_task(state)
     current=task or next((t for t in reversed(state['tasks']) if t['id'] in state['done']),state['tasks'][-1])
     history=[a for a in state['attempts'] if a['task']==current['id']]
@@ -896,6 +913,11 @@ def select(root,run=None):
     if assessment:result['initial_profile']=state['config']['models'][state['host']][assessment['difficulty']]
     if state.get('candidate'):result['current_candidate']={k:state['candidate'][k] for k in ('task','head','tree','git_tree')}
     if state.get('publication'):result['publication']=state['publication']
+    if continued and state['status']=='running':
+        result['continuation']['instruction']=(
+            'Continue the returned phase in this turn under the existing grant; acknowledgement alone is not completion. '
+            'The wait for continuation is satisfied. Wait only for the next real decision or unavoidable blocker; '
+            'honor Stop and explicit permission refusal.')
     from .storage import encode
     if len(encode(result))>state['config']['context']['result_chars']:
         result['attempts']=[{k:v for k,v in a.items() if k!='summary'} for a in attempts]
@@ -907,7 +929,7 @@ def select(root,run=None):
         if result.get('publication'):
             result['publication']={k:state['publication'].get(k) for k in ('head','branch','base_branch','destination','remote')}
     if len(encode(result))>state['config']['context']['result_chars']:
-        result['continuation']={k:result['continuation'][k] for k in ('phase','pending_decision')}
+        result['continuation']={k:result['continuation'][k] for k in ('phase','pending_decision','instruction') if k in result['continuation']}
         result={k:result[k] for k in ('run','status','execution','task','report','attempt_count','reviews_used','reviews_allowed','done_count','granted_count','followups','continuation') if k in result}
     if len(encode(result))>state['config']['context']['result_chars']:result={'run':state['id'],'status':state['status'],'execution':result['execution'],'attempt_count':len(state['attempts']),'continuation':result['continuation']}
     return result
@@ -1393,7 +1415,9 @@ def _presented(root,locator,state=None):
     if not host or not session:return locator
     locator=locator|{'host':host,'session':session}
     options=prepared['menu_options'] if prepared.get('presentation') in ('checkpoint-menu','recovery-menu') and not prepared.get('bound_question') else None
-    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options,compact='disclosure' in prepared)
+    from .decisions import menu_actions
+    try:path,calls=authority.question_calls(root,host,session,question,locator.get('transcript_path'),options=options,compact='disclosure' in prepared,
+                                            offered_actions=menu_actions(prepared) if prepared.get('menu_version')==2 else None)
     except Refused:return locator
     consumed=(state or {}).get('decisions',{})
     for call in reversed(calls):
@@ -1401,7 +1425,9 @@ def _presented(root,locator,state=None):
         try:
             source=authority.native_human(root,candidate,latest=False)
             if not authority.newer(source.get('question_at'),prepared['created_at']):continue
-            if 'disclosure' in prepared:
+            if prepared.get('menu_version')==2:
+                if (source.get('prepared_offer') or {}).get('decision')!=key:continue
+            elif 'disclosure' in prepared:
                 reference=authority.shown_offer_reference({'question':prepared['disclosure']+'\n'+question})
                 visible=authority.shown_offer_reference(source)
                 if visible!=reference and (visible or (source.get('prepared_offer') or {}).get('decision')!=key):continue
@@ -1422,7 +1448,7 @@ def _recorded_choice(journal,key,kind):
 
 
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
-    if kind=='stop':locator=_scope_stop_locator(root,locator)
+    if kind=='stop':locator=_scope_choice_locator(root,locator)
     if isinstance(locator,dict) and re.fullmatch(r'[0-9a-f]{64}',locator.get('decision') or ''):
         prepared=read_json(_home(root)/'decisions'/(locator['decision']+'.json'))
         if kind=='stop' and prepared.get('kind')=='approve-scope':
@@ -1439,6 +1465,24 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
     if kind not in allowed:raise Refused('Unknown consequential decision')
     with _locked(root):
         journal,state=load_run(root,run)
+        # The last preparation is a lookup hint, never approval. _presented and
+        # verify still require that exact offer in the real answer's native history.
+        if not locator.get('decision') and kind!='stop':
+            hint_path=checkout_file(root,'oh-recovery-menu.json')
+            hint=read_json(hint_path) if hint_path.exists() else {}
+            offer_path=_home(root)/'decisions'/(hint.get('decision','missing')+'.json')
+            offer=read_json(offer_path) if offer_path.exists() else {}
+            if (offer.get('menu_version')==2 and offer.get('run')==state['id']
+                    and offer.get('attempt')==attempt
+                    and (offer.get('kind')==kind or kind in (offer.get('choices') or {}))):
+                candidate=_presented(root,locator|{'decision':hint['decision']},state)
+                # Automatic lookup must not revive an old consumed answer over newer input.
+                try:observed=authority.native_human(root,candidate)
+                except Refused:pass
+                else:
+                    returned=observed.get('prepared_offer') or {}
+                    if returned.get('decision')==hint['decision'] and not returned.get('ambiguous'):
+                        locator=candidate
         locator=_presented(root,locator,state)
         since=journal.records()[0]['at']
         if attempt:since=_attempt(state,attempt).get('finished_at') or since
@@ -1462,6 +1506,12 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             designs=[name for name in artifacts if Path(name).parent==design_folder]
             subject_path=Path(designs[0]) if len(designs)==1 else Path(reviewed['evidence'])/'result.json'
         source=authority.native_human(root,locator,subject=subject_path,latest=False)
+        if kind=='stop' and not locator.get('decision') and source.get('via')=='question':
+            shown=(source.get('prepared_offer') or {}).get('decision')
+            if isinstance(shown,str) and re.fullmatch(r'[0-9a-f]{64}',shown):
+                offered=read_json(_home(root)/'decisions'/(shown+'.json'))
+                if offered.get('run') and offered['run']!=state['id']:
+                    raise Refused('This reply needs its bound decision effect; use the run identified by its native question.')
         if state.get('published'):return select(root,state['id'])
         if not locator.get('decision') and kind=='resume' and (_saved_subject(state) not in source.get('question','') or state['branch'] not in source.get('question','')):
             raise Refused('Ask whether to resume '+_saved_subject(state)+' on '+state['branch']+', then use the native answer; no continuation was started')
@@ -1471,8 +1521,9 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .decisions import verify as verify_decision
             prepared=verify_decision(root,state,kind,locator,source,attempt,replay=True)
         elif (kind=='stop' and source.get('via')=='question'
-              or authority.shown_offer_reference(source) and not _command(source)
-              or not _affirmed(source['prompt'],kind,source.get('question',''))):
+              or (authority.shown_offer_reference(source) or source.get('prepared_offer')) and not _command(source)
+              or not _affirmed(source['prompt'],kind,source.get('question',''))) and not (
+                  kind=='stop' and authority.action_matches(source['prompt'],'Stop and take over','stop')):
             if key not in state['decisions'] or not _recorded_choice(journal,key,kind):
                 raise Refused('This reply needs its bound decision effect. Include the decision identity returned before the question in the same native locator and retry; do not ask the person to answer again.')
         if kind=='resume':
@@ -1496,7 +1547,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                         _resume_binding(root,state,write=True)
                 from .receipts import index
                 index(journal,state)
-                return select(root,state['id'])
+                return select(root,state['id'],continued=kind in ('resume','continue','approve-repair'))
             if _recorded_choice(journal,key,kind):
                 from .receipts import index
                 index(journal,state)
@@ -1516,11 +1567,14 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             scope_id=digest(scope)
             adoption={'native_version':2,'scope_id':scope_id,'scope_snapshot':scope}
             state=state|adoption
-        if kind=='stop' and prepared:
+        if kind=='stop':
             _continuation_order(root,state,source)
             from .recovery import _settle
-            state=_settle(root,journal,state,source|{'decision':locator['decision']})
-            _switchable(root,[state])
+            state=_settle(root,journal,state,source|{'decision':locator.get('decision')})
+            from .controls import busy
+            # A direct Stop remains available during coordinator checks. It fences
+            # continuation; the runner finishing is still required before transfer.
+            if prepared or not busy(root):_switchable(root,[state])
         subject={'head':git(root,'rev-parse','HEAD')} if kind in ('stop','resume') else _subject(root,state)
         events=[]
         def add(name,value):events.append({'kind':name,'data':value})
@@ -1603,7 +1657,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             from .publication import destination as publication_destination,commits,made
             from .branches import main_ref,trunk
             dest=publication_destination(root,required=True)|{'base_branch':trunk(root,state['config'])}
-            if prepared and prepared.get('presentation')=='checkpoint-menu':
+            if prepared and prepared.get('publication_destination'):
                 # The verified native menu binds this destination and the exact
                 # work boundary. Its concise heading need not repeat those facts.
                 if prepared['publication_destination']!=dest:
@@ -1671,10 +1725,13 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
         from .receipts import index
         index(journal,reduce(journal.records()))
         if kind=='resume':_resume_binding(root,state,write=True)
-        return select(root,state['id'])
+        return select(root,state['id'],continued=kind in ('resume','continue','approve-repair'))
 
 
-def complete(root,attempt_id):
+def complete(root,attempt_id,commit_subject=None):
+    if commit_subject is not None and (not isinstance(commit_subject,str) or not commit_subject.strip() or
+                                       any(ord(c)<32 or ord(c)==127 for c in commit_subject)):
+        raise Refused('Commit subject must be one non-empty line without control characters')
     with _locked(root):
         journal,state=load_run(root);_owner(root,state);_idle(root);review=_attempt(state,attempt_id)
         if review.get('superseded'):raise Refused('Recovery changed the reviewed subject; finish fresh checks and review before completion')
@@ -1737,15 +1794,21 @@ def complete(root,attempt_id):
         value={'task':task['id'],'review':attempt_id,'summary':review['summary'],'evidence':review.get('native_source',[]),'tree':subject['git_tree']}
         if committed(state):
             if not recovered:
+                title=commit_subject if commit_subject is not None else (intent or {}).get('commit_subject')
+                if title is None:title=('fix ' if correction else '')+f"task {task['id']}: {task['title']}"
                 if not intent:
-                    intent={'task':task['id'],'key':key,'review':attempt_id,'git_tree':subject['git_tree'],'parent':subject['head'],'publication':evidence}
+                    intent={'task':task['id'],'key':key,'review':attempt_id,'git_tree':subject['git_tree'],'parent':subject['head'],'publication':evidence,'commit_subject':title}
+                    journal.append('commit.intent',intent)
+                elif commit_subject is not None and intent.get('commit_subject')!=title:
+                    intent=intent|{'commit_subject':title}
                     journal.append('commit.intent',intent)
                 git(root,'add','--all',*whole(root))
                 if git(root,'write-tree')!=subject['git_tree']:raise Refused('Staged tree differs from independently reviewed candidate')
-                title=('fix ' if correction else '')+f"task {task['id']}: {task['title']}"
                 git(root,'commit','--allow-empty','-m',f"{title}\n\nOH-Run: {state['id']}\nOH-Review: {attempt_id}\nOH-Reviewed-Tree: {subject['git_tree']}\nOH-Evidence: {digest(evidence)}")
                 if git(root,'rev-parse','HEAD^{tree}')!=subject['git_tree'] or git(root,'rev-parse','HEAD^')!=subject['head']:
                     raise Refused('Commit hooks changed the reviewed candidate or parent')
+                from .publication import verify_record
+                verify_record(root,git(root,'rev-parse','HEAD'),evidence)
             value['commit']=git(root,'rev-parse','HEAD')
         else:value['artifact']={'files':subject['artifacts']}
         bound=state.get('delivery')

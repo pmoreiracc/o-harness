@@ -18,12 +18,22 @@ First explain the idea in your own words, then recommend one route and give evid
 
 During recommendation, write only the external preview/report: show the complete
 additions and their destinations before the person approves them. Do not edit the
-project's plans or decide an open question. Approval is bound to these actual additions;
+project's plans or decide an open question. Before returning a roadmap/task preview,
+validate the prospective documents with the existing `oh.plans.check(root, where)`
+checker against a temporary copy of the current plans plus the exact additions. Set
+`where`'s base, roadmap, designs and decisions paths to that external copy; keep the
+actual project root for project rules. Preserve relative links and remove the copy
+after checking. Use the existing roadmap format: backticked slug, em-dash empty
+Depends/Design cells, and a valid design link only when one exists. Put explanations
+outside structural cells. Return the checked preview and actual validation result.
+Approval is bound to these actual additions;
 an agent report, silence or permission to draft does not approve writing them.
 
 When a fresh application attempt carries the bound approval, apply those additions
 using ordinary native tools, choose safe unused numbers and preserve roadmap/log
-links. Validate documents with `plans check`, without product tests. If independent
-review requires a different route or materially different contents, present the
+links. Validate documents with `plans check`, without product tests. A syntax-only
+correction that preserves the approved initiative/task, route, dependencies and
+destinations stays within that approval; repair and revalidate without asking again.
+If independent review requires a different route or materially different contents, present the
 changed additions for approval before applying them. Return artifact paths, actual
 validation and remaining questions concisely. Do not grant scope, commit or publish.

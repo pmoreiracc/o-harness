@@ -33,10 +33,11 @@ def requested(source,doc,track,command):
         if (selected.get('kind'),selected.get('doc'),selected.get('track'))!=('design',doc,track):
             raise Refused('The native request selects a different design or track')
         return
-    text=source['prompt'].strip()
+    from .authority import action_text
+    text=action_text(source['prompt'])
     direct=re.fullmatch(r'(?i)(?:(?:can|could|would) you |please )?(?:deliver|implement|build|finish)\s+'
         r'(?:(?:the )?(?:approved )?design\s+)?([0-9]{4})(?:\s+(?:track\s+)?([a-zA-Z0-9_-]+))?[.!?]?',text)
-    if direct and not menu:
+    if direct and (not menu or text in map(action_text,source.get('question_options') or [])):
         if (direct[1],(direct[2] or '').casefold())!=(doc,track.casefold()):
             raise Refused('The native request selects a different design or track')
         return
@@ -52,6 +53,32 @@ def requested(source,doc,track,command):
     choices={doc} if not track else {track.casefold(),doc+' '+track.casefold()}
     if delivery_choice and choice in choices:return
     raise Refused('Request delivery of this approved design explicitly before admitting its task batch')
+
+def merged_batch(root,state,base=None):
+    """Observe a completed batch already on the base, without completing its old journal."""
+    from .branches import fetch_base,trunk,contained,absorbed
+    from .native import _execution
+    from .workspace import observation
+    from .storage import changes
+    if git(root,'branch','--show-current')==state['branch'] and changes(root):return None
+    if (state['workflow']!='deliver' or state.get('published') or not state.get('design') or not state.get('done')
+            or any(task not in state['done'] for task in state['granted'])
+            or _execution(root,state)['state']!='idle'):
+        return None
+    name=trunk(root,state['config'])
+    if not name:return None
+    base=base or fetch_base(root,name)
+    if not base.get('commit') or base['freshness'] not in ('fetched','local_only'):return None
+    try:saved=observation(root,state['branch'])
+    except Refused:return None
+    commits=[item['commit'] for item in state['summaries'] if item.get('commit')]
+    if saved['paths'] or not commits:return None
+    if not all(contained(root,saved['head'],commit) for commit in commits):return None
+    tip=absorbed(root,base['commit'],state['branch'])
+    if tip:
+        return {'base':base['commit'],'branch':state['branch'],'merged_head':tip,
+                'next':'The completed batch is already merged. Re-read the approved design on the refreshed base and select its next eligible task with scope prepare and the current invocation. Do not ask to resume or discard this merged batch.'}
+
 
 def inputs(where):
     return plans.private_inputs(where|{'location':'private'})

@@ -382,6 +382,7 @@ def _prepared_menu(root,host,payload):
     path=checkout_file(root,'oh-recovery-menu.json')
     if not path.exists():return None
     prepared=read_json(path)
+    if prepared.get('menu_version')==2:return None
     questions=args.get('questions')
     if not isinstance(questions,list) or not questions or not isinstance(questions[0],dict):return None
     shown=questions[0].get('question') or questions[0].get('title') or ''
@@ -563,7 +564,7 @@ def _hook(root,host,payload):
                     return _deny('For OH helpers, use the exact native_commands.helper_prefix from the packet directly. '
                                  'In Codex, use command_format with this attempt ID and the executable/argument array, then run its returned command unchanged. '
                                  'For ordinary project commands, use OH’s owned-command helper with the same native shell tool '
-                                 'and its normal permissions. Pass the executable and arguments as a JSON array; '
+                                 'and its native permission mechanism. Pass the executable and arguments as a JSON array; '
                                  'for shell syntax, include the explicit original shell and its command argument. '
                                  'Invocation format: ' + example)
                 if not use:

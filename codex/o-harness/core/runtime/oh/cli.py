@@ -54,7 +54,7 @@ def main(argv=None):
     owned=sub.add_parser('owned-command');owned.add_argument('attempt');owned.add_argument('--argv',required=True)
     sub.add_parser('candidate')
     evidence=sub.add_parser('evidence');evidence.add_argument('attachment',type=Path)
-    complete=sub.add_parser('complete');complete.add_argument('attempt')
+    complete=sub.add_parser('complete');complete.add_argument('attempt');complete.add_argument('--commit-subject')
     decision=sub.add_parser('decision');decision.add_argument('kind');decision.add_argument('locator');decision.add_argument('--attempt');decision.add_argument('--destination',type=Path)
     request=sub.add_parser('decision-request');request.add_argument('kind');request.add_argument('--attempt');request.add_argument('--rounds',type=int,help='Override the configured review window only when the person explicitly requests a different count; otherwise omit');request.add_argument('--run');request.add_argument('--also');request.add_argument('--repair')
     request.add_argument('--request',help='Native locator of the initiating request to continue after this prerequisite');request.add_argument('--after',help='Prior accepted prerequisite for this same request')
@@ -120,7 +120,7 @@ def main(argv=None):
             raise SystemExit(owned_command(root,args.attempt,json.loads(args.argv)))
         elif args.command=='candidate':result=native.candidate(root)
         elif args.command=='evidence':result=native.attach_evidence(root,read_json(args.attachment))
-        elif args.command=='complete':result=native.complete(root,args.attempt)
+        elif args.command=='complete':result=native.complete(root,args.attempt,args.commit_subject)
         elif args.command=='decision':result=native.decision(root,args.kind,_locator(args.locator),args.attempt,read_json(args.destination) if args.destination else None)
         elif args.command=='decision-request':
             from .decisions import prepare

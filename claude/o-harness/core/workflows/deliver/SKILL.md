@@ -3,7 +3,7 @@ name: deliver
 description: Deliver approved design tasks or a bounded quick fix with fresh native agents and independent review.
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
-entry and communication protocol before new work. For a matching unfinished run,
+entry and communication protocol before new work. For a matching run that still needs recovery after entry reconciliation,
 follow `workflows/recovery.md`; resume its saved phase instead of restarting these steps.
 Use its shared recovery gate (Continue, Start fresh, Stop and take over), including
 when old native transcripts are unavailable. Do not ask the person to repair OH state.
@@ -41,11 +41,10 @@ Interpret the requested work as follows:
   an arbitrary manifest or ask for another trigger. Only if the helper reports multiple
   runnable tracks, or a concrete design selection is missing, call
   Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
-  once and preserve the answer. For a track choice, use the helper's exact short
-  question: `Which track should OH deliver for design NNNN?` Use the exact track
-  names as choices (a recommended suffix is fine). Put recommendations or other
-  explanations in commentary, outside the question. This binds delivery, not an
-  inspection or planning choice that merely mentions delivery.
+  once and preserve the answer. Use a natural question and action labels that identify what will run:
+  **Deliver 0001 core** or **Deliver 0001 other**, for example. For a design
+  choice use **Deliver 0001** with its title in the description. A typed reply
+  can name the same action.
   Retry `scope prepare` with that answer's native locator, including `tool_use_id`
   for a menu answer, rather than the older invocation. For a typed fallback, show
   the same question on its own line and use the actual reply locator. The answer and its native
@@ -56,8 +55,13 @@ Interpret the requested work as follows:
   an external manifest of ordered tasks with `id`, `title`, `instructions` and optional
   `needs`. Preserve included original unreviewed edits in one coherent task; do not
   split an existing dirty change across partially completed repair tasks. Call
-  `scope prepare <manifest.json>` and present its actual scope preview and finite
-  task/review limits. Difficulty and model selection stay outside that manifest.
+  `scope prepare <manifest.json>`. If it reports `execution_branch_required`, resolve
+  the safe execution branch and reprepare there, preserving the included edits, before
+  presenting approval; that preview has no approval offer. `keep_checkout` does not
+  waive the base-branch guard. Then show
+  the executable scope preview and finite task/review limits; do not spend a human
+  answer on a preview that cannot enter delivery. Difficulty and model selection stay
+  outside that manifest.
 - Existing prepared or interrupted work: use the matching retained scope and remaining
   allowance through `resume`; never convert a preparation ID or agent text into a
   human approval. A complete saved batch proceeds to its actual decision/publication.
@@ -67,12 +71,12 @@ Interpret the requested work as follows:
 Read `workflows/decisions.md` before presenting scope. For a quick fix, use Claude's
 native plan viewer **Accept** or Codex Plan mode's native **Implement** when that plan
 surface is available. Show the complete unchanged scope preview there and bind the
-actual acceptance with `scope approve`. For a menu or chat reply, show the returned `approval.disclosure` once, then its short question and choices. In Codex Default mode,
+actual acceptance with `scope approve`. For a menu or chat reply, explain the bounded change, post the supplied Markdown scope link once in chat, then present its short question and choices. In Codex Default mode,
 call `functions.request_user_input_async` with the returned `approval` question and
 choices. Retain its decision identity and use the shared direct-reply fallback. An initiating
 human locator identifies the request and does not replace this scope acceptance.
-For quick-fix menus, **Approve and fix** accepts the shown scope; **Stop and take over**
-records the refusal and ends the handoff. Bind either answer with `scope approve` and the original scope decision identity.
+For quick-fix menus, the returned **Approve fix** action accepts the shown scope; **Stop and take over**
+records the refusal and ends the handoff. Bind approval with `scope approve`; bind refusal with `decision stop` using the original scope decision ID and no run argument.
 Honor the saved labels of older prepared questions. For CI corrections, first complete
 the authorized investigation described in `workflows/publication.md`; a preliminary
 failure summary is not an established repair plan.

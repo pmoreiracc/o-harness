@@ -2,6 +2,9 @@
 name: oh-config
 description: Show or change your OH settings.
 ---
+When a choice is needed, introduce the work or setting and explain each option's effect
+in the native menu itself. Keep internal identifiers in tool calls. Wait for the person's choice.
+
 Resolve the `scripts/oh` command at the plugin root, two levels above this skill directory (from PowerShell or cmd on Windows, use `scripts\oh.cmd` there). Use that absolute path; never create integration files in a product repository. If setup is missing, run the command with `setup` explicitly.
 
 Read the settings: in Codex, call `mcp__o_harness__config` directly with the checkout's absolute path as `root`; in Claude, run `<plugin>/scripts/oh --root <project-root> config`. It returns every setting that exists, with its value, default, source, allowed values and meaning, this project's `checks`, and the settings `file`. That list is the only source of truth: never mention, suggest or write a setting that isn't in it.

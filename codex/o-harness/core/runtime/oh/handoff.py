@@ -222,7 +222,11 @@ def prepare(state, task, role, directory, admission, feedback=''):
         'helper_prefix':('& '+' '.join("'"+v.replace("'","''")+"'" for v in prefix)) if powershell else shlex.join(prefix),
         'admission':shell_line(prefix+['admission',str(directory)],windows=powershell),
         'verify':shell_line(prefix+['verify','--attempt',admission['id']],windows=powershell),
-        'instruction':'Use the native shell tool and its normal permissions. Run shell commands through owned-command. '
+        'instruction':'Use the native shell tool and native permission mechanism. OH helpers write private coordination state even during read-only work. '
+            'If that state is outside the sandbox writable roots, request native permission for the unchanged command on its first invocation, including admission; '
+            'do not probe sandbox access first. Recover an unexpected sandbox-access error within the same attempt. '
+            'Never retry an explicit permission refusal, Stop, revoked attempt or exit 130. '
+            'Run shell commands through owned-command. '
             'In Codex, call command_format with this attempt ID and the executable/argument array; run its returned '
             'command unchanged in the corresponding native shell. Do not reconstruct Windows argument escaping. '
             'Supply the actual executable and argument array. Choose the example for the shell actually in use: '
