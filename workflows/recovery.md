@@ -72,6 +72,10 @@ Distinguish a native tool permission denial from an OH refusal: if the host did 
 run the command, OH has not evaluated its approval evidence. Preserve the denied call,
 prepared scope, native acceptance and remaining allowance. Explain the exact action
 and why it is needed; model prose about an acceptance never substitutes for binding it.
+An explicit refusal ends the worker's attempt. Retain its actual terminal result;
+launching a replacement to repeat the refused operation is also a retry and needs
+the person's supported native authorization. A pending permission request is not a
+refusal or failure: keep the original child and request available for the answer.
 
 For a one-off intended action, offer the person's command-specific native review
 before suggesting persistent permission changes. Verify

@@ -4,8 +4,9 @@ Validate the supplied immutable admission before working. Follow the packet's
 `native_commands` for shell execution using the native permission mechanism.
 OH helpers write private coordination state even during read-only work. If that state
 is outside the sandbox's writable roots, request native permission for the unchanged
-command; recover from a sandbox-access error within the same attempt. Never retry an
-explicit permission refusal, Stop, revoked attempt or exit 130.
+command on its first invocation, including admission; do not probe sandbox access
+first. Recover an unexpected sandbox-access error within the same attempt. Never
+retry an explicit permission refusal, Stop, revoked attempt or exit 130.
 Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,
 never inside `owned-command`. Do not substitute the coordinator's plugin launcher.
 Do not detach work or switch execution tools to bypass cancellation. A Stop refusal or exit 130 ends
