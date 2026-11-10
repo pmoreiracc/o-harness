@@ -78,6 +78,16 @@ not exercise. After the single implementation review run every slice on the fina
 
 The independent Design fixture contains a normal roadmap initiative only. The host still drafts, checks, reviews and accepts its design. Nightly P also exercises the direct handoff from the newly created proposal.
 
+For outside-state helper acceptance, leave the first assessment's native permission
+request pending across a coordinator wait before approving it. Verify the same child
+and admission continue, with no timeout-driven interruption or replacement. Exercise
+a later helper and a fresh session too. This extends the existing delivery slice:
+time spent awaiting a real permission answer must not consume a throwaway worker.
+In a separate delivery variant, explicitly refuse native helper permission and verify
+the terminal attempt is retained without another child retrying the refused operation.
+This refusal variant belongs in the nightly catalog; exercise it during permission
+repairs and report its cost separately. Preserve real Stop and revoked-attempt coverage.
+
 Use a unique base branch in a dedicated private fixture repository, set its name as
 the fixture project's configured base, and push only this trial's starting tree to it.
 Use `python3 check.py` for hosted sanity. For scenario C also require release readiness.

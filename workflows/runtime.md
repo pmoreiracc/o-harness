@@ -238,8 +238,9 @@ admission command (not only in the packet read afterwards):
 
 OH helpers write private coordination state even during read-only work. If that state
 is outside the sandbox's writable roots, request native permission for the unchanged
-command; recover from a sandbox-access error within the same attempt. Never retry an
-explicit permission refusal, Stop, revoked attempt or exit 130.
+command on its first invocation, including admission; do not probe sandbox access
+first. Recover an unexpected sandbox-access error within the same attempt. Never
+retry an explicit permission refusal, Stop, revoked attempt or exit 130.
 
 Do not substitute the coordinator's plugin launcher. The admission result includes the verified, bounded
 `task_context`; read it directly instead of bootstrapping another shell read. In Codex,
@@ -251,8 +252,10 @@ Pass an explicit shell inside that array when shell syntax is needed. Never appe
 outer shell operators, nest OH helpers in the wrapper, or bypass a refused tool.
 The wrapper inherits the native tool’s permissions; it grants no permission. Do not
 launch detached services or use another execution tool to escape owned cleanup.
-A Stop refusal or exit 130 ends this worker. The coordinator can admit a fresh one
-only after the existing Resume decision and cleanup.
+A native permission refusal, Stop or exit 130 ends this worker. Do not retry the
+refused operation by admitting a replacement. Follow `workflows/recovery.md` for
+the person's supported native retry; replacement after Stop still needs the
+existing Resume decision and cleanup. Continuation never grants native access.
 
 - Codex: call native `spawn_agent` with `agent_type: "default"`, `fork_turns: "none"`,
   the admitted `model` and `reasoning_effort`, the returned `native_task_name` and the self-contained
@@ -273,8 +276,17 @@ starts and names the required settings. Launch that same admission again with ex
 those settings; nothing ran, so there is no attempt to retain or recover.
 
 Prefer a native background/asynchronous launch when supported so the coordinator can
-bind promptly, handle human controls and report progress. Await through native host tools;
-do not block on a foreground launch and leave a long-running child unable to use its
+bind promptly, handle human controls and report progress. Await through native host tools.
+Silence or elapsed time alone is not a reason to interrupt or replace a live child.
+Use native child status and its original saved outcome to distinguish active work,
+pending permission and terminal refusal before reporting progress or recovering.
+An empty native wait is inconclusive. Reconcile it with checked retention using
+the original child locator: a terminal outcome can be saved before its completion
+notification arrives. If retention says the result is not yet saved, await the same
+child; that is not a reason to cancel or replace it.
+Keep a pending permission request available for the person's answer; it is not a
+failure. Missing OH command activity does not establish that its native tool is idle.
+Do not block on a foreground launch and leave a long-running child unable to use its
 binding-dependent helpers. If a child reaches `candidate`, `verify` or `admission` before
 the binding is saved, bind promptly and retry that same operation after the short host-save
 delay. This is not a new attempt, model selection or approval.
