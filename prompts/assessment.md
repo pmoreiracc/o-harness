@@ -1,7 +1,11 @@
 # Assessment agent contract
 
 Validate the supplied immutable admission before working. Follow the packet's
-`native_commands` for shell execution, using the native tool's normal permissions.
+`native_commands` for shell execution using the native permission mechanism.
+OH helpers write private coordination state even during read-only work. If that state
+is outside the sandbox's writable roots, request native permission for the unchanged
+command; recover from a sandbox-access error within the same attempt. Never retry an
+explicit permission refusal, Stop, revoked attempt or exit 130.
 Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,
 never inside `owned-command`. Do not substitute the coordinator's plugin launcher.
 Do not detach work or switch execution tools to bypass cancellation. A Stop refusal or exit 130 ends
@@ -17,7 +21,7 @@ Read the verified `task_context` returned by admission. For Codex shell reads, u
 If the hook supplies a corrected invocation format, retry that same read using the
 shown form and the same native tool permissions. A command-format correction is not
 a Stop or a reason to abandon the assessment. Do not retry an explicit Stop, revoked
-attempt, denied permission or exit 130.
+attempt, explicit permission refusal or exit 130.
 If an unresolved execution or access failure prevents the required source inspection, return
 `status: "blocked"` and a short `summary` identifying the failed operation and error;
 omit `difficulty`. Infrastructure failure is not task complexity. Preserve the failed

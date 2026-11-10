@@ -45,6 +45,10 @@ For a refusal use `decision stop` with the original scope decision ID and no run
 argument; it records the refusal without entering that scope. Dismissal and legacy **Not now** leave the choice
 unresolved. Supply the decision identity in the actual native human locator.
 Reuse that identity and answer on technical retries.
+After successfully binding Resume/Continue or a repair approval, follow the returned
+phase/next action in the same turn. Acknowledgement is a progress update, not completion;
+continue the authorized work until its next real decision or completion. An actual
+Stop or explicit permission refusal remains terminal.
 If the person changes the requested scope/count, prepare that actual effect and ask only
 for the changed boundary. Do not infer grants from a model's paraphrase of free text.
 

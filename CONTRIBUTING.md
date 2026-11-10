@@ -115,7 +115,7 @@ OH while OH itself changes. Run `on` again when you want a new build.
 It also starts or refreshes a background development dashboard/collector at
 <http://localhost:4319> and opens it in your browser. No extra terminal is required.
 
-Codex development builds show **OH DEV** with the amber beetle icon; releases show **OH**
+Codex development builds show **OH DEV** with the development OH icon; releases show **OH**
 with the violet icon. Bundled skills use the matching icon, including in live development builds.
 
 `oh-dev off` restores the previous released-plugin enablement. `oh-dev status` shows each

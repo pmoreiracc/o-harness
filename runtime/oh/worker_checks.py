@@ -45,7 +45,7 @@ def command_format(root,attempt_id,argv):
     guard(root,attempt=attempt_id)
     return {'bash':command_line(root,attempt_id,argv),
             'powershell':command_line(root,attempt_id,argv,windows=True),
-            'instruction':'Run the returned command unchanged in the corresponding native shell tool with its normal permissions. Formatting grants no authority and executes nothing.'}
+            'instruction':'Run the returned command unchanged in the corresponding native shell tool using its native permission mechanism. Formatting grants no authority and executes nothing.'}
 
 
 def run(root):

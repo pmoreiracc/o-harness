@@ -564,7 +564,7 @@ def _hook(root,host,payload):
                     return _deny('For OH helpers, use the exact native_commands.helper_prefix from the packet directly. '
                                  'In Codex, use command_format with this attempt ID and the executable/argument array, then run its returned command unchanged. '
                                  'For ordinary project commands, use OH’s owned-command helper with the same native shell tool '
-                                 'and its normal permissions. Pass the executable and arguments as a JSON array; '
+                                 'and its native permission mechanism. Pass the executable and arguments as a JSON array; '
                                  'for shell syntax, include the explicit original shell and its command argument. '
                                  'Invocation format: ' + example)
                 if not use:

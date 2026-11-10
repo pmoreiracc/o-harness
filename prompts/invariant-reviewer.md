@@ -1,7 +1,11 @@
 # Independent reviewer contract
 
 Validate the supplied immutable admission before working. Follow the packet's
-`native_commands` for shell execution, using the native tool's normal permissions.
+`native_commands` for shell execution using the native permission mechanism.
+OH helpers write private coordination state even during read-only work. If that state
+is outside the sandbox's writable roots, request native permission for the unchanged
+command; recover from a sandbox-access error within the same attempt. Never retry an
+explicit permission refusal, Stop, revoked attempt or exit 130.
 Read the verified `task_context` returned by admission. In Codex, use `command_format`
 for shell quoting and run its returned command unchanged with the native shell tool.
 Run focused OH helpers directly using the packet's `native_commands.helper_prefix`,

@@ -880,7 +880,7 @@ def _start(root,key,source,*,approved_preview=False):
         return _finish_entry(root,journal,reduce(journal.records()),source)
 
 
-def select(root,run=None):
+def select(root,run=None,*,continued=False):
     journal,state=load_run(root,run);task=next_task(state)
     current=task or next((t for t in reversed(state['tasks']) if t['id'] in state['done']),state['tasks'][-1])
     history=[a for a in state['attempts'] if a['task']==current['id']]
@@ -913,6 +913,11 @@ def select(root,run=None):
     if assessment:result['initial_profile']=state['config']['models'][state['host']][assessment['difficulty']]
     if state.get('candidate'):result['current_candidate']={k:state['candidate'][k] for k in ('task','head','tree','git_tree')}
     if state.get('publication'):result['publication']=state['publication']
+    if continued and state['status']=='running':
+        result['continuation']['instruction']=(
+            'Continue the returned phase in this turn under the existing grant; acknowledgement alone is not completion. '
+            'The wait for continuation is satisfied. Wait only for the next real decision or unavoidable blocker; '
+            'honor Stop and explicit permission refusal.')
     from .storage import encode
     if len(encode(result))>state['config']['context']['result_chars']:
         result['attempts']=[{k:v for k,v in a.items() if k!='summary'} for a in attempts]
@@ -924,7 +929,7 @@ def select(root,run=None):
         if result.get('publication'):
             result['publication']={k:state['publication'].get(k) for k in ('head','branch','base_branch','destination','remote')}
     if len(encode(result))>state['config']['context']['result_chars']:
-        result['continuation']={k:result['continuation'][k] for k in ('phase','pending_decision')}
+        result['continuation']={k:result['continuation'][k] for k in ('phase','pending_decision','instruction') if k in result['continuation']}
         result={k:result[k] for k in ('run','status','execution','task','report','attempt_count','reviews_used','reviews_allowed','done_count','granted_count','followups','continuation') if k in result}
     if len(encode(result))>state['config']['context']['result_chars']:result={'run':state['id'],'status':state['status'],'execution':result['execution'],'attempt_count':len(state['attempts']),'continuation':result['continuation']}
     return result
@@ -1542,7 +1547,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                         _resume_binding(root,state,write=True)
                 from .receipts import index
                 index(journal,state)
-                return select(root,state['id'])
+                return select(root,state['id'],continued=kind in ('resume','continue','approve-repair'))
             if _recorded_choice(journal,key,kind):
                 from .receipts import index
                 index(journal,state)
@@ -1720,7 +1725,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
         from .receipts import index
         index(journal,reduce(journal.records()))
         if kind=='resume':_resume_binding(root,state,write=True)
-        return select(root,state['id'])
+        return select(root,state['id'],continued=kind in ('resume','continue','approve-repair'))
 
 
 def complete(root,attempt_id,commit_subject=None):
