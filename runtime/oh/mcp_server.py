@@ -33,7 +33,7 @@ TOOLS = [
          {'branch':TEXT,'base':TEXT,'human':OBJECT,'after':TEXT}, ['branch','human']),
     tool('resume', 'Read unfinished work', 'Read saved continuation and verify a human resume decision when supplied; never renew allowances.', {'human':OBJECT,'run':TEXT}),
     tool('admission', 'Validate review admission', 'Validate the immutable subject and request, recovering a missing native child binding when needed.', {'attempt_directory':TEXT}, ['attempt_directory']),
-    tool('command_format', 'Format native shell command', 'Return exact Bash and PowerShell quoting for an admitted worker command. Does not execute or authorize it. Pass an executable/argument array, then run the returned string unchanged with the native shell tool and its normal permissions.',
+    tool('command_format', 'Format native shell command', 'Return exact Bash and PowerShell quoting for an admitted worker command. Does not execute or authorize it. Pass an executable/argument array, then run the returned string unchanged with the native shell tool and its native permission mechanism.',
          {'attempt':TEXT,'argv':{'type':'array','minItems':1,'items':TEXT}}, ['attempt','argv'], read_only=True),
     tool('config', 'OH settings', 'Read project settings and configured checks.', read_only=True),
     tool('init', 'Register project', 'Register this checkout with OH.', {'name': TEXT}),

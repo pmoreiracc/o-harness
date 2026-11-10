@@ -585,7 +585,8 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
             with patch.object(authority,'claude_operations',return_value={'pending-resume':{'state':'rejected','started':now()}}):
                 native.decision(self.root,'stop',answer)
             with patch.object(authority,'claude_operations',side_effect=authority.Unavailable('Deleted parent')):
-                native.decision(self.root,'stop',answer)
+                stopped=native.decision(self.root,'stop',answer)
+        self.assertNotIn('instruction',stopped['continuation'])
         self.assertEqual(load_run(self.root)[1]['status'],'stopped')
         self.assertEqual(self.git('status','--porcelain'),before)
         with self.assertRaisesRegex(Refused,'not running'):native.admit(self.root,'assessment')
@@ -733,7 +734,8 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         stale=decisions.prepare(self.root,'approve-repair',repair='An earlier proposed repair.')
         subject=native._subject(self.root,load_run(self.root)[1])
         gate=decisions.prepare(self.root,'approve-repair',repair='Repair the shared fixture needed by this task.')
-        native.decision(self.root,'approve-repair',self.answer(gate,gate['options'][0],host='codex',session='s'))
+        approved=native.decision(self.root,'approve-repair',self.answer(gate,gate['options'][0],host='codex',session='s'))
+        self.assertTrue(approved['continuation']['instruction'])
         self.assertTrue(load_run(self.root)[1]['approved_repairs'])
         self.recover('restart')
         state=load_run(self.root)[1]
@@ -759,7 +761,10 @@ class RecoveryTest(NativeFixture, unittest.TestCase):
         author=self.finish_attempt('implementation',text)
         self.assertEqual(author['outcome'],'reported')
         before=load_run(self.root)[1]
-        self.recover('resume')
+        _,answer,resumed=self.recover('resume')
+        self.assertTrue(resumed['continuation']['instruction'])
+        self.assertEqual(native.decision(self.root,'resume',answer)['continuation'],resumed['continuation'])
+        self.assertNotIn('instruction',native.select(self.root)['continuation'])
         journal,state=load_run(self.root)
         self.assertEqual(state['branch'],before['branch'])
         self.assertEqual(state['assessments']['1']['attempt'],assessed['id'])

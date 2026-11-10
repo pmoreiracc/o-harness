@@ -70,7 +70,8 @@ Start fresh, Stop and take over choices; bind its returned action with `decision
 Other workflows use Resume. Call Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async` at these questions. Settle prior native work,
 then bind the same answer;
-continue its actual phase without new scope, repeated questions or renewed allowances.
+continue its actual phase in the same turn without new scope, repeated questions or
+renewed allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
 If a real prerequisite question intervenes, retain its initiating request with
 `decision-request --request <native-locator.json>` (Codex `request`). After binding
@@ -232,7 +233,15 @@ scope/evidence files rather than pasting the parent history or full worker trans
 Require admission validation before the first working tool. Every role follows the
 packet’s `native_commands`. Copy the returned `admission_command` unchanged into the
 child's launch prompt as its first command; the child cannot read the packet before
-validation. Do not substitute the coordinator's plugin launcher. The admission result includes the verified, bounded
+validation. Include this permission instruction in that launch prompt before the first
+admission command (not only in the packet read afterwards):
+
+OH helpers write private coordination state even during read-only work. If that state
+is outside the sandbox's writable roots, request native permission for the unchanged
+command; recover from a sandbox-access error within the same attempt. Never retry an
+explicit permission refusal, Stop, revoked attempt or exit 130.
+
+Do not substitute the coordinator's plugin launcher. The admission result includes the verified, bounded
 `task_context`; read it directly instead of bootstrapping another shell read. In Codex,
 use `command_format` with the executable/argument array and run its returned command
 unchanged through the corresponding native shell tool. The formatter executes nothing

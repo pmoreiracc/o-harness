@@ -203,7 +203,7 @@ def apply(root, kind, locator, *, run=None):
                 native._resume_binding(root,state,write=True)
             from .receipts import index
             index(journal,state)
-            return native.select(root, state['id'])
+            return native.select(root, state['id'], continued=kind!='stop')
         source = authority.coordinator(root, state, locator, retry_resume=True)
         source = source | {'decision': locator['decision']}
         verify(root, state, kind, locator, source)
@@ -290,4 +290,4 @@ def apply(root, kind, locator, *, run=None):
         if kind != 'stop':native._resume_binding(root, updated, write=True)
         from .receipts import index
         index(journal, updated)
-        return native.select(root, state['id'])
+        return native.select(root, state['id'], continued=kind!='stop')
