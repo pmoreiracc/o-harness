@@ -142,7 +142,14 @@ def _settle(root, journal, state, source):
         control = cancellation._read(root)
         record = (control or {}).get('attempts', {}).get(attempt['id'])
         if not record or not record.get('guard_observed'):
-            raise Refused('The old worker has no verified OH tool guard. Stop it in its native host, then retry this same recovery answer.')
+            if not record or not cancellation.unlaunched_stop(root, attempt, source):
+                raise Refused('The old worker has no verified OH tool guard. Stop it in its native host, then retry this same recovery answer.')
+            owner = control['owners'][record['owner']]
+            with cancellation._edit(root):
+                atomic_json(owner['marker'], {'event':'recovery', 'at':source['at'], 'turn':source['turn'],
+                                              'session':source['session'], 'decision':source['decision']})
+            native._retain_locked(root, attempt['id'], {}, run=state['id'])
+            continue
         owner = control['owners'][record['owner']]
         revocation = {'event': 'recovery', 'at': source['at'], 'turn': source['turn'],
                       'session': source['session'], 'decision': source['decision']}

@@ -130,7 +130,7 @@ def prepare(codex_model, claude_model, suite):
                         'a design scope, prepare decision-request stop and wait for its single action in ordinary chat. '
                         'This trial exercises the quick-fix menu: present the options from scope prepare on the native question surface or chat fallback. Native plan acceptance is tested separately. Do not launch workers '
                         'in this selection-only probe.\n')
-            (root / 'CLAUDE.md').write_text('Read AGENTS.md.\n', encoding='utf-8', newline='\n')
+            (root / 'CLAUDE.md').write_text('@AGENTS.md\n', encoding='utf-8', newline='\n')
             for file, value in (('answer.txt', 'before'), ('marker.txt', 'before'), ('release.txt', 'pending')):
                 (root / file).write_text(value + '\n', encoding='utf-8', newline='\n')
             (root / 'check.py').write_text(
