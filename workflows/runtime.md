@@ -148,6 +148,9 @@ Current candidate checks and fresh independent review remain required for comple
 Codex tools receive the equivalent JSON objects. A locator names actual host evidence: `host`,
 `session`, and available `turn`, `transcript_path`, `tool_use_id` or `child_session`.
 Copy identities from native events; do not invent a human message, child ID or result.
+When new human input arrives during a running turn without a fresh hook locator,
+use its actual prompt with `host`, `session` and `transcript_path`, omitting the older
+`turn`. The native input adapter resolves the delivered message's own identity.
 For an answer to a prepared decision, pass the current conversation locator (Claude: the
 one in OH's hook context; Codex: `host` and `session`) with its `decision` identity. OH
 finds the native question by its prepared text or complete completed-task menu and

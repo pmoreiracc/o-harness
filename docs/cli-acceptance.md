@@ -38,8 +38,9 @@ again, including on resume. Review changed hook definitions in the native `/hook
 screen for this profile. Do not copy authentication or synthesize hook trust.
 For Claude, load `<build>/claude/plugins/o-harness` with `--plugin-dir`, use the supplied
 `claude-settings.json` and `--setting-sources project,local`, and use normal subscription authentication.
-Excluding project sources also excludes `CLAUDE.md`; confirm the fixture memory appears
-in native `/context` before testing project-specific instructions. User settings remain excluded.
+Excluding project sources also excludes `CLAUDE.md`; confirm native `/context all` lists
+both `CLAUDE.md` and its imported `AGENTS.md` before relying on the fixture's pauses.
+User settings remain excluded.
 Both hosts need `OH_DATA_HOME` and `OH_DEV_NORMAL_DATA_HOME` set to `<trial>/data`.
 Clear inherited conversation/worker identifiers so a trial cannot impersonate its parent.
 Use normal native permissions; no bypass flags or API credentials. Keep owned sessions
@@ -87,6 +88,15 @@ In a separate delivery variant, explicitly refuse native helper permission and v
 the terminal attempt is retained without another child retrying the refused operation.
 This refusal variant belongs in the nightly catalog; exercise it during permission
 repairs and report its cost separately. Preserve real Stop and revoked-attempt coverage.
+
+For Claude input-adapter repairs, extend that delivery variant by typing the actual
+Stop while a native worker launch or tool is active. Inspect whether the host delivered
+it as a human `queued_command` attachment; an ordinary idle-turn Stop does not prove
+this representation. Cancel and retain the owned child, then verify that the original
+delivered Stop records without a repeated question or replacement worker. Saved scope,
+spent reviews, attempts and existing edits must survive, with no subsequent implementation
+or publication. Keep the first failed observation if recovery is needed. This host-envelope
+variant belongs in the nightly catalog; ordinary pre-worker Stop remains in sanity.
 
 Use a unique base branch in a dedicated private fixture repository, set its name as
 the fixture project's configured base, and push only this trial's starting tree to it.
