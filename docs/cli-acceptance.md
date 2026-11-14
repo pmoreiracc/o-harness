@@ -70,6 +70,13 @@ Mac CLIs. Independent projects and hosts may run concurrently. During developmen
 choose the affected slices; add a focused real CLI regression for a change these do
 not exercise. After the single implementation review run every slice on the final candidate.
 
+While independent slices overlap, attend ready native questions and delivery/merge
+handoffs before analyzing completed logs, cleanup or unrelated host failures. Inspect
+the actual choice and effect, then send only the authorized answer. If terminal input
+fails, use the documented native reply fallback promptly rather than trying more
+keypresses. Keep every scenario, approval and failed first observation; these changes
+reduce operator delay, not coverage.
+
 | Slice | Action in the real host | Check the effect |
 | --- | --- | --- |
 | Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The prospective row validates before the first approval; one approval records the same semantic addition in M1, which validates and passes review. Syntax-only repair does not ask again; application files stay at baseline. |

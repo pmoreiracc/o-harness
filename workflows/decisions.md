@@ -54,7 +54,10 @@ for the changed boundary. Do not infer grants from a model's paraphrase of free 
 
 ## Delivery recovery
 
-Use `decision-request recover --run ID` for an unfinished delivery. Show its returned disclosure with the affected paths or their inspection link.
+Use `decision-request recover --run ID` for an unfinished delivery. Keep its complete
+output, including `options` and `actions`, in the native tool result; do not pipe or
+filter it. Bind Continue to that same decision's `resume` action. This does not require
+showing the raw output to the person. Show its returned disclosure with the affected paths or their inspection link.
 For multiple choices call Claude `AskUserQuestion` or Codex Default mode
 `functions.request_user_input_async` with all returned actions, including the explicit discard action when available. Use the returned `actions` map with `decision`;
 the existing `continue` action is a task-batch grant, not this recovery's Continue.
