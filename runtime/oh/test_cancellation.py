@@ -19,6 +19,49 @@ from .workflow import load_run
 
 
 class CancellationTest(NativeFixture, unittest.TestCase):
+    def test_delivered_claude_stop_preserves_work_and_is_replayable(self):
+        home=Path(self.temp.name)/'host'
+        path=home/'.claude/projects/p/s.jsonl';path.parent.mkdir(parents=True)
+        self.parent_path=path;path.write_text('',newline='\n')
+        prepared=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+        native.approve_scope(self.root,prepared['scope_id'],self.human(host='claude'))
+        admitted=native.admit(self.root,'assessment')
+        native.bind(self.root,admitted['id'],{'child_session':'worker'})
+        self.native_results[admitted['id']]={'status':'cancelled','text':''}
+        native.retain(self.root,admitted['id'],{})
+        stop_at=now()
+        unlaunched=native.admit(self.root,'assessment')
+        (self.root/'existing.txt').write_text('preserve me\n',newline='\n')
+        journal,before=load_run(self.root)
+        record={'type':'attachment','sessionId':'s','cwd':str(self.root),'timestamp':stop_at,
+                'attachment':{'type':'queued_command','prompt':'Stop','commandMode':'prompt',
+                              'origin':{'kind':'human'},'humanTurn':True,
+                              'source_uuid':'native-command','delivery_id':'native-delivery'}}
+        invalid=[record|{'type':'queue-operation','operation':'enqueue'},
+                 record|{'cwd':str(home/'other'),'attachment':record['attachment']|{'source_uuid':'foreign'}},
+                 record|{'attachment':record['attachment']|{'origin':{'kind':'task-notification'},'commandMode':'task-notification'}}]
+        for event in invalid:
+            with path.open('a',newline='\n') as stream:stream.write(json.dumps(event)+'\n')
+            cancellation.poll(self.root,attempt=unlaunched['id'])
+            self.assertIsNone(cancellation.interrupted(self.root,attempt=unlaunched['id']))
+        with path.open('a',newline='\n') as stream:stream.write(json.dumps(record)+'\n')
+        locator={'host':'claude','session':'s','transcript_path':str(path)}
+        with patch('pathlib.Path.home',return_value=home),patch.object(authority,'native_human',self.native_human_original), \
+                patch.object(authority,'native_child',side_effect=authority.Saving('No launch exists')):
+            native.decision(self.root,'stop',locator)
+            stopped=load_run(self.root)[1];records=journal.records()
+            native.decision(self.root,'stop',locator)
+            self.assertEqual(journal.records(),records)
+        self.assertEqual(stopped['status'],'stopped')
+        for key in ('scope_id','granted','review_grants','done','publication'):
+            self.assertEqual(stopped.get(key),before.get(key),key)
+        self.assertEqual(stopped['attempts'][:-1],before['attempts'][:-1])
+        last=stopped['attempts'][-1]
+        self.assertEqual((last['id'],last['outcome']),(unlaunched['id'],'cancelled'))
+        self.assertNotIn('native_child',last)
+        self.assertEqual((self.root/'existing.txt').read_text(),'preserve me\n')
+        with self.assertRaises(Refused):native.admit(self.root,'implementation')
+
     def test_presentation_prose_does_not_block_native_questions_on_either_host(self):
         from .decisions import prepare
         # A first-ever quick fix has no execution control file or run.

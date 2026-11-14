@@ -9,6 +9,58 @@ from .authority import Expired, attest
 from .storage import Refused
 
 class AuthorityTest(unittest.TestCase):
+    def test_claude_delivered_human_input_uses_native_command_identity(self):
+        from copy import deepcopy
+        from .authority import native_human, claude_history, prompted
+        from .storage import digest
+        with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home',return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            path=home/'.claude/projects/p/session.jsonl';path.parent.mkdir(parents=True)
+            earlier={'type':'user','sessionId':'session','promptId':'initial','cwd':str(root),
+                     'timestamp':'2026-11-11T12:00:00Z','message':{'role':'user','content':'Deliver'}}
+            delivered={'type':'attachment','sessionId':'session','cwd':str(root),
+                       'timestamp':'2026-11-11T12:00:01Z','attachment':{'type':'queued_command',
+                       'prompt':'Stop','commandMode':'prompt','origin':{'kind':'human'},'humanTurn':True,
+                       'source_uuid':'command','delivery_id':'delivery'}}
+            locator={'host':'claude','session':'session','transcript_path':str(path)}
+            def save(record):
+                path.write_text(''.join(json.dumps(r)+'\n' for r in (earlier,record)),newline='\n')
+            save(delivered)
+            self.assertTrue(prompted(delivered,'session'))
+            source=native_human(root,locator)
+            self.assertEqual((source['turn'],source['prompt']),('command','Stop'))
+            self.assertEqual(source['record_hashes'],[digest(delivered)])
+            self.assertEqual(native_human(root,locator|{'turn':'command'}),source)
+            with self.assertRaises(Expired):native_human(root,locator|{'turn':'initial','prompt':'Deliver'})
+            self.assertEqual(native_human(root,locator|{'turn':'initial','prompt':'Deliver'},latest=False)['turn'],'initial')
+            repeated=deepcopy(delivered)
+            repeated['attachment'].update(source_uuid='next-command',delivery_id='next-delivery')
+            repeated['timestamp']='2026-11-11T12:00:02Z'
+            with path.open('a',newline='\n') as stream:stream.write(json.dumps(repeated)+'\n')
+            self.assertEqual(native_human(root,locator)['turn'],'next-command')
+            with self.assertRaises(Expired):native_human(root,locator|{'turn':'command','prompt':'Stop'})
+            self.assertEqual(native_human(root,locator|{'turn':'command','prompt':'Stop'},latest=False)['record_hashes'],[digest(delivered)])
+            for label in ('enqueue','foreign session','sidechain','meta','peer','notification','not human','no command','no delivery','model'):
+                record=deepcopy(delivered)
+                if label=='enqueue':record.update(type='queue-operation',operation='enqueue')
+                elif label=='foreign session':record['sessionId']='other'
+                elif label=='sidechain':record['isSidechain']=True
+                elif label=='meta':record['isMeta']=True
+                elif label=='peer':record['attachment']['origin']={'kind':'peer'}
+                elif label=='notification':record['attachment']['commandMode']='task-notification'
+                elif label=='not human':record['attachment']['humanTurn']=False
+                elif label=='no command':record['attachment'].pop('source_uuid')
+                elif label=='no delivery':record['attachment'].pop('delivery_id')
+                elif label=='model':record['origin']={'kind':'model'}
+                with self.subTest(label=label):
+                    save(record)
+                    self.assertFalse(prompted(record,'session'))
+                    self.assertEqual(len(claude_history(path,'session')),1)
+                    self.assertEqual(native_human(root,locator)['turn'],'initial')
+                    with self.assertRaises(Refused):native_human(root,locator|{'prompt':'Stop'})
+            save(delivered|{'cwd':str(home/'other')})
+            with self.assertRaisesRegex(Refused,'checkout'):native_human(root,locator)
+
     def setUp(self):
         context=patch.dict(os.environ,{'CODEX_THREAD_ID':'','CODEX_SESSION_ID':'','OH_CODEX_TURN_ID':''})
         context.start();self.addCleanup(context.stop)
@@ -189,6 +241,12 @@ class AuthorityTest(unittest.TestCase):
             retry=cancelled|{'message':{'role':'user','content':'I authorize you to retry that exact scope approve command now.'}}
             with self.assertRaises(Refused):read(records+controls+[retry])
             with self.assertRaises(Refused):read(records+[cancelled])
+            delivered=base|{'type':'attachment','entrypoint':'cli','timestamp':cancelled['timestamp'],
+                'attachment':{'type':'queued_command','prompt':'Stop','commandMode':'prompt',
+                              'origin':{'kind':'human'},'humanTurn':True,
+                              'source_uuid':'cancel-command','delivery_id':'cancel-delivery'}}
+            with self.assertRaises(Refused):read(records+[delivered])
+            self.assertEqual(native_human(root,locator,since=since,latest=False),found)
             with self.assertRaises(Refused):recover()
             self.assertEqual(native_human(root,locator,since=since,latest=False),found)
             self.assertEqual(recover(latest=False)[0],found)

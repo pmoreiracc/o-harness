@@ -137,19 +137,36 @@ def expanded_skill(x):
     return Path(found[1].strip()).name if found else None
 
 
-def prompted(x,session):
-    """Whether a Claude record is something the person typed in this conversation: a prompt or a command, not a
-    tool result, a menu answer or a summary Claude wrote."""
+def claude_input(x,session):
+    """Normalize a delivered native human command, retaining its source identity.
+
+    Queue operations alone do not prove delivery. Keep the original record for
+    hashing; this view is shared by discovery, freshness and attestation.
+    """
+    if x.get('type')=='attachment':
+        attached=x.get('attachment')
+        if (not isinstance(attached,dict) or attached.get('type')!='queued_command'
+                or attached.get('commandMode')!='prompt' or attached.get('origin')!={'kind':'human'}
+                or attached.get('humanTurn') is not True or not human(x)
+                or not all(isinstance(attached.get(k),str) and attached[k] for k in ('source_uuid','delivery_id','prompt'))):
+            return None
+        x=x|{'type':'user','promptId':attached['source_uuid'],
+             'message':{'role':'user','content':attached['prompt']}}
     content=(x.get('message') or {}).get('content')
     # Native permission inspection is a local host control, not a replacement
     # task instruction. Claude also saves its local UI output in user rows.
     # Ordinary text (including a typed retry or cancellation) stays consequential.
     if isinstance(content,str) and (saved_command(content)==('permissions','') or
                                    re.fullmatch(r'<local-command-stdout>.*</local-command-stdout>',content.strip(),re.S)):
-        return False
+        return None
     typed=isinstance(content,str) or isinstance(content,list) and any(isinstance(c,dict) and c.get('type')!='tool_result' for c in content)
-    return (x.get('type')=='user' and x.get('sessionId')==session and bool(x.get('promptId')) and typed
-            and not x.get('isCompactSummary') and human(x))
+    if (x.get('type')=='user' and x.get('sessionId')==session and bool(x.get('promptId')) and typed
+            and not x.get('isCompactSummary') and human(x)):return x
+
+
+def prompted(x,session):
+    """A typed prompt or delivered command, excluding tools, menus and summaries."""
+    return claude_input(x,session) is not None
 
 
 def attest(host,payload,root=None,*,latest=True,retry_resume=False):
@@ -198,6 +215,8 @@ def _attest(host,payload,root=None,*,caller=True,latest=True,retry_resume=False)
                 if not line.endswith(b'\n'):raise Saving('Claude is still saving this conversation; retry the same OH operation.')
                 continue
             if not isinstance(x,dict):continue
+            original=x
+            x=claude_input(x,event['session']) or x
             if prompted(x,event['session']):
                 content=(x.get('message') or {}).get('content')
                 typed=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
@@ -215,7 +234,7 @@ def _attest(host,payload,root=None,*,caller=True,latest=True,retry_resume=False)
             text=message.get('content')
             if isinstance(text,list):text='\n'.join(c.get('text','') for c in text if c.get('type')=='text')
             if isinstance(text,str) and text.strip()==event['prompt']:
-                matches.append(digest(x))
+                matches.append(digest(original))
                 if x.get('timestamp'):times.append(x['timestamp'])
             elif host=='claude' and isinstance(text,str) and typed_command(event['prompt']) is not None and saved_command(text)==typed_command(event['prompt']):
                 tagged.append(x)
@@ -246,6 +265,7 @@ def claude_history(path,session):
                 if not line.endswith(b'\n'):raise Saving('Claude is still saving this conversation; retry the same OH operation.')
                 continue
             if not isinstance(record,dict) or not prompted(record,session):continue
+            record=claude_input(record,session)
             content=(record.get('message') or {}).get('content')
             text=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
             if tagged:=saved_command(text):text='/'+tagged[0]+(' '+tagged[1] if tagged[1] else '')
@@ -417,7 +437,7 @@ def native_human(root, locator, *, since=None, subject=None, latest=True, retry_
             if not call:
                 displays.clear();exchange_at=record.get('timestamp')
                 if not locator.get('decision'):offer=None
-            content=(record.get('message') or {}).get('content')
+            content=(claude_input(record,session).get('message') or {}).get('content')
             typed=content if isinstance(content,str) else '\n'.join(c.get('text','') for c in content if isinstance(c,dict) and c.get('type')=='text')
             inputs.append((record.get('timestamp'),typed))
             if answer and not (retry_resume and _resume_retry(typed)):superseded=True
