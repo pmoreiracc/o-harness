@@ -14,12 +14,15 @@ separate native subscription profiles. Public PR/fork code must never execute on
 the private runner. Public deterministic Linux/Windows nightly coverage is unchanged.
 
 The private [control PR and its resume runbook](https://github.com/pmoreiracc/oh-nightly/pull/1)
-records the verified local Windows Codex pilot and the pending infrastructure
-review, maintainer merge, manual dispatch and catalog prerequisites. Claude's
+records the verified local Windows Codex pilot, the completed infrastructure
+review and its reporting repair, plus the pending maintainer merge, manual dispatch
+and catalog prerequisites. Claude's
 allowance returned and the merged fixture memory fix was verified, but its
-dedicated-profile pilot is blocked by the native-history resolution defect
-tracked in [#198](https://github.com/pmoreiracc/o-harness/issues/198). No task grant
-or worker was created; the native refusal was preserved.
+original dedicated-profile pilot stopped at the native-history defect tracked in
+[#198](https://github.com/pmoreiracc/o-harness/issues/198), before any grant or worker.
+The separately authorized repair has local native proof; trusted-main qualification
+awaits its human merge. Assisted recovery and the separate design-progress defect
+in [#199](https://github.com/pmoreiracc/o-harness/issues/199) remain recorded.
 The local Codex pass does not substitute for a two-host Actions dispatch.
 
 The maintainer merges the private dispatch bootstrap before the first manual run;
