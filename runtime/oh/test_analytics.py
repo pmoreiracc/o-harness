@@ -31,6 +31,20 @@ class AnalyticsTest(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         env=patch.dict(os.environ,{'OH_DATA_HOME':self.tmp.name});env.start();self.addCleanup(env.stop)
 
+    def test_coordinator_transcript_registration_uses_the_selected_claude_profile(self):
+        from .transcripts import register
+        from .storage import Refused,digest,read_json
+        home=Path(self.tmp.name);profile=home/'separate profile'
+        path=profile/'projects/p/session.jsonl';path.parent.mkdir(parents=True)
+        path.write_text('{}\n',newline='\n')
+        with patch.dict(os.environ,{'CLAUDE_CONFIG_DIR':str(profile),'OH_CHILD_ATTEMPT':''}):
+            register(home,'claude',{'session_id':'session','transcript_path':str(path)},'run','project')
+            source=home/'sources'/(digest({'host':'claude','session':'session'})+'.json')
+            self.assertEqual(read_json(source)['path'],str(path.resolve()))
+            outside=home/'outside.jsonl';outside.write_text('{}\n',newline='\n')
+            with self.assertRaisesRegex(Refused,'Unexpected host transcript path'):
+                register(home,'claude',{'session_id':'other','transcript_path':str(outside)},'run','project')
+
     def test_unavailable_dashboard_analysis_never_launches_a_model_or_alters_saved_analytics(self):
         from types import SimpleNamespace
         from .server import Handler

@@ -9,6 +9,36 @@ from .authority import Expired, attest
 from .storage import Refused
 
 class AuthorityTest(unittest.TestCase):
+    def test_claude_selected_profile_binds_parent_child_and_human_history(self):
+        from .authority import native_human, owner_transcript, _path
+        with tempfile.TemporaryDirectory() as name, patch('pathlib.Path.home',return_value=Path(name)):
+            home=Path(name);root=home/'project';root.mkdir()
+            default=home/'.claude';selected=home/'separate profile'
+            record={'type':'user','sessionId':'session','promptId':'turn','cwd':str(root),
+                    'timestamp':'2026-11-14T12:00:00Z','message':{'role':'user','content':'Deliver'}}
+            for profile in (default,selected):
+                path=profile/'projects/p/session.jsonl';path.parent.mkdir(parents=True)
+                path.write_text(json.dumps(record)+'\n',newline='\n')
+                child=path.parent/'session/subagents/agent-child.jsonl';child.parent.mkdir(parents=True)
+                child.write_text('{}\n',newline='\n')
+            for setting,profile in (('',default),(str(selected),selected)):
+                with self.subTest(setting=setting),patch.dict(os.environ,{'CLAUDE_CONFIG_DIR':setting}):
+                    path=profile/'projects/p/session.jsonl'
+                    locator={'host':'claude','session':'session','turn':'turn','transcript_path':str(path)}
+                    self.assertEqual(native_human(root,locator)['prompt'],'Deliver')
+                    self.assertEqual(native_human(root,{'host':'claude','session':'session'})['turn'],'turn')
+                    self.assertEqual(owner_transcript(locator),path.resolve())
+                    self.assertEqual(owner_transcript({'session':'session'}),path.resolve())
+                    self.assertEqual(_path('claude','child',str(path.parent/'session/subagents/agent-child.jsonl'),child=True),
+                                     (path.parent/'session/subagents/agent-child.jsonl').resolve())
+                    with self.assertRaises(Refused):native_human(root,locator|{'turn':'invented','prompt':'Deliver'})
+                    other=(selected if profile==default else default)/'projects/p/session.jsonl'
+                    self.assertIsNone(owner_transcript(locator|{'transcript_path':str(other)}))
+                    with self.assertRaises(Refused):native_human(root,locator|{'transcript_path':str(other)})
+                    with self.assertRaises(Refused):_path('claude','session',str(other))
+            with patch.dict(os.environ,{'CLAUDE_CONFIG_DIR':str(home/'missing-profile')}):
+                with self.assertRaises(Refused):native_human(root,{'host':'claude','session':'session'})
+
     def test_claude_delivered_human_input_uses_native_command_identity(self):
         from copy import deepcopy
         from .authority import native_human, claude_history, prompted
