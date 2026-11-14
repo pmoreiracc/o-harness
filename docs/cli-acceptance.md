@@ -138,9 +138,14 @@ interruption and an extra task batch; Q covers selection, Stop and quick-fix ref
 The catalog also covers changes graduated from incident regressions. Record gaps and
 extend this catalog when adding a distinct workflow option.
 
-A local Codex project automation schedules the live catalog at 03:00 America/Sao_Paulo.
-It needs an awake authenticated Mac, both installed subscription CLIs, GitHub access
-to the dedicated private fixtures, and native hook review when definitions change.
+The local Codex project automation `oh-nightly-live-cli-regression` stays paused
+while [#194](https://github.com/pmoreiracc/o-harness/issues/194) prepares private
+Windows Actions on AI-Server. See [Windows live nightly setup](windows-live-nightly.md)
+for the bootstrap and acceptance boundary. The Windows control stays dispatch-only;
+enable its 03:00 America/Sao_Paulo schedule only after real manual dispatch proof
+and catalog qualification. Keep the Mac automation paused. Windows
+evidence does not establish macOS behavior; manual Mac acceptance still needs both
+authenticated CLIs, private fixture access and native hook review when definitions change.
 The separate GitHub Actions schedule covers deterministic Linux/Windows regression.
 Live runs test a clean isolated checkout of fetched main. Leave normal oh-dev and
 developer checkouts alone. If another trial owns the acceptance profile, report the
