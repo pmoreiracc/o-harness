@@ -72,7 +72,8 @@ def codex_history(path,session):
 
 def owner_transcript(human):
     """The saved transcript of the coordinating Claude conversation."""
-    allowed=(Path.home()/'.claude/projects').resolve()
+    from .hosts import transcript_home
+    allowed=transcript_home('claude')
     if human.get('transcript_path'):paths=[Path(human['transcript_path']).expanduser().resolve()]
     else:paths=[p.resolve() for p in allowed.glob('*/'+human['session']+'.jsonl')] if re.fullmatch(r'[a-zA-Z0-9_-]+',human['session']) else []
     if len(paths)!=1 or not paths[0].is_relative_to(allowed) or not paths[0].is_file():return None
@@ -178,8 +179,8 @@ def _attest(host,payload,root=None,*,caller=True,latest=True,retry_resume=False)
     event=human_event(payload,host)
     if caller and os.environ.get('CODEX_THREAD_ID') and (host!='codex' or event['session']!=os.environ['CODEX_THREAD_ID']):
         raise Refused('This command belongs to another conversation; continue it there.')
-    from .hosts import codex_home
-    allowed=(codex_home()/'sessions' if host=='codex' else Path.home()/'.claude/projects').resolve()
+    from .hosts import transcript_home
+    allowed=transcript_home(host)
     if payload.get('transcript_path'):
         paths=[Path(payload['transcript_path']).expanduser().resolve()]
     else:paths=list(allowed.rglob('*'+event['session']+'*.jsonl'))
@@ -280,8 +281,8 @@ def _claude_choice(record,session):
 
 
 def _path(host, session, supplied=None, child=False):
-    from .hosts import codex_home
-    home=(codex_home()/'sessions' if host=='codex' else Path.home()/'.claude/projects').resolve()
+    from .hosts import transcript_home
+    home=transcript_home(host)
     if host not in ('codex','claude') or not re.fullmatch(r'[A-Za-z0-9_-]+',session or ''):
         raise Refused('A native host and session identity are required')
     paths=[Path(supplied).expanduser().resolve()] if supplied else list(home.rglob('*'+session+'*.jsonl'))

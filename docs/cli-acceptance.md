@@ -102,6 +102,15 @@ Use a unique base branch in a dedicated private fixture repository, set its name
 the fixture project's configured base, and push only this trial's starting tree to it.
 Use `python3 check.py` for hosted sanity. For scenario C also require release readiness.
 After the run close the fixture PR unmerged and delete only its trial branches.
+
+For native profile-history repairs, also exercise the delivery slice with a
+separately signed-in Claude profile selected by
+[`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/settings). Verify the
+original native session and turn reach track selection, Stop, fresh-session
+Continue and reviewed completion, with child history in that profile and usage
+sourced from it. Never copy credentials or history into the default profile to make
+the test pass. This profile variant belongs in the nightly catalog; run it during
+profile repairs and report its measured cost separately from ordinary sanity.
 In sanity, Core has a second runnable task so all three checkpoint actions are available. The second track exists only to test selection; it
 is outside the chosen scope. Fault injection, additional batches and failed hosted CI
 belong to the longer catalog. Measure preparation, each slice, slowest host and overall

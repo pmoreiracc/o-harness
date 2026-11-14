@@ -335,6 +335,13 @@ def codex_home():
     return Path(os.environ['CODEX_HOME']).expanduser() if os.environ.get('CODEX_HOME') else Path.home()/'.codex'
 
 
+def transcript_home(host):
+    """History belongs to the selected native profile, never another profile's fallback."""
+    if host=='codex':return (codex_home()/'sessions').resolve()
+    home=Path(os.environ['CLAUDE_CONFIG_DIR']).expanduser() if os.environ.get('CLAUDE_CONFIG_DIR') else Path.home()/'.claude'
+    return (home/'projects').resolve()
+
+
 def failure_text(result):
     reasons=result.get('cancellation',[])
     reason=('Worker stopped by request.' if 'stopped' in reasons else
