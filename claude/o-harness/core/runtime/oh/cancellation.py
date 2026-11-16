@@ -176,6 +176,17 @@ def poll(root, *, attempt=None, state=None, owner=None):
         return _scan(owner, lambda turn, record: _record_stop(owner, turn, record))
 
 
+def _claude_stop(root, session, record):
+    """Only normalized native human input can revoke work with a typed Stop."""
+    from .authority import claude_input, within, action_matches
+    typed = claude_input(record, session)
+    if not typed or not within(typed.get('cwd'), root):return None
+    content = (typed.get('message') or {}).get('content')
+    text = content if isinstance(content, str) else '\n'.join(
+        c.get('text', '') for c in content if isinstance(c, dict) and c.get('type') == 'text')
+    if action_matches(text, 'Stop and take over', 'stop'):return typed
+
+
 def _scan(owner, stopped):
     """Read incremental native records; the caller chooses durable or local observation."""
     if not owner or not owner.get('transcript'):
@@ -832,6 +843,12 @@ def unlaunched_stop(root, attempt, stopped):
     from .authority import _records, _claude_interruption, newer
     stop_record = None
     for event in _records(owner['transcript']):
+        if owner['host'] == 'claude' and stopped.get('host', 'claude') == 'claude' and stopped.get('session') == owner['session']:
+            typed = _claude_stop(root, owner['session'], event)
+            # Delivery can lag admission while retaining the original input time.
+            # Only this already-attested answer may settle the unlaunched attempt.
+            if typed and typed['promptId'] == stopped['turn'] and newer(event.get('timestamp'), owner.get('since')):
+                stop_record = event
         if not newer(event.get('timestamp'), attempt['started_at']):
             continue
         if owner['host'] == 'codex':

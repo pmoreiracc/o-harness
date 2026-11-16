@@ -98,6 +98,12 @@ The native permission dialog and its local output do not change task scope. A ne
 ordinary chat message still supersedes an unbound acceptance, including a typed retry
 request. Do not promise that the old locator can grant authority after such a message;
 show the current exact preview and obtain its current native acceptance instead.
+When recording an accepted plan, ask the person to use the command-specific dialog
+while Claude is idle; do not add a request to type "approved" afterward. Closing that
+dialog with `Esc` after `r` lets idle Claude continue without a new chat message.
+If the host instead requires a new message, explain that the plan must be presented
+and accepted again before its scope can be bound; the retry permission alone cannot
+replace that acceptance.
 
 ## A native command has no reservation
 
