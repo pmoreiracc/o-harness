@@ -347,18 +347,40 @@ class ControlsTest(NativeFixture,unittest.TestCase):
         self.assertEqual(load_run(self.root)[1]['granted'],before['granted'])
 
     def test_pause_stop_and_continuation_preserve_the_pending_phase_and_decision(self):
+        from . import decisions
         self.approve();journal,before=load_run(self.root)
         publication={'choice':'pr','source':'original-publication','head':self.git('rev-parse','HEAD')}
+        # A prior version may already have lost the phase while retaining its grant.
+        stranded=before|{'status':'running','done':['1'],
+                         'summaries':[{'task':'1','commit':publication['head']}],
+                         'publication':publication}
+        for phase in ('running','checkpoint','completed'):
+            self.assertEqual(native._resumed_status(stranded|{'status':phase}),'pr')
+        self.assertNotEqual(native._resumed_status(stranded|{'publication':publication|{'head':'older-head'}}),'pr')
+        self.assertEqual(native._resumed_status(stranded|{'done':[]}),'running')
+        self.assertEqual(native._resumed_status(stranded|{'extra_review':{'task':'1'}}),'running')
+        self.assertEqual(native._resumed_status(stranded|{'correction':{'task':'1'}}),'running')
+        self.assertNotEqual(native._resumed_status(stranded|{'published':{'head':publication['head']}}),'pr')
         journal.append('decision',publication)
-        for phase in ('pr','prepared_checkpoint','approval_checkpoint'):
-            with self.subTest(phase=phase):
+        cases=[(host,True,'pr') for host in ('codex','claude')]
+        cases += [('codex',False,phase) for phase in ('pr','prepared_checkpoint','approval_checkpoint')]
+        for host, prepared, phase in cases:
+            with self.subTest(host=host,prepared=prepared,phase=phase):
                 journal.append('run.status',{'status':phase})
                 if phase!='pr':journal.append('refinement.requested',{'feedback':'Keep the pending human refinement.'})
                 native.decision(self.root,'pause',self.human('pause'))
                 native.decision(self.root,'stop',self.human('stop'))
                 native.saved_work(self.root);native.resume(self.root)
                 self.assertEqual(load_run(self.root)[1]['status'],'stopped')
-                native.resume(self.root,self.resume_choice(session='fresh-parent'))
+                if prepared:
+                    gate=decisions.prepare(self.root,'recover')
+                    answer=self.offered_answer(gate,'Continue',host=host,session='fresh-parent')
+                    native.decision(self.root,'resume',answer)
+                    records=journal.records()
+                    native.decision(self.root,'resume',answer)
+                    self.assertEqual(journal.records(),records)
+                else:
+                    native.resume(self.root,self.resume_choice(host=host,session='fresh-parent'))
                 state=load_run(self.root)[1]
                 self.assertEqual(state['status'],phase)
                 self.assertEqual(state['publication'],publication)

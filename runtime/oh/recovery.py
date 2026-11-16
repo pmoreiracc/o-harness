@@ -287,8 +287,11 @@ def apply(root, kind, locator, *, run=None):
                     'branch': git(root, 'branch', '--show-current'), 'base': git(root, 'rev-parse', 'HEAD'),
                     'restart': kind == 'restart', 'done': done, 'summaries': retained,
                     'granted': pending[:state['config']['tasks_per_batch']] if kind == 'restart' else granted}})
+            status = ('stopped' if kind == 'stop' else
+                      native._resumed_status(state|{'granted':granted},initial=bool(initial))
+                      if kind == 'resume' and not changed_base else 'running')
             events += [{'kind': 'run.owner', 'data': {'human': source}},
-                       {'kind': 'run.status', 'data': {'status': 'stopped' if kind == 'stop' else 'running'}},
+                       {'kind': 'run.status', 'data': {'status': status}},
                        {'kind': 'decision', 'data': {'choice': kind, 'source': key, 'recovery': locator['decision'],
                                                     **({'target_only': True} if keep_other else {})}}]
             native._immutable(journal.path/'decisions'/(key+'.json'), {'human': source, 'prepared': prepared,'locator':locator})
