@@ -490,6 +490,23 @@ def _resume_offer(root,state):
     return select(root,state['id'])|{'resume_required':True,'next':'Read workflows/recovery.md and workflows/decisions.md, then prepare decision-request '+kind+' --run '+state['id']+' before asking. Show its returned question once and preserve that answer through recovery; bind the selected action.'}
 
 
+def _resumed_status(state, *, initial=False):
+    """Continue the pending phase without granting tasks or publication again."""
+    status=state['status']
+    if status=='completed' and state['workflow']=='review' and not _finished(state):status='running'
+    if status in ('paused','stopped','pausing'):
+        status=state.get('control_return_status') or state.get('pause_return_status') or 'running'
+    publication=state.get('publication') or {}
+    summaries=state.get('summaries') or []
+    publishing=(publication.get('head') and summaries and
+                publication['head']==summaries[-1].get('commit') and not state.get('published'))
+    if (status in ('running','needs_attention') or (initial and status=='checkpoint') or
+            status in ('checkpoint','completed') and publishing):
+        pending=next_task(state|{'status':'running'})
+        status='running' if pending else 'pr' if publishing else 'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint'
+    return status
+
+
 def _same_review_subject(selected,state):
     prior=state.get('standalone_subject',{})
     return all(selected[k]==prior.get(k) for k in
@@ -1702,13 +1719,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                 add('grant',initial)
                 state=state|{'granted':initial['tasks']}
             add('run.owner',{'human':source})
-            status=state['status']
-            if status=='completed' and state['workflow']=='review' and not _finished(state):status='running'
-            if status in ('paused','stopped','pausing'):
-                status=state.get('control_return_status') or state.get('pause_return_status') or 'running'
-            if status in ('running','needs_attention') or (initial and status=='checkpoint'):
-                status='running' if next_task(state|{'status':'running'}) else 'completed' if len(state['done'])==len(state['tasks']) else 'checkpoint'
-            add('run.status',{'status':status})
+            add('run.status',{'status':_resumed_status(state,initial=bool(initial))})
         if kind!='publish':
             effect={'choice':kind,'source':key,'head':subject['head'],'scope':state.get('scope_id'),'attempt':attempt}
             if kind=='stop':
