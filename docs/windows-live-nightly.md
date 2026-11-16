@@ -3,8 +3,10 @@
 [Issue #194](https://github.com/pmoreiracc/o-harness/issues/194) moves scheduled real
 CLI regression to AI-Server using the private
 [OH nightly control repository](https://github.com/pmoreiracc/oh-nightly). Its
-dispatch-only bootstrap is merged. The first manual Actions pilot ran and failed
-qualification; live acceptance remains pending and scheduling stays disabled.
+dispatch-only workflow is merged. Two manual pilots and one catalog dispatch
+have run on Windows. The catalog recorded four passing and four failing main
+cases, plus passing external-merge journeys on both native CLIs. The catalog is
+not green; scheduling stays disabled.
 
 The control repository owns the workflow, standard repository-scoped self-hosted
 Windows runner, native operator instructions, report boundary and Windows setup
@@ -13,23 +15,32 @@ guide. Keep that runner off public OH Actions. It tests only fetched merged OH
 separate native subscription profiles. Public PR/fork code must never execute on
 the private runner. Public deterministic Linux/Windows nightly coverage is unchanged.
 
-The private [dispatch evidence and operator corrections](https://github.com/pmoreiracc/oh-nightly/pull/6)
-retain the failed first outcomes, inspected effects, cleanup limits and ordered
-resume steps. The separately authorized [#198 repair](https://github.com/pmoreiracc/o-harness/issues/198)
+The private [dispatch evidence](https://github.com/pmoreiracc/oh-nightly/blob/main/DISPATCH-PROOF.md)
+and [catalog run](https://github.com/pmoreiracc/oh-nightly/actions/runs/43724928472)
+retain failed first outcomes, inspected effects and cleanup limits. The separately
+authorized [#198 repair](https://github.com/pmoreiracc/o-harness/issues/198)
 is merged, and the Actions pilot used trusted main containing it and the Mac
-agent's merged #191/#193 fixes. Passing two-host pilot and catalog qualification
-remain pending. The completed infrastructure review predates the subsequent
+agent's merged #191/#193 fixes. The second pilot reached reviewed completion and
+checkpoint Stop on both hosts, while retaining a Codex operator failure. The
+catalog also retains operator and product failures despite successful later
+recovery. Supplementary native variants are recorded separately at the
+maintainer's request; their results must not rewrite the Actions artifact.
+These follow-ups retain refused stale discard, actual disclosed restart,
+reviewed completion, presentation and interruption evidence, along with native
+permission failures and conditional paths whose prerequisites did not occur.
+They do not establish a green catalog or authorize shared-runtime repairs.
+The completed infrastructure review predates the subsequent
 reporting and operator-guidance corrections; those changes were not independently
 re-reviewed. The separate design-progress defect in
 [#199](https://github.com/pmoreiracc/o-harness/issues/199) remains recorded.
 
-The maintainer merges supporting operator corrections before another manual run.
-First prove one installed-skill
-delivery on Windows Codex and Claude, including actual decisions, checks, fresh
-consumer review, completion and cleanup. Fetch the Mac agent's merged #191/#193
-fixes before the one explicit P/D/Q/C catalog qualification. Keep failed first
-outcomes and unexercised dependent paths visible. Infrastructure work does not
-authorize runtime repairs or repeated product tests until green.
+The setup correction was human-merged before the second pilot and catalog.
+The trusted catalog source included the merged #191/#193 fixes. The private
+result report separates actual decisions, checks and effects from assisted
+recovery, failed setup and unavailable prerequisites. Retain unresolved failed
+evidence privately and remove only finished task-owned resources. Keep failed
+first outcomes and unexercised dependent paths visible. Infrastructure work does
+not authorize runtime repairs or repeated product tests until green.
 
 Keep scheduling disabled under the current maintainer instruction. Any future
 03:00 `America/Sao_Paulo` schedule requires a new maintainer request, completed
