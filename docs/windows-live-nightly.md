@@ -5,8 +5,8 @@ CLI regression to AI-Server using the private
 [OH nightly control repository](https://github.com/pmoreiracc/oh-nightly). Its
 dispatch-only workflow is merged. Two manual pilots and one catalog dispatch
 have run on Windows. The catalog recorded four passing and four failing main
-cases, plus passing external-merge journeys on both native CLIs. Qualification
-remains incomplete; scheduling stays disabled.
+cases, plus passing external-merge journeys on both native CLIs. The catalog is
+not green; scheduling stays disabled.
 
 The control repository owns the workflow, standard repository-scoped self-hosted
 Windows runner, native operator instructions, report boundary and Windows setup
