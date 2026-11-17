@@ -71,9 +71,9 @@ Interpret the requested work as follows:
 Read `workflows/decisions.md` before presenting scope. For a quick fix, use Claude's
 native plan viewer **Accept** or Codex Plan mode's native **Implement** when that plan
 surface is available. Show the complete unchanged scope preview there and bind the
-actual acceptance with `scope approve`. For a menu or chat reply, explain the bounded change, post the supplied Markdown scope link once in chat, then present its short question and choices. In Codex Default mode,
-call `functions.request_user_input_async` with the returned `approval` question and
-choices. Retain its decision identity and use the shared direct-reply fallback. An initiating
+actual acceptance with `scope approve`. For a menu or chat reply, present the scope and its returned
+`approval` choices using **Show the decision material** in `workflows/decisions.md`.
+Retain the same decision identity. An initiating
 human locator identifies the request and does not replace this scope acceptance.
 For quick-fix menus, the returned **Approve fix** action accepts the shown scope; **Stop and take over**
 records the refusal and ends the handoff. Bind approval with `scope approve`; bind refusal with `decision stop` using the original scope decision ID and no run argument.
@@ -131,9 +131,7 @@ When a specific supporting repair genuinely needs additional authority, explain 
 evidence, bounded change and why approval is needed. Prepare `decision-request approve-repair
 --repair "<change, reason and limits>"` (MCP `decision_request`, kind `approve-repair`,
 `repair` text). Present its returned **Approve repair and continue / Stop and take over** choices
-with Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`.
-Bind the returned action with `decision`, following
-`workflows/decisions.md`. Retain an active worker before presenting the decision.
+with the repair contents using `workflows/decisions.md`. Bind the returned action with `decision`. Retain an active worker before presenting the decision.
 
 After approval, admit a fresh implementation agent and continue the same task through
 required checks, fresh review and completion. The original design, task list, dependencies

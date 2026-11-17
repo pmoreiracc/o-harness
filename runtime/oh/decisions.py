@@ -4,6 +4,10 @@ from .storage import Refused, digest, now, read_json
 from .workflow import load_run, next_task, review_limit
 
 TAKE_OVER = 'Stop and take over'
+SHOW_MATERIAL = ('Codex Desktop: open the readable file on the right and show the question in chat. '
+                 'Without a panel, include the exact decision contents in the question itself. '
+                 'For a long preview, put the full contents and choices together in ordinary chat and wait for the reply. '
+                 'Use workflows/decisions.md.')
 
 
 def boundary(root,state,kind,attempt=None):
@@ -205,18 +209,29 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         if kind in ('approve-private','approve-proposal','accept-concerns'):
             from .system import Path
             evidence=_attempt(state,attempt)
-            artifact=Path(evidence['evidence'])/'result.json'
             if kind=='approve-private':
-                folder=Path(state.get('plans',{}).get('designs',''))
-                artifact=next((Path(name) for name in evidence.get('artifacts',{}) if Path(name).parent==folder),artifact)
-            value['disclosure']+='\n[View the reviewed work](<'+artifact.as_posix()+'>)'
+                from .native import _private_design
+                _,_,artifact=_private_design(root,state)
+                if evidence.get('artifacts')!=value['boundary']['artifacts']:
+                    raise Refused('The private planning documents changed after review. Review the current contents before presenting them for approval.')
+            else:
+                artifact=Path(evidence['evidence'])/('report.md' if kind=='approve-proposal' else 'review.md')
+            if artifact.is_file():
+                value['disclosure']+='\n[View the reviewed work](<'+artifact.as_posix()+'>)'
         if 'stop' in actions.values():value['stop_boundary']=stop_boundary(root,journal,state)
+        presentation=''
+        if kind=='approve-private':
+            presentation=('Open the reviewed design in the Codex Desktop right panel alongside the question. '
+                          'Without a panel, paste the entire design and the choices in one ordinary chat message, '
+                          'then wait for the direct reply. ')
+        elif kind in ('approve-proposal','approve-repair','accept-concerns'):
+            presentation=SHOW_MATERIAL+' '
         key=save_offer(root,value,details=compact_details if kind=='approve-repair' else None,
                        details_title='View the proposed repair')
         return {'decision':key,'question':value['question'],'options':options,
                 **({'disclosure':value['disclosure']} if 'disclosure' in value else {}),
                 **({'actions':actions} if actions else {}),
-                'human_locator':'Keep decision internal. Explain the action and share any supplied Markdown review link in a separate chat message before asking. Keep file paths and IDs out of the native menu. Bind the actual answer.'}
+                'human_locator':presentation+'Keep decision internal. Explain the action and bind the actual answer.'}
 
 
 def state_head(root):
@@ -432,8 +447,10 @@ def scope_request(root,scope):
     value['disclosure']+='\n[View the prepared scope](<'+preview.as_posix()+'>)'
     key=save_offer(root,value)
     return {'decision':key,'disclosure':value['disclosure'],'question':value['question'],'options':options,
-            'present':'Explain the bounded change in your own words. Put [View the prepared scope](...) in a separate chat message before asking. Keep file paths and IDs out of the native menu. Show the actions and wait.',
-            'bind':'For approval use scope approve (scope_approve). For refusal use decision stop with this decision ID and no run argument.',
+            'present':("On Claude use EnterPlanMode and ExitPlanMode for the person's single acceptance of the exact scope. "
+                       "On Codex in Plan mode use the proposed plan. For other surfaces: "+SHOW_MATERIAL),
+            'bind':('For native plan acceptance, use scope approve with the conversation locator and omit the menu decision ID. '
+                    'For a menu or chat answer, use this decision ID with scope approve or decision stop (no run argument).'),
             'actions':{label:'approve-scope',TAKE_OVER:'stop'}}
 
 
