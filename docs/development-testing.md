@@ -141,3 +141,6 @@ task's disposable repositories, sessions, state and temporary credentials. Retai
 only a concise sanitized report (source/snapshot, hosts, scenarios, outcomes, duration,
 usage if known and limitations). Failed evidence is removed after diagnosis, not hidden.
 Normal host configuration, active snapshots and unrelated projects/drafts are preserved.
+After testing and diagnosis, delete GitHub repositories created solely for the task.
+Preserve shared regression repositories and infrastructure; within them, clean only
+the trial's own branches and PRs.

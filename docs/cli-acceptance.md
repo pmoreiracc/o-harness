@@ -309,4 +309,7 @@ dedicated acceptance home for this trial's saved conversations, including child 
 Retain the acceptance profile and its subscription login for the next trial. Remove only this trial's
 host project history if it was stored outside the isolated root, using native controls.
 Keep a concise sanitized result report outside the temporary root before deleting it.
+After testing and diagnosis, delete GitHub repositories created solely for the task.
+Preserve shared regression repositories and infrastructure; within them, clean only
+the trial's own branches and PRs.
 No wildcard cleanup of other OH projects, normal settings, drafts or active snapshots.
