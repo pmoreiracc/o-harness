@@ -219,13 +219,19 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
             if artifact.is_file():
                 value['disclosure']+='\n[View the reviewed work](<'+artifact.as_posix()+'>)'
         if 'stop' in actions.values():value['stop_boundary']=stop_boundary(root,journal,state)
+        presentation=''
+        if kind=='approve-private':
+            presentation=('Open the reviewed design in the Codex Desktop right panel alongside the question. '
+                          'Without a panel, paste the entire design and the choices in one ordinary chat message, '
+                          'then wait for the direct reply. ')
+        elif kind in ('approve-proposal','approve-repair','accept-concerns'):
+            presentation=SHOW_MATERIAL+' '
         key=save_offer(root,value,details=compact_details if kind=='approve-repair' else None,
                        details_title='View the proposed repair')
         return {'decision':key,'question':value['question'],'options':options,
                 **({'disclosure':value['disclosure']} if 'disclosure' in value else {}),
                 **({'actions':actions} if actions else {}),
-                'human_locator':(SHOW_MATERIAL+' ' if kind in ('approve-private','approve-proposal','approve-repair','accept-concerns') else '')+
-                                'Keep decision internal. Explain the action and bind the actual answer.'}
+                'human_locator':presentation+'Keep decision internal. Explain the action and bind the actual answer.'}
 
 
 def state_head(root):

@@ -57,7 +57,8 @@ Use the prepared scope for a quick fix (including review and PR repairs), the ex
 additions and destinations for a proposal, the reviewed document and accompanying
 changes for a private design, the current review's findings for Accept/Fix concerns,
 or the proposed repair for an unfinished task. For recovery, show short path lists
-inline and use the supplied inspection file for a longer list. Use the current
+inline. For a longer list, keep the supplied inspection link in chat even when
+the file opens in the panel or you also show its paths inline. Use the current
 material again after a revision or when returning to a pending decision.
 
 For a Claude quick fix, open the native plan viewer yourself using `EnterPlanMode`
@@ -71,7 +72,11 @@ link and explain the choice in chat, then post the existing question while the f
 is open. A queued open can accompany the menu immediately. Neither the panel request
 nor menu submission establishes visibility or approval.
 
-Without a working panel, put the exact material in the question itself if it fits
+For private Design without a working panel, send the entire reviewed design and
+any accompanying changes in ordinary chat. End that message with the prepared choices
+and wait for the direct reply. A design summary in a menu omits the approved text.
+
+For other decisions without a working panel, put the exact material in the question itself if it fits
 readably. For a proposal this includes the actual rows or replacement text and
 destinations. For a longer document, show its full decision contents and the
 prepared question together in ordinary chat, then wait for a direct reply. Use

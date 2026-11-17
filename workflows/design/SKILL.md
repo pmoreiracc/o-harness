@@ -66,8 +66,9 @@ question names the decision required and its effect instead of silently choosing
 
 Repository designs need human merge of the reviewed design PR to become approved.
 Private designs need native acceptance of their reviewed contents: prepare
-`decision-request approve-private --attempt ID`, then present the design and its choices using
-**Show the decision material** in `workflows/decisions.md`. Bind acceptance with `decision approve-private`.
+`decision-request approve-private --attempt ID`, then open the reviewed design alongside its question in Codex
+Desktop. Without a viewer, paste the full design followed by its choices into one ordinary
+chat message and wait for the reply, following `workflows/decisions.md`. Bind acceptance with `decision approve-private`.
 Refinement returns to scoped authoring, document checks and a fresh review. Accepting
 a proposed decision document does not decide its underlying product question.
 
