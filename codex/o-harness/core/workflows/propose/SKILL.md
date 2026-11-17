@@ -39,9 +39,9 @@ with the actual recommendation/question; no unnecessary document or review is re
 ## 3. Approve the actual additions
 
 Before additions are written, prepare `decision-request approve-proposal --attempt ID`
-for the retained analysis. Summarize the proposed changes and post the supplied Markdown review link in chat before opening the menu. Then call Claude `AskUserQuestion` or Codex Default mode
-`functions.request_user_input_async` with its approve/refine/cancel choices using
-`workflows/decisions.md`. Bind approval of the latest analysis report with `decision
+for the retained analysis. Present the exact proposed rows or replacement text and
+destinations with the approve/refine/cancel choice using **Show the decision material**
+in `workflows/decisions.md`. Bind approval of the latest analysis report with `decision
 approve-proposal` and its actual native human locator. Refinement revises the unapproved
 proposal; neither permission to analyze nor an author report approves the additions.
 
