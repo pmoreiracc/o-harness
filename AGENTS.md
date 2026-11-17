@@ -131,6 +131,9 @@ After acceptance, stop task-owned test processes and remove disposable projects,
 worktrees, isolated profiles, test state and temporary credentials. Close test PRs without
 merging. Retain only a concise sanitized result report; preserve failed evidence until
 diagnosis is complete. Never remove unrelated drafts or an active development snapshot.
+After testing and diagnosis, delete GitHub repositories created solely for the task.
+Preserve shared regression repositories and infrastructure; within them, clean only
+the trial's own branches and PRs.
 
 Keep tests fast while preserving behavioral coverage; use measured durations to find waste.
 Avoid runtime regressions. There is no fixed test time limit.
