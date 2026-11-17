@@ -85,9 +85,10 @@ individual task. An empty ready list does not resume unrelated old work.
 
 For a quick fix, such as `oh-deliver fix the sign-in timeout`, OH prepares a bounded
 ordered task list and shows its task and review limits. In Claude, the native plan
-viewer's **Accept** is the single scope approval. Codex uses its available native
-question surface. When that surface is unavailable, read the complete preview and
-reply directly in chat. Refine the proposal before approving if it includes too much
+viewer's **Accept** is the single scope approval. In Codex Plan mode, accept the
+proposed plan. In Codex Desktop Default mode, OH requests the scope in the right
+panel alongside the chat question. Where a file viewer is unavailable, OH shows
+the scope in chat. Refine the proposal before approving if it includes too much
 or omits work. Rejecting or cancelling grants nothing.
 
 The scope includes any original manual edits or unreviewed commits that will be

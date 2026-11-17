@@ -100,6 +100,9 @@ class PlanningTest(NativeFixture,unittest.TestCase):
 
     def test_private_existing_draft_can_be_accepted_without_unrelated_rewrites(self):
         def existing():
+            plans.add_initiative(self.root,self.where,'M1','search','Search notes',[])
+            other,_=plans.write_design(self.root,self.where,'search','Search',BODY,'draft')
+            plans.claim(self.root,self.where,'search',other)
             number,path=plans.write_design(self.root,self.where,'auth','Sign-in',BODY,'draft')
             plans.claim(self.root,self.where,'auth',number);self.document=Path(path)
         self.planning('design','private',request='/oh-design auth',before=existing)
@@ -107,19 +110,25 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         self.finish_attempt('analysis',{'summary':'Preserved the existing design.'})
         review=self.reviewed()
         self.assertEqual(self.document.read_text(),original.replace('status: draft','status: approved'))
-        native.decision(self.root,'approve-private',self.human('approve'),attempt=review['id'])
+        from . import decisions
+        gate=decisions.prepare(self.root,'approve-private',attempt=review['id'])
+        self.assertIn(f'(<{self.document.as_posix()}>)',gate['disclosure'])
+        native.decision(self.root,'approve-private',self.offered_answer(gate,gate['options'][0]),attempt=review['id'])
         accepted=self.document.read_bytes()
         native.complete(self.root,review['id'])
         self.assertEqual(self.document.read_bytes(),accepted)
-        self.assertEqual(plans.approval(self.root,self.where,'0001'),'approved')
+        self.assertEqual(plans.approval(self.root,self.where,'0002'),'approved')
         from .delivery import selection
-        self.assertTrue(selection(self.root,'0001',claim=False)[0]['tasks'])
+        self.assertTrue(selection(self.root,'0002',claim=False)[0]['tasks'])
 
     def test_proposal_approval_does_not_replace_review_or_grant_product_implementation(self):
         self.planning('propose','repo')
         author=self.finish_attempt('analysis',{'summary':'Propose a search initiative in the first milestone.'})
         from . import decisions
         gate=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        preview=Path(author['evidence'])/'report.md'
+        self.assertIn(f'(<{preview.as_posix()}>)',gate['disclosure'])
+        self.assertIn('Propose a search initiative',preview.read_text(encoding='utf-8'))
         answer=self.offered_answer(gate,'Apply proposal')
         answer.update(question='Apply the sign-in proposal to M1?',question_options=['Cancel','Apply proposal'])
         # The first real answer can recover its own native preparation without

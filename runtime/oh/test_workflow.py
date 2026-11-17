@@ -1498,6 +1498,9 @@ class NativeWorkflowTest(NativeFixture):
         from .decisions import prepare as decision_request
         from .storage import now
         offer=decision_request(self.root,'accept-concerns',attempt=review['id'])
+        preview=Path(review['evidence'])/'review.md'
+        self.assertIn(f'(<{preview.as_posix()}>)',offer['disclosure'])
+        self.assertIn(concern['description'],preview.read_text(encoding='utf-8'))
         self.assertEqual(offer['options'],['Accept concerns · '+self.tasks[0]['title'],'Fix concerns'])
         before=load_run(self.root)[1]
         for answer in ('Fix concerns','Not now'):

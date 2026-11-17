@@ -54,7 +54,7 @@ def _private_restart(root, state, base):
 
 def prepare(root, state, entry_request=None, *, stop_boundary):
     from . import native
-    from .decisions import boundary, save_offer, TAKE_OVER
+    from .decisions import SHOW_MATERIAL, boundary, save_offer, TAKE_OVER
     from .branches import contained, fetch_base, trunk
     if state['workflow'] != 'deliver' or state.get('published'):
         raise Refused('This recovery gate is for unpublished delivery; use the saved planning or publication step')
@@ -126,7 +126,7 @@ def prepare(root, state, entry_request=None, *, stop_boundary):
     return {'decision': key, 'question': value['question'], 'disclosure': value['disclosure'], 'options': value['menu_options'],
             'base_observation':observed,
             'actions': {label: action for action, label in choices.items()},
-            'human_locator': 'Explain the consequences in the menu. Keep decision internal and bind the actual selection with it.'}
+            'human_locator': (SHOW_MATERIAL+' ' if value.get('details_file') else '')+'Explain the consequences in the menu. Keep decision internal and bind the actual selection with it.'}
 
 
 def _settle(root, journal, state, source):

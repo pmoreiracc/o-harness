@@ -27,8 +27,7 @@ For Codex menus with string options, include essential context in the question.
 A person reading just the menu should understand the decision. Never show an
 internal decision ID or fingerprint. Leave lists and supporting detail in chat or
 the supplied details link. For destructive restart, show the branch, restart
-base and discarded paths or their link before asking. For a reviewed proposal,
-plan, scope or repair, show the actual material to be approved. Put the supplied Markdown preview or review link in a short chat message before opening the menu. Use its readable link title. A named design or proposal action identifies the reviewed subject without requiring a link in the menu. Native menu titles and descriptions are plain text: keep raw URLs, absolute paths and internal IDs out of them. If the work changes during discussion, prepare the revised choice before asking.
+base and discarded paths or their link before asking. For decisions about a document or a list of affected paths, follow **Show the decision material** below. Native menu titles and descriptions are plain text: keep raw URLs, absolute paths and internal IDs out of them. If the work changes during discussion, prepare the revised choice before asking.
 Use the actual preparation result in this conversation before asking.
 When handling a pending offer from an older installed version, preserve its
 original binding and never silently replace a valid answer.
@@ -51,6 +50,35 @@ continue the authorized work until its next real decision or completion. An actu
 Stop or explicit permission refusal remains terminal.
 If the person changes the requested scope/count, prepare that actual effect and ask only
 for the changed boundary. Do not infer grants from a model's paraphrase of free text.
+
+## Show the decision material
+
+Use the prepared scope for a quick fix (including review and PR repairs), the exact
+additions and destinations for a proposal, the reviewed document and accompanying
+changes for a private design, the current review's findings for Accept/Fix concerns,
+or the proposed repair for an unfinished task. For recovery, show short path lists
+inline and use the supplied inspection file for a longer list. Use the current
+material again after a revision or when returning to a pending decision.
+
+For a Claude quick fix, open the native plan viewer yourself using `EnterPlanMode`
+and `ExitPlanMode` as described below. Look up those host tools if deferred. In
+Codex Plan mode use the native proposed plan. The plan's acceptance is the one decision.
+
+For the ordinary question in Codex Desktop, use `open_in_codex` when available to
+open the supplied readable file on the right in the current chat. For a decision
+with a short inline disclosure and no file, present that disclosure directly. Share its readable
+link and explain the choice in chat, then post the existing question while the file
+is open. A queued open can accompany the menu immediately. Neither the panel request
+nor menu submission establishes visibility or approval.
+
+Without a working panel, put the exact material in the question itself if it fits
+readably. For a proposal this includes the actual rows or replacement text and
+destinations. For a longer document, show its full decision contents and the
+prepared question together in ordinary chat, then wait for a direct reply. Use
+this fallback on either host if the person reports a missing preview or a report
+omits part of the decision. Read the original contents and include any material
+outside the main document. Ordinary selectors, allowances and publication
+checkpoints use their existing short disclosures.
 
 ## Delivery recovery
 
@@ -115,7 +143,7 @@ it is actually needed. Defer finding-disposition questions until the current rev
 and approved repairs are retained, rather than asking while that work is in progress.
 
 State the question and short choices in ordinary chat before posting its native menu,
-including the actual artifact preview when approving contents. Say the person can also reply
+alongside the decision material when approving contents. Say the person can also reply
 in chat. These are two presentations of one decision, never two approvals. Submission
 success establishes no menu visibility. If the person reports a missing menu, use the
 readable chat question and their direct reply; do not just repost a popup or keep
@@ -156,8 +184,7 @@ continues to bind the actual full plan directly, without an extra decision reque
 Native Pause/Stop commands remain immediately usable. Older already-presented canonical
 choices remain readable for recovery; do not build new wording around that compatibility.
 Routine clarification, issue tracking and follow-up bookkeeping need no durable grant.
-For concern-only reviews, call Claude `AskUserQuestion` or Codex Default mode
-`functions.request_user_input_async` with the returned subject-specific **Accept concerns / Fix concerns** choices. Fix concerns continues the existing scoped repair, verification and fresh-review
+For concern-only reviews, present the review findings with the returned subject-specific **Accept concerns / Fix concerns** choices. Fix concerns continues the existing scoped repair, verification and fresh-review
 path within the remaining allowance; it does not accept the findings or renew that allowance.
 Do not submit that choice as `accept-concerns`. A dismissal or a legacy Not now answer
 alone does not request repairs; follow the person's actual choice without inventing one.
@@ -172,7 +199,8 @@ heading, scope identity, instructions or limits, or append workflow commentary. 
 execution in chat.
 Then call `ExitPlanMode` without an
 extra `AskUserQuestion`. Bind that actual acceptance with `scope approve` using the same
-conversation locator; OH resolves the saved plan acceptance. If supplying `tool_use_id`,
+conversation locator, omitting the menu’s `decision` field so OH can resolve the saved
+plan acceptance. If supplying `tool_use_id`,
 use the `ExitPlanMode` call ID, not a human turn or result UUID. This display
 copy is not a consumer design. If the native host denies the binding command after
 acceptance, follow the command-specific permission recovery in `workflows/recovery.md`;
@@ -190,10 +218,5 @@ than the host option that clears context, since approval needs the original prev
 In Codex Default mode, use `functions.request_user_input_async` for the prepared scope
 question or use the shared direct-reply path. Never ask twice for one approval.
 
-For documents, show the actual complete artifact or preview before its bound question.
-Use readable artifact names and explain their relevant scope; internal result.json paths
-are not part of the person's approval vocabulary.
-Native file display is optional; a failed display falls back to readable chat and a direct
-reply. Do not ask someone to create a project or restart their session just to read it.
 Repository design approval is human merge; private approval is bound to reviewed contents.
 
