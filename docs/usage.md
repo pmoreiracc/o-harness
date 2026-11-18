@@ -234,8 +234,8 @@ restart task batch. Review usage and findings are retained. Deleted chat transcr
 do not require reconstructing the chat: after verified execution cleanup, missing
 results can be recorded as abandoned and the required work repeated.
 
-`oh-resume` uses that delivery gate, or the ordinary Resume question for planning
-and review. After your answer and once native work
+`oh-resume` uses that gate when delivery needs recovery and the ordinary Resume
+question for planning and review. After your answer and once native work
 is quiet, it continues the saved task or decision with its
 original scope, settings, findings and remaining allowances. A new session or host
 can continue even while the old conversation remains open; no prior Pause or Stop

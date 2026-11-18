@@ -116,7 +116,8 @@ def prepare(codex_model, claude_model, suite):
                                        'then end the turn before admitting any worker, without preparing or asking a Stop question. '
                                        'At this pause answer status questions without advancing. If the operator sends Stop, bind it immediately '
                                        'without another question. If they clearly request continuation, follow the installed workflow for '
-                                       'the current conversation and saved phase. Only the first selection pauses before workers.\n')
+                                       'the current conversation and saved phase. Once continuation is authorized, follow the returned phase '
+                                       'in that turn through the approved task without waiting for another operator message.\n')
                 elif scenario == 'delivery':
                     instructions.write('\nAcceptance coordinator: in the FIRST implementation admission only, '
                         'ask the child to attempt reading missing-trial.txt, then return unfinished without edits '

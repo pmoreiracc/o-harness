@@ -60,8 +60,9 @@ Interpret the requested work as follows:
   answer on a preview that cannot enter delivery. Difficulty and model selection stay
   outside that manifest.
 - Existing work: read its saved phase with `resume` and follow the current-owner
-  or recovery path in `workflows/recovery.md`. A complete saved batch proceeds to its
-  pending decision or publication step.
+  or recovery path in `workflows/recovery.md`. Preserve the retained scope and
+  remaining allowance. Never convert a preparation ID or agent text into human
+  approval. A complete saved batch proceeds to its pending decision or publication step.
 
 ## 2. Bind the required scope approval
 

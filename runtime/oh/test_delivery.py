@@ -53,9 +53,28 @@ class DeliveryTest(fixtures.NativeFixture):
 
     def test_typed_delivery_reuses_saved_scope_and_reports_its_current_owner(self):
         from . import native
+        from .storage import Journal
         self.documents()
-        entered = native.prepare_scope(self.root, doc='0001', human=self.human('/oh-deliver 0001'))
-        run = entered['run']
+        initial = self.human('/oh-deliver 0001')
+        append = Journal.append
+
+        def interrupt_grant(journal, kind, data):
+            if kind == 'grant':
+                raise OSError('interrupted initial grant')
+            return append(journal, kind, data)
+
+        with patch.object(Journal, 'append', interrupt_grant):
+            with self.assertRaisesRegex(OSError, 'interrupted initial grant'):
+                native.prepare_scope(self.root, doc='0001', human=initial)
+        journal, pending = load_run(self.root)
+        run = pending['id']
+        incomplete = journal.records()
+        self.assertFalse(pending['granted'])
+        self.assertNotIn('owner', native.resume(self.root, run=run)['continuation'])
+        self.assertEqual(journal.records(), incomplete)
+
+        entered = native.prepare_scope(self.root, doc='0001', human=initial)
+        self.assertEqual(entered['run'], run)
         journal, state = load_run(self.root, run)
         before = journal.records()
         branch = self.git('branch', '--show-current')

@@ -5,14 +5,15 @@ description: Use when the user asks to continue an existing OH workflow or its p
 Load `workflows/runtime.md` through OH's resource entry. Inspect `status --saved`
 and `resume --run ID` facts (Codex `status` with `saved`, `resume` with `run`).
 Read `workflows/entry.md` and call `entry` before giving current delivery or
-recovery advice. Report the last confirmed work and next action, distinguishing
-committed work from remaining checkout edits. Keep internal IDs in tool calls.
-Answer status questions from those facts. If the intended work is unclear,
-clarify the subject first.
+recovery advice. These reads leave selection and grants as they are. Show the
+requested subject, branch, last confirmed work, next action and remaining allowance.
+Distinguish committed work from remaining checkout edits. Keep internal IDs in tool
+calls. Answer status questions from those facts. If the intended work is unclear,
+clarify the subject before preparing a decision or taking action.
 
 For delivery, follow the current-owner and recovery paths in `workflows/recovery.md`.
-When the current owner can continue, load `workflows/deliver/SKILL.md` and carry
-out the saved phase in this turn. For a genuine recovery or transfer, read
+When the verified owner receives a clear request to continue that delivery, load
+`workflows/deliver/SKILL.md` and carry out the authorized saved phase in this turn. For a genuine recovery or transfer, read
 `workflows/decisions.md` and prepare `decision-request recover --run ID` for
 delivery or `decision-request resume --run ID` for planning/review. Delivery presents the
 returned disclosure in chat before its short question. For a single option use only

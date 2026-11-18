@@ -15,4 +15,4 @@ Route an idea to `workflows/propose/SKILL.md`, a roadmap initiative to
 For a clear request to continue saved delivery, follow `workflows/recovery.md`
 to check the current owner and resume the saved phase or prepare the recovery
 decision. Other saved work uses its existing Resume choice. Preserve the person's
-request and project approval rules. A request for feedback stays in review.
+request and project approval rules. Do not turn a request for feedback into implementation.

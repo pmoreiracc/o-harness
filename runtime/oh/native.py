@@ -412,7 +412,7 @@ def _pending_attempt(state,attempt):
             'next':(('Inspect this child’s latest native outcome; a saved binding does not mean it is still running. '
                     if child else 'No child binding is saved; this does not mean it was never launched. Inspect the original parent’s launch and result records. ')
                    +'The already-authorized current coordinator retains this same attempt and continues its remaining phase without another Continue question. '
-                    'Use the existing saved-work recovery decision when ownership needs to change or the selected work requires recovery.')}
+                    'Use the existing saved-work decision for recovery, ownership transfer, or a new entry into a planning or review workflow.')}
 
 
 
@@ -472,7 +472,7 @@ def saved_work(root):
                        **_continuation(state))
         summary['resumable']=not _finished(state)
         result.append(summary)
-    output={'saved_work':result,'next':'Read the matching run with resume --run ID and follow workflows/recovery.md. Continue an authorized delivery in its owning conversation; for recovery, prepare and show the returned decision once.'}
+    output={'saved_work':result,'next':'Read the matching run with resume --run ID and follow workflows/recovery.md. A clear request can continue an authorized delivery in its owning conversation. When a decision is needed, prepare and show it once, without a preliminary Resume question.'}
     from .storage import encode
     budget=min((state['config']['context']['result_chars'] for _,state in runs),default=1000)
     if len(encode(output))>budget:
@@ -488,8 +488,11 @@ def saved_work(root):
 def _delivery_owner(root,state):
     """Report an existing delivery owner without selecting or granting work."""
     if (state['workflow']!='deliver' or state['status'] not in ('running','checkpoint','completed','pr')
-            or _finished(state) or git(root,'branch','--show-current')!=state['branch']):
+            or not state['granted'] or _finished(state) or git(root,'branch','--show-current')!=state['branch']):
         return None
+    from . import cancellation
+    control=cancellation._read(root) or {}
+    if control.get('current')!=cancellation.owner_key(state):return None
     try:_owner(root,state)
     except (Refused,FileNotFoundError):return None
     return {key:state['human'][key] for key in ('host','session')}

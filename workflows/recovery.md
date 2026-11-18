@@ -127,9 +127,13 @@ continue the returned phase under the saved authority. Retain or await the origi
 attempt if one is pending. Show the actual task and last confirmed result, then
 take the next authorized step. Present any real pending decision through its
 existing path. Preserve the scope, branch, findings and remaining allowances.
+Do not turn a normal handback, cleanup continuation or delayed result into a new
+Continue question.
 
-If the host is saving execution evidence, briefly retry the read with the same
-request. A different conversation, changed selection, paused or stopped work,
+If entry stopped before recording its grant, use the original entry helper and
+native locator to finish that accepted entry when available. If the host is
+saving execution evidence, briefly retry the same read. A different conversation,
+changed selection, paused or stopped work,
 or unresolved ownership uses the existing recovery decision. A request for status
 only calls for an explanation of the saved phase and next action.
 

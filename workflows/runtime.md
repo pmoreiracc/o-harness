@@ -62,9 +62,11 @@ For matching saved work, follow `workflows/recovery.md`. A clear request to
 continue a delivery in its verified owning conversation uses the existing grant
 and saved phase. Delivery recovery or ownership transfer uses
 `decision-request recover` and its Continue, Start fresh, Stop and take over choices.
-Other workflows use their existing Resume decision. Free-text proposals and quick
-fixes can use different wording. Match them against the saved scope and report
-before deciding whether the request changes scope.
+Other workflows use their existing Resume decision. Where recovery or Resume
+requires an answer, a matching request identifies the saved work and the actual
+answer binds its continuation. Free-text proposals and quick fixes need not repeat
+the old wording. Read their saved scope and report and judge whether the request
+covers the same work. Never build a similarity parser or silently absorb a changed scope.
 
 When a decision is needed, read `workflows/decisions.md` and show the prepared
 question once. Use Claude `AskUserQuestion` or Codex Default mode
@@ -320,8 +322,9 @@ handback message mid-turn. Keep the original spawn locator after a native contin
 OH follows its attributed latest outcome and refuses stale completion/cancellation.
 The same authorized coordinator retains settled work and continues its remaining
 phase without another Continue question. Native saving or cleanup is a retry of
-that operation. Follow the saved-work recovery decision when delivery needs
-recovery or ownership transfer; see `workflows/recovery.md`.
+that operation. Follow `workflows/recovery.md` when delivery needs recovery or
+ownership transfer. A new invocation or owner for other workflows still uses
+its existing Resume decision.
 
 An acknowledged report remains historical evidence when the child continues for
 cleanup. Later closing text cannot replace it. If retention returns unfinished,
