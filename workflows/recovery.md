@@ -119,12 +119,21 @@ inspect callback errors, actor identity and the exact formatted command instead.
 
 ## Delivery entry and recovery
 
-This entry decision is for selecting saved work in a new invocation or ownership
-transfer. An already-authorized coordinator handling its own pending attempt first
-retains the original native result and continues the same phase. Do not turn a
-normal handback, cleanup continuation or delayed result into another Continue gate.
+Match the request to the saved scope and reconcile entry facts before continuing.
+For a clear request to continue the selected delivery, read `resume --run ID`
+(Codex `resume` with `run` and no `human`). If `continuation.owner` matches the
+current native conversation's host and session from its conversation reference,
+continue the returned phase under the saved authority. Retain or await the original
+attempt if one is pending. Show the actual task and last confirmed result, then
+take the next authorized step. Present any real pending decision through its
+existing path. Preserve the scope, branch, findings and remaining allowances.
 
-For an unfinished delivery, use `decision-request recover --run ID` (Codex
+If the host is saving execution evidence, briefly retry the read with the same
+request. A different conversation, changed selection, paused or stopped work,
+or unresolved ownership uses the existing recovery decision. A request for status
+only calls for an explanation of the saved phase and next action.
+
+For a delivery that needs recovery, use `decision-request recover --run ID` (Codex
 `decision_request` with kind `recover`). It inspects Git and prepares one native
 question. Explain the effects in plain language, including the affected paths or inspection link before a discard. Then ask its short question with its
 short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
@@ -134,7 +143,8 @@ If a required input is missing, explain the reason returned with the question. I
 Stop is available, ask only in ordinary chat and bind the explicit answer.
 
 Bind the chosen action from the returned `actions` map with `decision` and that
-same human locator, including its decision ID. Continue uses `resume`, Start fresh
+same human locator, including its decision ID. In Claude use `decision KIND <human-locator.json>`.
+The prepared decision identifies the run. Continue uses `resume`, Start fresh
 uses `restart`, and Stop and take over uses `stop`. The helper retains available
 results, revokes old execution, checks tracked operation cleanup and binds the new
 owner. A deleted chat does not require recreating its transcript: missing results

@@ -412,7 +412,7 @@ def _pending_attempt(state,attempt):
             'next':(('Inspect this child’s latest native outcome; a saved binding does not mean it is still running. '
                     if child else 'No child binding is saved; this does not mean it was never launched. Inspect the original parent’s launch and result records. ')
                    +'The already-authorized current coordinator retains this same attempt and continues its remaining phase without another Continue question. '
-                    'A new owner or workflow invocation uses the existing saved-work recovery decision before transferring ownership or replacing the attempt.')}
+                    'Use the existing saved-work recovery decision when ownership needs to change or the selected work requires recovery.')}
 
 
 
@@ -472,7 +472,7 @@ def saved_work(root):
                        **_continuation(state))
         summary['resumable']=not _finished(state)
         result.append(summary)
-    output={'saved_work':result,'next':'For matching unfinished work, read workflows/recovery.md and workflows/decisions.md, then prepare decision-request resume --run ID before asking. Show that returned question once; do not ask a preliminary Resume question. A matching command alone does not confirm continuation.'}
+    output={'saved_work':result,'next':'Read the matching run with resume --run ID and follow workflows/recovery.md. Continue an authorized delivery in its owning conversation; for recovery, prepare and show the returned decision once.'}
     from .storage import encode
     budget=min((state['config']['context']['result_chars'] for _,state in runs),default=1000)
     if len(encode(output))>budget:
@@ -483,6 +483,16 @@ def saved_work(root):
     if len(encode(output))>budget:
         output['saved_work']=[{k:item[k] for k in ('run','workflow','status','execution','resumable')} for item in result]
     return output
+
+
+def _delivery_owner(root,state):
+    """Report an existing delivery owner without selecting or granting work."""
+    if (state['workflow']!='deliver' or state['status'] not in ('running','checkpoint','completed','pr')
+            or _finished(state) or git(root,'branch','--show-current')!=state['branch']):
+        return None
+    try:_owner(root,state)
+    except (Refused,FileNotFoundError):return None
+    return {key:state['human'][key] for key in ('host','session')}
 
 
 def _resume_offer(root,state):
@@ -514,11 +524,13 @@ def _same_review_subject(selected,state):
 
 
 def _matching_entry(root,source,workflow,design=None,track='',selected=None):
-    # Exact selectors can be checked mechanically. Free-text identity remains the
-    # native coordinator's judgment after inspecting saved scope, through resume.
+    # Delivery design/track selectors have already been validated against the native
+    # input, including typed requests and native selections without a slash command.
+    # Matching arbitrary quick-fix prose remains the coordinator's judgment.
     matches=[]
     request=_command(source)
-    if not request or request[0]!='oh-'+workflow or not request[1]:return None
+    typed_delivery=not request and workflow=='deliver' and design
+    if not typed_delivery and (not request or request[0]!='oh-'+workflow or not request[1]):return None
     for _,state in _saved_runs(root):
         if state['workflow']!=workflow:continue
         if state.get('published') and workflow!='design':continue
@@ -536,6 +548,8 @@ def _matching_entry(root,source,workflow,design=None,track='',selected=None):
         key=_human_key(source,state)
         if key==state.get('source'):return _entry_retry(root,state,source)
         if state.get('published') or (state['status']=='completed' and state.get('plans',{}).get('location')=='private'):return select(root,state['id'])
+        if typed_delivery and (owner:=_delivery_owner(root,state)) and all(source[k]==owner[k] for k in owner):
+            return select(root,state['id'])|{'resume_required':False}
         return _resume_offer(root,state)
     if len(matches)>1:raise Refused('More than one saved run matches; inspect status --saved and select the intended run with resume --run')
 
@@ -1861,7 +1875,9 @@ def resume(root,locator=None,run=None):
             if feedback['workflow']=='review' and feedback['status']=='completed' and canonical.exists():run=read_json(canonical)['run']
     journal,state=load_run(root,run)
     if locator is None or _finished(state):
-        return select(root,state['id'])
+        result=select(root,state['id'])
+        if locator is None and (owner:=_delivery_owner(root,state)):result['continuation']['owner']=owner
+        return result
     return decision(root,'resume',locator,run=state['id'])
 
 

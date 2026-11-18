@@ -51,6 +51,43 @@ class DeliveryTest(fixtures.NativeFixture):
 
     documents=delivery_documents
 
+    def test_typed_delivery_reuses_saved_scope_and_reports_its_current_owner(self):
+        from . import native
+        self.documents()
+        entered = native.prepare_scope(self.root, doc='0001', human=self.human('/oh-deliver 0001'))
+        run = entered['run']
+        journal, state = load_run(self.root, run)
+        before = journal.records()
+        branch = self.git('branch', '--show-current')
+
+        for prompt in ('What is the status of design 0001?', 'Continue'):
+            with self.assertRaisesRegex(Refused, 'Request delivery'):
+                native.prepare_scope(self.root, doc='0001', human=self.human(prompt))
+
+        existing = native.prepare_scope(self.root, doc='0001',
+                                        human=self.human('Deliver approved design 0001', session='other'))
+        self.assertEqual(existing['run'], run)
+        self.assertTrue(existing['resume_required'])
+        self.assertEqual(journal.records(), before)
+        self.assertEqual(self.git('branch', '--show-current'), branch)
+        self.assertEqual(load_run(self.root)[1]['granted'], state['granted'])
+
+        facts = native.resume(self.root, run=run)
+        self.assertEqual(facts['continuation']['owner'], {'host': 'codex', 'session': 's'})
+        self.assertEqual(journal.records(), before)
+
+        request = self.human('Deliver approved design 0001')
+        existing = native.prepare_scope(self.root, doc='0001', human=request)
+        self.assertEqual(existing['run'], run)
+        self.assertFalse(existing['resume_required'])
+        self.assertEqual(journal.records(), before)
+
+        native.decision(self.root, 'stop', self.human('Stop'), run=run)
+        self.assertNotIn('owner', native.resume(self.root, run=run)['continuation'])
+        existing = native.prepare_scope(self.root, doc='0001', human=self.human('Deliver approved design 0001'))
+        self.assertTrue(existing['resume_required'])
+        self.assertEqual(load_run(self.root)[1]['status'], 'stopped')
+
     def test_design_batches_cross_tracks_through_the_publication_checkpoint(self):
         from . import native
         from .decisions import prepare

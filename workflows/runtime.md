@@ -58,20 +58,19 @@ it through its own normal scope authority without Stop/Pause of the old record.
 Preserve the old grants, attempts, findings and any real local/unmerged work; inspect
 `retained_work` references where they affect the new candidate. Merged output does not
 create missing completion or review evidence.
-When actually continuing an unfinished saved scope, always ask once, even when the command
-names its initiative, design or review subject. A matching request discovers work; it
-is not the resume answer. Free-text proposals and quick fixes need not repeat the old
-words: read their saved scope/report and judge whether this is the same work. Never
-build a similarity parser or silently absorb a changed scope.
+For matching saved work, follow `workflows/recovery.md`. A clear request to
+continue a delivery in its verified owning conversation uses the existing grant
+and saved phase. Delivery recovery or ownership transfer uses
+`decision-request recover` and its Continue, Start fresh, Stop and take over choices.
+Other workflows use their existing Resume decision. Free-text proposals and quick
+fixes can use different wording. Match them against the saved scope and report
+before deciding whether the request changes scope.
 
-For a matching saved run, read `workflows/recovery.md` and `workflows/decisions.md`
-before the first question. Delivery uses `decision-request recover` and its Continue,
-Start fresh, Stop and take over choices; bind its returned action with `decision`.
-Other workflows use Resume. Call Claude `AskUserQuestion` or Codex Default mode
-`functions.request_user_input_async` at these questions. Settle prior native work,
-then bind the same answer;
-continue its actual phase in the same turn without new scope, repeated questions or
-renewed allowances.
+When a decision is needed, read `workflows/decisions.md` and show the prepared
+question once. Use Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` with the documented chat fallback.
+Bind the actual answer and settle prior native work through the supported recovery
+path. Continue its actual phase in the same turn with the original scope and allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
 If a real prerequisite question intervenes, retain its initiating request with
 `decision-request --request <native-locator.json>` (Codex `request`). After binding
@@ -321,8 +320,8 @@ handback message mid-turn. Keep the original spawn locator after a native contin
 OH follows its attributed latest outcome and refuses stale completion/cancellation.
 The same authorized coordinator retains settled work and continues its remaining
 phase without another Continue question. Native saving or cleanup is a retry of
-that operation, not a new ownership decision. A new invocation or owner still uses
-the saved-work recovery decision.
+that operation. Follow the saved-work recovery decision when delivery needs
+recovery or ownership transfer; see `workflows/recovery.md`.
 
 An acknowledged report remains historical evidence when the child continues for
 cleanup. Later closing text cannot replace it. If retention returns unfinished,

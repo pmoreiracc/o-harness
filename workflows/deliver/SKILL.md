@@ -4,9 +4,9 @@ description: Deliver approved design tasks or a bounded quick fix with fresh nat
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
 entry and communication protocol before new work. For a matching run that still needs recovery after entry reconciliation,
-follow `workflows/recovery.md`; resume its saved phase instead of restarting these steps.
-Use its shared recovery gate (Continue, Start fresh, Stop and take over), including
-when old native transcripts are unavailable. Do not ask the person to repair OH state.
+follow `workflows/recovery.md` and enter its saved phase. A matching delivery that
+already belongs to the current authorized coordinator can continue in its saved
+phase using the current-owner path in that guide.
 If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Select the work
@@ -31,7 +31,8 @@ Interpret the requested work as follows:
   with design numbers as labels and names in descriptions. Keep that same question
   on its own line for the typed fallback and pass the actual answer locator.
   The empty invocation itself grants no continuation authority.
-- Approved design number and optional track: use `scope prepare --doc NNNN
+- A named approved design and optional track, given in prose or as a skill
+  argument: check for matching saved work first. For a new delivery, use `scope prepare --doc NNNN
   [--track TRACK] --human <native-locator.json>` (Codex `scope_prepare`). The helper
   validates approval and selects the lowest-numbered eligible task at each step.
   Without a track, the configured batch can span the design. An explicit track
@@ -53,9 +54,9 @@ Interpret the requested work as follows:
   the executable scope preview and finite task/review limits; do not spend a human
   answer on a preview that cannot enter delivery. Difficulty and model selection stay
   outside that manifest.
-- Existing prepared or interrupted work: use the matching retained scope and remaining
-  allowance through `resume`; never convert a preparation ID or agent text into a
-  human approval. A complete saved batch proceeds to its actual decision/publication.
+- Existing work: read its saved phase with `resume` and follow the current-owner
+  or recovery path in `workflows/recovery.md`. A complete saved batch proceeds to its
+  pending decision or publication step.
 
 ## 2. Bind the required scope approval
 

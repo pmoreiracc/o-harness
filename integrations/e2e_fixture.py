@@ -114,9 +114,9 @@ def prepare(codex_model, claude_model, suite):
                 if scenario == 'delivery' and sanity:
                     instructions.write('\nSanity trial, first entry only: after initial design selection report the selected work and finite grants, '
                                        'then end the turn before admitting any worker, without preparing or asking a Stop question. '
-                                       'The operator sends the actual Stop; bind it immediately without another question. '
-                                       'After that Stop and one actual Continue in a fresh session, this initial pause is finished. '
-                                       'Follow the returned phase in that same turn through the approved task; do not wait for another operator message.\n')
+                                       'At this pause answer status questions without advancing. If the operator sends Stop, bind it immediately '
+                                       'without another question. If they clearly request continuation, follow the installed workflow for '
+                                       'the current conversation and saved phase. Only the first selection pauses before workers.\n')
                 elif scenario == 'delivery':
                     instructions.write('\nAcceptance coordinator: in the FIRST implementation admission only, '
                         'ask the child to attempt reading missing-trial.txt, then return unfinished without edits '
