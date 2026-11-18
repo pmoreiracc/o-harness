@@ -83,7 +83,8 @@ designs and explains unavailable work.
 the lowest-numbered eligible task at each step. Tasks wait for their prerequisites,
 and blocked work stays pending. Add a track, as in `oh-deliver 0005 core`, to limit
 the run to that track.
-The number identifies the design. An empty ready list does not resume unrelated work.
+The number identifies the design. You can also say “Deliver approved design 0005.”
+An empty ready list does not resume unrelated work.
 
 For a quick fix, such as `oh-deliver fix the sign-in timeout`, OH prepares a bounded
 ordered task list and shows its task and review limits. In Claude, the native plan
@@ -215,6 +216,10 @@ you do not need to reproduce the original wording. With no subject, OH shows rel
 unfinished work first. Declining leaves it intact.
 A clearly different request does not silently select an old task.
 
+For delivery already authorized in the current conversation, “Continue the approved
+delivery” picks up the saved phase. OH asks for the existing recovery decision
+when taking over from another conversation or resuming stopped or paused work.
+
 `status --saved` lists both saved workflow and standalone review facts without changing
 selection. `resume --run ID` reads one run; adding `--human` binds an actual native human
 continuation. Codex exposes the equivalent `status` (`saved`) and `resume` (`run`, `human`)
@@ -229,8 +234,8 @@ restart task batch. Review usage and findings are retained. Deleted chat transcr
 do not require reconstructing the chat: after verified execution cleanup, missing
 results can be recorded as abandoned and the required work repeated.
 
-`oh-resume` uses that delivery gate, or the ordinary Resume question for planning
-and review. After your answer and once native work
+`oh-resume` uses that gate when delivery needs recovery and the ordinary Resume
+question for planning and review. After your answer and once native work
 is quiet, it continues the saved task or decision with its
 original scope, settings, findings and remaining allowances. A new session or host
 can continue even while the old conversation remains open; no prior Pause or Stop

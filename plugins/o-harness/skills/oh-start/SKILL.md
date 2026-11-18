@@ -1,6 +1,6 @@
 ---
 name: oh-start
-description: Choose an OH workflow only when explicitly invoked.
+description: Find ready or saved OH work and choose the workflow to use next.
 disable-model-invocation: true
 ---
 When a choice is needed, introduce the work or setting and explain each option's effect

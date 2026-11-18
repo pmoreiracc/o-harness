@@ -81,7 +81,7 @@ reduce operator delay, not coverage.
 | --- | --- | --- |
 | Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The prospective row validates before the first approval; one approval records the same semantic addition in M1, which validates and passes review. Syntax-only repair does not ask again; application files stay at baseline. |
 | Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
-| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, then send Stop at the selection boundary before workers, with no prepared Stop question. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; one real Continue in a fresh session enters the authorized phase in the same turn without an operator nudge or allowance renewal. Report any extra nudge as an assisted recovery, not an autonomous pass. The first assessment reaches supported native permission directly when private state is outside writable roots, without a throwaway worker; a later helper uses the same supported access. Only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers task 2 from the Other track, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; task 2 remains pending and marker.txt stays unchanged. |
+| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Ask “Deliver approved design 0001”, then send Stop at the selection boundary before workers, with no prepared Stop question. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; one real Continue in a fresh session enters the authorized phase in the same turn without an operator nudge or allowance renewal. Report any extra nudge as an assisted recovery, not an autonomous pass. The first assessment reaches supported native permission directly when private state is outside writable roots, without a throwaway worker; a later helper uses the same supported access. Only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers task 2 from the Other track, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; task 2 remains pending and marker.txt stays unchanged. |
 | Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, and decline it in the prepared scope menu. | One actual Stop binds a scope decline. Verify its receipt, no new run, no implementation, approval, edits or publication. |
 
 For the document decisions in these scenarios, inspect what the operator can read while
@@ -137,6 +137,26 @@ after recovery and link unrelated known failures, explaining their effect on sco
 Timings guide optimization; an overrun never converts a pass into a failure.
 For a new E2E case document whether it protects an essential ordinary workflow (sanity
 and nightly) or adds a variant or fault (nightly). Prefer extending an existing path.
+
+## Plain-language delivery entry
+
+In the delivery sanity slice, use the prompt exactly as written, without a skill
+mention. Confirm the installed Deliver procedure was loaded and the intended
+design was selected. In the new conversation ask “Continue the approved delivery”
+and verify the normal bound recovery decision still precedes work.
+
+For same-conversation coverage, use a fresh delivery fixture with its first-turn
+pause before workers. At that pause ask “What is the status of design 0001?” and
+confirm the run still has zero attempts and the same grant. Then ask “Continue the
+approved delivery” in that same conversation. Verify that assessment starts for
+the original task and run with no extra recovery question or new grant. This
+variant reuses the delivery fixture and belongs in the nightly catalog. End the
+targeted probe with the supported Stop path once the entry behavior is observed.
+
+In a fresh fixture, ask a status or ambiguous coding question and confirm no
+delivery run or grant is created. Use the explicit Deliver command in the catalog
+D scenario to cover the existing entry. Test the packaged implicit activation in
+Codex Desktop separately from CLI acceptance.
 
 ## External merge re-entry
 

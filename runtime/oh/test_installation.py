@@ -709,9 +709,18 @@ class InstallationTest(unittest.TestCase):
             for plugin in (first,second):
                 for resource in resources:
                     self.assertEqual((plugin/'core'/resource).read_bytes(),(HOME/resource).read_bytes())
-            self.assertNotIn('disable-model-invocation: true',(first/'skills/oh-deliver/SKILL.md').read_text())
-            self.assertIn('allow_implicit_invocation: false',(first/'skills/oh-deliver/agents/openai.yaml').read_text())
-            self.assertIn('disable-model-invocation: true',(second/'skills/oh-deliver/SKILL.md').read_text())
+            for name in ('oh-deliver', 'oh-resume'):
+                with self.subTest(implicit_skill=name):
+                    self.assertIn('allow_implicit_invocation: true',
+                                  (first/'skills'/name/'agents/openai.yaml').read_text())
+                    self.assertNotIn('disable-model-invocation: true',
+                                     (second/'skills'/name/'SKILL.md').read_text())
+            for name in ('oh-start', 'oh-stop', 'oh-config', 'oh-update'):
+                with self.subTest(explicit_skill=name):
+                    self.assertIn('allow_implicit_invocation: false',
+                                  (first/'skills'/name/'agents/openai.yaml').read_text())
+                    self.assertIn('disable-model-invocation: true',
+                                  (second/'skills'/name/'SKILL.md').read_text())
             from .system import Path as FilePath
             data=FilePath(base/'state')/('a'*90)/('b'*90)/('c'*90)
             cleanup.callback(shutil.rmtree,FilePath(base/'state'),ignore_errors=True)

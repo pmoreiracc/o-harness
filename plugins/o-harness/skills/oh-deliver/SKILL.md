@@ -1,12 +1,16 @@
 ---
 name: oh-deliver
-description: Deliver design tasks or quick fixes, or list ready work through OH, only when explicitly invoked.
-disable-model-invocation: true
+description: Deliver a named approved design, for example “Deliver approved design 0001”, or prepare an explicitly requested OH quick fix. List ready work on request.
 ---
-Load `workflows/deliver/SKILL.md` through OH's resource entry and follow it.
-A number selects a design, not a task. Check saved work before naming the actual
-task. Introduce the implementation agent, affected checks and invariant reviewer
-agent once the work is selected. A quick fix needs approval of its bounded scope.
+For an explicit skill invocation or a clear request to deliver through OH, load
+`workflows/deliver/SKILL.md` through OH's resource entry. A typed request naming an
+approved design, such as “Deliver approved design 0001”, qualifies. A general coding
+request does not select OH. A readiness or status question calls for facts only.
+Clarify ambiguous delivery intent before preparing scope or changing the checkout.
+
+A number identifies a design. Check for matching saved work before naming the
+actual task. For new work, introduce the implementation agent, affected checks and
+invariant reviewer once the task is selected. A quick fix needs its scope approval.
 
 Resolve the absolute plugin launcher two levels above this skill: `scripts/oh`
 (`scripts\oh.cmd` on native Windows). Keep OH configuration and evidence outside
