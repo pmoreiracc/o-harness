@@ -81,7 +81,7 @@ reduce operator delay, not coverage.
 | --- | --- | --- |
 | Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The prospective row validates before the first approval; one approval records the same semantic addition in M1, which validates and passes review. Syntax-only repair does not ask again; application files stay at baseline. |
 | Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
-| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, choose Core, then send Stop at the selection boundary before workers, with no prepared Stop question. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; one real Continue in a fresh session enters the authorized phase in the same turn without an operator nudge or allowance renewal. Report any extra nudge as an assisted recovery, not an autonomous pass. The first assessment reaches supported native permission directly when private state is outside writable roots, without a throwaway worker; a later helper uses the same supported access. Only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers the next runnable Core task, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; the next Core task and excluded track remain untouched. |
+| Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Invoke Deliver 0001, then send Stop at the selection boundary before workers, with no prepared Stop question. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; one real Continue in a fresh session enters the authorized phase in the same turn without an operator nudge or allowance renewal. Report any extra nudge as an assisted recovery, not an autonomous pass. The first assessment reaches supported native permission directly when private state is outside writable roots, without a throwaway worker; a later helper uses the same supported access. Only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers task 2 from the Other track, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; task 2 remains pending and marker.txt stays unchanged. |
 | Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, and decline it in the prepared scope menu. | One actual Stop binds a scope decline. Verify its receipt, no new run, no implementation, approval, edits or publication. |
 
 For the document decisions in these scenarios, inspect what the operator can read while
@@ -119,13 +119,15 @@ After the run close the fixture PR unmerged and delete only its trial branches.
 For native profile-history repairs, also exercise the delivery slice with a
 separately signed-in Claude profile selected by
 [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/settings). Verify the
-original native session and turn reach track selection, Stop, fresh-session
+original native session and turn reach design selection, Stop, fresh-session
 Continue and reviewed completion, with child history in that profile and usage
 sourced from it. Never copy credentials or history into the default profile to make
 the test pass. This profile variant belongs in the nightly catalog; run it during
 profile repairs and report its measured cost separately from ordinary sanity.
-In sanity, Core has a second runnable task so all three checkpoint actions are available. The second track exists only to test selection; it
-is outside the chosen scope. Fault injection, additional batches and failed hosted CI
+In sanity, task 2 belongs to a second track and depends on task 1. After the single-task
+batch finishes, the three-way menu offers task 2. Choosing publication leaves task 2 pending.
+This cross-track checkpoint is part of the ordinary delivery slice and adds no task execution.
+Fault injection, additional batches and failed hosted CI
 belong to the longer catalog. Measure preparation, each slice, slowest host and overall
 wall time. Report sanity separately from additional targeted/nightly variants, per host,
 and retain overall wall time. State whether each duration includes setup, human approvals,
@@ -195,7 +197,9 @@ and selectable by Deliver. A completed run with an undeliverable draft fails thi
 ## D — Deliver, recovery and batches
 
 Use `<host>-delivery`. Invoke the installed Deliver skill for `0001`. Task 1 changes
-`answer.txt`; task 2 changes `marker.txt`; the task allowance is one at a time.
+`answer.txt`; task 2 changes `marker.txt` in another track. The first batch covers both
+tasks and task 2 depends on task 1. The next batch is task 3, which creates `summary.txt`
+in a third track and depends on task 2.
 The delivery fixture instructions ask the FIRST implementation child to attempt one
 missing-file read and return unfinished without edits; subsequent authors work normally.
 This is a deliberate unfinished-author test, not a claimed live service outage.
@@ -203,11 +207,13 @@ Invoke Deliver with only its supported design/track arguments; do not append a s
 paragraph of test directions to a slash-command argument. The fixture owns those directions.
 
 Check: the first unfinished attempt and failed read remain visible; a fresh author finishes
-task 1 without a new scope/allowance grant; checks and a fresh consumer review precede its
-commit. The checkpoint offers next batch, publication and takeover. Stop there, record the
-committed HEAD and remaining allowance, then resume in a fresh native session. Continue the
-next batch through its actual decision. Exactly tasks 1 and 2 finish; original evidence,
-commit and spent allowances survive. No third task or unrelated file change is allowed.
+task 1 without a new scope grant. Tasks 1 and 2 each pass checks and fresh consumer
+review before committing, with no approval between them. The checkpoint offers task 3,
+publication and takeover. Record the committed HEAD and remaining allowance, then resume
+in a fresh native session and choose the next batch through its actual decision. Exactly
+tasks 1, 2 and 3 finish. Original evidence, commits and spent allowances survive. Check
+that task 3 was ungranted until the Continue answer and that no unrelated file changed.
+The additional tiny task exercises continuation into a third track in the nightly catalog.
 
 For catalog delivery, configure a dedicated private GitHub fixture repository before
 starting D: push only this fixture's initial main, set origin, then let normal publication
@@ -216,8 +222,7 @@ Check the clickable link, saved URL and actual remote HEAD. Do not merge the tes
 
 ## Q — Selection and refusal
 
-Use `<host>-choice`. Invoke Deliver `0001`, select Core through the actual track question,
-and confirm only task 1 is selected. Stop before implementation using the native Stop
+Use `<host>-choice`. Invoke Deliver `0001 core` and confirm only task 1 is selected. Stop before implementation using the native Stop
 decision. Inspect that application files and grants were not expanded. Then request a tiny
 new quick fix and choose Stop and take over once. Check the decline receipt, the previous
 stopped journal and unchanged files. For recovery, inspect the path list through its inspection
@@ -268,7 +273,7 @@ paths below in the nightly catalog.
 | Exercise in a disposable consumer and useful context | Outcome to inspect | Golden-reference comparison |
 | --- | --- | --- |
 | P: refine or cancel a proposed roadmap addition before accepting the revised preview; discuss a Design choice before approving private Design | Discussion and cancellation grant nothing. Only the accepted additions and reviewed design become usable. | Propose step 3 separates Approve, Refine and Reconsider; only the accepted preview is written. Design leaves consequential choices to the person. OH private approval binds reviewed artifacts rather than a merge. |
-| D: select a named design/track; at the first completed task choose the next batch, then publish the completed work | Only the selected track and displayed task window run. One publication answer opens one PR at the reviewed commit and destination. | Deliver task checkpoints bind the exact next window or publication. OH Stop preserves work locally without pushing; the reference’s Stop-without-PR push is not OH policy. |
+| D: select a design by number; complete its first mixed-track batch, choose the next batch, then publish | Tasks 1 and 2 run in order under the initial grant. The native Continue answer grants task 3. One publication answer opens one PR at the reviewed commit and destination. | OH uses the reference’s finite task windows and allows a design-wide selection to span tracks. |
 | D recovery: leave a harmless uncommitted fixture file, stop, resume, and select the explicit discard action (including a readable Start fresh label) after inspecting the branch, restart base and affected file list | Continue preserves existing edits; on a separate disposable run an actual restart discards only the disclosed contents. Changing those contents before acting invalidates restart. | The shared recovery contract repairs operations within existing authority. A new choice never replenishes a task or review window; destructive cleanup still needs its disclosed effect. |
 | Q: decline a new fix with an earlier run stopped; accept a distinct one-file fix through the normal plan or menu in a fresh fixture | Decline never approves anything, starts a worker or modifies the earlier journal. Approval executes only the actual scope. A dismissed question remains pending. In the Claude plan viewer decline using feedback and verify that the scope stays unapproved and no worker runs. The host records a rejected plan separately from a menu Stop. For a technical approval retry, use the same actual native answer without a copied decision ID; verify the same run, unchanged journal/grants and no duplicate attempts. Do not ask again. | Human-only grants and non-granting cancellation are retained. OH also supports bounded quick fixes and native plan acceptance; it does not require the reference’s exact bare-command presentation. |
 | Review: use a tiny manual change with a real optional concern. Request review, choose Fix concerns, and on a separate concern choose acceptance. If a repair would exceed the task or review allowance, decline it, then exercise an explicit bounded grant in a separate trial | Acceptance records the reviewed subject. Fix concerns repairs within the grant. A supporting repair or additional round requires its own actual choice; observe the exact changed scope or count. | Deliver’s concern matrix separates fixes from exact-tree acceptance and explicit review-window grants. OH standalone feedback itself grants no repair or completion authority. |

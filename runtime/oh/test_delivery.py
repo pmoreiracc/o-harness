@@ -51,6 +51,53 @@ class DeliveryTest(fixtures.NativeFixture):
 
     documents=delivery_documents
 
+    def test_design_batches_cross_tracks_through_the_publication_checkpoint(self):
+        from . import native
+        from .decisions import prepare
+        from .delivery_verify import verify
+        fixtures.configure(self.root,tasks_per_batch=5)
+        self.documents(body=(
+            '## 5. Open decisions\n\nChoose a storage owner.\n\n## Tasks\n\n'
+            '### Schema track\n\n- [ ] **1.** Add schema.\n\n'
+            '### Render track\n\n- [ ] **2.** Render values.\n'
+            '- [ ] **3.** Attach references. *Depends on tasks 1, 2.*\n\n'
+            '### Check track\n\n- [ ] **4.** Check references. *Depends on task 3.*\n'
+            '- [ ] **5.** Cover errors. *Depends on task 4.*\n'
+            '- [ ] **6.** Check fallback. *Depends on task 5.*\n'
+            '- [ ] **7.** Choose storage. *Blocked on §5.*\n\n'
+            '### Evals track\n\n- [ ] **8.** Evaluate storage. *Depends on task 7.*\n'
+            '- [ ] **9.** Evaluate fallback. *Depends on task 6.*\n'))
+        started=native.prepare_scope(self.root,doc='0001',human=self.human('/oh-deliver 0001'))
+        first=['1','2','3','4','5']
+        self.assertEqual(started['granted'],first)
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
+        self.git('remote','add','origin','https://github.com/example/product.git')
+        for task in first:
+            self.assertEqual(native.select(self.root)['task']['id'],task)
+            self.assess();self.implement(edit=lambda:None)
+            native.complete(self.root,self.reviewed()['id'])
+        self.assertEqual(load_run(self.root)[1]['done'],first)
+        with self.assertRaises(Refused):native.admit(self.root,'assessment')
+        # Changes to the live setting do not alter the run's saved allowance.
+        fixtures.configure(self.root,tasks_per_batch=1)
+        offer=prepare(self.root,'continue')
+        self.assertEqual(offer['options'],['Start tasks 6, 9','Open PR to example/product → main','Stop and take over'])
+        self.assertIn('Continue authorizes tasks: 6, 9',offer['disclosure'])
+        self.assertIn('blocked on §5',offer['disclosure'])
+        self.assertIn('requires completed task(s): 7',offer['disclosure'])
+        locator=self.offered_answer(offer,offer['options'][0])
+        continued=native.decision(self.root,'continue',locator)
+        self.assertEqual(continued['run'],started['run'])
+        self.assertEqual(continued['granted'],['6','9'])
+        for task in ('6','9'):
+            self.assertEqual(native.select(self.root)['task']['id'],task)
+            self.assess();self.implement(edit=lambda:None)
+            native.complete(self.root,self.reviewed()['id'])
+        state=load_run(self.root)[1]
+        self.assertEqual(state['done'],first+['6','9'])
+        self.assertEqual(prepare(self.root,'publish')['options'],offer['options'][1:])
+        verify(self.root,state)
+
     def test_checkpoint_explains_saved_design_without_expanding_selection(self):
         from .decisions import _checkpoint
         body=('## 5. Open decisions\n\nChoose the storage owner.\n\n## Tasks\n\n### Core track\n\n'
@@ -128,8 +175,6 @@ class DeliveryTest(fixtures.NativeFixture):
         with patch('pathlib.Path.home',return_value=home),patch.dict(os.environ,env), \
                 patch('oh.authority.native_human',side_effect=self.native_human_original), \
                 patch('oh.authority.coordinator',side_effect=native_coordinator):
-            with self.assertRaisesRegex(Refused,'Choose one design track'):
-                native.prepare_scope(self.root,doc='0001',human=request)
             if typed:
                 rows.extend([{'type':'response_item','timestamp':now(),'payload':{'type':'message','role':'assistant',
                     'content':[{'type':'output_text','text':question}]}},human(answer)])
@@ -530,7 +575,7 @@ class DeliveryTest(fixtures.NativeFixture):
         self.assertEqual(self.git('rev-parse','HEAD'),main)
         self.assertEqual(selected['task']['id'],'2')
 
-    def test_merged_track_selects_only_runnable_track_without_another_question(self):
+    def test_merged_track_skips_completed_and_blocked_tasks_on_design_entry(self):
         from . import native
         body=('## 5. Open decisions\n\nOwner decisions remain unresolved.\n\n## Tasks\n\n### Dashboard track\n\n'
               '- [ ] **1.** Resolve forecast transition. *Blocked on §5.*\n'
@@ -554,9 +599,9 @@ class DeliveryTest(fixtures.NativeFixture):
         selected=native.prepare_scope(self.root,doc='0001',human=request)
         journal,state=load_run(self.root)
         self.assertTrue(selected['approved']);self.assertEqual(selected['task']['id'],'4')
-        self.assertEqual(state['track'],'dashboard');self.assertEqual(state['granted'],['4'])
+        self.assertEqual(state['track'],'');self.assertEqual(state['granted'],['4'])
         self.assertEqual([t['id'] for t in state['tasks']],['4','6'])
-        self.assertEqual(self.git('branch','--show-current'),'deliver/0001-dashboard')
+        self.assertEqual(self.git('branch','--show-current'),'deliver/0001')
         self.assertEqual(self.git('rev-parse','HEAD'),base)
         records=journal.records()
         self.assertEqual(native.prepare_scope(self.root,doc='0001',human=request)['run'],state['id'])
@@ -565,18 +610,23 @@ class DeliveryTest(fixtures.NativeFixture):
         self.assertEqual(native.prepare_scope(self.root,doc='0001',human=request)['run'],state['id'])
         self.assertEqual(len(load_run(self.root)[1]['attempts']),1)
 
-    def test_automatic_track_ignores_blocked_tracks_but_preserves_real_choices(self):
+    def test_design_selection_lists_all_ready_tracks_and_skips_blocked_dependencies(self):
         _,path=self.documents(body=('## 5. Open decisions\n\nOwner decision remains unresolved.\n\n## Tasks\n\n### Dashboard track\n\n'
             '- [ ] **1.** Dashboard. *Blocked on §5.*\n\n'
             '### Registry track\n\n- [ ] **8.** Registry.\n'))
         manifest,_=delivery.selection(self.root,'0001')
-        self.assertEqual(manifest['track'],'registry')
+        self.assertEqual(manifest['track'],'')
         self.assertEqual([t['id'] for t in manifest['tasks']],['8'])
         text=path.read_text()
         path.write_text(text.replace(' *Blocked on §5.*',''),newline='\n')
         self.git('commit','-qam','resolve dashboard blocker');self.git('update-ref','refs/remotes/origin/main','HEAD')
-        with self.assertRaisesRegex(Refused,'Choose one design track: dashboard, registry'):
-            delivery.selection(self.root,'0001')
+        manifest,_=delivery.selection(self.root,'0001')
+        self.assertEqual([t['id'] for t in manifest['tasks']],['1','8'])
+        self.assertEqual([t['id'] for t in delivery.listing(self.root)['ready'][0]['tasks']],['1','8'])
+        path.write_text(text.replace(' *Blocked on §5.*',' *Depends on task 8.*'),newline='\n')
+        self.git('commit','-qam','record cross-track dependency');self.git('update-ref','refs/remotes/origin/main','HEAD')
+        manifest,_=delivery.selection(self.root,'0001')
+        self.assertEqual([(t['id'],t['needs']) for t in manifest['tasks']],[('8',[]),('1',['8'])])
         path.write_text(text.replace('**8.** Registry.','**8.** Registry. *Depends on task 1.*'),newline='\n')
         self.git('commit','-qam','both tracks blocked');self.git('update-ref','refs/remotes/origin/main','HEAD')
         with self.assertRaisesRegex(Refused,'No ready pending tasks'):

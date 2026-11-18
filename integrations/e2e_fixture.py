@@ -112,7 +112,7 @@ def prepare(codex_model, claude_model, suite):
                         'input surface. Use OH plain-chat fallback: show the complete prepared question and choices, '
                         'end the turn, and wait for the actual native reply through exec resume.\n')
                 if scenario == 'delivery' and sanity:
-                    instructions.write('\nSanity trial, first entry only: after initial track selection report the selected work and finite grants, '
+                    instructions.write('\nSanity trial, first entry only: after initial design selection report the selected work and finite grants, '
                                        'then end the turn before admitting any worker, without preparing or asking a Stop question. '
                                        'The operator sends the actual Stop; bind it immediately without another question. '
                                        'After that Stop and one actual Continue in a fresh session, this initial pause is finished. '
@@ -126,7 +126,7 @@ def prepare(codex_model, claude_model, suite):
                 elif scenario == 'merged':
                     instructions.write('\nExternal-merge trial: deliver the first batch normally. At its checkpoint wait for the actual Stop. The operator publishes and merges that batch outside OH. On the fresh invocation select the next eligible task from the fetched base, report its finite grants and wait before workers without preparing or asking a Stop question. Bind the operator\'s actual Stop immediately without another question. Never edit OH state to simulate publication or merge.\n')
                 elif scenario == 'choice':
-                    instructions.write('\nAcceptance coordinator: after the actual track answer prepares '
+                    instructions.write('\nAcceptance coordinator: after explicit track selection prepares '
                         'a design scope, prepare decision-request stop and wait for its single action in ordinary chat. '
                         'This trial exercises the quick-fix menu: present the options from scope prepare on the native question surface or chat fallback. Native plan acceptance is tested separately. Do not launch workers '
                         'in this selection-only probe.\n')
@@ -141,7 +141,8 @@ def prepare(codex_model, claude_model, suite):
             edit(root, 'project', lambda c: c.update({
                 'plans': {'location': 'private' if scenario in ('planning', 'design') else 'repo',
                           'private_folder': str(base / 'plans')},
-                'base_branch': 'main', 'tasks_per_batch': 1, 'review_rounds': 2,
+                'base_branch': 'main', 'tasks_per_batch': 2 if scenario == 'delivery' and not sanity else 1,
+                'review_rounds': 2,
                 'checks': [{'name': 'answer', 'command': [sys.executable, 'check.py']}], 'models': profiles}))
             where = plans.layout(root)
             plans.start_roadmap(where, 'Tiny acceptance')
@@ -154,11 +155,16 @@ def prepare(codex_model, claude_model, suite):
                 body = ('## Why\n\nVerify ordinary delivery.\n\n## Tasks\n\n### Core track\n\n'
                         '- [ ] **1.** Change answer.txt to exactly after followed by one newline. '
                         'Preserve other application files. Run python3 check.py.\n')
+                body += '\n### Other track\n\n'
                 if scenario in ('delivery','merged'):
                     body += ('- [ ] **2.** Change marker.txt to exactly done followed by one newline. '
                              'Preserve other application files. Run python3 check.py. *Depends on task 1.*\n')
-                if sanity or scenario != 'delivery':
-                    body += '\n### Other track\n\n- [ ] **3.** Change marker.txt to done followed by one newline.\n'
+                if scenario == 'delivery' and not sanity:
+                    body += ('\n### Summary track\n\n- [ ] **3.** Create summary.txt with exactly delivered followed '
+                             'by one newline. Preserve other application files. Keep release.txt at pending for '
+                             'the separate hosted CI exercise. Run python3 check.py. *Depends on task 2.*\n')
+                elif scenario == 'choice':
+                    body += '- [ ] **3.** Change marker.txt to done followed by one newline.\n'
                 number, _ = plans.write_design(root, where, 'trial', 'Tiny delivery', body, 'approved')
                 plans.claim(root, where, 'trial', number)
                 git(root, 'add', '.');git(root, 'commit', '-qm', 'approved acceptance design')
