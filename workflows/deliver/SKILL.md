@@ -33,22 +33,13 @@ Interpret the requested work as follows:
   The empty invocation itself grants no continuation authority.
 - Approved design number and optional track: use `scope prepare --doc NNNN
   [--track TRACK] --human <native-locator.json>` (Codex `scope_prepare`). The helper
-  validates approval and selects the first runnable task, skipping completed tasks,
-  explicit blockers and unmet dependencies. With no track specified, it automatically
-  selects the only runnable track; a completed track is not another choice. A merged
-  earlier track does not finish the design while runnable work remains. Proceed under
-  the invocation without asking whether to prepare that work. Do not rebuild tasks as
-  an arbitrary manifest or ask for another trigger. Only if the helper reports multiple
-  runnable tracks, or a concrete design selection is missing, call
-  Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
-  once and preserve the answer. Use a natural question and action labels that identify what will run:
-  **Deliver 0001 core** or **Deliver 0001 other**, for example. For a design
-  choice use **Deliver 0001** with its title in the description. A typed reply
-  can name the same action.
-  Retry `scope prepare` with that answer's native locator, including `tool_use_id`
-  for a menu answer, rather than the older invocation. For a typed fallback, show
-  the same question on its own line and use the actual reply locator. The answer and its native
-  question context select the track; no repeated invocation or extra approval is needed.
+  validates approval and selects the lowest-numbered eligible task at each step.
+  Without a track, the configured batch can span the design. An explicit track
+  limits selection to that track. Skip completed and explicitly blocked tasks,
+  and include a dependent task only when all of its prerequisites are complete or
+  earlier in the saved order. A merged earlier track does not finish the design
+  while runnable work remains. Proceed under the invocation without asking again
+  or building an arbitrary manifest.
 - A bounded change in prose: first compare saved quick-fix scope and reports with
   the requested outcome; offer to resume the same work without requiring identical wording.
   For genuinely new work, inspect the relevant code and correct base, then prepare

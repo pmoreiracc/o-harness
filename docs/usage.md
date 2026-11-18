@@ -79,9 +79,11 @@ in ordinary conversation. It does not start an empty run or invent the selection
 `oh-deliver` without arguments first shows unfinished delivery work, when present,
 and asks once whether to resume it or choose different work. Otherwise it lists ready
 designs and explains unavailable work.
-`oh-deliver 0005` selects approved design 0005; add a track when needed. Tasks follow
-their dependencies, and blocked work stays pending. The number names a design, not an
-individual task. An empty ready list does not resume unrelated old work.
+`oh-deliver 0005` selects tasks from approved design 0005 across tracks. OH picks
+the lowest-numbered eligible task at each step. Tasks wait for their prerequisites,
+and blocked work stays pending. Add a track, as in `oh-deliver 0005 core`, to limit
+the run to that track.
+The number identifies the design. An empty ready list does not resume unrelated work.
 
 For a quick fix, such as `oh-deliver fix the sign-in timeout`, OH prepares a bounded
 ordered task list and shows its task and review limits. In Claude, the native plan
@@ -149,8 +151,9 @@ after a successful review requires checks and another review; keeping a saved fo
 does not. An additional review allowance grants the exact count presented in its question.
 
 By default a batch covers five tasks and each task has three review rounds. `oh-config`
-shows the actual project settings. When the task batch ends, choose whether to continue
-the next finite batch, publish completed work, or stop. A spent review allowance needs
+shows the actual project settings. When the task batch ends, the PR menu offers the
+next eligible batch when work remains in the selection, along with publication when
+available and the option to stop. A spent review allowance needs
 your grant before another review starts. Failed and interrupted launches are retained;
 waiting, retries and restarts do not replenish an allowance. A repeated blocking family
 in two independent reviewer receipts triggers implementation escalation. A first blocker

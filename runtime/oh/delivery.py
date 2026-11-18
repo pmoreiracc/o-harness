@@ -211,17 +211,15 @@ def selection(root,doc,track='',*,claim=True):
     except Refused:pass
     for n,row in current.items():
         if row[1]=='done' and n not in completed:raise Refused('Unrecorded task completion cannot grant subsequent work')
-    if not track and len(tracks)>1:
-        runnable={r[2] for r in rows if r[0] not in completed and not r[4]
-                  and set(filter(None,r[3].split(',')))<=completed}
-        if len(runnable)>1:raise Refused('Choose one design track: '+', '.join(sorted(runnable))+'\n'+track_question(doc))
-        if runnable:track=next(iter(runnable))
+    pending={task_id:(set(filter(None,needs.split(','))),title)
+             for task_id,_,owner,needs,blocked,title in rows
+             if task_id not in completed and not blocked and (not track or owner==track)}
     tasks=[];available=set(completed)
-    for row in rows:
-        task_id,_,owner,needs,blocked,title=row
-        if task_id in completed or (track and owner!=track):continue
-        deps=set(filter(None,needs.split(',')))
-        if blocked or not deps<=available:continue
+    # Revisit earlier IDs when a newly selected prerequisite makes them runnable.
+    while pending:
+        task_id=next((number for number,(deps,_) in pending.items() if deps<=available),None)
+        if task_id is None:break
+        deps,title=pending.pop(task_id)
         match=re.search(r'^- \[ \] \*\*'+re.escape(task_id)+r'\.\*\*.*?(?=^- \[[ x]\] \*\*\d+\.\*\*|^##|\Z)',text,re.M|re.S)
         if not match:raise Refused('Cannot extract the approved pending task')
         tasks.append({'id':task_id,'title':title,'instructions':match[0].strip(),'needs':sorted(deps-completed),
