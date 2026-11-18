@@ -3,10 +3,15 @@ name: deliver
 description: Deliver approved design tasks or a bounded quick fix with fresh native agents and independent review.
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
-entry and communication protocol before new work. For a matching run that still needs recovery after entry reconciliation,
-follow `workflows/recovery.md` and enter its saved phase. A matching delivery that
-already belongs to the current authorized coordinator can continue in its saved
-phase using the current-owner path in that guide.
+entry and communication protocol before new work. For matching saved work, follow
+`workflows/recovery.md`. A clear request from the verified owning conversation
+continues the saved phase under its existing grant.
+
+When the delivery still needs recovery after entry reconciliation, use the
+shared **Continue**, **Start fresh**, and **Stop and take over** gate, including
+when old native transcripts are unavailable. Present only the options returned
+by the recovery helper. Do not ask the person to repair OH state.
+
 If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Select the work
