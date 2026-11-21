@@ -7,10 +7,11 @@ from .storage import Refused
 from .workflow import load_run
 from .test_fixtures_workflow import NativeFixture
 from .test_fixtures_plans import BODY
+from .authority import coordinator
 
 
 class PlanningTest(NativeFixture,unittest.TestCase):
-    def planning(self,workflow,location,request=None,before=None):
+    def planning(self,workflow,location,request=None,before=None,locator=None):
         change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
         change(self.root,'plans.location',location)
         self.where=plans.layout(self.root)
@@ -20,7 +21,50 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         if location=='repo':self.git('add','.');self.git('commit','-qm','planning context')
         manifest={'tasks':[{'id':workflow,'title':'Plan the sign-in flow','instructions':'Write the requested bounded plan.'}]}
         prompt=request or ('Plan the sign-in flow.' if workflow=='design' else 'Propose the sign-in flow.')
-        return native.prepare_scope(self.root,manifest,workflow=workflow,human=self.human(prompt))
+        return native.prepare_scope(self.root,manifest,workflow=workflow,human=locator or self.human(prompt))
+
+    def test_design_drafting_continues_after_a_native_product_reply(self):
+        import json
+        from unittest.mock import patch
+        from . import authority
+        from .storage import now
+
+        session = 'design-parent'
+        request = '$oh-design auth'
+        home = Path(self.temp.name) / 'codex'
+        transcript = home / 'sessions' / (session + '.jsonl')
+        transcript.parent.mkdir(parents=True)
+
+        def record(value):
+            with transcript.open('a', encoding='utf-8', newline='\n') as stream:
+                stream.write(json.dumps(value) + '\n')
+
+        def message(turn, text):
+            record({'type': 'event_msg', 'timestamp': now(), 'payload': {
+                'type': 'user_message', 'turn_id': turn, 'message': text}})
+        record({'type': 'session_meta', 'payload': {
+            'id': session, 'source': 'cli', 'cwd': str(self.root)}})
+        message('1', request)
+        original = {'host': 'codex', 'session': session, 'turn': '1', 'prompt': request,
+                    'transcript_path': str(transcript)}
+        with patch.dict('os.environ', {'CODEX_HOME': str(home), 'CODEX_THREAD_ID': session}), \
+                patch('oh.authority.native_human', side_effect=self.native_human_original), \
+                patch('oh.authority.coordinator', wraps=coordinator):
+            started = self.planning('design', 'private', request=request, locator=original)
+            self.assertEqual(load_run(self.root)[1]['attempts'], [])
+
+            message('2', 'Use a passkey.')
+            with self.assertRaises(authority.Expired):
+                authority.native_human(self.root, original)
+
+            author = native.admit(self.root, 'analysis')
+            journal, state = load_run(self.root)
+            self.assertEqual(state['id'], started['run'])
+            self.assertEqual(state['attempts'][0]['id'], author['id'])
+            self.assertEqual(state['design'], 'auth')
+            self.assertEqual(state['human']['prompt'], request)
+            self.assertEqual(len(state['attempts']), 1)
+            self.assertEqual([entry['kind'] for entry in journal.records()].count('grant'), 1)
 
     def test_private_design_requires_human_approval_of_the_exact_reviewed_artifacts(self):
         self.planning('design','private',request='/oh-design auth');head=self.git('rev-parse','HEAD')

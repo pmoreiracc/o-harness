@@ -150,7 +150,7 @@ def prepare(codex_model, claude_model, suite):
             plans.add_milestone(root, where, 'M1', 'First', 'One small useful change')
             if scenario == 'design':
                 plans.add_initiative(root, where, 'M1', 'greeting',
-                                     'Change answer.txt from before to after; preserve other application files.', [])
+                                     'Change answer.txt from before to after and create greeting.txt with hello or welcome. The person chooses the greeting wording. Preserve other application files.', [])
             elif scenario != 'planning':
                 plans.add_initiative(root, where, 'M1', 'trial', 'Tiny delivery', [])
                 body = ('## Why\n\nVerify ordinary delivery.\n\n## Tasks\n\n### Core track\n\n'
