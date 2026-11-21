@@ -109,7 +109,10 @@ whether they prevent proving this change's approved outcome from a separate prod
    scenario boundaries and timestamps suffice; do not rerun valid evidence to improve timing.
    Preserve every failed first-answer observation after recovery.
 3. For host-interaction changes offer one personal snapshot trial with both results.
-   Keep the snapshot available and wait for the developer's reply before opening the PR. If they choose the trial, wait for their verdict.
+   Keep the snapshot available and wait for the developer's reply before opening the PR.
+   If they choose the trial, enable the snapshot, report its activation status, and stop there.
+   The developer chooses the project, session, and prompt and runs the trial themselves.
+   Wait for their verdict before opening the PR.
 4. Open the PR and follow CI. Aim for nine minutes of deterministic CI and roughly ten
    minutes of full live sanity wall time. These are targets for improving fixtures and
    scheduling. Keep valuable coverage if its best measured implementation runs longer;
