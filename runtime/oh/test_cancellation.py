@@ -64,7 +64,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
                 'tool_input':{'command':scope_command+'; echo extra'}})
             self.assertEqual(appended['hookSpecificOutput']['permissionDecision'],'deny')
             for unsafe in (scope_command+'\necho extra',
-                           scope_command.replace('manifest.json','$(echo extra >&2; echo manifest.json)'),
+                           scope_command+' "$(echo extra >&2; echo manifest.json)"',
                            scope_command+' > /tmp/output',
                            scope_command.replace('manifest.json','`echo manifest.json`'),
                            review_command+'; echo extra'):
