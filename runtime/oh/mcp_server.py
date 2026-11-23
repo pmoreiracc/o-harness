@@ -243,6 +243,7 @@ def checkout(arguments, thread):
 # OH's and the hosts' own settings: taken from what Codex passes this server, never from the person's shell.
 FORWARDED = {'OH_DATA_HOME', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
 MARK = '__OH_SHELL_ENVIRONMENT__'
+SHELL_TIMEOUT = 20
 
 
 def shell_environment():
@@ -254,10 +255,19 @@ def shell_environment():
         import pwd  # windows-ok: POSIX only, after the Windows return above
         shell = pwd.getpwuid(os.getuid()).pw_shell  # windows-ok: POSIX only
     if not shell or not Path(shell).is_absolute():return {}
-    try:done = subprocess.run([shell, '-ilc', f'printf {MARK}; env -0'], stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
-    except (OSError, subprocess.SubprocessError):return {}
-    if done.returncode or MARK.encode() not in done.stdout:return {}
-    pairs = done.stdout.split(MARK.encode(), 1)[1].split(b'\0')
+    from .system import spawn, stop
+    try:
+        with spawn([shell, '-lc', f'printf {MARK}; env -0'], stdin=subprocess.DEVNULL,
+                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as child:
+            try:
+                stdout, _ = child.communicate(timeout=SHELL_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                stop(child, force=True)
+                return {}
+    except OSError:
+        return {}
+    if child.returncode or MARK.encode() not in stdout:return {}
+    pairs = stdout.split(MARK.encode(), 1)[1].split(b'\0')
     return dict(p.decode('utf-8', 'replace').split('=', 1) for p in pairs if b'=' in p)
 
 

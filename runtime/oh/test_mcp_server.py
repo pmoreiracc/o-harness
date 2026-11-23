@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import shlex
 from pathlib import Path
 import sys
 import tempfile
@@ -43,6 +44,42 @@ def codex_session(home, thread, cwd):
 
 def calling(thread, **extra):
     return {'_meta': {'x-codex-turn-metadata': {'thread_id': thread, 'turn_id': 'turn-1'}} | extra}
+
+
+@unittest.skipIf(os.name == 'nt', 'Windows inherits the host environment')
+class ShellEnvironmentTest(unittest.TestCase):
+    def test_login_shell_runs_detached_and_noninteractive(self):
+        from .mcp_server import shell_environment
+        with tempfile.TemporaryDirectory() as temp:
+            shell = Path(temp) / 'shell'
+            script = ('#!/bin/sh\n[ "$1" = -lc ] || exit 1\n'
+                             f'{shlex.quote(sys.executable)} -c '
+                             '\'import os,sys; assert os.getsid(0) == int(sys.argv[1])\' "$$" || exit 1\n'
+                             'printf __OH_SHELL_ENVIRONMENT__\nFROM_LOGIN=yes env -0\n')
+            shell.write_text(script, newline='\n')
+            shell.chmod(0o700)
+            with patch.dict(os.environ, {'SHELL': str(shell)}):
+                self.assertEqual(shell_environment()['FROM_LOGIN'], 'yes')
+
+    def test_timeout_kills_a_stopped_login_shell(self):
+        from .mcp_server import shell_environment
+        from .system import spawn
+        with tempfile.TemporaryDirectory() as temp:
+            shell = Path(temp) / 'shell'
+            shell.write_text('#!/bin/sh\nkill -STOP "$$"\n', newline='\n')
+            shell.chmod(0o700)
+            with (patch.dict(os.environ, {'SHELL': str(shell)}),
+                  patch('oh.mcp_server.SHELL_TIMEOUT', 0.2),
+                  patch('oh.system.spawn', wraps=spawn) as launch):
+                # Save the real child so its termination can be checked after the probe returns.
+                children = []
+                def record(*args, **kwargs):
+                    child = spawn(*args, **kwargs)
+                    children.append(child)
+                    return child
+                launch.side_effect = record
+                self.assertEqual(shell_environment(), {})
+                self.assertLess(children[0].returncode, 0)
 
 
 class CodexToolsTest(unittest.TestCase):
