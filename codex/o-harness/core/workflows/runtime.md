@@ -20,7 +20,13 @@ absolute `root`; the operation names are in the table below. For example, load a
 workflow with `mcp__o_harness__resource` and read saved work with
 `mcp__o_harness__status` using `saved: true`. In code mode invoke the same tools
 through `text(await tools.mcp__o_harness__<operation>(arguments))` inside `functions.exec`.
-In Claude use the absolute plugin launcher,
+In Claude, create a manifest or native locator file in a separate native file-tool
+call. Then invoke `scope prepare ... --human` or `review --human` as one direct OH
+launcher Bash call, without shell aliases, setup, pipes or another command in that
+call. The same direct form applies to `decision stop`. OH's existing hook routes these exact calls to Claude's
+one-time native permission prompt. It grants no scope or publication authority.
+A combined call is refused with a split-and-retry instruction so other shell
+actions cannot ride on that prompt. Use the absolute plugin launcher,
 `<plugin>/scripts/oh --root <checkout> <command>` (`scripts\oh.cmd` on native Windows).
 
 OH's `resource` is a tool. MCP resource/template listings do not discover OH tools
@@ -38,7 +44,13 @@ For an explicit Stop, inspect the current saved state and bind that actual nativ
 input with `decision stop`; settle owned execution through the normal helpers under
 that request. An unapproved preview uses its existing scope-refusal offer. Do not
 turn Stop into a Resume, new scope or confirmation question, even when no Stop
-question was prepared. Keep the original input through technical retries.
+question was prepared. Keep the original input through technical retries. If the
+host denies the binding command, no further work may start, but OH has not yet
+recorded Stop. Follow the native permission recovery in `workflows/recovery.md`
+and verify the saved run before saying that OH stopped.
+Stopping a native child, including a reviewer, cancels its execution only. Retain
+that cancellation and complete the run-level `decision stop` under the original
+native input before reporting the OH run as stopped.
 
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved
@@ -58,20 +70,21 @@ it through its own normal scope authority without Stop/Pause of the old record.
 Preserve the old grants, attempts, findings and any real local/unmerged work; inspect
 `retained_work` references where they affect the new candidate. Merged output does not
 create missing completion or review evidence.
-When actually continuing an unfinished saved scope, always ask once, even when the command
-names its initiative, design or review subject. A matching request discovers work; it
-is not the resume answer. Free-text proposals and quick fixes need not repeat the old
-words: read their saved scope/report and judge whether this is the same work. Never
-build a similarity parser or silently absorb a changed scope.
+For matching saved work, follow `workflows/recovery.md`. A clear request to
+continue a delivery in its verified owning conversation uses the existing grant
+and saved phase. Delivery recovery or ownership transfer uses
+`decision-request recover` and its Continue, Start fresh, Stop and take over choices.
+Other workflows use their existing Resume decision. Where recovery or Resume
+requires an answer, a matching request identifies the saved work and the actual
+answer binds its continuation. Free-text proposals and quick fixes need not repeat
+the old wording. Read their saved scope and report and judge whether the request
+covers the same work. Never build a similarity parser or silently absorb a changed scope.
 
-For a matching saved run, read `workflows/recovery.md` and `workflows/decisions.md`
-before the first question. Delivery uses `decision-request recover` and its Continue,
-Start fresh, Stop and take over choices; bind its returned action with `decision`.
-Other workflows use Resume. Call Claude `AskUserQuestion` or Codex Default mode
-`functions.request_user_input_async` at these questions. Settle prior native work,
-then bind the same answer;
-continue its actual phase in the same turn without new scope, repeated questions or
-renewed allowances.
+When a decision is needed, read `workflows/decisions.md` and show the prepared
+question once. Use Claude `AskUserQuestion` or Codex Default mode
+`functions.request_user_input_async` with the documented chat fallback.
+Bind the actual answer and settle prior native work through the supported recovery
+path. Continue its actual phase in the same turn with the original scope and allowances.
 For new work, follow the selected workflow's ordered steps below the shared protocol.
 If a real prerequisite question intervenes, retain its initiating request with
 `decision-request --request <native-locator.json>` (Codex `request`). After binding
@@ -321,8 +334,9 @@ handback message mid-turn. Keep the original spawn locator after a native contin
 OH follows its attributed latest outcome and refuses stale completion/cancellation.
 The same authorized coordinator retains settled work and continues its remaining
 phase without another Continue question. Native saving or cleanup is a retry of
-that operation, not a new ownership decision. A new invocation or owner still uses
-the saved-work recovery decision.
+that operation. Follow `workflows/recovery.md` when delivery needs recovery or
+ownership transfer. A new invocation or owner for other workflows still uses
+its existing Resume decision.
 
 An acknowledged report remains historical evidence when the child continues for
 cleanup. Later closing text cannot replace it. If retention returns unfinished,

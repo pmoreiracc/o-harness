@@ -3,10 +3,15 @@ name: deliver
 description: Deliver approved design tasks or a bounded quick fix with fresh native agents and independent review.
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
-entry and communication protocol before new work. For a matching run that still needs recovery after entry reconciliation,
-follow `workflows/recovery.md`; resume its saved phase instead of restarting these steps.
-Use its shared recovery gate (Continue, Start fresh, Stop and take over), including
-when old native transcripts are unavailable. Do not ask the person to repair OH state.
+entry and communication protocol before new work. For matching saved work, follow
+`workflows/recovery.md`. A clear request from the verified owning conversation
+continues the saved phase under its existing grant.
+
+When the delivery still needs recovery after entry reconciliation, use the
+shared **Continue**, **Start fresh**, and **Stop and take over** gate, including
+when old native transcripts are unavailable. Present only the options returned
+by the recovery helper. Do not ask the person to repair OH state.
+
 If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Select the work
@@ -31,24 +36,16 @@ Interpret the requested work as follows:
   with design numbers as labels and names in descriptions. Keep that same question
   on its own line for the typed fallback and pass the actual answer locator.
   The empty invocation itself grants no continuation authority.
-- Approved design number and optional track: use `scope prepare --doc NNNN
+- A named approved design and optional track, given in prose or as a skill
+  argument: check for matching saved work first. For a new delivery, use `scope prepare --doc NNNN
   [--track TRACK] --human <native-locator.json>` (Codex `scope_prepare`). The helper
-  validates approval and selects the first runnable task, skipping completed tasks,
-  explicit blockers and unmet dependencies. With no track specified, it automatically
-  selects the only runnable track; a completed track is not another choice. A merged
-  earlier track does not finish the design while runnable work remains. Proceed under
-  the invocation without asking whether to prepare that work. Do not rebuild tasks as
-  an arbitrary manifest or ask for another trigger. Only if the helper reports multiple
-  runnable tracks, or a concrete design selection is missing, call
-  Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
-  once and preserve the answer. Use a natural question and action labels that identify what will run:
-  **Deliver 0001 core** or **Deliver 0001 other**, for example. For a design
-  choice use **Deliver 0001** with its title in the description. A typed reply
-  can name the same action.
-  Retry `scope prepare` with that answer's native locator, including `tool_use_id`
-  for a menu answer, rather than the older invocation. For a typed fallback, show
-  the same question on its own line and use the actual reply locator. The answer and its native
-  question context select the track; no repeated invocation or extra approval is needed.
+  validates approval and selects the lowest-numbered eligible task at each step.
+  Without a track, the configured batch can span the design. An explicit track
+  limits selection to that track. Skip completed and explicitly blocked tasks,
+  and include a dependent task only when all of its prerequisites are complete or
+  earlier in the saved order. A merged earlier track does not finish the design
+  while runnable work remains. Proceed under the invocation without asking again
+  or building an arbitrary manifest.
 - A bounded change in prose: first compare saved quick-fix scope and reports with
   the requested outcome; offer to resume the same work without requiring identical wording.
   For genuinely new work, inspect the relevant code and correct base, then prepare
@@ -62,9 +59,10 @@ Interpret the requested work as follows:
   the executable scope preview and finite task/review limits; do not spend a human
   answer on a preview that cannot enter delivery. Difficulty and model selection stay
   outside that manifest.
-- Existing prepared or interrupted work: use the matching retained scope and remaining
-  allowance through `resume`; never convert a preparation ID or agent text into a
-  human approval. A complete saved batch proceeds to its actual decision/publication.
+- Existing work: read its saved phase with `resume` and follow the current-owner
+  or recovery path in `workflows/recovery.md`. Preserve the retained scope and
+  remaining allowance. Never convert a preparation ID or agent text into human
+  approval. A complete saved batch proceeds to its pending decision or publication step.
 
 ## 2. Bind the required scope approval
 

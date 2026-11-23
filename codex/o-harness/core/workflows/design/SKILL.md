@@ -4,7 +4,9 @@ description: Draft and independently review one roadmap initiative's project pla
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
 entry and communication protocol before new work. For a matching unfinished run,
-follow `workflows/recovery.md`; resume its saved phase instead of restarting these steps.
+follow `workflows/recovery.md` and continue from the phase returned by the selected action.
+On a new conversation, offer that saved-work choice before replaying a pending
+private design approval or admitting another attempt.
 If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Prepare the initiative
@@ -19,23 +21,27 @@ Read `plans path`. If the repo/private location is undecided, call Claude
 `AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
 Show the actual folder for the selected location. Respect project policy.
 
-Before dependent drafting, read the initiative and nearby roadmap prose, relevant
-decision records and existing decision/Open lists, including an existing design's
-Open section. Identify known questions whose answers would change the approach.
-Discuss those choices with the person before drafting around them: explain the
-context, viable alternatives, consequences and recommendation so the question is
-answerable. Use ordinary discussion and actual free-text replies when short choices
-are inadequate; follow `workflows/decisions.md` for the native question surface.
-A request to discuss or review a proposed decision does not decide it, approve
-scope, renew reviews or authorize publication. Honor the consumer's decision and
-document conventions; OH requires no ADR or particular decision-log format.
+Read the initiative and nearby roadmap prose, relevant decision records and existing
+decision/Open lists, including an existing design's Open section. Prepare one bounded
+planning task with `scope prepare <manifest.json> --workflow design --human
+<native-locator.json>` (Codex `scope_prepare`). Include `design: "<initiative-slug>"` in
+the manifest. The native request authorizes drafting directly. Bind it before asking
+product questions so their replies can inform the saved task.
 
-Prepare one bounded planning task for the requested initiative with `scope prepare
-<manifest.json> --workflow design --human <native-locator.json>` (Codex `scope_prepare`).
-Include `design: "<initiative-slug>"` in the manifest so the saved scope identifies
-its initiative. The native request authorizes drafting directly; do not add a scope-approval question.
-Keep project requirements, ordered tasks, dependencies and acceptance checks in the
-plan; keep difficulty/model/effort in external execution evidence.
+Identify known questions whose answers would change the approach. Explain the context,
+viable alternatives, consequences and recommendation, then ask before admitting the
+dependent drafting attempt. Use ordinary discussion and actual free-text replies when
+short choices are inadequate. Follow the native question guidance in
+`workflows/decisions.md`. Product choices within the initiative guide the design. Changes
+to the requested initiative need a new request, and a Stop follows the existing Stop
+procedure. Product discussion grants no extra work, reviews or publication.
+
+After the person answers in the owning conversation, continue the saved drafting
+phase directly. This includes an ordinary chat reply on a later turn. Use the actual
+choices and any unresolved questions as context in the author's and reviewer's bounded
+prompts. Honor the consumer's decision and document conventions. Keep project
+requirements, ordered tasks, dependencies and acceptance checks in the plan, and
+difficulty/model/effort in external execution evidence.
 
 ## 2. Draft and check
 

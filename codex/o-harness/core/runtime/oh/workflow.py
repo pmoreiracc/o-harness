@@ -185,6 +185,12 @@ def reduce(records):
         elif kind=='review.resolution':state['resolutions'][d['attempt']]=d
         elif kind=='run.owner':state['human']=d['human'];state['host']=d['human']['host']
         elif kind=='recovery.started':state['recovery_intent']=d
+        elif kind=='workflow.restarted':
+            state.update(branch=d['branch'],base=d['base'],done=[],summaries=[],commit_intents={},resolutions={},task_started={})
+            for field in ('proposal_answers','proposals','preview','refinement','verification','candidate',
+                          'private_native_approval','publication','rendered'):
+                state.pop(field,None)
+            for attempt in state['attempts']:attempt['superseded']=True
         elif kind=='delivery.recovered':
             state.update(branch=d['branch'],base=d['base'],done=d['done'],summaries=d['summaries'],granted=d['granted'])
             for key in ('verification','candidate','extra_review','correction','rendered','delivery_render','private_native_approval','publication'):

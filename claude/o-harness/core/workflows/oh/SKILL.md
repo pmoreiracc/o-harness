@@ -12,6 +12,7 @@ approval from this selector invocation alone.
 Route an idea to `workflows/propose/SKILL.md`, a roadmap initiative to
 `workflows/design/SKILL.md`, approved design tasks or a bounded quick fix to
 `workflows/deliver/SKILL.md`, and requested inspection to `workflows/review/SKILL.md`.
-Existing saved work uses the matching resume facts and always needs the one Resume
-choice, even when its subject was supplied. Keep the person's actual request
-and project approval rules; do not turn a request for feedback into implementation.
+For a clear request to continue saved delivery, follow `workflows/recovery.md`
+to check the current owner and resume the saved phase or prepare the recovery
+decision. Other saved work uses its existing Resume choice. Preserve the person's
+request and project approval rules. Do not turn a request for feedback into implementation.

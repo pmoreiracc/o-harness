@@ -4,6 +4,11 @@ Bind an explicit unambiguous Stop immediately with `decision stop` and that actu
 native input. It needs no new question or confirmation, including when the Stop
 question was omitted. For an unapproved scope, use its existing scope-refusal offer;
 for saved work, stop the current run. Never prepare another question in response to Stop.
+In Claude, make the Stop binding one direct OH launcher call with its native locator;
+do not combine it with shell setup or other commands. The same form applies to a
+`scope prepare` call that binds the native request. OH's existing native hook asks
+through Claude's permission prompt for these recognized calls and grants no permission
+itself. Keep the original human input if that prompt needs a retry.
 
 Read before presenting a consequential question. The order is **prepare effect → show
 context and question → wait for the answer → bind that same answer**. Never prepare a
@@ -47,7 +52,11 @@ Reuse that identity and answer on technical retries.
 After successfully binding Resume/Continue or a repair approval, follow the returned
 phase/next action in the same turn. Acknowledgement is a progress update, not completion;
 continue the authorized work until its next real decision or completion. An actual
-Stop or explicit permission refusal remains terminal.
+Stop ends task execution. A person's explicit refusal of native permission remains
+terminal. A host classifier's denial of the `decision stop` tool call is a technical
+block, not a refusal or a recorded Stop: keep the original native Stop input,
+follow `workflows/recovery.md` for a command-specific native retry, and verify
+the saved status before reporting completion. Do not resume work while it is unbound.
 If the person changes the requested scope/count, prepare that actual effect and ask only
 for the changed boundary. Do not infer grants from a model's paraphrase of free text.
 

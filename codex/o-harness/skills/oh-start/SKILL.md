@@ -1,6 +1,6 @@
 ---
 name: oh-start
-description: Choose an OH workflow only when explicitly invoked.
+description: Find ready or saved OH work and choose the workflow to use next.
 ---
 When a choice is needed, introduce the work or setting and explain each option's effect
 in the native menu itself. Keep internal identifiers in tool calls. Wait for the person's choice.

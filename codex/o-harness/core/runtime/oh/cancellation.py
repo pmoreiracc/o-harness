@@ -1,6 +1,7 @@
 """Native interruption records and owned command cleanup; no agent runner or grants.
 
-The host still executes and approves every tool. This module can only revoke work.
+The host still executes and approves every tool. This module can revoke work or
+route a recognized Stop binding to the host's own permission prompt.
 Resume authority remains in native.decision. Old attempts retain their revocation
 when the same conversation receives a new owner epoch.
 """
@@ -384,6 +385,77 @@ def _deny(reason):
             'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
 
 
+def _claude_permission_binding(root, command, session):
+    """Route a literal authority-binding OH call to Claude's own permission UI."""
+    if not isinstance(command, str):return False
+    if '\n' in command or '\r' in command:return False
+    # shlex removes quotes, so check executable expansions before tokenizing.
+    quote='';expansions=[];i=0
+    while i<len(command):
+        char=command[i]
+        if char=='\\' and quote!="'":i+=2;continue
+        if char=="'" and quote!='"':quote='' if quote=="'" else "'"
+        elif char=='"' and quote!="'":quote='' if quote=='"' else '"'
+        elif quote!="'" and char in ('`',):return False
+        elif quote!="'" and char=='$':
+            j=i+1
+            if j==len(command) or not (command[j].isalpha() or command[j]=='_'):return False
+            while j<len(command) and (command[j].isalnum() or command[j]=='_'):j+=1
+            expansions.append(command[i+1:j]);i=j;continue
+        elif not quote and char in ('*','?','['):return False
+        i+=1
+    try:
+        lexer=shlex.shlex(command,posix=True,punctuation_chars=';&|<>()')
+        lexer.whitespace_split=True
+        tokens=list(lexer)
+        words=shlex.split(command)
+    except ValueError:return False
+    operators=[token for token in tokens if token and set(token)<=set(';&|<>()')]
+    alias=(len(tokens)>3 and tokens[0].startswith('O=') and tokens[1]==';' and tokens[2]=='$O')
+    if operators!=([';'] if alias else []):return False
+    if len(words)==7 and words[0].startswith('O=') and words[0].endswith(';') and words[1]=='$O':
+        launcher=words[0][2:-1]
+        words=[launcher]+words[2:]
+    if (len(words)<6 or words[1]!='--root' or
+            words[2]!='$PWD' and Path(words[2]).resolve()!=Path(root).resolve()):
+        return False
+    expected_expansions=(['O'] if alias else [])+(['PWD'] if words[2]=='$PWD' else [])
+    if expansions!=expected_expansions:return False
+    expected=os.environ.get('OH_NATIVE_CONTROL_LAUNCHER')
+    if not expected or Path(words[0]).resolve()!=Path(expected).resolve():
+        return False
+    action=words[3:]
+    if action[:2]==['scope','prepare'] and '--human' in action:
+        return 'scope preparation'
+    if (action and action[0]=='review' and action.count('--human')==1
+            and action.index('--human')+1<len(action)):
+        return 'review entry'
+    if len(action)!=3 or action[:2]!=['decision','stop']:return False
+    try:locator=json.loads(action[2])
+    except ValueError:return False
+    return ('Stop' if isinstance(locator,dict) and locator.get('host')=='claude'
+            and locator.get('session')==session else False)
+
+
+def _claude_binding_request(root,host,payload):
+    """Use only Claude's native permission prompt for a literal OH binding call."""
+    if (host!='claude' or payload.get('hook_event_name')!='PreToolUse'
+            or payload.get('agent_id') or not payload.get('session_id')):return {}
+    shell,command=_shell_command(host,payload.get('tool_name',''),payload.get('tool_input') or {})
+    if not shell:return {}
+    if binding:=_claude_permission_binding(root,command,payload['session_id']):
+        return {'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'ask',
+                'permissionDecisionReason':('Review this exact OH '+binding+' command. '
+                                            'This technical permission grants no new OH work.')}}
+    if (isinstance(command,str) and 'scripts/oh' in command and '--human' in command
+            and ('scope prepare' in command or 'review' in command)):
+        return _deny('Write the native locator separately with the file tool, then invoke the OH '
+                     'launcher directly in one Bash call without shell aliases, setup, or other commands. '
+                     'Retry the same scope prepare or review --human call with the original request. '
+                     'This technical correction needs no new work approval.')
+    return {}
+
+
 def _prepared_menu(root,host,payload):
     """Repair a prepared display before a person answers. This hint grants nothing."""
     name=payload.get('tool_name','')
@@ -418,28 +490,29 @@ def _prepared_menu(root,host,payload):
 
 
 def hook(root, host, payload):
-    """A native callback can revoke or refuse work, never approve or rewrite a tool."""
+    """A native callback can revoke, refuse, or ask for host permission; never approve."""
     from subprocess import CalledProcessError
     from .storage import git
     try:
         root = Path(git(root, 'rev-parse', '--show-toplevel'))
     except CalledProcessError:
         return {}
+    binding=_claude_binding_request(root,host,payload)
     try:
         path = _path(root)
     except Refused as exc:
         if 'not registered' in str(exc):
-            return {}
+            return binding
         raise
     if payload.get('hook_event_name')=='PreToolUse' and not payload.get('agent_id'):
         if malformed:=_prepared_menu(root,host,payload):return malformed
     if not path.exists():
-        return {}
+        return binding
     # Resolve registration once for this synchronous callback. Repeated Git
     # identity checks in poll/read/edit can otherwise exhaust the host deadline.
     token=_hook_checkout.set((root,path));callback=_callback.set(True)
     try:
-        try:return _hook(root,host,payload)
+        try:return _hook(root,host,payload) or binding
         except Refused as exc:
             if not isinstance(exc.__context__,BlockingIOError):raise
             value=_read(root);actor=_actor(value,host,payload)

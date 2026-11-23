@@ -1,14 +1,21 @@
 ---
 name: oh-resume
-description: Continue saved OH work or its pending decision in this session, on either host, with existing allowances.
-disable-model-invocation: true
+description: Use when the user asks to continue an existing OH workflow or its pending decision.
 ---
-Load `workflows/runtime.md` through OH's resource entry, then inspect `status --saved`
+Load `workflows/runtime.md` through OH's resource entry. Inspect `status --saved`
 and `resume --run ID` facts (Codex `status` with `saved`, `resume` with `run`).
-Discovery never changes the selected run. Show the requested saved subject, branch,
-next step and remaining allowance. Read `workflows/recovery.md` and `workflows/decisions.md`,
-then prepare `decision-request recover --run ID` for delivery, or `decision-request resume --run ID`
-for planning/review, before asking its returned question once. Delivery presents the
+Read `workflows/entry.md` and call `entry` before giving current delivery or
+recovery advice. These reads leave selection and grants as they are. Show the
+requested subject, branch, last confirmed work, next action and remaining allowance.
+Distinguish committed work from remaining checkout edits. Keep internal IDs in tool
+calls. Answer status questions from those facts. If the intended work is unclear,
+clarify the subject before preparing a decision or taking action.
+
+For delivery, follow the current-owner and recovery paths in `workflows/recovery.md`.
+When the verified owner receives a clear request to continue that delivery, load
+`workflows/deliver/SKILL.md` and carry out the authorized saved phase in this turn. For a genuine recovery or transfer, read
+`workflows/decisions.md` and prepare `decision-request recover --run ID` for
+delivery or `decision-request resume --run ID` for planning/review. Delivery presents the
 returned disclosure in chat before its short question. For a single option use only
 the direct chat reply. The usual choices are Continue, Start fresh and Stop and take over.
 Bind the selected action from its returned `actions`
@@ -25,8 +32,9 @@ never reuse a completed reviewer or renew allowances to switch hosts. Preserve u
 unfinished edits. Report the actual resumed work, not a new implementation introduction
 when only a decision or publication remains.
 For the ordinary Resume question, bind continuation with `resume --run ID --human <native-locator.json>`
-(Codex `resume` with its human locator). Stop and take over binds `decision stop`
-using the same run and prepared decision. A factual status read alone grants nothing.
+(Codex `resume` with its human locator). For a prepared Stop and take over,
+use `decision stop <human-locator.json>` (Codex `decision` with kind `stop`).
+Include the decision ID in that locator, which identifies the run.
 The old conversation may remain open. Require no prior Stop/Pause when no attempt or
 check is executing, even if legacy saved status still says running. After continuation,
 only the current coordinator launches further OH operations; keep earlier attempts

@@ -4,8 +4,18 @@ description: Independently inspect a specified subject and offer bounded repairs
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
 entry and communication protocol before new work. For a matching unfinished run,
-follow `workflows/recovery.md`; resume its saved phase instead of restarting these steps.
+follow `workflows/recovery.md` and continue from the phase returned by the selected action.
+On a new conversation, offer that saved-work choice before replaying pending
+review feedback or admitting another reviewer.
 If the subject is missing, discover relevant saved work before asking for it.
+When Start fresh is selected, bind that menu answer with `decision restart` on
+the saved review run. Use the returned review phase to admit a fresh reviewer;
+do not call the new-review entry or `prepare` again. The old attempt remains
+history, and OH settles it before the new reviewer starts.
+If the person says Stop while a reviewer is running, cancel that child and bind
+the same native Stop input with `decision stop` on the saved review run. Check
+that OH reports `stopped` before saying the review is stopped. Stopping the
+child alone leaves the OH run open; never treat it as the completed Stop.
 
 Terminal feedback is a completed report. An explicit new review uses a fresh agent;
 preserve underlying workflow work when selecting standalone feedback or returning to it.
@@ -22,16 +32,24 @@ change is reviewed as a commit or range. Honor an explicit feedback-only request
 
 ## 2. Bind, launch and retain
 
-Call `review -- <selector...>` (Codex `review` with selector arguments) to bind that
-subject, then admit a fresh invariant reviewer agent (`review`) with the configured profile and bounded
-packet. Bind its native child identity, wait and retain its complete original report.
+Call `review --human <locator.json> [-- <selector...>]` as one direct Claude OH
+launcher call after writing the native locator with a file tool; do not prepend
+shell aliases or another command. In Codex use `review` with selector arguments
+and the native locator. A host permission denial is technical: retry the direct
+call under the same request and check saved status before reporting a blocker.
+Next call `attempt admit review` and inspect its attempt ID, configured
+profile and bounded request packet. Only then launch the native invariant reviewer
+with that packet; bind its child identity with `attempt bind`, wait and retain its
+complete original report. A reviewer launched before OH admission cannot produce
+an OH review receipt; do not report its output as the saved review.
 Do not require an author report or design document, run product tests or start repairs
 merely to obtain feedback. The requested subject and project requirements determine
 which evidence is needed.
 
 ## 3. Return the feedback
 
-Present the actual outcome, concrete findings, evidence and limits with the readable
+Read the saved OH result after retaining the reviewer. Present the actual durable
+status, outcome, concrete findings, evidence and limits with the readable
 report. This standalone receipt is feedback about its exact subject, never a delivery
 round, completion approval or repair authorization. Read `workflows/findings.md` for outside-scope follow-ups: preserve and surface findings, offer
 context-appropriate tracking when useful, and never require routing just to return feedback.

@@ -1,6 +1,6 @@
 interface:
   display_name: "oh-start"
-  short_description: "Explicit OH workflow or run control"
+  short_description: "Find work and choose an OH workflow"
   icon_small: "./assets/icon.png"
   icon_large: "./assets/icon.png"
 policy:

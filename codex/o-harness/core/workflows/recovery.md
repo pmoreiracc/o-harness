@@ -5,6 +5,14 @@ saved/local/origin facts. Preserve local work while gathering information. Deliv
 recovery questions report their observed base freshness separately from the selected
 discard/continuation effect; a cached base is not verified current origin.
 
+For Propose, Design and standalone Review, a matching unfinished run entered from
+a new conversation needs its saved-work decision before advancing any phase. This
+includes a completed author waiting on a proposal preview, a reviewed design
+waiting on private approval, and review feedback waiting on a repair choice. Show
+Resume saved work, Start fresh and Stop and take over when available. A reply in
+the owning conversation to an already presented approval binds that approval
+directly; do not interrupt it with a new saved-work question.
+
 If entry reports a merged batch, use its next-task guidance. A stale unpublished checkpoint does not require Resume when its completed batch is on the refreshed base and its saved branch has no additional work. Read the approved plan on that base and use the current invocation with scope prepare. Preserve the old journal as history.
 
 ## Idle history and selection
@@ -86,6 +94,24 @@ press `r`, then `Esc` to request its retry. This adds no allow rule, and auto mo
 the retry again. The agent must not approve its own denied call, change permission policy,
 disguise the command, or execute it through another tool to evade the denial.
 
+The recognized direct Claude `scope prepare ... --human`, `review --human`, and
+`decision stop` calls
+go to Claude's native one-time permission prompt through OH's existing hook. Create
+input files in separate calls; a combined shell call is refused with instructions
+to split it and retry the same native request. If the hook is unavailable or Claude
+still denies a Stop binding, the native Stop forbids further task work, but the OH
+run is not yet stopped. Keep
+the original Stop locator and the exact denied call. Show a native permission
+choice for that call and wait for the person's answer while the turn remains
+active; do not end with a claim that OH stopped or ask them to run OH in a shell.
+Use the host's one-time retry without sending a new ordinary chat message, so the
+original Stop remains the current native input. If auto mode denies it again, use
+Claude's native permission-mode control to switch that session to Manual and
+request the exact command there; Manual asks the person before running it. Neither
+path grants a persistent rule. Then verify the journal status. If the person
+refuses the command or the host still blocks it, report the unrecorded Stop and
+current saved status, and offer the supported native takeover path.
+
 Once the person has authorized the native retry, preserve the original acceptance
 locator and retry that binding, then inspect OH's actual result. A host retry does not
 approve changed scope, renew an allowance, or waive an OH refusal. For a changed plan,
@@ -119,12 +145,25 @@ inspect callback errors, actor identity and the exact formatted command instead.
 
 ## Delivery entry and recovery
 
-This entry decision is for selecting saved work in a new invocation or ownership
-transfer. An already-authorized coordinator handling its own pending attempt first
-retains the original native result and continues the same phase. Do not turn a
-normal handback, cleanup continuation or delayed result into another Continue gate.
+Match the request to the saved scope and reconcile entry facts before continuing.
+For a clear request to continue the selected delivery, read `resume --run ID`
+(Codex `resume` with `run` and no `human`). If `continuation.owner` matches the
+current native conversation's host and session from its conversation reference,
+continue the returned phase under the saved authority. Retain or await the original
+attempt if one is pending. Show the actual task and last confirmed result, then
+take the next authorized step. Present any real pending decision through its
+existing path. Preserve the scope, branch, findings and remaining allowances.
+Do not turn a normal handback, cleanup continuation or delayed result into a new
+Continue question.
 
-For an unfinished delivery, use `decision-request recover --run ID` (Codex
+If entry stopped before recording its grant, use the original entry helper and
+native locator to finish that accepted entry when available. If the host is
+saving execution evidence, briefly retry the same read. A different conversation,
+changed selection, paused or stopped work,
+or unresolved ownership uses the existing recovery decision. A request for status
+only calls for an explanation of the saved phase and next action.
+
+For a delivery that needs recovery, use `decision-request recover --run ID` (Codex
 `decision_request` with kind `recover`). It inspects Git and prepares one native
 question. Explain the effects in plain language, including the affected paths or inspection link before a discard. Then ask its short question with its
 short buttons: **Continue**, **Start fresh**, **Stop and take over**. Present only
@@ -134,7 +173,8 @@ If a required input is missing, explain the reason returned with the question. I
 Stop is available, ask only in ordinary chat and bind the explicit answer.
 
 Bind the chosen action from the returned `actions` map with `decision` and that
-same human locator, including its decision ID. Continue uses `resume`, Start fresh
+same human locator, including its decision ID. In Claude use `decision KIND <human-locator.json>`.
+The prepared decision identifies the run. Continue uses `resume`, Start fresh
 uses `restart`, and Stop and take over uses `stop`. The helper retains available
 results, revokes old execution, checks tracked operation cleanup and binds the new
 owner. A deleted chat does not require recreating its transcript: missing results
@@ -185,12 +225,17 @@ first, present its actual question, and preserve the answer while settling old n
 Show the selected subject, branch, latest result, next step and remaining allowance.
 Prepare the Resume decision for that run before presenting its native question, then
 call Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
-with the returned question and both choices. Bind Stop and take over with
+with the returned question and all available choices. Start fresh restarts planning on a new
+branch at the disclosed configured base, preserving the old branch, edits and any private
+planning documents. For standalone review it reopens the same captured subject, preserving
+the checkout in the same saved run. Bind the choice with `decision restart` before
+admitting another agent; do not call the new-review entry or `prepare` again. Continue authoring or review
+from the returned phase. Spent review rounds still count. Bind Stop and take over with
 `decision stop` for the same run and decision ID. It settles the run's old native
 work and preserves its files. Wait for the actual answer before continuation,
 legacy adoption or retaining an old result. A matching invocation is not that
 answer. If old operations or native saves are still settling, retry the same
-Resume or Stop answer after a short wait.
+selected answer after a short wait.
 
 With no subject, show relevant unfinished work first. If several runs plausibly match,
 use Claude `AskUserQuestion` or Codex Default mode `functions.request_user_input_async`
