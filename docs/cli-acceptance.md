@@ -63,6 +63,35 @@ For a saved native conversation, pass `--resume SESSION_ID --prompt 'actual answ
 Only do so after its prior native process has exited. Native approval review remains
 enabled; the launcher does not bypass permissions or hook trust.
 
+For a saved-work restart change, re-enter unfinished Design, Propose and standalone
+Review in disposable projects on each host. Use the dedicated `review` fixture for
+standalone Review; its uncommitted `answer.txt` change is the captured subject and
+it permits native reviewer launch. Inspect the returned menu and select
+Start fresh. Check the planning base and preservation of the previous edits, or the
+exact captured review subject and unchanged checkout. Check the original grant and
+spent review count, then verify the new attempt starts in the same saved run,
+without another new-work preparation.
+
+For the Claude auto-mode Stop regression, send an actual Stop while a Design author
+is active. The earlier failing candidate's `decision stop` call was silently denied
+as Undermining Oversight. On the final candidate, check that the recognized command
+opens Claude's native one-time permission prompt, no more work starts while it waits,
+and the saved run becomes stopped only after approval and owned execution settles.
+Keep a classifier denial as a failed first observation if it recurs; then test the
+documented native retry. Report the permission choice and recovery separately.
+For the same host-permission family, check that Propose and Design prepare their
+manifests and native locators separately, then invoke `scope prepare --human` in
+one direct call. A combined shell call must be refused before its side effects;
+the direct retry should show native one-time permission and bind the original
+request once, without a broad allow rule or another scope question.
+Check standalone Claude Review's first `review --human` binding as well. A shell
+alias or combined call must get a direct-call retry instruction; the direct retry
+must use Claude's native permission prompt and admit the reviewer under the
+original request, with no broad allow rule.
+In a standalone Review fixture, send Stop during its native reviewer. The child
+must be cancelled and retained, and the same Stop must set the OH review run to
+`stopped`; a cancelled child with a still-running OH run is a failed result.
+
 ## Live sanity
 
 Use the `sanity` fixture for the pre-PR run. Run the following slices in both installed
@@ -80,7 +109,7 @@ reduce operator delay, not coverage.
 | Slice | Action in the real host | Check the effect |
 | --- | --- | --- |
 | Propose | In `planning`, propose the small greeting initiative described in P and accept its native preview. | The prospective row validates before the first approval; one approval records the same semantic addition in M1, which validates and passes review. Syntax-only repair does not ask again; application files stay at baseline. |
-| Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Accept the actual reviewed design. | The design and roadmap validate and Deliver selects the approved task. Application files stay at baseline. |
+| Design | In the independent private `design` fixture, invoke Design for the pre-existing greeting initiative. Choose a wording for the greeting, then accept the actual reviewed design. | Before the choice, OH retains one Design run with zero attempts. The reply leads to drafting on that run without another invocation or approval question. The design uses the chosen wording, the design and roadmap validate, and Deliver selects the approved task. Application files stay at baseline. |
 | Delivery | Give the delivery fixture a private test remote and a passing hosted check before entry. Ask “Deliver approved design 0001”, then send Stop at the selection boundary before workers, with no prepared Stop question. Exit, resume in a fresh conversation, then deliver task 1, review it and select publication. | Stop preserved the grant with zero attempts; one real Continue in a fresh session enters the authorized phase in the same turn without an operator nudge or allowance renewal. Report any extra nudge as an assisted recovery, not an autonomous pass. The first assessment reaches supported native permission directly when private state is outside writable roots, without a throwaway worker; a later helper uses the same supported access. Only the selected task edits `answer.txt`, the actual check and fresh review precede completion. The menu itself names the completed work and offers task 2 from the Other track, the PR destination and Stop. Select publication once. A second question for the same effect fails this slice even if a later retry publishes. Exactly one PR links the reviewed HEAD and passes CI; task 2 remains pending and marker.txt stays unchanged. |
 | Quick fix | In the choice project request a one-file quick fix, inspect the actual bounded scope, and decline it in the prepared scope menu. | One actual Stop binds a scope decline. Verify its receipt, no new run, no implementation, approval, edits or publication. |
 
@@ -90,7 +119,11 @@ concern findings, supporting repair or long discard list as applicable. In a des
 trial check the Codex right panel alongside its chat choice and Claude’s native quick-fix
 plan acceptance. On a CLI check the readable in-chat material and a single bound answer.
 
-The independent Design fixture contains a normal roadmap initiative only. The host still drafts, checks, reviews and accepts its design. Nightly P also exercises the direct handoff from the newly created proposal.
+The greeting initiative asks the person to choose between `hello` and `welcome`.
+When Design asks for the choice, use `inspect --scenario design` to check the
+saved run and absence of attempts. Reply with the choice alone, then confirm drafting
+starts on the same run. This covers a question on the ordinary Design path within the
+existing sanity slice. Nightly P also exercises the handoff from a new proposal.
 
 For outside-state helper acceptance, leave the first assessment's native permission
 request pending across a coordinator wait before approving it. Verify the same child

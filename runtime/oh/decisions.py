@@ -102,7 +102,7 @@ def _checkpoint(root,state,kind,details):
 
 
 def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,request=None,after=None):
-    from .native import _locked, _attempt, _saved_subject, _active
+    from .native import _locked, _attempt, _saved_subject, _active, _finished
     with _locked(root):
         journal,state=load_run(root,run)
         entry_request=None
@@ -204,6 +204,13 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
             if kind=='accept-concerns':title=f'How should we handle the findings for {subject}?'
             if kind=='approve-repair':title=f'Expand task {task["id"]} to include the proposed repair?'
             value.update(disclosure=compact_details,question=title,menu_options=options)
+        if (kind=='resume' and not also and state['workflow'] in ('design','propose','review')
+                and not _finished(state) and len(state['done'])<len(state['tasks'])):
+            from .recovery import restart_option
+            restart_option(root,state,value)
+            if 'choices' in value:
+                options=value['menu_options']
+                actions={label:action for action,label in value['choices'].items()}
         # The existing immutable scope or reviewed artifact gives a generic
         # affirmative button a concrete subject without prescribing its wording.
         if kind in ('approve-private','approve-proposal','accept-concerns'):

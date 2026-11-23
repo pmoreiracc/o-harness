@@ -13,6 +13,7 @@ def main():
         return
     arguments = [str(Path(__file__).with_name('oh')), '--root', payload['cwd'],
                  'native-control', sys.argv[1]]
+    os.environ['OH_NATIVE_CONTROL_LAUNCHER'] = arguments[0]
     if os.name == 'nt' and sys.flags.utf8_mode:
         # The native host already bounds this hook. Reuse its isolated Python
         # instead of spending the Interrupt deadline relaunching two interpreters.
@@ -26,7 +27,7 @@ def main():
     # the retained payload explicitly because the original stdin was consumed.
     command = [sys.executable, '-I', *(['-X', 'utf8'] if os.name == 'nt' else []), *arguments]
     done = subprocess.run(command, input=json.dumps(payload), capture_output=True,
-                          text=True, encoding='utf-8', timeout=2.5)
+                          text=True, encoding='utf-8', timeout=2.5, env=os.environ.copy())
     if done.returncode:
         print('OH could not verify native Stop control: ' + done.stderr.strip()[-500:], file=sys.stderr)
         raise SystemExit(1)

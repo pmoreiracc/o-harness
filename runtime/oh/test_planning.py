@@ -7,10 +7,11 @@ from .storage import Refused
 from .workflow import load_run
 from .test_fixtures_workflow import NativeFixture
 from .test_fixtures_plans import BODY
+from .authority import coordinator
 
 
 class PlanningTest(NativeFixture,unittest.TestCase):
-    def planning(self,workflow,location,request=None,before=None):
+    def planning(self,workflow,location,request=None,before=None,locator=None):
         change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
         change(self.root,'plans.location',location)
         self.where=plans.layout(self.root)
@@ -20,7 +21,123 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         if location=='repo':self.git('add','.');self.git('commit','-qm','planning context')
         manifest={'tasks':[{'id':workflow,'title':'Plan the sign-in flow','instructions':'Write the requested bounded plan.'}]}
         prompt=request or ('Plan the sign-in flow.' if workflow=='design' else 'Propose the sign-in flow.')
-        return native.prepare_scope(self.root,manifest,workflow=workflow,human=self.human(prompt))
+        return native.prepare_scope(self.root,manifest,workflow=workflow,human=locator or self.human(prompt))
+
+    def test_design_restart_preserves_old_draft_and_resumes_authoring_from_base(self):
+        from . import decisions, workspace
+        self.planning('design','repo',request='/oh-design auth')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        base=self.git('rev-parse','origin/main')
+        original=self.git('branch','--show-current')
+        draft=self.root/'wip.md'
+        self.finish_attempt('analysis',{'summary':'Wrote a draft.'},edit=lambda:draft.write_text('first draft'))
+        gate=decisions.prepare(self.root,'resume')
+        self.assertEqual(list(gate['actions'].values()),['resume','restart','stop'])
+        answer=self.offered_answer(gate,'Start fresh')
+        result=native.decision(self.root,'restart',answer)
+        self.assertEqual(result['continuation']['phase'],'authoring')
+        self.assertTrue(result['attempts'][0]['superseded'])
+        self.assertEqual(self.git('rev-parse','HEAD'),base)
+        self.assertFalse(draft.exists())
+        native.decision(self.root,'restart',answer)
+        workspace.switch(self.root,original)
+        self.assertEqual(draft.read_text(),'first draft')
+
+    def test_planning_restart_refuses_a_changed_base_before_switching(self):
+        from . import decisions
+        self.planning('design','repo',request='/oh-design auth')
+        original=self.git('branch','--show-current')
+        gate=decisions.prepare(self.root,'resume')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        with self.assertRaisesRegex(Refused,'restart base changed'):
+            native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'))
+        self.assertEqual(self.git('branch','--show-current'),original)
+        self.assertEqual(load_run(self.root)[1]['attempts'],[])
+
+    def test_private_proposal_restart_requires_a_new_preview_approval(self):
+        from . import decisions
+        self.planning('propose','private')
+        author=self.finish_attempt('analysis',{'summary':'Propose sign-in.'})
+        preview=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        native.decision(self.root,'approve-proposal',self.offered_answer(preview,preview['options'][0]),attempt=author['id'])
+        self.reviewed()
+        gate=decisions.prepare(self.root,'resume')
+        restarted=native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'))
+        self.assertEqual(restarted['reviews_used'],1)
+        self.assertFalse(load_run(self.root)[1].get('proposal_answers'))
+        self.finish_attempt('analysis',{'summary':'New proposal.'})
+        self.assertEqual(native.select(self.root)['continuation']['pending_decision'],'proposal_approval')
+
+    def test_unapproved_proposal_preview_can_start_fresh_on_reentry(self):
+        from . import decisions
+        self.planning('propose','private')
+        author=self.finish_attempt('analysis',{'summary':'Propose sign-in.'})
+        preview=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        self.assertIn('Start fresh',native.saved_work(self.root)['next'])
+        gate=decisions.prepare(self.root,'resume')
+        self.assertEqual(list(gate['actions'].values()),['resume','restart','stop'])
+        restarted=native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'))
+        self.assertEqual(restarted['continuation']['phase'],'authoring')
+        self.assertTrue(load_run(self.root)[1]['attempts'][0]['superseded'])
+        with self.assertRaises(Refused):
+            native.decision(self.root,'approve-proposal',self.offered_answer(preview,preview['options'][0]),attempt=author['id'])
+
+    def test_review_restart_preserves_uncommitted_subject(self):
+        from . import decisions
+        path=self.root/'uncommitted.txt'
+        path.write_text('review these bytes')
+        run=native.review(self.root,'changes',self.human('Review my changes.'))
+        original=load_run(self.root,run['id'])[1]
+        gate=decisions.prepare(self.root,'resume',run=run['id'])
+        result=native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'),run=run['id'])
+        self.assertEqual(result['run'],run['id'])
+        self.assertEqual(result['continuation']['phase'],'review')
+        self.assertEqual(load_run(self.root,run['id'])[1]['standalone_artifact'],original['standalone_artifact'])
+        self.assertEqual(path.read_text(),'review these bytes')
+        self.assertEqual(self.git('branch','--show-current'),original['branch'])
+
+    def test_design_drafting_continues_after_a_native_product_reply(self):
+        import json
+        from unittest.mock import patch
+        from . import authority
+        from .storage import now
+
+        session = 'design-parent'
+        request = '$oh-design auth'
+        home = Path(self.temp.name) / 'codex'
+        transcript = home / 'sessions' / (session + '.jsonl')
+        transcript.parent.mkdir(parents=True)
+
+        def record(value):
+            with transcript.open('a', encoding='utf-8', newline='\n') as stream:
+                stream.write(json.dumps(value) + '\n')
+
+        def message(turn, text):
+            record({'type': 'event_msg', 'timestamp': now(), 'payload': {
+                'type': 'user_message', 'turn_id': turn, 'message': text}})
+        record({'type': 'session_meta', 'payload': {
+            'id': session, 'source': 'cli', 'cwd': str(self.root)}})
+        message('1', request)
+        original = {'host': 'codex', 'session': session, 'turn': '1', 'prompt': request,
+                    'transcript_path': str(transcript)}
+        with patch.dict('os.environ', {'CODEX_HOME': str(home), 'CODEX_THREAD_ID': session}), \
+                patch('oh.authority.native_human', side_effect=self.native_human_original), \
+                patch('oh.authority.coordinator', wraps=coordinator):
+            started = self.planning('design', 'private', request=request, locator=original)
+            self.assertEqual(load_run(self.root)[1]['attempts'], [])
+
+            message('2', 'Use a passkey.')
+            with self.assertRaises(authority.Expired):
+                authority.native_human(self.root, original)
+
+            author = native.admit(self.root, 'analysis')
+            journal, state = load_run(self.root)
+            self.assertEqual(state['id'], started['run'])
+            self.assertEqual(state['attempts'][0]['id'], author['id'])
+            self.assertEqual(state['design'], 'auth')
+            self.assertEqual(state['human']['prompt'], request)
+            self.assertEqual(len(state['attempts']), 1)
+            self.assertEqual([entry['kind'] for entry in journal.records()].count('grant'), 1)
 
     def test_private_design_requires_human_approval_of_the_exact_reviewed_artifacts(self):
         self.planning('design','private',request='/oh-design auth');head=self.git('rev-parse','HEAD')
