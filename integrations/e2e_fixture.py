@@ -93,7 +93,7 @@ def prepare(codex_model, claude_model, suite):
                       for role in ('simple', 'standard', 'complex', 'review', 'insights')}
                 for host, model in (('codex', codex_model), ('claude', claude_model))}
     # Isolate the two sanity planning paths so their real sessions can overlap.
-    scenarios = ('delivery', 'planning', 'choice', 'design', 'merged') if sanity else ('delivery', 'planning', 'choice', 'merged')
+    scenarios = ('delivery', 'planning', 'choice', 'design', 'review', 'merged') if sanity else ('delivery', 'planning', 'choice', 'review', 'merged')
     for host in ('codex', 'claude'):
         for scenario in scenarios:
             root = base / f'{host}-{scenario}';root.mkdir()
@@ -140,7 +140,7 @@ def prepare(codex_model, claude_model, suite):
             git(root, 'add', '.');git(root, 'commit', '-qm', 'tiny acceptance fixture')
             register(root, f'Acceptance {host} {scenario}')
             edit(root, 'project', lambda c: c.update({
-                'plans': {'location': 'private' if scenario in ('planning', 'design') else 'repo',
+                'plans': {'location': 'private' if scenario in ('planning', 'design', 'review') else 'repo',
                           'private_folder': str(base / 'plans')},
                 'base_branch': 'main', 'tasks_per_batch': 2 if scenario == 'delivery' and not sanity else 1,
                 'review_rounds': 2,
@@ -151,7 +151,7 @@ def prepare(codex_model, claude_model, suite):
             if scenario == 'design':
                 plans.add_initiative(root, where, 'M1', 'greeting',
                                      'Change answer.txt from before to after and create greeting.txt with hello or welcome. The person chooses the greeting wording. Preserve other application files.', [])
-            elif scenario != 'planning':
+            elif scenario not in ('planning','review'):
                 plans.add_initiative(root, where, 'M1', 'trial', 'Tiny delivery', [])
                 body = ('## Why\n\nVerify ordinary delivery.\n\n## Tasks\n\n### Core track\n\n'
                         '- [ ] **1.** Change answer.txt to exactly after followed by one newline. '
@@ -170,6 +170,8 @@ def prepare(codex_model, claude_model, suite):
                 plans.claim(root, where, 'trial', number)
                 git(root, 'add', '.');git(root, 'commit', '-qm', 'approved acceptance design')
             git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+            if scenario == 'review':
+                (root / 'answer.txt').write_text('after\n', encoding='utf-8', newline='\n')
     (base / 'codex-home').mkdir()
     roots = [base / f'codex-{scenario}' for scenario in scenarios]
     (base / 'codex-home/config.toml').write_text(
@@ -317,10 +319,10 @@ def main():
     new.add_argument('--claude-model', required=True)
     observe = sub.add_parser('inspect')
     observe.add_argument('directory');observe.add_argument('--host', choices=('codex', 'claude'), required=True)
-    observe.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design', 'merged'), required=True)
+    observe.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design', 'review', 'merged'), required=True)
     start = sub.add_parser('launch', help='open the native CLI; operator answers its actual questions')
     start.add_argument('directory');start.add_argument('--host', choices=('codex', 'claude'), required=True)
-    start.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design', 'merged'), required=True)
+    start.add_argument('--scenario', choices=('delivery', 'planning', 'choice', 'design', 'review', 'merged'), required=True)
     start.add_argument('--prompt', required=True);start.add_argument('--resume')
     args = parser.parse_args()
     if args.command == 'login-codex':codex_login()

@@ -20,7 +20,13 @@ absolute `root`; the operation names are in the table below. For example, load a
 workflow with `mcp__o_harness__resource` and read saved work with
 `mcp__o_harness__status` using `saved: true`. In code mode invoke the same tools
 through `text(await tools.mcp__o_harness__<operation>(arguments))` inside `functions.exec`.
-In Claude use the absolute plugin launcher,
+In Claude, create a manifest or native locator file in a separate native file-tool
+call. Then invoke `scope prepare ... --human` or `review --human` as one direct OH
+launcher Bash call, without shell aliases, setup, pipes or another command in that
+call. The same direct form applies to `decision stop`. OH's existing hook routes these exact calls to Claude's
+one-time native permission prompt. It grants no scope or publication authority.
+A combined call is refused with a split-and-retry instruction so other shell
+actions cannot ride on that prompt. Use the absolute plugin launcher,
 `<plugin>/scripts/oh --root <checkout> <command>` (`scripts\oh.cmd` on native Windows).
 
 OH's `resource` is a tool. MCP resource/template listings do not discover OH tools
@@ -38,7 +44,13 @@ For an explicit Stop, inspect the current saved state and bind that actual nativ
 input with `decision stop`; settle owned execution through the normal helpers under
 that request. An unapproved preview uses its existing scope-refusal offer. Do not
 turn Stop into a Resume, new scope or confirmation question, even when no Stop
-question was prepared. Keep the original input through technical retries.
+question was prepared. Keep the original input through technical retries. If the
+host denies the binding command, no further work may start, but OH has not yet
+recorded Stop. Follow the native permission recovery in `workflows/recovery.md`
+and verify the saved run before saying that OH stopped.
+Stopping a native child, including a reviewer, cancels its execution only. Retain
+that cancellation and complete the run-level `decision stop` under the original
+native input before reporting the OH run as stopped.
 
 Before asking for missing arguments, choosing a branch or preparing any new scope,
 read `status --saved` (Codex `status` with `saved: true`). This reads both the saved

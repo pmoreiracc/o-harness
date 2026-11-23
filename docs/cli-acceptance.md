@@ -63,6 +63,35 @@ For a saved native conversation, pass `--resume SESSION_ID --prompt 'actual answ
 Only do so after its prior native process has exited. Native approval review remains
 enabled; the launcher does not bypass permissions or hook trust.
 
+For a saved-work restart change, re-enter unfinished Design, Propose and standalone
+Review in disposable projects on each host. Use the dedicated `review` fixture for
+standalone Review; its uncommitted `answer.txt` change is the captured subject and
+it permits native reviewer launch. Inspect the returned menu and select
+Start fresh. Check the planning base and preservation of the previous edits, or the
+exact captured review subject and unchanged checkout. Check the original grant and
+spent review count, then verify the new attempt starts in the same saved run,
+without another new-work preparation.
+
+For the Claude auto-mode Stop regression, send an actual Stop while a Design author
+is active. The earlier failing candidate's `decision stop` call was silently denied
+as Undermining Oversight. On the final candidate, check that the recognized command
+opens Claude's native one-time permission prompt, no more work starts while it waits,
+and the saved run becomes stopped only after approval and owned execution settles.
+Keep a classifier denial as a failed first observation if it recurs; then test the
+documented native retry. Report the permission choice and recovery separately.
+For the same host-permission family, check that Propose and Design prepare their
+manifests and native locators separately, then invoke `scope prepare --human` in
+one direct call. A combined shell call must be refused before its side effects;
+the direct retry should show native one-time permission and bind the original
+request once, without a broad allow rule or another scope question.
+Check standalone Claude Review's first `review --human` binding as well. A shell
+alias or combined call must get a direct-call retry instruction; the direct retry
+must use Claude's native permission prompt and admit the reviewer under the
+original request, with no broad allow rule.
+In a standalone Review fixture, send Stop during its native reviewer. The child
+must be cancelled and retained, and the same Stop must set the OH review run to
+`stopped`; a cancelled child with a still-running OH run is a failed result.
+
 ## Live sanity
 
 Use the `sanity` fixture for the pre-PR run. Run the following slices in both installed

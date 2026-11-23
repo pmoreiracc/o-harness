@@ -23,6 +23,79 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         prompt=request or ('Plan the sign-in flow.' if workflow=='design' else 'Propose the sign-in flow.')
         return native.prepare_scope(self.root,manifest,workflow=workflow,human=locator or self.human(prompt))
 
+    def test_design_restart_preserves_old_draft_and_resumes_authoring_from_base(self):
+        from . import decisions, workspace
+        self.planning('design','repo',request='/oh-design auth')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        base=self.git('rev-parse','origin/main')
+        original=self.git('branch','--show-current')
+        draft=self.root/'wip.md'
+        self.finish_attempt('analysis',{'summary':'Wrote a draft.'},edit=lambda:draft.write_text('first draft'))
+        gate=decisions.prepare(self.root,'resume')
+        self.assertEqual(list(gate['actions'].values()),['resume','restart','stop'])
+        answer=self.offered_answer(gate,'Start fresh')
+        result=native.decision(self.root,'restart',answer)
+        self.assertEqual(result['continuation']['phase'],'authoring')
+        self.assertTrue(result['attempts'][0]['superseded'])
+        self.assertEqual(self.git('rev-parse','HEAD'),base)
+        self.assertFalse(draft.exists())
+        native.decision(self.root,'restart',answer)
+        workspace.switch(self.root,original)
+        self.assertEqual(draft.read_text(),'first draft')
+
+    def test_planning_restart_refuses_a_changed_base_before_switching(self):
+        from . import decisions
+        self.planning('design','repo',request='/oh-design auth')
+        original=self.git('branch','--show-current')
+        gate=decisions.prepare(self.root,'resume')
+        self.git('update-ref','refs/remotes/origin/main','HEAD')
+        with self.assertRaisesRegex(Refused,'restart base changed'):
+            native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'))
+        self.assertEqual(self.git('branch','--show-current'),original)
+        self.assertEqual(load_run(self.root)[1]['attempts'],[])
+
+    def test_private_proposal_restart_requires_a_new_preview_approval(self):
+        from . import decisions
+        self.planning('propose','private')
+        author=self.finish_attempt('analysis',{'summary':'Propose sign-in.'})
+        preview=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        native.decision(self.root,'approve-proposal',self.offered_answer(preview,preview['options'][0]),attempt=author['id'])
+        self.reviewed()
+        gate=decisions.prepare(self.root,'resume')
+        restarted=native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'))
+        self.assertEqual(restarted['reviews_used'],1)
+        self.assertFalse(load_run(self.root)[1].get('proposal_answers'))
+        self.finish_attempt('analysis',{'summary':'New proposal.'})
+        self.assertEqual(native.select(self.root)['continuation']['pending_decision'],'proposal_approval')
+
+    def test_unapproved_proposal_preview_can_start_fresh_on_reentry(self):
+        from . import decisions
+        self.planning('propose','private')
+        author=self.finish_attempt('analysis',{'summary':'Propose sign-in.'})
+        preview=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        self.assertIn('Start fresh',native.saved_work(self.root)['next'])
+        gate=decisions.prepare(self.root,'resume')
+        self.assertEqual(list(gate['actions'].values()),['resume','restart','stop'])
+        restarted=native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'))
+        self.assertEqual(restarted['continuation']['phase'],'authoring')
+        self.assertTrue(load_run(self.root)[1]['attempts'][0]['superseded'])
+        with self.assertRaises(Refused):
+            native.decision(self.root,'approve-proposal',self.offered_answer(preview,preview['options'][0]),attempt=author['id'])
+
+    def test_review_restart_preserves_uncommitted_subject(self):
+        from . import decisions
+        path=self.root/'uncommitted.txt'
+        path.write_text('review these bytes')
+        run=native.review(self.root,'changes',self.human('Review my changes.'))
+        original=load_run(self.root,run['id'])[1]
+        gate=decisions.prepare(self.root,'resume',run=run['id'])
+        result=native.decision(self.root,'restart',self.offered_answer(gate,'Start fresh'),run=run['id'])
+        self.assertEqual(result['run'],run['id'])
+        self.assertEqual(result['continuation']['phase'],'review')
+        self.assertEqual(load_run(self.root,run['id'])[1]['standalone_artifact'],original['standalone_artifact'])
+        self.assertEqual(path.read_text(),'review these bytes')
+        self.assertEqual(self.git('branch','--show-current'),original['branch'])
+
     def test_design_drafting_continues_after_a_native_product_reply(self):
         import json
         from unittest.mock import patch

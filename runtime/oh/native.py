@@ -472,7 +472,12 @@ def saved_work(root):
                        **_continuation(state))
         summary['resumable']=not _finished(state)
         result.append(summary)
-    output={'saved_work':result,'next':'Read the matching run with resume --run ID and follow workflows/recovery.md. A clear request can continue an authorized delivery in its owning conversation. When a decision is needed, prepare and show it once, without a preliminary Resume question.'}
+    output={'saved_work':result,'next':(
+        'Read the matching run with resume --run ID and follow workflows/recovery.md. '
+        'For unfinished Propose, Design or standalone Review entered from a new conversation, '
+        'prepare the saved-work Resume choice with Start fresh before replaying a pending approval or feedback choice. '
+        'In the owning conversation, bind an already presented choice directly. '
+        'A clear delivery request can continue its existing grant in the owning conversation.')}
     from .storage import encode
     budget=min((state['config']['context']['result_chars'] for _,state in runs),default=1000)
     if len(encode(output))>budget:
@@ -1490,7 +1495,7 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
             locator=_presented(root,locator)
             source=authority.native_human(root,locator,latest=False)
             return _decline_scope(root,prepared['scope'],scope,locator,source)
-        if prepared.get('presentation')=='recovery-menu':
+        if prepared.get('presentation')=='recovery-menu' or kind=='restart' and 'restart_target' in prepared:
             from .recovery import apply
             return apply(root,kind,locator,run=run)
         if kind=='stop' and prepared.get('stop_boundary') and run is None:
@@ -1546,6 +1551,8 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                 offered=read_json(_home(root)/'decisions'/(shown+'.json'))
                 if offered.get('run') and offered['run']!=state['id']:
                     raise Refused('This reply needs its bound decision effect; use the run identified by its native question.')
+        if attempt and _attempt(state,attempt).get('superseded'):
+            raise Refused('This attempt was superseded. Use the current workflow attempt.')
         if state.get('published'):return select(root,state['id'])
         if not locator.get('decision') and kind=='resume' and (_saved_subject(state) not in source.get('question','') or state['branch'] not in source.get('question','')):
             raise Refused('Ask whether to resume '+_saved_subject(state)+' on '+state['branch']+', then use the native answer; no continuation was started')

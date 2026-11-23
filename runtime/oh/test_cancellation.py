@@ -19,6 +19,77 @@ from .workflow import load_run
 
 
 class CancellationTest(NativeFixture, unittest.TestCase):
+    def test_claude_authority_bindings_use_native_permission_prompt_in_auto_mode(self):
+        launcher=(Path(self.temp.name)/'build/claude/plugins/o-harness/scripts/oh').as_posix()
+        locator=json.dumps({'host':'claude','session':'s','transcript_path':str(Path(self.temp.name)/'stop.jsonl')})
+        command=f'O={launcher}; $O --root "$PWD" decision stop {shlex.quote(locator)}'
+        scope_command=shlex.join([launcher,'--root',str(self.root),'scope','prepare',
+                                  str(Path(self.temp.name)/'manifest.json'),'--workflow','design',
+                                  '--human',str(Path(self.temp.name)/'human.json')])
+        review_command=shlex.join([launcher,'--root',str(self.root),'review',
+                                   '--human',locator])
+        payload={'hook_event_name':'PreToolUse','session_id':'s','turn_id':'stop-turn',
+                 'tool_name':'Bash','tool_use_id':'stop-command','tool_input':{'command':command}}
+        with patch.dict(os.environ,{'OH_NATIVE_CONTROL_LAUNCHER':launcher}):
+            self.assertEqual(cancellation._claude_permission_binding(self.root,scope_command,'s'),'scope preparation',scope_command)
+            self.assertFalse(cancellation._path(self.root).exists())
+            first=cancellation.hook(self.root,'claude',payload|{'tool_input':{'command':scope_command}})
+            self.assertEqual(first['hookSpecificOutput']['permissionDecision'],'ask',first)
+            review_first=cancellation.hook(self.root,'claude',payload|{'tool_input':{'command':review_command}})
+            self.assertEqual(review_first['hookSpecificOutput']['permissionDecision'],'ask',review_first)
+            alias=f'OH={launcher}; R={self.root}; $OH --root $R review --human {shlex.quote(locator)}'
+            alias_result=cancellation.hook(self.root,'claude',payload|{'tool_input':{'command':alias}})
+            self.assertEqual(alias_result['hookSpecificOutput']['permissionDecision'],'deny',alias_result)
+            with patch('oh.cancellation._path',side_effect=Refused('checkout not registered')):
+                unregistered=cancellation.hook(self.root,'claude',payload|{'tool_input':{'command':scope_command}})
+            self.assertEqual(unregistered['hookSpecificOutput']['permissionDecision'],'ask',unregistered)
+            scope=native.prepare_scope(self.root,{'tasks':self.tasks[:1]})
+            native.approve_scope(self.root,scope['scope_id'],self.human(host='claude'))
+            journal,_=load_run(self.root)
+            before=journal.records()
+            result=cancellation.hook(self.root,'claude',payload)
+            self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'ask')
+            scoped=cancellation.hook(self.root,'claude',payload|{'tool_input':{'command':scope_command}})
+            self.assertEqual(scoped['hookSpecificOutput']['permissionDecision'],'ask',scoped)
+            self.assertEqual(journal.records(),before)
+            for other in (command+'; echo extra',command.replace('"session": "s"','"session": "other"'),
+                          'echo decision stop',command.replace(launcher,launcher+'-other')):
+                self.assertEqual(cancellation.hook(self.root,'claude',payload|{
+                    'tool_input':{'command':other}}),{})
+            self.assertEqual(cancellation.hook(self.root,'codex',payload),{})
+            compound=cancellation.hook(self.root,'claude',payload|{
+                'tool_input':{'command':'echo preparing; '+scope_command}})
+            self.assertEqual(compound['hookSpecificOutput']['permissionDecision'],'deny')
+            appended=cancellation.hook(self.root,'claude',payload|{
+                'tool_input':{'command':scope_command+'; echo extra'}})
+            self.assertEqual(appended['hookSpecificOutput']['permissionDecision'],'deny')
+            for unsafe in (scope_command+'\necho extra',
+                           scope_command.replace('manifest.json','$(echo extra >&2; echo manifest.json)'),
+                           scope_command+' > /tmp/output',
+                           scope_command.replace('manifest.json','`echo manifest.json`'),
+                           review_command+'; echo extra'):
+                rejected=cancellation.hook(self.root,'claude',payload|{'tool_input':{'command':unsafe}})
+                self.assertEqual(rejected['hookSpecificOutput']['permissionDecision'],'deny',unsafe)
+        from .installation import build
+        plugin=Path(self.temp.name)/'plugin'/'o-harness'
+        build(plugin,'claude')
+        installed=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup','--development'],
+                                 capture_output=True,text=True)
+        self.assertEqual(installed.returncode,0,installed.stderr)
+        packaged=str(plugin/'scripts/oh')
+        packaged_command=command.replace(launcher,packaged)
+        wrapped=subprocess.run([sys.executable,'-I',str(plugin/'scripts/native-control.py'),'claude'],
+                               input=json.dumps(payload|{'cwd':str(self.root),'tool_input':{'command':packaged_command}}),
+                               capture_output=True,text=True)
+        self.assertEqual(wrapped.returncode,0,wrapped.stderr)
+        self.assertEqual(json.loads(wrapped.stdout)['hookSpecificOutput']['permissionDecision'],'ask')
+        wrapped_scope=subprocess.run([sys.executable,'-I',str(plugin/'scripts/native-control.py'),'claude'],
+                                     input=json.dumps(payload|{'cwd':str(self.root),'tool_input':{
+                                         'command':scope_command.replace(launcher,packaged)}}),
+                                     capture_output=True,text=True)
+        self.assertEqual(wrapped_scope.returncode,0,wrapped_scope.stderr)
+        self.assertEqual(json.loads(wrapped_scope.stdout)['hookSpecificOutput']['permissionDecision'],'ask')
+
     def test_delivered_claude_stop_preserves_work_and_is_replayable(self):
         home=Path(self.temp.name)/'host'
         path=home/'.claude/projects/p/s.jsonl';path.parent.mkdir(parents=True)

@@ -4,7 +4,9 @@ description: Draft and independently review one roadmap initiative's project pla
 ---
 Read `workflows/runtime.md` once through OH's resource entry. Apply its saved-work
 entry and communication protocol before new work. For a matching unfinished run,
-follow `workflows/recovery.md`; resume its saved phase instead of restarting these steps.
+follow `workflows/recovery.md` and continue from the phase returned by the selected action.
+On a new conversation, offer that saved-work choice before replaying a pending
+private design approval or admitting another attempt.
 If the subject is missing, discover relevant saved work before asking for it.
 
 ## 1. Prepare the initiative

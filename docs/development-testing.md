@@ -58,6 +58,14 @@ belongs in its chosen suite. Include the measured cost of additions to the core 
   handoff or recovery step. Use the [scenario catalog and disposable fixtures](cli-acceptance.md).
   Run full live sanity after the independent review as described under Final verification and CI.
 
+The agent owns automated sanity testing through completion. When a native permission
+blocks a test, open a decision menu naming the exact action, test profile and any
+persistent effect. Continue independent checks. With an asynchronous menu, keep the
+turn active while waiting for the developer's answer. If the menu disappears before
+they answer, check for a recorded reply and present the still-needed choice again.
+Only an explicit approval authorizes the action. Honor the answer and continue the
+remaining tests within that authority.
+
 Real AI runs have variable duration and subscription usage. Measure both where available;
 unknown usage remains unknown. The scheduled live catalog is a separate subscription run on the authenticated Mac. Use no API fallback,
 automatic review renewal or retry-until-green. A failure remains evidence even if a later trial passes.

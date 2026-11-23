@@ -52,6 +52,84 @@ def _private_restart(root, state, base):
     return {'path': bound['path'], 'text': text, 'doc': bound['doc'], 'approval': approval}
 
 
+def restart_option(root, state, offer):
+    """Restart authoring or the bound review without discarding the person's files."""
+    from .branches import fetch_base, trunk
+    if state['workflow'] == 'review':
+        if not state.get('standalone_artifact'):
+            offer['disclosure'] += '\nStart fresh unavailable: the original review subject is missing.'
+            return
+        target = state['standalone_subject']
+        detail = ('Start fresh restarts this saved review run on its original selected subject: '
+                  +target['description']+'. The checkout is preserved. Bind this choice with decision restart before admitting a reviewer; do not create another review run.')
+    else:
+        try:
+            target = fetch_base(root, trunk(root, state['config']))
+        except (OSError, Refused, SubprocessError) as exc:
+            offer['disclosure'] += '\nStart fresh unavailable: '+str(exc)
+            return
+        if not target['commit']:
+            offer['disclosure'] += '\nStart fresh unavailable: '+str(target['reason'])
+            return
+        detail = (f"Start fresh begins {state['workflow']} on a new branch from {target['ref']} ({target['commit'][:12]}, "
+                  f"{target['freshness']}). The previous branch and its edits are preserved.")
+        if state.get('plans', {}).get('location') == 'private':
+            detail += ' Existing private planning documents remain available as inputs to the new draft.'
+    offer['restart_target'] = target
+    offer['choices'] = {'resume': offer['label'], 'restart': 'Start fresh', 'stop': offer['menu_options'][-1]}
+    offer['menu_options'] = list(offer['choices'].values())
+    offer['affected_paths'] = []  # No files are discarded.
+    offer['disclosure'] += '\n'+detail+' Spent review rounds remain counted.'
+
+
+def _restart_workflow(root, journal, state, prepared, source, locator, key):
+    from . import cancellation, native
+    from .branches import run_git
+    from .workspace import switch
+    from .decisions import stop_boundary
+    if native._finished(state) or len(state['done']) == len(state['tasks']):
+        raise Refused('This work is already complete; inspect its result.')
+    if prepared['stop_boundary'] != stop_boundary(root,journal,state):
+        raise Refused('The saved work changed after the restart question. Present current choices.')
+    native._switchable(root,[s for _,s in native._saved_runs(root) if s['id']!=state['id']])
+    cancellation.register_owner(root,state | {'human':source},active=False)
+    state = _settle(root,journal,state,source)
+    native._switchable(root,[state])
+    initial = native._initial_grant(root,journal,state) if state.get('native_version') else None
+    with cancellation.continuation(root,state,source,replacing=True):
+        branch,base = state['branch'],state['base']
+        if state['workflow'] == 'review':
+            switch(root,branch)
+            native._subject(root,state)  # Validate the immutable captured subject.
+        else:
+            target = prepared['restart_target']
+            base = target['commit']
+            if git(root,'rev-parse',target['ref']) != base:
+                raise Refused('The restart base changed. Present the updated choices.')
+            branch = state['workflow']+'/restart-'+locator['decision'][:12]
+            exists = run_git(root,'show-ref','--verify','--quiet','refs/heads/'+branch).returncode == 0
+            intent = state.get('recovery_intent',{})
+            if exists and (intent.get('key') != key or git(root,'rev-parse',branch) != base):
+                raise Refused('The restart branch is occupied. Prepare new choices to use another branch.')
+            if intent.get('key') != key:
+                journal.append('recovery.started',{'kind':'restart','key':key,'branch':branch,'base':base})
+            switch(root,branch,base)
+        events = [{'kind':'grant','data':initial}] if initial else []
+        events.extend([
+            {'kind':'workflow.restarted','data':{'branch':branch,'base':base}},
+            {'kind':'run.owner','data':{'human':source}},
+            {'kind':'run.status','data':{'status':'running'}},
+            {'kind':'decision','data':{'choice':'restart','source':key,'recovery':locator['decision']}},
+        ])
+        native._immutable(journal.path/'decisions'/(key+'.json'),{'human':source,'prepared':prepared,'locator':locator})
+        journal.append('transition',{'events':events})
+    updated = reduce(journal.records())
+    native._resume_binding(root,updated,write=True)
+    from .receipts import index
+    index(journal,updated)
+    return native.select(root,state['id'],continued=True)
+
+
 def prepare(root, state, entry_request=None, *, stop_boundary):
     from . import native
     from .decisions import SHOW_MATERIAL, boundary, save_offer, TAKE_OVER
@@ -201,6 +279,8 @@ def apply(root, kind, locator, *, run=None):
         key = native._human_key(source,state)
         native._continuation_order(root,state,source)
         if key in state['decisions']:
+            if not native._recorded_choice(journal,key,kind):
+                raise Refused('This input was already used for another action.')
             if native._human_key(state['human'],state)!=key:
                 raise Refused('A newer coordinator owns this delivery; use its current recovery decision')
             if kind!='stop':
@@ -214,6 +294,8 @@ def apply(root, kind, locator, *, run=None):
         source = authority.coordinator(root, state, locator, retry_resume=True)
         source = source | {'decision': locator['decision']}
         verify(root, state, kind, locator, source)
+        if kind=='restart' and 'restart_target' in prepared:
+            return _restart_workflow(root,journal,state,prepared,source,locator,key)
         original = prepared['subject']
         if kind != 'stop':
             current = facts(root, state)
