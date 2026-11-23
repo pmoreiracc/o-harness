@@ -76,7 +76,7 @@ class CancellationTest(NativeFixture, unittest.TestCase):
         installed=subprocess.run([sys.executable,'-I',str(plugin/'core/oh'),'setup','--development'],
                                  capture_output=True,text=True)
         self.assertEqual(installed.returncode,0,installed.stderr)
-        packaged=str(plugin/'scripts/oh')
+        packaged=(plugin/'scripts/oh').as_posix()
         packaged_command=command.replace(launcher,packaged)
         wrapped=subprocess.run([sys.executable,'-I',str(plugin/'scripts/native-control.py'),'claude'],
                                input=json.dumps(payload|{'cwd':str(self.root),'tool_input':{'command':packaged_command}}),
