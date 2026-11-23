@@ -16,6 +16,18 @@ RUN=[sys.executable,'-I'] if os.name=='nt' else []
 
 
 class InstallationTest(unittest.TestCase):
+    def test_updater_preserves_owner_refusal_and_offers_native_retry(self):
+        from . import updater
+
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stderr(io.StringIO()) as output:
+            with (patch.dict(os.environ, {'OH_DATA_HOME': temp}),
+                  patch.object(updater.hosts, 'executable', side_effect=updater.hosts.UntrustedOwner('/home has an untrusted owner')),
+                  patch.object(updater, 'call') as call):
+                self.assertEqual(updater.update(Path(temp), 'codex'), 1)
+                call.assert_not_called()
+        self.assertIn('/home has an untrusted owner', output.getvalue())
+        self.assertIn('retry the same OH update with the host', output.getvalue())
+
     def test_release_updater_reports_versions_and_continues_after_host_failure(self):
         from . import updater
         from types import SimpleNamespace
