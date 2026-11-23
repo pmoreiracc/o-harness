@@ -313,6 +313,63 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         from .delivery import selection
         self.assertTrue(selection(self.root,'0002',claim=False)[0]['tasks'])
 
+    def test_improvement_recommendation_finishes_without_approval_or_writes(self):
+        from . import decisions
+
+        self.planning('propose','repo')
+        base=self.git('rev-parse','HEAD')
+        attempt=self.finish_attempt('analysis','Proposal route: improvement\nTighten the existing sign-in check.')
+        self.assertEqual(attempt['proposal_route'],'improvement')
+        self.assertEqual(native.select(self.root)['continuation']['phase'],'finished')
+        state=load_run(self.root)[1]
+        self.assertEqual(state['status'],'completed')
+        self.assertEqual(state['done'],[])
+        self.assertFalse(state.get('proposal_answers'))
+        self.assertEqual(self.git('rev-parse','HEAD'),base)
+        self.assertEqual(self.git('status','--porcelain'),'')
+        with self.assertRaisesRegex(Refused,'no plan additions'):
+            decisions.prepare(self.root,'approve-proposal',attempt=attempt['id'])
+
+    def test_unclear_proposal_requests_clarification_without_approval(self):
+        from . import decisions
+
+        self.planning('propose','private')
+        attempt=self.finish_attempt('analysis',{'route':'unclear','summary':'Should this cover existing accounts?'})
+        continuation=native.select(self.root)['continuation']
+        self.assertEqual(continuation['phase'],'proposal_clarification')
+        self.assertIsNone(continuation['pending_decision'])
+        with self.assertRaisesRegex(Refused,'no plan additions'):
+            decisions.prepare(self.root,'approve-proposal',attempt=attempt['id'])
+
+    def test_typed_proposal_reply_requires_current_full_preview(self):
+        from . import decisions
+        from .storage import checkout_file
+
+        self.planning('propose','private')
+        addition='Add the search initiative to milestone M1 in the private roadmap with no dependencies.'
+        evidence='The exact prospective roadmap passed document validation.'
+        preview=f'{addition}\n\n{evidence}'
+        author=self.finish_attempt('analysis',{'route':'roadmap','preview':preview,'summary':'Add search.'})
+        gate=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        answer=self.offered_answer(gate,gate['options'][0],via='typed')
+        displayed=gate['disclosure']
+        self.assertIn(gate['question'],displayed)
+        for option in gate['options']:
+            self.assertIn(option,displayed)
+        answer=answer|{'question':displayed,'question_context':[{'text':displayed,'at':answer['question_at']}]}
+        short=displayed.replace(evidence,'The checks passed.')
+        abbreviated=answer|{'question':short,'question_context':[{'text':short,'at':answer['question_at']}]}
+        with self.assertRaisesRegex(Refused,'complete current proposal'):
+            native.decision(self.root,'approve-proposal',abbreviated,attempt=author['id'])
+        self.assertFalse(load_run(self.root)[1].get('proposal_answers'))
+        # Another menu can replace the last hint. The exact native offer still binds.
+        checkout_file(self.root,'oh-recovery-menu.json').unlink()
+        answer.pop('decision')
+        native.decision(self.root,'approve-proposal',answer,attempt=author['id'])
+        state=load_run(self.root)[1]
+        self.assertEqual([a['attempt'] for a in state['proposal_answers']],[author['id']])
+        self.assertEqual(state['done'],[])
+
     def test_proposal_approval_does_not_replace_review_or_grant_product_implementation(self):
         self.planning('propose','repo')
         author=self.finish_attempt('analysis',{'summary':'Propose a search initiative in the first milestone.'})

@@ -400,7 +400,9 @@ def _initiative(state):
 
 def _finished(state):
     feedback=state['workflow']=='review' and state.get('attempts') and state['attempts'][-1].get('outcome') in ('clean','blocking','needs_resolution','review_incomplete','unfinished')
-    return bool(state.get('published') or (state['status']=='completed' and (feedback or state.get('plans',{}).get('location')=='private')))
+    recommendation=state['workflow']=='propose' and state.get('attempts') and state['attempts'][-1].get('proposal_route')=='improvement'
+    return bool(state.get('published') or (state['status']=='completed' and
+                (feedback or recommendation or state.get('plans',{}).get('location')=='private')))
 
 
 def _pending_attempt(state,attempt):
@@ -434,9 +436,13 @@ def _continuation(state):
     if not pending:
         if phase=='task_window':decision='task_window'
         elif phase=='completion' and state.get('plans',{}).get('location')!='private':decision='publication'
-        elif history:
+        elif history and phase!='finished':
             latest=history[-1]
-            if latest['role']=='analysis' and state['workflow']=='propose' and not state.get('proposal_answers'):decision='proposal_approval'
+            if (latest['role']=='analysis' and latest.get('outcome')=='reported'
+                    and state['workflow']=='propose' and not state.get('proposal_answers')):
+                if latest.get('proposal_route')=='unclear':phase='proposal_clarification'
+                elif latest.get('proposal_route')=='improvement':phase='proposal_recommendation'
+                else:decision='proposal_approval'
             elif latest['role']=='review':
                 resolution=state.get('resolutions',{}).get(latest['id'],{})
                 if latest.get('outcome')=='needs_resolution' and any(f['severity']=='concern' and not resolution.get('concerns_accepted') for f in latest.get('findings',[])):decision='review_findings'
@@ -1118,6 +1124,8 @@ def _report(text):
     assessment=re.search(r'(?im)^\s*difficulty\s*:\s*(simple|standard|complex)\b',text)
     result={'summary':text,'findings':[]}
     if assessment:result.update(difficulty=assessment[1].lower(),rationale=text)
+    route=re.match(r'(?i)^Proposal route: (roadmap|task|improvement|unclear) *$',text.strip().split('\n',1)[0].strip())
+    if route:result['route']=route[1].lower()
     return result
 
 
@@ -1198,6 +1206,9 @@ def _dependent_completion(state,attempt,result,report,*,recovery=False):
             'difficulty':report['difficulty'],'rationale':report.get('rationale','Native assessment')}})
     if state['workflow']=='review' and not recovery:
         events.append({'kind':'run.status','data':{'status':'completed'}})
+    if result.get('proposal_route')=='improvement' and result['outcome']=='reported' and not recovery:
+        # A retained recommendation has no document effect and creates no approvals or completed tasks.
+        events.append({'kind':'run.status','data':{'status':'completed'}})
     extra=state.get('extra_review')
     baseline=(extra or {}).get('baseline') or attempt
     repair=(attempt['role'] in ('implementation','analysis') and result['outcome']!='binding_failed'
@@ -1261,6 +1272,12 @@ def _finish_attempt(root,journal,state,attempt,source,*,stopped=None,revoked=Fal
         if source.get('status')=='binding_failed':
             result['native_failure']={k:source.get(k) for k in ('native_id','tool_use_id','profile','admitted_profile','requested_profile','requested_context','binding_issues','terminal_status')}
         if attempt['role'] in ('implementation','analysis'):result.update(subject)
+        if (state['workflow']=='propose' and attempt['role']=='analysis' and outcome=='reported'
+                and not state.get('proposal_answers') and report.get('route') in ('roadmap','task','improvement','unclear')):
+            result['proposal_route']=report['route']
+            if any(subject.get(k)!=attempt[k] for k in ('head','tree','git_tree','artifacts')):
+                result['outcome']='unfinished'
+                result['summary']='Proposal analysis changed planning or checkout files before approval. Preserve the changes and inspect them before continuing.'
         if stopped:result['revocation']=stopped
         events=[{'kind':'attempt.finished','data':result}]+_dependent_completion(state,attempt,result,report,recovery=recovery)
         cancellation.close_settled(root,attempt['id'],control)
@@ -1527,6 +1544,14 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                     returned=observed.get('prepared_offer') or {}
                     if returned.get('decision')==hint['decision'] and not returned.get('ambiguous'):
                         locator=candidate
+        if kind=='approve-proposal' and not locator.get('decision'):
+            observed=authority.native_human(root,locator)
+            returned=observed.get('prepared_offer') or {}
+            key=returned.get('decision')
+            if isinstance(key,str) and re.fullmatch(r'[0-9a-f]{64}',key) and not returned.get('ambiguous'):
+                locator=locator|{'decision':key}
+            else:
+                raise Refused('No current proposal offer identifies this reply. Re-present the exact additions and choices from decision-request approve-proposal, then ask for a fresh reply.')
         locator=_presented(root,locator,state)
         since=journal.records()[0]['at']
         if attempt:since=_attempt(state,attempt).get('finished_at') or since
@@ -1687,8 +1712,8 @@ def decision(root,kind,locator,attempt=None,destination=None,run=None):
                 if scope['destination'].get('issue'):value['issue']=scope['destination']['issue']
             add('review.resolution',value)
         elif kind=='approve-proposal':
-            author=_attempt(state,attempt)
-            if state['workflow']!='propose' or author['role']!='analysis' or not author.get('finished'):raise Refused('Approve the actual completed proposal preview before writing')
+            from .decisions import proposal_author
+            author=proposal_author(state,attempt)
             add('proposal',{'attempt':attempt,'choice':'approve','source':source,'shown':author['native_source']})
         elif kind=='approve-private':
             review=_attempt(state,attempt)

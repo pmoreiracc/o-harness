@@ -101,6 +101,31 @@ def _checkpoint(root,state,kind,details):
             'checkpoint_status':state['status'],'publication_destination':dest,'unavailable':unavailable}
 
 
+def proposal_author(state, attempt):
+    from .native import _active
+    authors=[a for a in state['attempts'] if a['role']=='analysis' and not a.get('superseded')]
+    author=authors[-1] if authors else {}
+    if (state['workflow']!='propose' or _active(state) or author.get('id')!=attempt
+            or author.get('outcome')!='reported'):
+        raise Refused('Present the current retained proposal preview before asking to apply it')
+    if author.get('proposal_route') in ('improvement','unclear'):
+        raise Refused('This recommendation has no plan additions to approve')
+    return author
+
+
+def proposal_material(author):
+    from .retention import read
+    result=read(author['report_ref'])
+    if result.get('route') in ('improvement','unclear'):
+        raise Refused('This recommendation has no plan additions to approve')
+    material=result.get('preview')
+    if not material:
+        material=read(author['source_ref']).get('text')
+    if not isinstance(material,str) or not material.strip():
+        raise Refused('Retain the exact proposed additions and destinations before preparing approval')
+    return material.strip()
+
+
 def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,request=None,after=None):
     from .native import _locked, _attempt, _saved_subject, _active, _finished
     if kind=='setup-plans':
@@ -158,8 +183,8 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
             count=sum(f['severity']=='concern' for f in review['findings'])
             details+=f'\nAccept the {count} concerns shown in the review report for this candidate, leaving them unfixed.'
         elif kind=='approve-proposal':
-            _attempt(state,attempt)
-            label='Apply proposal · '+shorten(subject,width=48,placeholder='…');details+='\nApply the complete proposal preview shown above.'
+            material=proposal_material(proposal_author(state,attempt))
+            label='Apply proposal · '+shorten(subject,width=48,placeholder='…');details+='\nReview the complete proposal preview below.'
         elif kind=='approve-private':
             review=_attempt(state,attempt)
             label='Approve design · '+shorten(subject,width=48,placeholder='…');details+='\nDesign artifacts: '+', '.join(review.get('artifacts',{}))
@@ -176,6 +201,7 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
         value={'kind':kind,'run':state['id'],'attempt':attempt,'boundary':boundary(root,state,kind,attempt),
                'question':details+'\n\n'+label+'?','label':label,'created_at':now()}
         if entry_request:value['entry_request']=entry_request
+        if kind=='approve-proposal':value['proposal_preview']=material
         if kind=='grant-review':value['rounds']=count
         if kind=='approve-repair':value.update(task=task['id'],repair=repair.strip())
         compact_details=details.replace('\n'+reference,'',1)
@@ -216,6 +242,8 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
                 actions={label:action for action,label in value['choices'].items()}
         # The existing immutable scope or reviewed artifact gives a generic
         # affirmative button a concrete subject without prescribing its wording.
+        if kind=='approve-proposal':
+            value['disclosure']+='\n\n'+material
         if kind in ('approve-private','approve-proposal','accept-concerns'):
             from .system import Path
             evidence=_attempt(state,attempt)
@@ -234,14 +262,23 @@ def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,re
             presentation=('Open the reviewed design in the Codex Desktop right panel alongside the question. '
                           'Without a panel, paste the entire design and the choices in one ordinary chat message, '
                           'then wait for the direct reply. ')
-        elif kind in ('approve-proposal','approve-repair','accept-concerns'):
+        elif kind=='approve-proposal':
+            # Return the whole chat message so the coordinator can preserve the retained
+            # preview and its choices without recreating any of the decision text.
+            choices='\n'.join(f'- {option}' for option in options)
+            value['disclosure']+=f"\n\n{value['question']}\n\n{choices}"
+            presentation=('Paste the disclosure field verbatim as one ordinary chat message. It already includes '
+                          'the question and all choices. Wait for the direct reply and bind it with this decision '
+                          'identity. Keep the decision identity internal.')
+        elif kind in ('approve-repair','accept-concerns'):
             presentation=SHOW_MATERIAL+' '
+        if kind!='approve-proposal':presentation+='Keep decision internal. Explain the action and bind the actual answer.'
         key=save_offer(root,value,details=compact_details if kind=='approve-repair' else None,
                        details_title='View the proposed repair')
         return {'decision':key,'question':value['question'],'options':options,
                 **({'disclosure':value['disclosure']} if 'disclosure' in value else {}),
                 **({'actions':actions} if actions else {}),
-                'human_locator':presentation+'Keep decision internal. Explain the action and bind the actual answer.'}
+                'human_locator':presentation}
 
 
 def state_head(root):
@@ -411,6 +448,10 @@ def verify(root,state,kind,locator,source,attempt=None,replay=False):
     if 'disclosure' not in value and not newer(shown_at,value['created_at']):
         raise Refused('This native question predates the prepared decision')
     if not replay:
+        if kind=='approve-proposal' and 'proposal_preview' in value:
+            material=proposal_material(proposal_author(state,attempt))
+            if material!=value['proposal_preview'] or not newer(presented_question_at(source,material),value['created_at']):
+                raise Refused('The complete current proposal was not displayed before the reply. Paste the prepared disclosure verbatim in chat and wait for a fresh reply.')
         if kind=='restart' and (detail:=value.get('details_file')):
             from .system import Path
             path=Path(detail['path'])

@@ -43,16 +43,21 @@ then writes its preview/report externally, without modifying project planning do
 Require a structurally valid prospective preview before asking for approval, using the
 existing checker on an external temporary copy as described in `prompts/propose.md`.
 Retain its original native result and show the understanding, recommended route, evidence,
-complete additions and exact destinations. An improvement or unclear route can end here
-with the actual recommendation/question; no unnecessary document or review is required.
+complete additions and exact destinations. An improvement ends with the retained
+recommendation. For an unclear route, ask the actual clarification and continue
+analysis when the person answers. Neither route needs an Apply proposal choice or a
+standalone review.
 
 ## 3. Approve the actual additions
 
 Before additions are written, prepare `decision-request approve-proposal --attempt ID`
-for the retained analysis. Present the exact proposed rows or replacement text and
-destinations with the approve/refine/cancel choice using **Show the decision material**
-in `workflows/decisions.md`. Bind approval of the latest analysis report with `decision
-approve-proposal` and its actual native human locator. Refinement revises the unapproved
+for the retained analysis. Paste its `disclosure` field verbatim as one ordinary chat
+message. It already contains the complete retained preview, destinations, question
+and all choices. Use that message even if you previously summarized the proposal.
+Wait for the person's direct answer. Bind it with `decision approve-proposal` (Codex
+`decision`) with the returned decision identity in `human.decision`. If the latest
+reply lacks the displayed preview or belongs to an earlier exchange, paste the current
+prepared disclosure verbatim and wait for a fresh answer. Refinement revises the unapproved
 proposal; neither permission to analyze nor an author report approves the additions.
 
 ## 4. Apply, check and independently review

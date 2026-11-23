@@ -16,6 +16,12 @@ First explain the idea in your own words, then recommend one route and give evid
 - Improvement: describe the concrete bounded change; no planning document is owed.
 - Unclear: explain the competing readings and the question needed to choose.
 
+Start the native recommendation's final message with `Proposal route: roadmap`,
+`Proposal route: task`, `Proposal route: improvement`, or `Proposal route: unclear`.
+Include the complete additions and exact destinations in that same message for a
+roadmap or task route. For improvement, return the recommendation as read-only
+feedback. For unclear, end with the question that would let the person decide.
+
 During recommendation, write only the external preview/report: show the complete
 additions and their destinations before the person approves them. Do not edit the
 project's plans or decide an open question. Before returning a roadmap/task preview,
