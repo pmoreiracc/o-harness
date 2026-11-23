@@ -103,6 +103,9 @@ def _checkpoint(root,state,kind,details):
 
 def prepare(root,kind,attempt=None,rounds=None,run=None,also=None,repair=None,request=None,after=None):
     from .native import _locked, _attempt, _saved_subject, _active, _finished
+    if kind=='setup-plans':
+        from .entry import setup_offer
+        return setup_offer(root,request,after)
     with _locked(root):
         journal,state=load_run(root,run)
         entry_request=None

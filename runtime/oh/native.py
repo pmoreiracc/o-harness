@@ -236,7 +236,8 @@ def _entry_order(root,source,saved=None):
     if source.get('prerequisite'):
         # request_source reattested this accepted effect and its exact answer.
         prepared=read_json(_home(root)/'decisions'/(source['prerequisite']+'.json'))
-        _,state=load_run(root,prepared['run'])
+        if prepared.get('run'):
+            _,state=load_run(root,prepared['run'])
     _owner_order(root,owner,state)
     for journal,prior in _saved_runs(root) if saved is None else saved:
         if not authority.newer(owner.get('at'),_selection_boundary(journal,_human_key(owner,prior),selection_only=True)):
@@ -304,8 +305,9 @@ def _finish_entry(root,journal,state,source):
     order_state=state
     if state.get('entry_prerequisite'):
         prepared=read_json(_home(root)/'decisions'/(state['entry_prerequisite']+'.json'))
-        _,prior=load_run(root,prepared['run'])
-        if (cancellation._read(root) or {}).get('current')==cancellation.owner_key(prior):order_state=prior
+        if prepared.get('run'):
+            _,prior=load_run(root,prepared['run'])
+            if (cancellation._read(root) or {}).get('current')==cancellation.owner_key(prior):order_state=prior
     _owner_order(root,owner,order_state)
     for other_journal,other in _saved_runs(root):
         boundary=_selection_boundary(other_journal,_human_key(owner,other),selection_only=other['id']!=state['id'])
@@ -1487,6 +1489,9 @@ def _recorded_choice(journal,key,kind):
 
 
 def decision(root,kind,locator,attempt=None,destination=None,run=None):
+    if kind=='setup-plans':
+        from .entry import apply_setup
+        return apply_setup(root,locator)
     if kind=='stop':locator=_scope_choice_locator(root,locator)
     if isinstance(locator,dict) and re.fullmatch(r'[0-9a-f]{64}',locator.get('decision') or ''):
         prepared=read_json(_home(root)/'decisions'/(locator['decision']+'.json'))

@@ -19,9 +19,17 @@ request. Prepare with `keep_checkout: true` / `--keep-checkout`; later approved 
 stay on that bound branch. Read-only inspection and private artifacts need no unrelated
 branch change. Do not move an already bound proposal to another branch after approval.
 
-Read `plans path`. If the repo/private location is undecided, call Claude
-`AskUserQuestion` or Codex Default mode `functions.request_user_input_async` once.
-Show the actual folder for the selected location. Respect project policy.
+Read `plans path`. If the location is undecided, prepare
+`decision-request setup-plans --request <initiating-locator.json>` (Codex
+`decision_request`, kind `setup-plans`, with the initiating locator in `request`).
+If a saved-work prerequisite already retained this request, supply its `after` too.
+Show the returned `question` and `options` unchanged through the native question or
+ordinary chat. The question already contains both exact paths. Bind the actual reply
+with `decision setup-plans` and the returned decision in its locator. If the result
+contains `retry`, present its question and options unchanged and bind a fresh reply
+using its decision. Keep the original initiating locator. On Cancel, stop this entry.
+After a successful choice, continue with the original locator and `--after` (Codex
+`after`) from the result. Project checks can be configured separately for delivery.
 
 Prepare one bounded routing task with `scope prepare <manifest.json> --workflow propose
 --human <native-locator.json>` (Codex `scope_prepare`). That request authorizes analysis;
