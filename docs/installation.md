@@ -50,6 +50,29 @@ model/effort availability is checked before admission, with no API fallback.
 
 Registering a project changes nothing in its repository.
 
+### First use from Linux Codex
+
+A workspace-write session can block OH's writes outside the repository. If a command
+reports denied access, retry that same command using Codex's native execution permission.
+The first successful setup creates a backup coordination lock beside the OH data directory.
+Creating the directory and adding it to the sandbox gives access to its contents. The first
+setup can still need one-time permission to create the sibling lock.
+
+For ongoing access to the default Linux layout with private plans, start from an ordinary terminal:
+
+```sh
+(umask 077; mkdir -p "$HOME/.local/share/o-harness" "$HOME/.config/o-harness" "$HOME/oh-plans")
+codex --add-dir "$HOME/.local/share/o-harness" \
+  --add-dir "$HOME/.config/o-harness" \
+  --add-dir "$HOME/oh-plans"
+```
+
+Use the configured paths if they differ. An absolute `XDG_CONFIG_HOME` changes the
+settings directory to `$XDG_CONFIG_HOME/o-harness`. A separate `OH_DATA_HOME` keeps
+settings inside its own `config` subdirectory. If you keep plans in Git, omit the
+private-plans directory. For new private plans, add the configured parent folder
+and let OH create the project folder. Then continue the original OH request.
+
 ## Windows
 
 Windows support remains a preview. Native Claude Code delivery and Stop/recovery

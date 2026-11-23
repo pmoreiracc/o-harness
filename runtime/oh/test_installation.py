@@ -671,6 +671,32 @@ class InstallationTest(unittest.TestCase):
             self.assertFalse((dev.normal_data() / 'runtime/active.json').exists())
             self.assertFalse((dev.home() / 'data/runtime/active.json').exists())
 
+    def test_setup_explains_denied_state_writes_without_masking_other_errors(self):
+        import errno
+        from . import installation
+
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as cleanup:
+            package = Path(tmp)
+            (package / 'revision.json').write_text('{"version":"1.0.0"}', encoding='utf-8')
+            cleanup.enter_context(patch.object(installation, 'HOME', package))
+            cleanup.enter_context(patch.object(installation, 'verify_package', return_value='release'))
+            data = package / 'state'
+            for denied in (errno.EROFS, errno.EACCES, errno.EPERM):
+                with self.subTest(denied=denied), patch.object(installation, 'state_home',
+                        side_effect=OSError(denied, os.strerror(denied), str(data))):
+                    with self.assertRaisesRegex(Refused, 'requires write access') as raised:
+                        installation.setup()
+                    self.assertIn(str(data), str(raised.exception))
+            with patch.object(installation, 'state_home', return_value=data), patch.object(installation, 'lock',
+                    side_effect=OSError(errno.EACCES, os.strerror(errno.EACCES), str(data / 'runtime/install.lock'))):
+                with self.assertRaisesRegex(Refused, 'install.lock'):
+                    installation.setup()
+            with patch.object(installation, 'state_home',
+                              side_effect=OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), str(data))):
+                with self.assertRaises(OSError) as raised:
+                    installation.setup()
+            self.assertEqual(raised.exception.errno, errno.ENOSPC)
+
     def test_both_hosts_share_one_core_and_setup_is_explicit_and_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as cleanup:
             base=Path(tmp);consumer=base/'product';consumer.mkdir()
