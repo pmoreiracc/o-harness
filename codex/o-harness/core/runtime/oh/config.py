@@ -705,7 +705,7 @@ def parse(key, raw):
     return value
 
 
-def change(root, key, raw=None, *, scope=None):
+def change(root, key, raw=None, *, scope=None, before_apply=None):
     """The only writer: an unknown key or invalid value never reaches settings.json."""
     key=RENAMED.get(key) or key
     scope = scope or 'project'
@@ -745,6 +745,7 @@ def change(root, key, raw=None, *, scope=None):
         except KeyError:return None
     before = current()
     def apply(layer):
+        if before_apply:before_apply()
         if raw is None:
             if not present(layer, parts):return False
             remove(layer, parts);return True

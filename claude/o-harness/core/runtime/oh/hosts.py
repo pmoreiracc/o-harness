@@ -105,8 +105,10 @@ def binary_identity(path,root=None,*,removable=False):
             if reason:raise Refused(f'Host executable path {component} {reason}; install it where only you or administrators can change it')
     for component in [] if WINDOWS else [path,*path.parents]:
         info=component.stat()
-        if info.st_uid not in (0,os.getuid()) or info.st_mode & (stat.S_IWGRP|stat.S_IWOTH):
-            raise Refused('Host executable has an untrusted owner or shared-writable path component: '+str(component))
+        if info.st_mode & (stat.S_IWGRP|stat.S_IWOTH):
+            raise Refused('Host executable has a shared-writable path component: '+str(component))
+        if info.st_uid not in (0,os.getuid()):  # windows-ok: this loop runs only on POSIX
+            raise UntrustedOwner(f'Host executable path component {component} has an untrusted owner (uid {info.st_uid})')
     # Execute a native binary directly; a PATH-resolved script interpreter is not part of this trust record.
     with path.open('rb') as stream:
         if script(stream):raise Refused('Choose the installed native host binary, not a PATH-resolved wrapper')
@@ -187,6 +189,10 @@ def in_codex_app(path):
     # Recorded paths are resolved, so a profile behind a junction or redirect is compared resolved too.
     bin_dir=codex_app_bin()
     return any(Path(path).resolve().is_relative_to(folder) for folder in (bin_dir,bin_dir.resolve()))
+
+
+class UntrustedOwner(Refused):
+    pass
 
 
 class NotFound(Refused):

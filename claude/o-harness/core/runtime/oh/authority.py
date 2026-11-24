@@ -328,6 +328,7 @@ def _display(record, host, session, before_call=None):
 
 def _offered(record,host,session):
     """Identify a prepared menu returned in this conversation, independently of its displayed title."""
+    retry_only=False
     if host=='claude':
         if record.get('type')!='user' or record.get('sessionId')!=session or record.get('isSidechain') or record.get('isMeta'):return None
         parts=(record.get('message') or {}).get('content')
@@ -336,17 +337,20 @@ def _offered(record,host,session):
         item=record.get('payload') or {}
         if record.get('type')=='event_msg' and item.get('type')=='item_completed' and item.get('thread_id')==session:
             call=item.get('item') or {}
+            retry_only=call.get('tool')=='decision'
             if (call.get('type')!='McpToolCall' or call.get('server')!='o-harness' or
-                    call.get('tool') not in ('scope_prepare','decision_request','prepare') or call.get('status')!='completed'):return None
+                    (not retry_only and call.get('tool') not in ('scope_prepare','decision_request','prepare')) or
+                    call.get('status')!='completed'):return None
             result=call.get('result')
         elif record.get('type')=='response_item' and item.get('type') in ('function_call_output','custom_tool_call_output'):
             result=item.get('output')
         else:return None
-    text=str(result)
+    text=re.sub(r'''\\+(?=["'])''','',str(result))
     if 'question' not in text or 'options' not in text:return None
+    if retry_only and not re.search(r"""["']retry["']\s*:\s*\{""",text):return None
     # Only an offer returned before the question can identify its subject.
     # A later hook rejection or a question result quoting the title is not a preparation.
-    ids=re.findall(r"""["']decision["']\s*:\s*["']([0-9a-f]{64})["']""",re.sub(r'''\\+(?=["'])''','',text))
+    ids=re.findall(r"""["']decision["']\s*:\s*["']([0-9a-f]{64})["']""",text)
     if not ids:return None
     refs=_OFFER_REFERENCE.findall(text)
     return {'decision':ids[-1], 'reference':refs[-1] if refs else None, 'ambiguous':len(set(ids))!=1,

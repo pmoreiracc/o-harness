@@ -101,6 +101,11 @@ def update(root, host=None):
         except subprocess.TimeoutExpired:
             failed = True
             print(f'{name}: host identity check timed out. Retry oh-update.', file=sys.stderr, flush=True)
+        except hosts.UntrustedOwner as exc:
+            failed = True
+            print(f'{name}: {exc}. If a sandbox remaps file ownership, retry the same OH update '
+                  'with the host’s native execution permission or run it in an ordinary terminal. '
+                  'If it still fails, check the executable path’s ownership.', file=sys.stderr, flush=True)
         except (Refused, OSError) as exc:
             failed = True
             print(f'{name}: {exc}', file=sys.stderr, flush=True)

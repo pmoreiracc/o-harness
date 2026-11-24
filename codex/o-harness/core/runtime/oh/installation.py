@@ -1,4 +1,6 @@
 """Explicit, local plugin packaging and shared-core installation. No consumer writes."""
+from contextlib import contextmanager
+import errno
 import hashlib
 import json
 from .system import Path
@@ -108,13 +110,30 @@ def version_key(value):
     except ValueError:return ()
 
 
+@contextmanager
+def _writable_installation():
+    home = None
+    try:
+        home = state_home()
+        with lock(home / 'runtime/install.lock'):
+            yield home
+    except OSError as exc:
+        if exc.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+            raise
+        path = exc.filename2 or exc.filename or home or 'the OH data directory'
+        raise Refused(f'OH setup requires write access at {path} ({exc.strerror}). '
+                      'If a sandbox blocked this access, retry the same command using native '
+                      'execution permission. Otherwise check ownership and write access at the reported path, '
+                      'then retry the command.') from None
+
+
 def setup(*, development=False, if_newer=False):
     revision=verify_package(HOME)
     if '+worktree.' in revision and not development:
         raise Refused('This is an unreviewed development build. Use setup --development only for an explicit local test; install a reviewed revision for normal work.')
-    home=state_home();destination=home/'versions'/revision
     version=read_json(HOME/'revision.json').get('version')
-    with lock(home/'runtime/install.lock'):
+    with _writable_installation() as home:
+        destination=home/'versions'/revision
         active=home/'runtime/active.json'
         # Automatic activation re-checks under the lock, so concurrent hosts never downgrade.
         if if_newer and active.exists() and version_key(version)<=version_key(read_json(active).get('version')):

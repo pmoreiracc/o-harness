@@ -43,7 +43,10 @@ else:
                 not current or number(package.get('version'))>number(current.get('version'))):
             import subprocess
             done=subprocess.run([*python,str(plugin/'core/oh'),'setup','--if-newer'],stdin=subprocess.DEVNULL,capture_output=True,encoding='utf-8',errors='replace')
-            if done.returncode:print('OH: automatic setup failed. '+done.stderr.strip(),file=sys.stderr)
+            if done.returncode:
+                message = 'OH: automatic setup failed. ' + done.stderr.strip().removeprefix('OH: ')
+                if not active.is_file():raise SystemExit(message)
+                print(message, file=sys.stderr)
     if not active.is_file():
         if command in ('native-event','native-control'):raise SystemExit(0)
         raise SystemExit('OH is not set up. Run this plugin command with setup first.')
