@@ -2,7 +2,7 @@
 
 ## Hosts and installation
 
-- **Windows native workflows are in preview.** The release checks plugin setup and startup on Linux, macOS and Windows. Native Windows coverage includes successful delivery and external-merge trials. Earlier Windows catalog runs recorded planning and CI-repair gaps. See the [Windows native test status](windows-live-nightly.md) and [installation guide](installation.md#windows).
+- **Windows native workflows are in preview.** The release checks plugin setup and startup on Linux, macOS and Windows. Native Windows coverage includes successful delivery and external-merge trials. Earlier Windows catalog runs recorded planning and CI-repair gaps. See the [Claude planning issue](https://github.com/pmoreiracc/o-harness/issues/229), [Windows native test status](windows-live-nightly.md), and [installation guide](installation.md#windows).
 - **Codex hook trust is per definition.** After an update, use `/hooks` in a fresh Codex terminal session to review changed OH hook definitions. This can also apply to timeout-only changes. [Update guide](installation.md#update)
 - **Updates move forward.** Finish or cancel active work before changing builds. Older versions whose launcher cannot replace the current one require a fresh OH data folder. Keep the existing OH data if it contains work you may need. [Upgrade and rollback details](installation.md#update)
 

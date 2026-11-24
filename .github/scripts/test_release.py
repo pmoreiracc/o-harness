@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import release
+import release_notes
 
 spec = importlib.util.spec_from_file_location('configure_release', Path(__file__).with_name('configure-release.py'))
 configure_release = importlib.util.module_from_spec(spec)
@@ -29,6 +30,23 @@ def pull(**changes):
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_published_notes_use_only_the_exact_version_and_tagged_links(self):
+        changelog = ('# Changelog\n\n## v1.0.10\nWrong version\n\n'
+                     '## v1.0.1 - 2026-11-24\n\n### Changes\n'
+                     '```sh\n## Example comment\necho "[doc](docs/example.md)"\n```\n'
+                     '[Guide](./docs/installation.md#update) and [site](https://example.com).\n\n'
+                     '## v1.0.0\nEarlier release\n')
+        self.assertEqual(release_notes.render(changelog, 'pmoreiracc/o-harness', 'v1.0.1'),
+                         '### Changes\n```sh\n## Example comment\necho "[doc](docs/example.md)"\n```\n'
+                         '[Guide](https://github.com/pmoreiracc/o-harness/blob/v1.0.1/'
+                         'docs/installation.md#update) and [site](https://example.com).\n')
+
+    def test_missing_or_empty_changelog_section_leaves_generated_notes_available(self):
+        changelog = '## v1.0.10\nOther release\n\n## v1.0.1\n\n## v1.0.0\nOld notes\n'
+        for tag in ('v1.0.1', 'v1.0.2'):
+            with self.subTest(tag=tag):
+                self.assertEqual(release_notes.render(changelog, 'pmoreiracc/o-harness', tag), '')
+
     def fixture(self, current='1.0.0', tag=None):
         calls = []
         def api(method, path, data=None, missing=False):
