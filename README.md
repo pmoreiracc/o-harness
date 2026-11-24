@@ -92,7 +92,7 @@ Planning leaves your code untouched. Build when you're ready with `oh-deliver`.
 
 <sub>macOS, Linux or 64-bit Windows 11 (preview) · Python 3.12+ · Git</sub>
 
-[Getting started →](docs/usage.md) · [Installation help →](docs/installation.md)
+[Getting started →](docs/usage.md) · [Installation help →](docs/installation.md) · [Known limits](docs/known-limits.md) · [Changelog](CHANGELOG.md)
 
 ---
 
