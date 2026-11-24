@@ -15,8 +15,8 @@ guide. Keep that runner off public OH Actions. It tests only fetched merged OH
 separate native subscription profiles. Public PR/fork code must never execute on
 the private runner. Public deterministic Linux/Windows nightly coverage is unchanged.
 
-The private [dispatch evidence](https://github.com/pmoreiracc/oh-nightly/blob/main/DISPATCH-PROOF.md)
-and [catalog run](https://github.com/pmoreiracc/oh-nightly/actions/runs/43724928472)
+The [dispatch evidence (private)](https://github.com/pmoreiracc/oh-nightly/blob/main/DISPATCH-PROOF.md)
+and [catalog run (private)](https://github.com/pmoreiracc/oh-nightly/actions/runs/43724928472)
 retain failed first outcomes, inspected effects and cleanup limits. The separately
 authorized [#198 repair](https://github.com/pmoreiracc/o-harness/issues/198)
 is merged, and the Actions pilot used trusted main containing it and the Mac
@@ -34,18 +34,21 @@ reporting and operator-guidance corrections; those changes were not independentl
 re-reviewed. The separate design-progress defect in
 [#199](https://github.com/pmoreiracc/o-harness/issues/199) remains recorded.
 
-The v0.9.5 [catalog rerun](https://github.com/pmoreiracc/oh-nightly/actions/runs/45264758722)
+The v0.9.5 [catalog rerun (private)](https://github.com/pmoreiracc/oh-nightly/actions/runs/45264758722)
 recorded passing Claude Delivery and quick-fix selection. Planning failed even
-though proposal and Design approvals were recorded after assisted recovery. The
+though proposal and Design approvals were recorded after assisted recovery. See
+[#229](https://github.com/pmoreiracc/o-harness/issues/229) for the first-answer failure. The
 CI-repair scenario did not run because its prerequisite failed. Codex was deferred
-at its subscription limit. The [v1.0 follow-up](https://github.com/pmoreiracc/oh-nightly/actions/runs/45310473542)
+at its subscription limit. The [v1.0 follow-up (private)](https://github.com/pmoreiracc/oh-nightly/actions/runs/45310473542)
 started on the self-hosted runner and ended during the native operator step without
 a scenario report. After the listener was restored, the
-[retry](https://github.com/pmoreiracc/oh-nightly/actions/runs/45312705279)
+[retry (private)](https://github.com/pmoreiracc/oh-nightly/actions/runs/45312705279)
 stopped before it selected an OH revision because its process could not find
 `codex` on PATH. Start the listener in the signed-in PowerShell session after
 `Get-Command codex,claude,git,gh,python3` resolves the existing tools. Windows
-native workflows remain in preview.
+native workflows remain in preview. The [final recheck (private)](https://github.com/pmoreiracc/oh-nightly/actions/runs/45313681643)
+completed on `c32fed7`. Both hosts deferred all eight scenarios at their
+subscription limits. The report supplied no reset time and cleanup completed.
 
 The setup correction was human-merged before the second pilot and catalog.
 The trusted catalog source included the merged #191/#193 fixes. The private

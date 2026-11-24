@@ -144,7 +144,16 @@ jobs:
           git -C "$out" add -A
           git -C "$out" diff --cached --quiet || git -C "$out" commit -qm "Release $TAG ($(git rev-parse --short "$COMMIT"))"
           git -C "$out" push origin dist
-      - name: Create the GitHub release, with notes listing the merged pull requests
+      - name: Create the GitHub release with the tagged changelog
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then exit 0; fi
+          notes="$RUNNER_TEMP/release-notes.md"
+          python3 .github/scripts/release_notes.py "$GITHUB_REPOSITORY" "$TAG" > "$notes"
+          if [ -s "$notes" ]; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes"
+          else
+            echo "No changelog section for $TAG. Using GitHub's generated notes."
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          fi
