@@ -111,7 +111,8 @@ for the tested versions and remaining limits.
 
 ## Update
 
-Merged changes reach you only when a new version is released.
+Merged changes reach you only when a new version is released. See the
+[changelog](../CHANGELOG.md) and [known limits](known-limits.md).
 
 In Codex, installing or enabling a plugin does not trust changed hook definitions.
 Even changing a timeout invalidates the previous definition's trust. After an OH
