@@ -23,6 +23,81 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         prompt=request or ('Plan the sign-in flow.' if workflow=='design' else 'Propose the sign-in flow.')
         return native.prepare_scope(self.root,manifest,workflow=workflow,human=locator or self.human(prompt))
 
+    def test_initial_request_continues_after_exact_plan_location_answer(self):
+        from . import decisions, entry
+        from .config import load
+        from .storage import now
+        from unittest.mock import patch
+
+        change(self.root,'plans.location','ask')
+        change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
+        request=self.human('/oh-propose a new account area')
+        gate=decisions.prepare(self.root,'setup-plans',request=request)
+        with self.assertRaisesRegex(Refused,'Bind the actual plan location'):
+            entry.request_source(self.root,request,gate['decision'])
+        cancellation=self.offered_answer(gate,'Cancel')
+        self.assertEqual(native.decision(self.root,'setup-plans',cancellation),{'cancelled':True})
+        self.assertEqual(load(self.root)['plans']['location'],'ask')
+        answer=self.offered_answer(gate,gate['options'][1],via='typed')
+        interrupted=answer|{'prepared_offer':{'decision':gate['decision'],'exchange_at':now()}}
+        with self.assertRaisesRegex(Refused,'Newer input'):
+            native.decision(self.root,'setup-plans',interrupted)
+        from .storage import project
+        owner=project(self.root)
+        private=plans.private_base(str(Path(self.temp.name)/'plans'),owner.get('private_plans_name',owner['name']))
+        self.assertIn(str(self.root),gate['question'])
+        self.assertIn(str(private),gate['question'])
+        shown='\n'.join([gate['question'],*gate['options']])
+        answer=answer|{'question':shown,'question_context':[{'text':shown,'at':answer['question_at']}]}
+        self.assertEqual(native.decision(self.root,'setup-plans',answer)['location'],'private')
+        self.assertEqual(native.decision(self.root,'setup-plans',answer)['after'],gate['decision'])
+        original_native = native.authority.native_human
+        def newer_input(root, locator, **kwargs):
+            if locator==answer:raise native.authority.Expired('Newer input')
+            return original_native(root, locator, **kwargs)
+        with patch('oh.authority.native_human',side_effect=newer_input):
+            with self.assertRaisesRegex(Refused,'Newer input'):
+                entry.request_source(self.root,request,gate['decision'])
+        scope=native.prepare_scope(self.root,{'tasks':[{'id':'propose','title':'Account area','instructions':'Assess the idea.'}]},
+                                   workflow='propose',human=request,after=gate['decision'])
+        self.assertTrue(scope['approved'])
+        _,state=load_run(self.root)
+        self.assertEqual(state['plans']['location'],'private')
+        self.assertEqual(state['entry_prerequisite'],gate['decision'])
+        self.assertEqual(state['attempts'],[])
+
+    def test_incomplete_plan_setup_question_can_be_corrected_without_reentering(self):
+        from . import authority, decisions, entry
+        from .config import load
+        from .storage import now
+
+        change(self.root,'plans.location','ask')
+        change(self.root,'plans.private_folder',str(Path(self.temp.name)/'plans'))
+        request=self.human('/oh-propose a new account area')
+        gate=decisions.prepare(self.root,'setup-plans',request=request)
+        initial=self.offered_answer(gate,gate['options'][1])
+        initial=initial|{'question':'Where should these plans be kept?', 'question_context':[]}
+        reply=native.decision(self.root,'setup-plans',initial)
+        corrected=reply['retry']
+        self.assertNotEqual(corrected['decision'],gate['decision'])
+        self.assertEqual(load(self.root)['plans']['location'],'ask')
+        with self.assertRaisesRegex(Refused,'Bind the actual plan location'):
+            entry.request_source(self.root,request,corrected['decision'])
+
+        recorded={'type':'event_msg','timestamp':now(),'payload':{'type':'item_completed','thread_id':request['session'],'item':{
+            'type':'McpToolCall','server':'o-harness','tool':'decision','status':'completed','result':reply}}}
+        prepared=authority._offered(recorded,'codex',request['session'])
+        self.assertEqual(prepared['decision'],corrected['decision'])
+        answer=self.offered_answer(corrected,corrected['options'][1],prepared_offer=prepared)
+        intervening=answer|{'prepared_offer':{'decision':corrected['decision'],'exchange_at':now()}}
+        with self.assertRaisesRegex(Refused,'Newer input'):
+            native.decision(self.root,'setup-plans',intervening)
+        result=native.decision(self.root,'setup-plans',answer)
+        self.assertEqual(result,{'location':'private','after':corrected['decision']})
+        original=entry.request_source(self.root,request,result['after'])
+        self.assertEqual(original['prompt'],request['prompt'])
+        self.assertEqual(original['prerequisite_human']['prompt'],corrected['options'][1])
+
     def test_design_restart_preserves_old_draft_and_resumes_authoring_from_base(self):
         from . import decisions, workspace
         self.planning('design','repo',request='/oh-design auth')
@@ -237,6 +312,63 @@ class PlanningTest(NativeFixture,unittest.TestCase):
         self.assertEqual(plans.approval(self.root,self.where,'0002'),'approved')
         from .delivery import selection
         self.assertTrue(selection(self.root,'0002',claim=False)[0]['tasks'])
+
+    def test_improvement_recommendation_finishes_without_approval_or_writes(self):
+        from . import decisions
+
+        self.planning('propose','repo')
+        base=self.git('rev-parse','HEAD')
+        attempt=self.finish_attempt('analysis','Proposal route: improvement\nTighten the existing sign-in check.')
+        self.assertEqual(attempt['proposal_route'],'improvement')
+        self.assertEqual(native.select(self.root)['continuation']['phase'],'finished')
+        state=load_run(self.root)[1]
+        self.assertEqual(state['status'],'completed')
+        self.assertEqual(state['done'],[])
+        self.assertFalse(state.get('proposal_answers'))
+        self.assertEqual(self.git('rev-parse','HEAD'),base)
+        self.assertEqual(self.git('status','--porcelain'),'')
+        with self.assertRaisesRegex(Refused,'no plan additions'):
+            decisions.prepare(self.root,'approve-proposal',attempt=attempt['id'])
+
+    def test_unclear_proposal_requests_clarification_without_approval(self):
+        from . import decisions
+
+        self.planning('propose','private')
+        attempt=self.finish_attempt('analysis',{'route':'unclear','summary':'Should this cover existing accounts?'})
+        continuation=native.select(self.root)['continuation']
+        self.assertEqual(continuation['phase'],'proposal_clarification')
+        self.assertIsNone(continuation['pending_decision'])
+        with self.assertRaisesRegex(Refused,'no plan additions'):
+            decisions.prepare(self.root,'approve-proposal',attempt=attempt['id'])
+
+    def test_typed_proposal_reply_requires_current_full_preview(self):
+        from . import decisions
+        from .storage import checkout_file
+
+        self.planning('propose','private')
+        addition='Add the search initiative to milestone M1 in the private roadmap with no dependencies.'
+        evidence='The exact prospective roadmap passed document validation.'
+        preview=f'{addition}\n\n{evidence}'
+        author=self.finish_attempt('analysis',{'route':'roadmap','preview':preview,'summary':'Add search.'})
+        gate=decisions.prepare(self.root,'approve-proposal',attempt=author['id'])
+        answer=self.offered_answer(gate,gate['options'][0],via='typed')
+        displayed=gate['disclosure']
+        self.assertIn(gate['question'],displayed)
+        for option in gate['options']:
+            self.assertIn(option,displayed)
+        answer=answer|{'question':displayed,'question_context':[{'text':displayed,'at':answer['question_at']}]}
+        short=displayed.replace(evidence,'The checks passed.')
+        abbreviated=answer|{'question':short,'question_context':[{'text':short,'at':answer['question_at']}]}
+        with self.assertRaisesRegex(Refused,'complete current proposal'):
+            native.decision(self.root,'approve-proposal',abbreviated,attempt=author['id'])
+        self.assertFalse(load_run(self.root)[1].get('proposal_answers'))
+        # Another menu can replace the last hint. The exact native offer still binds.
+        checkout_file(self.root,'oh-recovery-menu.json').unlink()
+        answer.pop('decision')
+        native.decision(self.root,'approve-proposal',answer,attempt=author['id'])
+        state=load_run(self.root)[1]
+        self.assertEqual([a['attempt'] for a in state['proposal_answers']],[author['id']])
+        self.assertEqual(state['done'],[])
 
     def test_proposal_approval_does_not_replace_review_or_grant_product_implementation(self):
         self.planning('propose','repo')
