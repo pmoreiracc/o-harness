@@ -1,360 +1,204 @@
 # Using OH
 
-This guide describes the native workflow candidate. **Known limitation:** in the tested
-Codex Desktop and CLI paths, stopping the parent did not cancel its native child.
-The Desktop child continued to its natural deadline, 168.7 seconds after parent Stop.
-It is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81) and
-[OpenAI #55521](https://github.com/openai/codex/issues/55521).
-The [requested recovery design](plans/native-stop-recovery.md) makes native Stop
-and automatic cleanup on Resume the intended experience, without a second manual
-`oh-stop`. The local implementation is awaiting integrated host acceptance.
-Do not assume an idle parent means its children have stopped. OH adds no cancellation
-supervisor or fallback runner. Claude's successful bounded terminal probe does not
-establish Remote Control or detached-command behavior. See the
-[implementation and validation record](plans/native-workflows.md).
+This guide covers the full workflow: proposing an idea, designing it, delivering the tasks, handling review findings, pausing and resuming, and publishing the result. For setup, see [Installation and updates](installation.md). For every setting, see [Configuration](configuration.md).
 
-OH skills coordinate fresh agents in Claude or Codex. Your host runs their tools and
-handles permissions; OH's focused helpers retain approved scope, checks, review and
-completion evidence. Configuration and evidence live outside your repository.
+Skills start with `/` in Claude Code and `$` in Codex. The examples below use the Claude form.
 
-Use `/` in Claude and `$` in Codex. For example:
+| To do this | Run |
+|---|---|
+| Find ready or saved work | `/oh-start` |
+| Propose an idea | `/oh-propose search across my notes` |
+| Design a roadmap initiative | `/oh-design auth` |
+| Deliver an approved design | `/oh-deliver 0005` |
+| Prepare a quick fix | `/oh-deliver fix the sign-in timeout` |
+| Review your current changes | `/oh-review changes` |
+| See or change settings | `/oh-config` |
+| Pause the current run | `/oh-pause` |
+| Continue saved work | `/oh-resume` |
 
-| Work | Claude | Codex |
-| --- | --- | --- |
-| Propose an idea | `/oh-propose search across my notes` | `$oh-propose search across my notes` |
-| Design an initiative | `/oh-design auth` | `$oh-design auth` |
-| Deliver an approved design | `/oh-deliver 0005` | `$oh-deliver 0005` |
-| Prepare a bounded fix | `/oh-deliver fix the sign-in timeout` | `$oh-deliver fix the sign-in timeout` |
-| Review current edits | `/oh-review changes` | `$oh-review changes` |
-| Inspect settings | `/oh-config` | `$oh-config` |
+## How approvals work
 
-`oh-start` helps select a workflow when the intended work is missing. Starting a
-proposal or design authorizes that planning work; it does not authorize product
-implementation. A quick fix needs approval of its actual task scope. Questions and
-agent reports never substitute for your approval.
+OH asks before it changes your plans, before it writes code, and before it publishes. Each approval covers exactly what it shows you:
+
+- Running `oh-propose` or `oh-design` lets OH draft planning documents. It doesn't let OH write product code.
+- Delivery starts only after you approve its scope: an approved design, or the task list of a quick fix.
+- Publishing a PR needs its own approval.
+
+Questions appear in your host's native menus, or in chat when a menu isn't available. Only your answer counts as approval. Agent reports and agent text never approve anything.
 
 ## Propose an idea
 
-`oh-propose` examines the relevant roadmap, designs, decisions and code, then explains
-what it understood and recommends one route:
+```text
+/oh-propose search across my notes
+```
 
-- A roadmap initiative, with its milestone and hard dependencies.
+`oh-propose` reads your roadmap, designs, decision records and code, explains what it understood, and recommends one route:
+
+- A new roadmap initiative, with its milestone and dependencies.
 - A task in an approved design.
 - An improvement to existing behavior that needs no planning document.
-- A question when the idea or its destination is unclear.
+- A question, when the idea or where it belongs is unclear.
 
-Before changing planning documents, OH shows the complete proposed additions and their
-destinations. Approve them, refine them in your own words, or keep the recommendation
-without saving it. A changed route or materially changed additions need approval of
-those changes. No exact command wording or extra confirmation is required.
+Before it changes any planning document, OH shows the complete additions and where they go. You can approve them, refine them in your own words, or keep the recommendation without saving it. After you approve, OH writes and checks the additions, and a fresh reviewer agent challenges the routing, dependencies and project requirements. OH repairs any blocking finding before it finishes.
 
-Approved additions are written and checked, then a fresh independent reviewer agent
-challenges the routing, dependencies and project requirements. Blockers are repaired
-before completion. An improvement or unclear route can finish with its recommendation
-or question; it does not need an artificial document or review.
+An improvement or an open question finishes with the recommendation. It doesn't create a document.
 
 ## Design an initiative
 
-`oh-design <slug>` drafts a plan for one roadmap initiative. It defines the approach,
-ordered tasks, dependencies and acceptance checks. The request authorizes drafting
-directly. A fresh independent reviewer agent then challenges the actual document.
-Planning validates documents rather than running product tests.
+```text
+/oh-design auth
+```
 
-An open product question that changes the approach remains yours to decide. OH can
-prepare its alternatives and recommendation without choosing for you. Approving the
-text of a proposed decision record does not decide the underlying question.
+`oh-design` writes the design doc for one roadmap initiative: the approach, numbered tasks in order, their dependencies and acceptance checks. A fresh reviewer agent then challenges the document. Planning checks the documents; it doesn't run your product's tests.
 
-The first planning workflow asks where plans live; see [configuration](configuration.md).
-Repository plans use ordinary work branches and pull requests. A repository design
-becomes approved through your merge. Private plans normally live in
-`~/oh-plans/<project name>/`, outside the checkout. A private design needs your native
-acceptance of its reviewed contents and no Git commit or PR. Later edits require
-review and approval of the changed design before delivery.
+If an open product question would change the approach, OH lays out the alternatives and its recommendation, and the decision stays with you.
 
-Invoking Propose or Design without an argument asks for the missing idea or initiative
-in ordinary conversation. It does not start an empty run or invent the selection.
+The first time you plan in a project, OH asks **Where should OH keep this project's plans?** and shows both paths:
 
-## Deliver code
+- **Keep plans in the repository** commits roadmaps, designs and decision records to your repo through normal branches and pull requests. A design becomes approved when you merge its PR.
+- **Keep plans in the private folder** keeps them in `~/oh-plans/<project name>/`, outside your checkout. You approve a private design directly, with no commit or PR.
 
-`oh-deliver` without arguments first shows unfinished delivery work, when present,
-and asks once whether to resume it or choose different work. Otherwise it lists ready
-designs and explains unavailable work.
-`oh-deliver 0005` selects tasks from approved design 0005 across tracks. OH picks
-the lowest-numbered eligible task at each step. Tasks wait for their prerequisites,
-and blocked work stays pending. Add a track, as in `oh-deliver 0005 core`, to limit
-the run to that track.
-The number identifies the design. You can also say “Deliver approved design 0005.”
-An empty ready list does not resume unrelated work.
+OH then continues with the request you started. Any later edit to an approved design gets a fresh review and your approval before delivery uses it. To change the location later, see [Plans](configuration.md#plans).
 
-For a quick fix, such as `oh-deliver fix the sign-in timeout`, OH prepares a bounded
-ordered task list and shows its task and review limits. In Claude, the native plan
-viewer's **Accept** is the single scope approval. In Codex Plan mode, accept the
-proposed plan. In Codex Desktop Default mode, OH requests the scope in the right
-panel alongside the chat question. Where a file viewer is unavailable, OH shows
-the scope in chat. Refine the proposal before approving if it includes too much
-or omits work. Rejecting or cancelling grants nothing.
+Running `oh-propose` or `oh-design` with no argument asks for the idea or initiative in chat.
 
-The scope includes any original manual edits or unreviewed commits that will be
-completed with the fix. An existing dirty change stays one coherent repair task;
-it is not split across partially completed tasks. Other people's edits are preserved.
-An explicit correction to an existing PR keeps that destination.
-The preview identifies included starting edits and original branch commits. If starting
-contents change before acceptance, OH preserves them and requires a current preview;
-replaying an already consumed approval grants no additional work.
+## Deliver an approved design
 
-For each admitted task:
+```text
+/oh-deliver 0005
+```
 
-1. A fresh assessment selects its configured difficulty profile. Difficulty, model
-   and effort stay in OH evidence, outside the project design.
-2. A fresh implementation agent implements the task, updates required documentation,
-   reviews its own work and runs the configured checks. Routine failures are repaired
-   within the same scope, without a Retry approval.
-3. The final candidate includes provisional task and lifecycle updates. Its passing
-   checks and a fresh independent review must cover that exact candidate. Provisional
-   checkboxes are not completion authority.
-4. Blocking findings are repaired as defect families and independently reviewed again.
-   Only reviewed completion records the task as done and commits the reviewed tree.
+The number identifies the design. You can also say "Deliver approved design 0005". Add a track name, as in `/oh-deliver 0005 core`, to deliver only that track.
 
-The last task's review covers the accumulated branch and interactions among its tasks.
-There is no obligatory extra final-review stage. Tasks execute sequentially. Agents
-receive bounded current context and evidence references; full transcripts do not
-accumulate in the coordinating chat.
+OH picks the lowest-numbered task that's ready, works through tasks one at a time, and waits for each task's prerequisites. With no argument, `oh-deliver` first shows any unfinished delivery and asks whether to resume it. Otherwise it lists the designs that are ready.
 
-Your native host controls command permissions, including network, Docker and additional
-experiments. OH does not replace those controls or remove the shell from Windows agents.
-Reviewers are instructed not to edit and a changed subject invalidates their receipt.
-This is a behavioral restriction, not a separate operating-system sandbox; equality
-checks cannot detect an edit subsequently reverted.
+For each task:
 
-## Findings, limits and decisions
+1. A fresh assessment agent reads the task and the relevant code and rates it **simple**, **standard** or **complex**. That rating selects the model and effort for the work. See [Models](configuration.md#models).
+2. A fresh implementation agent builds the task, updates the documentation it affects, reviews its own work and runs your project's checks. It repairs routine check failures within the same task.
+3. A fresh reviewer agent reviews the exact result that passed the checks.
+4. Blocking findings go back for repair and another independent review. When the review is clean, OH records the task as done and commits the reviewed code.
 
-The approved scope stays fixed. For example, fixing a login timeout may reveal a logout
-problem; that observation does not authorize building a second feature.
+The last task's review covers the whole branch, including how its tasks work together. Agents receive the current task and references to earlier evidence, so full transcripts don't pile up in your chat.
 
-Blocking findings must be repaired. Concern-only findings let you choose whether to fix
-or accept the concern. Outside-scope findings stay in saved workflow follow-ups without
-blocking otherwise ready work for a filing decision. Creating an external issue still
-needs explicit or standing human authorization.
-Original findings remain available alongside author repair claims and later reviewer
-closure; a formatting problem does not erase an attempt or its findings. Reviewers
-provide a small structured decision (verdict, finding severities, claims and stable
-family identifiers), check it before finishing, and keep the full receipt flexible.
-The implementation agent reads that full receipt before judging and repairing findings;
-OH does not interpret Markdown wording as approval or a new defect family.
+Your host keeps control of command permissions, including network and Docker access. Reviewer agents work under a no-edit rule: if the subject changes during a review, the review no longer counts.
 
-OH keeps unrelated review findings in the saved workflow's follow-up section and shows
-them when reporting or continuing the work. They do not block completion merely because
-a filing destination is undecided, and retaining them never authorizes their implementation.
-You can ask the agent to create or link a GitHub issue, keep the saved follow-up, or add
-a note to a related mutable design. A design note is future work, not an approved new task.
-Repo and private designs behave alike. Frozen designs stay frozen. Editing a document
-after a successful review requires checks and another review; keeping a saved follow-up
-does not. An additional review allowance grants the exact count presented in its question.
+## Quick fixes
 
-By default a batch covers five tasks and each task has three review rounds. `oh-config`
-shows the actual project settings. When the task batch ends, the PR menu offers the
-next eligible batch when work remains in the selection, along with publication when
-available and the option to stop. A spent review allowance needs
-your grant before another review starts. Failed and interrupted launches are retained;
-waiting, retries and restarts do not replenish an allowance. A repeated blocking family
-in two independent reviewer receipts triggers implementation escalation. A first blocker
-or a missing check tool does not.
-When separately delivered tracks converge with every task done, OH selects one bounded
-finalization task to check, review and freeze the complete design. It does not rerun the
-completed implementation tasks.
+```text
+/oh-deliver fix the sign-in timeout
+```
 
-Questions use the host's native controls, with a direct chat reply when needed. The
-agent explains the subject and effects; there is no separate OH menu engine, exact
-reply command or approval the agent can write for you. If the host is still saving a
-valid answer, OH can retry that evidence read briefly without asking you to repeat it.
-An unresolved obstacle should name what happened and the concrete next step.
+For a change that doesn't need a design, describe it. OH prepares a short task list and shows it with its task and review limits. Approve it where your host shows plans:
 
-## Independent feedback
+- In Claude Code, **Accept** in the plan viewer.
+- In Codex Plan mode, **Implement**.
+- In a menu or in chat, **Approve fix** (or **Approve N tasks**). **Stop and take over** declines it.
 
-Ask OH to review a specific subject, or use `oh-review` with `changes`, `tree`,
-`paths <relative paths>`, `commit <ref>` or `range <base> <head>`. Historical review
-reads that revision without switching your branch. Feedback does not require an
-author report, design document or product test run unless the project or subject
-actually requires one.
+Refine the proposal before you approve if it includes too much or leaves something out. The scope includes any uncommitted edits or unreviewed commits it will finish, and the preview lists them. Edits made by other people are kept as they are.
 
-Each standalone request starts a fresh independent reviewer agent. Its receipt is
-feedback on that subject, not a delivery review round or permission to implement,
-complete or publish work. A clean or explicitly feedback-only review ends with its
-report. Add `--feedback-only` when you want no repair offer.
+## Findings and review rounds
 
-Applicable findings can become a bounded quick-fix preview. Approve that scope once
-before repairs; otherwise keep the report as feedback. The original receipt is repair
-input, not proof that the repaired change passed review. A later standalone request
-does not automatically import old finding history.
+The approved scope stays fixed. If fixing a login timeout reveals a logout problem, OH records the logout problem and keeps building only what you approved.
 
-For completed unpublished delivery work, `oh-review task <id>` uses that task's saved
-scope and remaining review allowance. A clean result returns to the existing decision
-without another commit. Blockers enter its scoped repair/review cycle and produce a
-correction commit, preserving original completion and review history. Reviewing
-published work produces standalone feedback.
-Publication waits until the requested task review and any correction are complete;
-the earlier clean commit cannot override a newly discovered blocker.
+| Finding | What happens |
+|---|---|
+| Blocking | Repaired, then reviewed again by a fresh reviewer. |
+| Concern | You choose **Fix concerns** or **Accept concerns**. |
+| Outside the task's scope | Saved as a follow-up in the workflow record. It doesn't block the task. |
 
-## Pause, Stop and resume
+When OH reports or continues the work, it shows the saved follow-ups. You can ask the agent to open or link a GitHub issue, keep the follow-up, or add a note to a related design. A note is future work, not a new approved task.
 
-`oh-pause` requests a cooperative pause: the current native step finishes and its
-result is retained before another phase starts.
+Each task has a set number of review rounds, 3 by default. When a task has used them, OH asks before another review starts, with an option such as **Allow 2 additional review rounds**. Retries, restarts and switching hosts don't add rounds.
 
-The local native Stop implementation is awaiting full OH host acceptance. Its
-intended experience is: click the host's Stop button, then invoke the same work in
-this conversation or a new one and accept Resume once. No second `oh-stop` command
-or manual child management should be needed. Edits, findings and remaining allowances
-are preserved. See the [implementation and evidence](plans/native-stop-recovery.md)
-for what has been tested and the remaining limits.
+If the same blocking problem appears in two independent reviews, OH moves the repair to the **complex** profile.
 
-Every work entry checks saved work before preparing a new scope. For example, repeat
-`oh-design agent-pipeline` in the same checkout to find its interrupted draft or
-pending decision. OH asks "Resume agent-pipeline on design/agent-pipeline?" with
-`Resume saved work` and `Stop and take over`, even when you named the initiative. Nothing continues before
-your answer. Propose and quick fixes compare the requested outcome with saved scope;
-you do not need to reproduce the original wording. With no subject, OH shows relevant
-unfinished work first. Declining leaves it intact.
-A clearly different request does not silently select an old task.
+## Batches
 
-For delivery already authorized in the current conversation, “Continue the approved
-delivery” picks up the saved phase. OH asks for the existing recovery decision
-when taking over from another conversation or resuming stopped or paused work.
+OH works through a batch of tasks, 5 by default, without stopping between them. Each scope preview states what it covers, for example "First batch: 5 tasks. Up to 3 independent reviews per task before human renewal." At the end of each batch, OH shows what was completed and asks what to do next:
 
-`status --saved` lists both saved workflow and standalone review facts without changing
-selection. `resume --run ID` reads one run; adding `--human` binds an actual native human
-continuation. Codex exposes the equivalent `status` (`saved`) and `resume` (`run`, `human`)
-inputs. These are focused helpers, not another agent runner.
+- **Start tasks …** runs the next batch.
+- **Open PR to `<owner>/<repo>` → `<base>`** publishes the reviewed work.
+- **Stop and take over** ends OH's work and leaves your files and commits as they are.
 
-For delivery, the recovery question is **How would you like OH to proceed with this
-delivery?** Its short choices are **Continue**, **Start fresh**, and **Stop and take
-over**. Continue keeps existing changes; Start fresh discards the displayed work and
-starts from the displayed main/base commit, without backups; Stop and take over ends
-OH execution and leaves files unchanged. The question names the affected paths and
-restart task batch. Review usage and findings are retained. Deleted chat transcripts
-do not require reconstructing the chat: after verified execution cleanup, missing
-results can be recorded as abandoned and the required work repeated.
+Change the batch size and review rounds with `/oh-config`. A change applies to the next run you start; a running batch keeps the settings it was approved with.
 
-`oh-resume` uses that gate when delivery needs recovery and the ordinary Resume
-question for planning and review. After your answer and once native work
-is quiet, it continues the saved task or decision with its
-original scope, settings, findings and remaining allowances. A new session or host
-can continue even while the old conversation remains open; no prior Pause or Stop
-is needed when no attempt or check is executing. The new coordinator continues the
-same work and the superseded coordinator launches nothing further. Existing attempts
-keep their original native parents. If a check is still executing, OH waits for that
-step before retrying the valid continuation. A new session must not start another
-agent while an old child can still execute tools or its tracked commands remain live. Discovery alone does not lift a saved
-Pause or Stop; a later human Resume answer can. Resume does not
-renew a spent review allowance, accept findings or widen scope. This uses the same
-checkout and OH data, not migration to another computer.
+## Ask for a review
 
-A completed batch resumes its pending decision or publication; it does not rerun
-implementation. An interrupted publication reuses the existing PR and grant. Work
-completed outside OH is not reopened or relabelled as independently reviewed.
+```text
+/oh-review changes
+```
+
+`oh-review` starts a fresh reviewer agent on any of these subjects:
+
+| Subject | Reviews |
+|---|---|
+| `changes` or `tree` | Your current working tree, including uncommitted changes, against `HEAD` |
+| `paths <relative paths>` | Specific files or folders |
+| `commit <ref>` | One commit |
+| `range <base> <head>` | A range of commits |
+| `task <id>` | A completed delivery task that isn't published yet |
+
+Reviewing a commit or range reads that revision without switching your branch. If the review finds something to fix, OH can turn the findings into a quick-fix scope for your approval. Add `--feedback-only` to get the report without a repair offer.
+
+`task <id>` uses the task's saved scope and remaining review rounds. A clean result returns you to the batch decision. Blocking findings go through the normal repair and review cycle and produce a correction commit, and OH waits for that correction before it publishes.
+
+## Pause, stop and resume
+
+`/oh-pause` lets the current step finish, saves its result, and stops before the next one.
+
+To stop immediately, use your host's Stop button. OH stops the commands it started and blocks the stopped agent from running further tools. In Codex, a child agent may keep running until it finishes; see [Known limits](known-limits.md).
+
+To continue, run the same command again in this conversation or a new one, or run `/oh-resume`. Before OH prepares new work, it checks for saved work. When it finds some, it asks whether to resume it, with **Resume saved work**, **Stop and take over** and, when available, **Start fresh**. Nothing continues until you answer. You don't need to repeat your original wording, and a clearly different request never picks up an old task by accident.
+
+Resumed work keeps its original scope, settings, findings and remaining review rounds. You can continue from a new session or the other host, on the same checkout.
+
+When a delivery needs recovery, for example after a stop in the middle of a task, OH names the branch and affected paths and offers three choices:
+
+- **Continue** keeps the existing changes and finishes the approved delivery.
+- **Discard local work on `<branch>` and restart at `<base>`** (Start fresh) discards the affected local changes and the branch's unmerged work. It makes no backup.
+- **Stop and take over** ends OH's work and leaves the files unchanged.
+
+Review rounds used and findings stay recorded whichever you choose.
 
 ## Publication
 
-You control whether reviewed work is published and what ships. Publication approval
-binds the reviewed head and destination. OH reconciles an existing PR before creating
-one; a failed lookup does not authorize a duplicate. A correction updates its existing
-PR. Your merge remains separate from the agent's work.
+You decide whether reviewed work is published and where. Publication approval covers the exact reviewed commit and destination. If a PR for the work already exists, OH updates it instead of opening a duplicate.
 
-The result should explain what changed, actual checks, review rounds and findings,
-then link the commit, document or PR. After publishing, the agent keeps following CI on
-that PR's reviewed head until it has a result, instead of asking you to check later.
-Pending, missing, failed, cancelled or skipped checks are not a pass. When CI fails,
-the agent reports a short diagnosis and asks whether to prepare a fix for the same PR,
-re-run the failed jobs or leave it. Publication permission alone does not authorize
-further code edits; a fix needs its own scope approval, implementation, checks and
-fresh review.
+The result explains what changed, which checks ran, the review rounds and findings, and links the commit, document or PR. After publishing, the agent follows CI on the PR until it has a result. Pending, missing, failed, cancelled or skipped checks don't count as a pass.
 
-You can still code, commit and open PRs without OH.
+When CI fails, the agent reports a short diagnosis and offers to prepare a fix for the same PR (**Approve fix**), to re-run the failed jobs (**Re-run failed checks**) when the evidence supports it, or to stop (**Stop and take over**). A fix goes through its own scope approval, checks and fresh review.
 
-## Projects, checks and visibility
+You merge. You can also keep coding, committing and opening PRs without OH.
 
-Before current planning/delivery advice, OH's `entry` operation gathers saved work,
-local edits/commits and the configured origin base. Fetching those facts does not
-pull, switch branches or discard files. It reports the observed base commit and
-whether the fetch succeeded, failed or the repository has no origin. Local plan
-and delivery listings identify their checkout source; material differences need
-reconciliation before treating their tasks/blockers as current.
+## Projects and checkouts
 
-OH's workflow requires agents to keep repository work in the checkout you selected,
-using branches in that folder. It forbids creating parallel worktrees, clones or
-repository copies for a task, including nested copies. Local conflicts are reconciled
-there while preserving unfinished work; a genuine scope or discard decision is presented with its concrete
-effect. OH evidence, scratch artifacts and configured private plans retain their
-external locations. An existing checkout you selected remains supported.
+The first OH command in a repository registers it with `oh init`. Registration writes nothing to your repository; settings, checks and evidence live in OH's own folders.
 
-For independent work, the agent uses `workspace` to save unfinished edits, switch to
-the intended branch in that same folder and restore any work previously saved there.
-The helper preserves staged, unstaged and untracked changes using a retained Git stash
-and an external byte backup; it creates no unfinished commit. Ignored local files stay
-in place, except that ignored contents of a tracked file replaced by a directory are
-saved with that changed path and restored with it. Branch switches refuse to overwrite
-ignored files. Returning
-through the existing Resume/Continue choice restores the saved branch and staged state
-without another preservation question. Scope, findings and remaining allowances stay
-with their original run.
+| Option | Use it to |
+|---|---|
+| `oh init --name <name>` | Choose the project name |
+| `oh init --attach <project-id>` | Add another worktree of a registered project |
+| `oh init --reattach <checkout-id>` | Reconnect a checkout you moved |
+| `oh init --replace` | Register a new checkout at an old path, starting fresh |
 
-An interrupted operation reuses its saved record. Failed switches restore the source
-work when possible. A moved branch, conflicting restore, active writer or unsupported
-Git state gets a concrete recovery step while retaining its backup and stash. OH does
-not force a switch or overwrite new edits to make recovery appear successful. Safety
-stashes remain in Git, labelled `OH workspace`, even after restoration; OH never pops
-them or removes your other stashes. The external backup records their exact identities.
+A registration follows the repository's Git identity, so reboots, commits, branch switches and remote URL changes keep it. Registrations from older OH versions upgrade automatically and keep their IDs, saved work and spent review rounds.
 
-The agent can preserve/integrate local work, safely update its base or propose a
-specific discard. Discard approval names the affected paths/commits and target
-commit; the agent rechecks and executes that effect. Other work, ignored files and
-nested worktrees remain protected. Workflow entry after a prerequisite still requires
-valid native request/scope provenance. Discovery and selected reads separate retained
-workflow status from native interruption and unsettled execution; idle history alone
-does not block different approved work, Resume or standalone-review repairs. Historical
-grants, findings and spent review rounds remain unchanged. Recorded task lists are not
-proof of current unfinished work; merged output supplies no missing completion evidence.
+New work starts from the base branch, which OH detects from `origin/HEAD`, then `main`, then `master`. Set another with `oh config set base_branch develop`.
 
-A necessary recovery/continuation question can retain the initiating native request
-with `decision-request --request`. After its actual answer is bound, `scope prepare
---after` carries that request forward; `scope approve --after` retains an already
-accepted unchanged preview. These paths reverify the latest prerequisite answer and
-honor later cancellation or changed instructions, without another invocation or a new
-grant. Use
-`scope prepare --keep-checkout` (Codex `keep_checkout: true`) when preserving a
-checkout deliberately selected after reconciliation; normal scope and approval
-checks still apply. Offline information stays labelled with its freshness limit.
+OH keeps work in the checkout you selected and switches branches in that folder. It doesn't create extra worktrees or clones. When it needs to switch, it saves your staged, unstaged and untracked changes in a Git stash labelled `OH workspace`, plus a backup outside the repository, and restores them when you return. It never pops or removes your stashes.
 
-Register a checkout with `oh init`; registration grants no work. Use `--name` to choose
-a project name, `--attach <project-id>` for another worktree, `--reattach <checkout-id>`
-for a moved checkout, and `--replace` for a new checkout at an old path. Configuration,
-checks and evidence stay outside consumer repositories.
+## Command-line helpers
 
-Registration uses Git's checkout/admin/common paths and a saved commit, not filesystem
-device or inode numbers. Reboots, normal commits, branch switches and remote URL changes
-do not replace the registration. A restored or re-cloned repository at the same paths
-containing that commit is the same logical workspace; another clone or sibling worktree
-has its own checkout authority. Missing saved history must be restored before reuse.
-The usual Resume, branch, scope, exact-review and publication checks still apply.
+With the `oh` command on your `PATH` (see [Installation](installation.md#install)):
 
-Older filesystem registrations upgrade automatically when Git layout and saved history,
-or the original directory identity, verify continuity. IDs, saved work, approvals and
-spent allowances are preserved; the original registration is backed up. If verification
-fails, restore the checkout or its Git history and retry; legacy settings remain in place.
-Use `oh init --replace` only for an intentional replacement, which starts fresh authority.
-An empty repository records its first
-commit when a workflow is explicitly invoked. Git reflogs are not required.
+| Command | What it does |
+|---|---|
+| `oh status` | Shows saved workflow facts without starting an agent |
+| `oh verify [base] [review\|pre-push\|ci]` | Runs the project's checks |
+| `oh config` | Shows effective settings and where each comes from |
+| `oh plans list` | Shows each initiative's design and approval status |
 
-`oh config` shows the effective settings and their sources. The base branch is detected
-from `origin/HEAD`, then `main`, then `master`; `oh config set base_branch develop`
-selects another existing branch. New work uses an appropriate work branch from that
-base, while interrupted work preserves its matching branch and useful draft.
-`oh verify` runs the project's registered checks; an explicit comparison base overrides
-the default. A missing tool needs restoration, not weaker tests or a new task grant.
-On native Windows, a registered bare `bash` uses native Bash, such as Git for Windows;
-use `wsl` or an explicit interpreter when that is what the check requires.
-See [configuration](configuration.md) for check definitions and profile import/export.
+On native Windows, a check registered as bare `bash` runs native Bash, such as Git Bash. Use `wsl` or an explicit interpreter when the check needs it.
 
-`oh status` shows saved workflow facts without launching an agent. The dashboard and
-retained receipts help inspect scope, tasks, checks, attempts, findings and decisions;
-observations never grant authority. Missing usage observations remain unknown.
-See [dashboard and data](analytics.md) and [installation](installation.md).
+The [dashboard](analytics.md) shows scope, tasks, checks, attempts, findings and decisions for every run.
