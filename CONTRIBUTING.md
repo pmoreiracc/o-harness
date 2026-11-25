@@ -97,7 +97,7 @@ Add `--host codex` or `--host claude` to `on`, `off` or `status` to select one h
 
 Each `oh-dev on` build gets a unique version, such as `0.5.0-SNAPSHOT.1790853731453599000`, shared by both plugins and their engine, and lives under `~/.local/share/oh-dev/builds/`. Uncommitted edits are included; later edits don't change the snapshot, so run `on` again for a new build. Live builds are marked `-SNAPSHOT.live.<build-id>`, and their skills and hook definitions refresh on each `on`. Keep a build folder while sessions or runs use it.
 
-In Codex, development builds show **OH DEV** with the development icon; releases show **OH** with the violet icon.
+In Codex, releases show **OH** with the white icon. Development builds show **OH DEV** with the dark icon.
 
 ### Development dashboard
 
