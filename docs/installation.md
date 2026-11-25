@@ -1,64 +1,52 @@
 # Installation and updates
 
-The observed native Codex Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81)
-and does not block activation or release. Required checks and independent review still
-apply; see [the validation record](plans/native-workflows.md).
-
 ## Requirements
 
-- macOS, Linux, or 64-bit Windows 11 (x64 or ARM64) as a preview ([Windows notes](#windows)). The dashboard auto-start
-  service covers macOS and Windows; on Linux run `oh serve` yourself.
-- Python 3.12+ (on Windows, OH can fetch it for you) and Git.
-- Claude Code signed in with a Claude subscription, or Codex signed in with ChatGPT.
-  OH refuses API-key logins.
+- macOS or Linux. Native Windows 11 (64-bit, x64 or ARM64) is in preview; see [Windows](#windows).
+- Python 3.12+ and Git. On Windows, OH can download Python for you.
+- Claude Code signed in with a Claude subscription, or Codex signed in with ChatGPT. OH checks the sign-in before it starts agents and doesn't use API keys.
 
 ## Install
 
-Claude Code:
+**Claude Code**
 
 ```sh
 claude plugin marketplace add pmoreiracc/o-harness#dist
 claude plugin install o-harness@o-harness
 ```
 
-Codex:
+**Codex**
 
 ```sh
 codex plugin marketplace add pmoreiracc/o-harness --ref dist
 codex plugin add o-harness@o-harness
 ```
 
-You can install it in both hosts. They share one OH installation and one data folder,
-`~/.local/share/o-harness`. The first time a plugin runs OH, it installs its engine there
-and creates the `oh` command at `~/.local/share/o-harness/bin/oh`. Add that folder to your
-`PATH` if you want to type `oh` directly; the examples below assume you did.
+You can install OH in both hosts. They share one installation and one data folder, `~/.local/share/o-harness`. The first time a plugin runs OH, it installs the engine there and creates the `oh` command at `~/.local/share/o-harness/bin/oh`. Add that folder to your `PATH` to run `oh` directly. The examples in these docs assume you did.
 
 ## First use in a project
 
-1. Start a new agent session in your project and run `/oh-propose <idea>`
-   (Codex: `$oh-propose <idea>`). The first time, OH installs itself and the agent registers
-   the project with `oh init`, saving your project's checks: the commands OH must pass
-   before it commits, in your settings file (`~/.config/o-harness/settings.json`). Nothing
-   runs yet. `/oh-config` shows them, and `oh config open` opens the file.
-2. OH continues the saved command after registration. If setup reports an external obstacle,
-   follow its concrete recovery instruction; your original command remains pending.
+Open a new session in your project and give OH an idea:
 
-Native workflow agents run inside the active Claude or Codex host using its signed-in
-subscription and ordinary tool permissions. OH no longer starts a separate headless
-worker or requires a pinned worker executable. Keep the host and its CLI current;
-model/effort availability is checked before admission, with no API fallback.
+```text
+/oh-propose Add search to my notes app.
+```
 
-Registering a project changes nothing in its repository.
+In Codex, use `$oh-propose`. On first use, OH:
 
-### First use from Linux Codex
+1. Registers the project with `oh init`. Registration writes nothing to your repository.
+2. Saves your project's checks, the commands that must pass before OH commits a task, in `~/.config/o-harness/settings.json`. Run `/oh-config` to see them, or `oh config open` to edit the file.
+3. Asks **Where should OH keep this project's plans?**, then continues with your original request.
 
-A workspace-write session can block OH's writes outside the repository. If a command
-reports denied access, retry that same command using Codex's native execution permission.
-The first successful setup creates a backup coordination lock beside the OH data directory.
-Creating the directory and adding it to the sandbox gives access to its contents. The first
-setup can still need one-time permission to create the sibling lock.
+If setup hits a problem outside OH, it names the fix, and your request stays pending until you retry.
 
-For ongoing access to the default Linux layout with private plans, start from an ordinary terminal:
+OH's agents run inside Claude Code or Codex, with that host's subscription and tool permissions. Keep the host CLI up to date. OH checks that the configured model and effort are available before it starts an agent.
+
+### Codex on Linux
+
+A `workspace-write` sandbox can block OH's writes outside the repository. If a command reports denied access, retry the same command with Codex's native execution permission. The first setup may also need one-time permission to create a lock file next to OH's data folder.
+
+To give Codex ongoing access to the default layout with private plans, start it from a terminal:
 
 ```sh
 (umask 077; mkdir -p "$HOME/.local/share/o-harness" "$HOME/.config/o-harness" "$HOME/oh-plans")
@@ -67,128 +55,62 @@ codex --add-dir "$HOME/.local/share/o-harness" \
   --add-dir "$HOME/oh-plans"
 ```
 
-Use the configured paths if they differ. An absolute `XDG_CONFIG_HOME` changes the
-settings directory to `$XDG_CONFIG_HOME/o-harness`. A separate `OH_DATA_HOME` keeps
-settings inside its own `config` subdirectory. If you keep plans in Git, omit the
-private-plans directory. For new private plans, add the configured parent folder
-and let OH create the project folder. Then continue the original OH request.
+Use your own paths if they differ. With an absolute `XDG_CONFIG_HOME`, settings live in `$XDG_CONFIG_HOME/o-harness`. If you keep plans in the repository, leave out `~/oh-plans`.
 
 ## Windows
 
-Windows support remains a preview. Native Claude Code delivery and Stop/recovery
-passed on Windows 10 build 19045 with the compatibility candidate. An earlier native
-Codex continuation also completed, but native Windows Codex execution of the final
-combined candidate has not been tested. CI covers additional Windows behavior; see
-the [acceptance summary](plans/release-compatibility.md#acceptance-summary-2026-10-28)
-for the tested versions and remaining limits.
+Native Windows 11 support is in preview. [Known limits](known-limits.md) lists what's still being tested.
 
-- **Git for Windows**, which includes Git Bash: Claude Code runs OH's hooks through it.
-- Codex uses its default Windows `cmd` hook runner. A custom PowerShell hook shell is not
-  covered by this preview; keep the default for OH's packaged Windows hooks.
-- **Python:** nothing to install. OH uses Python 3.12 or newer if it finds one (`python3`,
-  `python` or `py -3`). If there is none, it downloads the official Python 3.14.7 Windows
-  package from python.org into `%USERPROFILE%\.local\share\o-harness\python` once: about
-  12 MB, checked against its published SHA-256, with no admin rights and no `PATH` change. In
-  Claude Code that happens at OH's `setup`, which the first OH command runs and which says so
-  first; in Codex, when the first session starts OH's tools. OH then uses that Python first. Set `OH_PYTHON_DOWNLOAD=0`
-  to stop the download and install Python yourself.
-- From PowerShell or cmd, run OH through `scripts\oh.cmd` (the plugin's, or
-  `%USERPROFILE%\.local\share\o-harness\bin\oh.cmd` after setup). cmd re-reads `& | < > ^`
-  in arguments, so pass JSON from a file: `oh.cmd config set checks @checks.json`.
-- Git for Windows converts line endings by default (`core.autocrlf`); OH accepts files whose
-  only difference from what Git stores is their line endings.
-- OH uses Windows extended paths for its file operations, including saved evidence,
-  locks, recovery and backups. Existing saved path identities stay unchanged; no registry
-  change or data migration is needed. External tools retain their own path limits.
-- Native Claude and Codex agents use their host's available tools and permissions.
-  OH does not remove Claude's shell or install a replacement Windows sandbox.
-  Codex shell hooks accept both canonical `Bash` command payloads and native
-  `exec_command` payloads (`cmd`); both require the same owned-command reservation.
-  Native Claude workflow and Stop/recovery validation passed for the tested build;
-  that result does not establish every Windows host configuration or native Codex path.
-- `oh service-install` adds a Task Scheduler task that starts the dashboard at logon,
-  without admin rights or a window; `oh service-uninstall` removes it.
+- **Git for Windows** is required. Claude Code runs OH's hooks through its Git Bash.
+- Codex runs OH's hooks through its default `cmd` hook runner. Keep that default; a custom PowerShell hook shell isn't supported for OH's hooks.
+- **Python** needs no setup. OH uses Python 3.12 or newer if it finds one (`python3`, `python` or `py -3`). Otherwise it downloads the official Python 3.14.7 embeddable package from python.org into `%USERPROFILE%\.local\share\o-harness\python`, about 12 MB, checked against its pinned SHA-256, with no admin rights and no `PATH` change. Set `OH_PYTHON_DOWNLOAD=0` to install Python yourself instead.
+- From PowerShell or cmd, run OH as `%USERPROFILE%\.local\share\o-harness\bin\oh.cmd`. cmd re-reads `& | < > ^` in arguments, so pass JSON from a file, for example `oh.cmd config set checks @checks.json`.
+- Files that differ from Git's copy only in line endings (`core.autocrlf`) count as unchanged.
+- OH uses Windows extended paths for its own files, so long paths in its data folder work without registry changes.
+- `oh service-install` starts the dashboard at logon through Task Scheduler, with no admin rights and no window. `oh service-uninstall` removes it.
 
 ## Update
 
-Merged changes reach you only when a new version is released. See the
-[changelog](../CHANGELOG.md) and [known limits](known-limits.md).
+Run this in a session:
 
-In Codex, installing or enabling a plugin does not trust changed hook definitions.
-Even changing a timeout invalidates the previous definition's trust. After an OH
-update, open Terminal in the project, run `codex`, and enter `/hooks` to review any
-new or modified OH hooks. Trust only the definitions you approve, then start fresh
-sessions. An enabled plugin or an old saved trust entry does not establish that
-the current callbacks can run. See [Codex hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
+```text
+/oh-update
+```
 
-Inside your session, run `/oh-update` in Claude Code or `$oh-update` in Codex to refresh
-the release marketplace and update OH in both installed hosts on Windows, macOS and Linux.
-To select one host, use `/oh-update codex` or `$oh-update claude`.
+In Codex, run `$oh-update`. OH refreshes the release marketplace and updates the plugin in every host where it's installed, on macOS, Linux and Windows. To update one host, add its name, as in `/oh-update codex`.
 
-It reports the installed plugin versions, for example `codex: 0.5.0 -> 0.6.0`, or
-`codex: 0.6.0 — up to date` after a successful refresh finds no change. A host failure does
-not prevent updating the other host; the command reports the error and exits unsuccessfully.
-If the release plugin is missing, the command adds the official release marketplace and
-installs the latest release, reporting `not installed -> <version>`.
-When a session's `PATH` omits another host's CLI, OH revalidates and uses that host's
-previously recorded executable. On Windows, the Codex app keeps its CLI in a folder it
-replaces on every app update, so when `codex` is not on `PATH`, OH looks that copy up again
-on each use and records the current one. `CODEX_CLI_PATH`, the app's own override, is used
-first when it is an absolute path to an existing file. If the app has not installed its CLI
-yet, open the Codex app once and retry. If a running Codex session keeps an older copy, OH
-uses the copy named by the installed app. When it cannot tell which copy is current,
-`oh-update` keeps using the copy it recorded if that still exists; otherwise close the
-Codex sessions, reopen the app and retry. Hosts it cannot find are reported explicitly as
-skipped. A binary named with `oh trust-host <host> <path>` stays pinned until you trust
-another.
+It reports each host's result as `<host>: <old> -> <new>`, or `<host>: <version> — up to date`. A host where OH isn't installed yet gets the latest release and reports `not installed -> <version>`. A host that isn't found is reported as skipped. If one host fails, the other still updates.
 
-You can also use the host commands directly:
+Start a new session afterwards. The first OH command switches to the new version. Your saved work, settings, plans and spent review rounds carry over, and `/oh-resume` continues any saved run in the new session.
 
-- **Claude Code:** turn on auto-update for the `o-harness` marketplace in `/plugin` →
-  Marketplaces, or run:
+### Codex hook trust
 
-  ```sh
-  claude plugin marketplace update o-harness
-  claude plugin update o-harness@o-harness
-  ```
+Codex trusts each hook definition separately, so a changed OH hook, even a changed timeout, needs your review. Open a terminal in the project, run `codex`, enter `/hooks`, and trust the OH hooks you approve. Then start new sessions. See [Codex hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 
-- **Codex:**
+### Update with host commands
 
-  ```sh
-  codex plugin marketplace upgrade o-harness
-  ```
+**Claude Code:** turn on auto-update for the `o-harness` marketplace in `/plugin` → Marketplaces, or run:
 
-  The marketplace refresh also updates installed plugins.
+```sh
+claude plugin marketplace update o-harness
+claude plugin update o-harness@o-harness
+```
 
-Start a new session afterwards. The first OH command you run switches to the new version.
-Older filesystem-based checkout registrations upgrade automatically when OH can verify
-the same Git layout and saved history, or the original directories before work was saved.
-The upgrade preserves project and checkout IDs, settings, plans, saved work and spent
-allowances, and keeps the original registration under `registry/upgrades` in OH's data
-folder. Saved-work discovery performs the same upgrade; no `init --replace` or repeated
-scope approval is needed for a format change. Interrupted upgrades retry safely.
-Historical project records for worktrees of the same verified Git repository can
-use their existing named settings while keeping separate IDs and work histories.
-New worktrees join the present main checkout's project when these records coexist.
-Different repositories or contradictory legacy settings still require resolution.
-If identity cannot be verified, OH preserves the registration and explains how to restore
-the checkout or its Git history. Use `init --replace` only for an intentional replacement.
-Updates only go forward: versions with Windows support install an `oh` command that older
-versions' `setup` refuses to replace, so go back to an older version only with a fresh OH
-data folder.
-Finish or cancel active native work before switching builds. Current helpers preserve
-historical evidence and adopt unfinished work only at a quiet boundary; they do not
-restart a retired runner or replenish allowances. Checked owner handoff reconciles
-legacy completed-attempt control entries before new work. Do not run old and new
-completion writers concurrently on the same saved run; use fresh sessions after
-settling the old coordinator. The dashboard service
-restarts itself on the new version; if you installed it before version 0.3.0, run
-`oh service-install` once more.
-On Windows, OH retains earlier downloaded Python versions because an installed dashboard
-task or an existing batch can still reference them. `python/current` selects the new version
-for new commands. Reinstall the service with `oh service-install` to select the current
-interpreter; remove old Python folders only after their batches have ended and no scheduled
-task references them.
+**Codex:** the marketplace refresh also updates installed plugins.
+
+```sh
+codex plugin marketplace upgrade o-harness
+```
+
+### Where OH finds the host CLIs
+
+When a session's `PATH` doesn't include the other host's CLI, `oh-update` uses the executable OH recorded earlier, after checking it again. On Windows, the Codex app replaces its CLI folder on every app update, so OH looks the current copy up each time. An absolute `CODEX_CLI_PATH` takes precedence. If the Codex app hasn't installed its CLI yet, open the app once and retry. To pin a specific binary, run `oh trust-host <host> <path>`.
+
+### Older versions
+
+OH only moves forward. Newer versions install an `oh` command that older versions can't replace, so to go back to an older version, use a fresh OH data folder.
+
+The dashboard service restarts on the new version by itself. If you installed it before version 0.3.0, run `oh service-install` once more. On Windows, run `oh service-install` after an update to move the service to the newest downloaded Python. OH keeps earlier Python downloads; remove an old one only once no batch or scheduled task uses it.
 
 ## Uninstall
 
@@ -197,21 +119,10 @@ claude plugin uninstall o-harness@o-harness   # or: codex plugin remove o-harnes
 oh service-uninstall                          # only if you installed the dashboard service
 ```
 
-This keeps your OH data: projects, review evidence and analytics. To remove everything,
-delete `~/.local/share/o-harness` after uninstalling from both hosts.
+Uninstalling keeps your OH data: projects, review evidence and dashboard history. To remove everything, delete `~/.local/share/o-harness` and `~/.config/o-harness` after uninstalling from both hosts.
 
 ## Local build
 
-To try a build locally without releasing, run `integrations/package.sh <empty-folder>`
-and add that folder as a local marketplace. The known native Stop limitation is
-tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81) and does not block local
-activation or release.
-OH only switches automatically to a higher
-version, so activate a local build with `scripts/oh setup` from the installed plugin
-(`setup --development` if the checkout had uncommitted changes).
+To try a build without releasing it, run `integrations/package.sh <empty-folder>` and add that folder as a local marketplace. OH only switches automatically to a higher version, so activate a local build with `scripts/oh setup` from the installed plugin, or `scripts/oh setup --development` if the checkout has uncommitted changes.
 
-Keep the snapshot that wrote a run available for retention and receipt retries.
-New source-bound completion records require a compatible reader even after the run
-settles; older runtimes cannot safely revisit them. Use isolated development data
-when a trial needs to switch back to an older runtime. Switching plugins or rolling
-back source does not roll back workflow history.
+Keep the build that wrote a run available while that run is in use. Newer completion records need a compatible reader, so use separate development data when a trial must switch back to an older runtime. For day-to-day development builds, see `oh-dev` in [CONTRIBUTING.md](../CONTRIBUTING.md).

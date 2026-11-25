@@ -1,269 +1,168 @@
 # Architecture
 
-OH's native workflow candidate uses skills and focused validation helpers. The host
-runs agents and their tools; OH retains scope, allowances and evidence. The observed
-Codex parent-Stop limitation is tracked in [issue #81](https://github.com/pmoreiracc/o-harness/issues/81)
-and [upstream #55521](https://github.com/openai/codex/issues/55521).
-The [native Stop recovery implementation](plans/native-stop-recovery.md) adds tool
-revocation and owned command cleanup. Disposable Codex Desktop probes established
-the approach; integrated host acceptance remains pending. A stopped parent, revoked
-worker and terminated native model are distinct facts.
+OH is a set of host skills backed by a Python core of focused validation helpers. The host (Claude Code or Codex) runs every agent, tool call and question. OH decides what an agent may work on, records what happened, and checks the evidence before anything is committed or published. It has no agent runner, scheduler or permission broker of its own.
+
+```text
+ you ──► host chat ──► OH skill (coordinator)
+                          │  launches one fresh native agent at a time
+                          ▼
+              assessment · implementation · review agents
+                          │  call focused helpers (shell or MCP)
+                          ▼
+                 OH core (runtime/oh) ──► journals, evidence, settings
+                                          outside the checkout
+```
+
+## Invariants
+
+The rules in [`config/invariants.json`](../config/invariants.json) constrain every change to OH:
+
+1. Only verified native host records of a person's decision grant task scope, publication or additional review allowance. Model output, silence, elapsed time, retries and restarts grant nothing.
+2. A reviewer is independent of the author, starts with a fresh context and reviews its exact admitted subject. A detected change to the subject invalidates the review.
+3. Durable workflow evidence is authoritative. Analytics and model prose are not.
+4. Every attempt, including failed launches, is retained. Recovery is idempotent and never replenishes a grant.
+5. Agents run only under first-party, subscription-authenticated host execution, with no API fallback.
+6. Task contexts and coordinator handoffs stay bounded. Worker transcripts don't accumulate in the parent conversation.
+7. Missing observations stay unknown, and estimates are labeled.
+8. Telemetry makes no model calls and has no authority over delivery.
+9. The shared core is host-neutral and writes no OH files or markers into a consumer checkout or its Git directory.
+10. Tasks are implemented sequentially. Parallel implementation isn't enabled.
+
+## Repository layout
 
 | Path | Contents |
 |---|---|
-| `runtime/oh/` | Scope, journals, native provenance, checks, review, completion, publication and analytics |
-| `plugins/o-harness/` | Host plugin skills, Claude agent definitions, passive prompt hook, agent launch guard and launchers |
-| `workflows/` | Shared native workflow and workflow-specific instructions |
-| `prompts/` | Authoring and independent-review contracts |
-| `config/` | Defaults and OH's invariants |
+| `runtime/oh/` | Python core: scope, journals, native provenance, checks, review, completion, publication and analytics |
+| `plugins/o-harness/` | Host plugin: skills, Claude agent definitions, hooks, launchers and the Codex MCP server entry |
+| `workflows/` | Shared workflow instructions the skills load at run time |
+| `prompts/` | Authoring and independent-review contracts for agents |
+| `config/` | `defaults.json` and `invariants.json` |
 | `dashboard/` | Static dashboard assets |
-| `integrations/` | Test, packaging and development scripts |
+| `integrations/` | Packaging, test selection and development scripts |
 | `.claude/`, `.codex/` | Configuration for developing OH itself |
 
-## Install layout
+## Packaging and install layout
 
-A built plugin carries the shared core. Its launcher installs a newer version under
-`~/.local/share/o-harness/versions/` and records the active runtime. Both hosts use the
-same OH data and settings. Current helpers read retained historical evidence rather
-than routing requests back to a retired executor. Original admissions, configuration
-snapshots, task grants and consumed allowances are not rewritten by an update.
+`integrations/package.sh` builds one plugin per host. Each carries a copy of the shared core (`runtime`, `config`, `prompts`, `workflows`, `dashboard`, without tests) and a `revision.json` with its version. On first use, the launcher installs the core under `~/.local/share/o-harness/versions/<revision>/` and records the active runtime in `runtime/active.json`. Setup only moves to a higher version.
 
-Finish or cancel native work before changing builds. Adoption of unfinished work must
-occur at a quiet boundary and preserve its scope, commits, findings and allowances.
-A run completed outside OH must not be reopened or relabelled as OH-reviewed. See
-[installation](installation.md) and [usage](usage.md).
+Both hosts share one data folder and one settings file. An update never rewrites historical evidence: original admissions, configuration snapshots, task grants and consumed allowances stay as recorded, and current helpers read them in place.
 
-## Native execution and authority
+Host differences are applied at packaging time:
 
-Checkout registration binds Git's canonical worktree root, private admin directory and
-common repository directory to an existing commit. Lookups resolve that same commit;
-they do not pin the moving HEAD, remote URL, filesystem device or inode. Separate paths
-remain separate checkout identities. A same-path restore with the saved commit is the
-same logical workspace, while unrelated Git history cannot reuse its registration.
-Empty repositories acquire their first commit during explicit workflow enrollment,
-before scope approval. Branch reflog file identity is not an execution requirement.
-Verified legacy filesystem registrations upgrade in place under the registry lock,
-with an immutable backup before publication. IDs, journals and spent allowances remain
-unchanged; migration grants no work. Unverifiable bindings retain their legacy settings
-for restoration. Intentional replacement remains a separate fresh-authority operation.
+| | Claude Code | Codex |
+|---|---|---|
+| OH operations | Packaged launcher (`scripts/oh`), called through native shell tools | Plugin MCP server (`.mcp.json`) |
+| Agent definitions | Named non-fork agents: `assessment`, `implementation`, `analysis`, `reviewer` | Native `default` agent role, no parent-history fork |
+| Hooks on Windows | Run through `sh` (Git Bash) | `commandWindows` entries run through `cmd.exe` |
 
-The coordinating skill selects work and launches one fresh native agent at a time.
-Codex uses its default native role with no parent-history fork and explicit model and
-reasoning effort. Claude uses packaged named non-fork agents with invocation-specific
-model and effort. No OH headless model runner, agent scheduler or permission broker
-executes the task.
+## Hooks
 
-Claude child reports can arrive through a forwarded native handback or the completed
-Agent call's structured handback report. OH matches the original report to the child's
-acknowledged terminal handback, preserving its full text. Retention retries reuse the
-same completed attempt and do not repeat assessment or consume another allowance.
-Native final notices may omit the spawn-call ID; OH still requires the bound parent
-and child, current lifecycle and settled owned commands/checks. Interim background-wait notices
-cannot finish the attempt. Native system-marked background completions are tool evidence,
-never human approval, including when Claude delivers them as user-role messages.
-Claude Desktop Stop may leave only the child's native interruption record and
-spawn-linked `stoppedByUser` metadata. Together they establish interruption when
-no later lifecycle or child activity supersedes them; no parent completion is required.
-Both native user-interruption marker variants are recognized, including interruption
-during tool use; the marker still needs the associated native cancellation evidence.
-An omitted Claude spawn-call ID is recovered only from a unique native launch
-result, then checked against the immutable admission as usual.
+| Event | Purpose | Hosts |
+|---|---|---|
+| `UserPromptSubmit` | Records a native source locator for the person's message | Both |
+| `PreToolUse` (`Agent`) | Agent launch guard: refuses a launch whose model, effort or fresh context differs from its admission | Both |
+| `PreToolUse` | Blocks tools for revoked workers and reserves OH-owned shell commands | Both |
+| `PostToolUse` | Records completed tool activity. On Claude, also records agent lifecycle evidence for `Agent`, `Task` and `SubagentHandback`. | Both |
+| `PostToolUseFailure` | Records failed tool activity | Claude |
+| `SubagentStart` | Tracks a started agent | Both |
+| `SubagentStop` | Records finished OH agents | Claude |
+| `Interrupt` | Records your request to stop work | Codex |
 
-Claude's Agent and SubagentStop hooks reuse checked binding and retention. A hook is
-a wakeup, not proof that the child's execution has settled; delayed evidence is retried
-through the same helpers. Codex task paths resolve through native session metadata.
-Child admission and author helpers can recover a missed binding on both hosts, preserving
-the original profile checks and admission. No hook launches work or grants continuation.
-This keeps the golden reference's automatic bookkeeping while checking the delivered
-report rather than copying `last_assistant_message`: current Claude can deliver its report
-through `SubagentHandback` before Stop, and hooks can precede saved terminal evidence.
-See [Claude's lifecycle payloads](https://code.claude.com/docs/en/hooks#subagentstop) and
-[Codex's native orchestration](https://learn.chatgpt.com/docs/agent-configuration/subagents#orchestration).
+Hooks are trusted host integrations, not a security sandbox. No hook launches work, grants continuation, returns a permission approval or rewrites tool inputs. A hook is a wakeup: delayed evidence is retried through the same helpers, and a hook firing is never treated as proof that a child's execution has settled.
 
-Review decisions may follow a short preamble, but must be unique and outside quoted
-examples. The complete receipt is retained. An older missing-header classification can
-be corrected from the same native result on the unchanged subject without a new round;
-its original result and receipt remain immutable and the correction is journaled separately.
+## Execution
 
-The native host owns tool permissions and agent execution. OH shell wrappers inherit
-those permissions and use the existing process cleanup utilities. Reviewers
-follow a no-edit contract under inherited host permissions. Candidate mutation
-invalidates their receipt; this does not provide a separate filesystem sandbox and
-cannot detect an edit subsequently reverted.
+The coordinating skill selects work and launches one fresh native agent at a time, with an explicit model and reasoning effort. Agent roles are `assessment`, `implementation`, `analysis` (planning) and `review`.
 
-The agent launch guard refuses a native agent launch whose model, effort or fresh context
-differs from the admission it names, before the child starts; it grants and launches
-nothing, and binding still validates every launched child. The prompt hook exposes only a native source locator. It neither classifies replies,
-grants work, starts a workflow nor writes a waiting record. Consequential helpers read
-the actual native human message or question/plan acceptance and bind its scope,
-subject and consumption identity. Agent text, sidechain input, elapsed time, retries
-and restarts grant nothing. Trusted native records are accepted under normal host
-permissions; custom host software can imitate such records, an explicit limitation
-in `config/invariants.json`.
+Before admitting the first attempt of a session, OH confirms the host's subscription sign-in: Codex must report `Logged in using ChatGPT`, and Claude must report a `claude.ai` first-party login. OH's own host CLI calls (version probes, the Codex model catalog and updates) run with API-key and base-URL variables removed from the environment.
 
-Skills ask real questions directly through native tools or ordinary chat when those
-tools are unavailable. `decision-request` binds the precise presented effect and current
-subject before a consequential native question. `decision` verifies the actual answer
-against that record, including the exact additional review count; it does not classify
-arbitrary prose as a grant. Native tools render the question. Ordinary conversation and
-tracking instructions stay with the host agent. Older canonical choices remain supported
-for recovery, without extending their phrase vocabulary.
-At a completed-task checkpoint, the complete native single-select menu and exact chosen
-action bind to the prepared work boundary. Introductory question wording is presentation,
-as in the golden reference's Claude task checkpoint. Changed work, allowances or destination
-still invalidate the decision; incomplete menus and arbitrary Yes replies grant nothing.
-Other consequential questions and older prepared records retain their exact context checks.
-Claude quick fixes use the native plan viewer's single Accept, bound to the actual
-accepted scope. Drafting a design needs no extra scope question. Repository design
-approval remains human merge; private design approval binds the reviewed contents.
+For each delivery task:
 
-Outside-scope observations are durable follow-ups in retained reviews and the run index,
-not mandatory completion gates. Optional tracking records a real issue URL or a mutable
-design note. Notes never extend approved tasks, and changing a reviewed document requires
-checks and fresh review. Repo and private plans use the same policy; frozen designs and
-work without a design retain follow-ups without forcing an issue destination.
+1. An `assessment` agent rates the task `simple`, `standard` or `complex`. The rating is stored in OH's records, never in the design document, and is reused for repairs and resume.
+2. An `implementation` agent builds the task with the selected profile, updates required documentation, runs the configured checks and prepares provisional task and lifecycle changes in the candidate.
+3. A `review` agent examines that exact candidate against the immutable original scope, project contracts and prior findings.
+4. `complete` validates the passing checks, the clean review and the current candidate, then records the task and commits the reviewed tree. Provisional checkboxes in the candidate are content, not completion authority.
 
-## Focused helpers
+A blocking finding family that repeats in two independent reviewer receipts moves the repair to the `complex` profile. A spent review allowance needs a verified human grant; retries and host switches don't renew it. The last task's review covers the accumulated branch.
 
-`native.py` supplies explicit operations for scope preparation/approval, attempt
-admission/binding/retention, candidate preparation, checks, human decisions, reviewed
-completion and standalone feedback. `status` returns facts, not an agent dispatch or
-generated question. The journal retains each attempt before launch, including failed,
-empty and interrupted launches. Native identity and result records bind the agent to
-that admission without treating an author summary as completion proof.
+`handoff.py` keeps each agent packet bounded, with references to immutable scope and evidence and a complete finding index. Original reports are retained without a mandatory prose schema. Author repair claims and independent reviewer closure stay distinguishable. Reviewer decisions are small structured records (verdict, finding severities, claims and stable family identifiers); the full receipt is retained but never interpreted as control data.
 
-Every workflow reads `status --saved` before preparing new work. It reads both checkout
-bindings without changing selection; `resume --run` reads a specified journal, while a
-verified answer to a Resume question naming the saved subject and branch can transfer
-ownership and select it. A matching workflow command alone grants no continuation.
-The review binding's
-optional `selected` flag preserves unfinished feedback when returning to the ordinary
-workflow; old bindings without that flag keep their existing selection behavior.
-Phase hints describe retained evidence and pending decisions; admission and completion
-remain authoritative. Recovery retention after a valid Resume command does not make
-that command stale or replenish its allowance.
+Claude child reports can arrive through a forwarded native handback or the completed `Agent` call's structured report. OH matches the report to the child's acknowledged terminal handback, keeps its full text, and recovers an omitted spawn-call ID only from a unique native launch result, checked against the admission.
 
-The implementer prepares provisional task/lifecycle changes and verifies the final
-candidate. A fresh independent reviewer examines that candidate against the immutable
-original scope, project contracts and prior findings. Provisional marks are content,
-not completion authority. Only completion validates the passing checks, review and
-current candidate before recording the task and committing the reviewed tree.
-The last task's review includes the accumulated branch and task interactions.
+## Authority and decisions
 
-Checks and repairs stay within the approved task. A repeated blocking family in two
-independent reviewer receipts triggers implementation escalation. A spent review
-allowance requires a verified human grant; retrying or switching hosts does not renew
-it. Standalone feedback cannot count as workflow review or authorize repairs.
+Skills ask questions through native host tools (Claude `AskUserQuestion`, Codex Default mode `functions.request_user_input_async`), or in ordinary chat when those aren't available. OH binds each consequential answer to what was shown:
 
-`handoff.py` retains bounded current packets with immutable scope/evidence references
-and complete finding indexes. Full worker transcripts stay outside the mandatory
-coordinator context. Original reports are retained without a mandatory prose schema.
-Author repair claims and independent reviewer closure remain distinguishable, including
-findings from imperfect reports. Supplemental measurements are hashed evidence
-references, not approval.
+- `decision-request` records the exact presented effect and current subject before the question.
+- `decision` verifies the person's actual answer against that record, including an exact additional review count. It doesn't classify arbitrary prose as a grant.
+- `scope prepare` and `scope approve` do the same for delivery scope. Claude quick fixes bind the plan viewer's **Accept**; Codex Plan mode binds **Implement**.
 
-## Host entries
+At a completed-batch checkpoint, the complete single-select menu and the chosen action bind to the prepared work boundary. Changed work, allowances or destination invalidate the decision; incomplete menus and a bare "Yes" grant nothing.
 
-Claude calls the packaged launcher through its ordinary native tools. Codex calls
-focused OH operations through the plugin MCP bridge because OH state lives outside
-the consumer checkout. The bridge validates the calling native conversation and its
-Git root before invoking the corresponding helper. Native child agents can use
-candidate/check/admission helpers; child prompts cannot grant scope or publication.
+Repository designs are approved by a human merge. Private designs are approved by binding the reviewed contents.
 
-The MCP server does not launch model subprocesses, display questions or accept an
-arbitrary command proxy. Project checks use the saved configuration and ordinary
-check process utilities. Settings, setup, backups and services remain explicit
-commands. A native permission rejection is not bypassed through another entry.
+Out-of-scope findings become durable follow-ups in retained reviews and the run index. They never extend approved tasks, and changing a reviewed document requires checks and a fresh review.
 
-Transport cancellation alone does not establish workflow Stop. `cancellation.py`
-records attributed native interruptions outside the consumer checkout. Codex uses
-its Interrupt callback; both hosts can recover from saved interruption records.
-Tool callbacks block revoked workers. Each native shell command is reserved by its
-PreToolUse callback and runs through a literal `owned-command` invocation using the
-same shell tool and sandbox. No hook returns permission approval or rewrites inputs.
-Worker cleanup receipts use private temporary storage; shell commands only read
-OH’s durable state. Configured checks reuse their existing process groups or Windows jobs.
-Native SIGINT/SIGTERM unwinds the check helper through command cleanup. Owned command
-execution waits until its kernel process identity has been saved; Windows processes
-start suspended in a named job that terminates members when its last handle closes.
-After a stopped verification helper releases its execution lock, Resume can reconcile
-a missing configured-check receipt from that saved identity. Unknown or reused identities
-never authorize a signal. Historical receipts without an identity require conclusive
-cleanup evidence, such as a kernel boot time later than the command start.
+Native records are trusted under normal host permissions. Custom host software could imitate such records; this is an accepted limitation recorded in `config/invariants.json`.
 
-Resume verifies the existing human answer, waits for owned command/check cleanup, and then
-transfers ownership under the tool-admission lock. Old attempts remain revoked after
-same-conversation or cross-conversation continuation. A cleanup receipt does not
-claim native model termination. Late reports remain attached to the original attempt
-and cannot turn its cancelled outcome into success.
-The exact instruction “Retry the same Resume answer now” preserves the existing
-answer; it grants nothing independently. Changed instructions or a later Stop still
-invalidate continuation. Repeated questions are matched to their prepared decision's
-creation time, so an older identical question cannot replace the current answer.
+## Checkout identity
 
-Ordinary native tools are not mirrored in OH's execution ledger. Their individual
-completion callbacks do not gate handoff; the native worker outcome and OH-owned
-commands/checks do. Older ordinary-tool rows remain unchanged and nonblocking.
-Worker launch/reactivation bindings, owned-command reservations and Stop guards remain.
-This follows the golden reference's task/outcome boundary while keeping OH's cross-host
-ownership and process cleanup. OH relies on the host for ordinary tool execution; it
-does not independently certify the lifetime of arbitrary external-service jobs.
+Registration binds Git's canonical worktree root, private admin directory and common repository directory to an existing commit. Lookups resolve that commit; they don't pin `HEAD`, the remote URL, or filesystem device and inode numbers. A same-path restore with the saved commit is the same logical workspace; unrelated history can't reuse a registration. An empty repository gets its first commit at explicit workflow enrollment, before scope approval.
 
-Native hooks are trusted host integrations, not a security sandbox. A killed wrapper
-or missing owned-process evidence can prevent verified cleanup. OH retains that
-uncertainty and refuses overlapping work. A missing ordinary-tool callback alone
-is not evidence that a worker or owned process remains active.
-The [evidence and acceptance plan](plans/native-stop-recovery.md) separates live
-prototype results from fixture coverage and pending platform tests.
+Legacy filesystem registrations upgrade in place under the registry lock, with an immutable backup under `registry/upgrades`. IDs, journals and spent allowances are unchanged, and migration grants no work. Unverifiable bindings keep their legacy settings until the checkout or its history is restored. `oh init --replace` is the only path to fresh authority at an old path.
 
-## Git subjects, completion and publication
+## Git subjects
 
-Delivery entry refreshes its Git base and checks ancestry before selecting pending
-approved tasks. New work does not inherit a merged branch merely because it is open;
-unmerged work is preserved and existing branch helpers perform base integration.
-The shared delivery recovery gate binds the current Git contents, affected paths,
-base commit and chosen effect. Continue, Start fresh and Stop use the existing native
-human-decision verifier, tool revocation and journal. Old results are retained when
-verifiable; otherwise an explicitly abandoned attempt records uncertainty without
-requiring a deleted transcript or inventing a native success. Tracked writes must
-settle before transfer. Restart preserves findings and consumed review rounds and
-invalidates superseded execution evidence. Its displayed task batch is explicit
-authority; no backup, alternate runner or implicit allowance renewal is introduced.
+Candidate trees are built with a temporary index; status never refreshes the user's index. Git reads keep the user's configuration, including line endings, while dropping inherited selectors for another repository or index. Tracked files, non-ignored children, file/folder replacements, gitlinks and conflicts all remain part of the reviewed subject.
 
-Git reads and candidate construction preserve the user's configuration, including
-line endings, while discarding inherited selectors for a different repository or
-index. The explicit checkout is validated before fingerprinting. Candidate trees use
-a temporary index; status does not refresh the user's index. Tracked files,
-nonignored children, file/folder replacements, gitlinks and conflicts remain part of
-the actual subject rather than being hidden by staging differences.
+`workspace.py` parks work losslessly in one checkout: staged, unstaged and untracked changes go to a retained Git stash labelled `OH workspace` plus an external byte backup, with no unfinished commit. Branch switches refuse to overwrite ignored files. OH never pops or drops stashes, and it doesn't create worktrees, clones or repository copies for a task.
 
-Approved task structure and completed history are checked mechanically. Required
-living-document changes remain possible within the original scope; the independent
-review assesses semantic scope drift. Native evidence stays outside consumer
-repositories and their Git directories.
+Delivery entry refreshes the base and checks ancestry before selecting pending tasks. The delivery recovery gate binds the current Git contents, affected paths, base commit and chosen effect (`resume`, `restart` or `stop`).
 
-Publication permission binds the reviewed head and destination. Reconciliation reuses
-an existing PR and never treats failed discovery as authority to create a duplicate.
-`oh pr-summary` validates retained commit evidence and renders a factual starting
-point for the native host's human-readable PR body: task summaries, verification,
-final review evidence and verdict, finding dispositions,
-and the stop boundary. Full receipts and commit-bound evidence remain in OH's
-external saved workflow history; no duplicate JSON journal is embedded in a PR.
-A compact publication identifier lets reconciliation recognize a description update
-while allowing the host to summarize its prose. That identifier grants no authority;
-local evidence and publication approval are still validated against the exact commits.
-A successful push is not CI success, and the person merges.
+## Stop, cancellation and resume
 
-Interrupted completion/publication uses retained evidence without inventing another
-grant or repeating already verified work. Historical receipts remain historical; a
-new host, snapshot or result view does not change what they reviewed.
+Transport cancellation alone isn't a workflow Stop. `cancellation.py` records attributed native interruptions outside the checkout. Codex delivers them through its `Interrupt` hook; Claude Desktop's interruption record and spawn-linked `stoppedByUser` metadata establish interruption when nothing later supersedes them. Both hosts can recover from saved interruption records.
 
-## Analytics and limits
+After a Stop, `PreToolUse` blocks the revoked worker. Every native shell command an OH agent runs is reserved by `PreToolUse` and executes through a literal `owned-command` invocation in the same shell tool and sandbox. Owned commands and configured checks run in process groups on POSIX and in a named job object on Windows (started suspended, terminated when its last handle closes), and execution waits until the kernel process identity is saved. Unknown or reused identities never authorize a signal.
 
-The SQLite dashboard index is derived from saved observations and never grants work.
-Missing measurements remain unknown and subset counters are not added twice. Dashboard
-reads make no model calls. New dashboard analysis is unavailable in this candidate;
-saved analytics and suggestions remain readable.
+Resume verifies the human answer, waits for owned command and check cleanup, then transfers ownership under the tool-admission lock. Old attempts stay revoked. Late reports remain attached to their original attempt and can't turn a cancelled outcome into success. A cleanup receipt doesn't claim the native model was terminated; that is host behavior (see [Known limits](known-limits.md)).
 
-Only sequential task implementation is supported. Additional hosts and platforms need
-their own native capability and cancellation validation. See [dashboard and data](analytics.md).
+Ordinary native tools aren't mirrored in OH's execution ledger. The worker outcome and OH-owned commands and checks gate handoff. OH doesn't certify the lifetime of arbitrary external-service jobs. A killed wrapper or missing process evidence leaves cleanup unverified; OH records that uncertainty and refuses overlapping work.
+
+## Publication
+
+Publication permission binds the reviewed head and the destination. Reconciliation reuses an existing PR and never treats a failed lookup as permission to create a duplicate. `oh pr-summary` validates retained commit evidence and renders a factual starting point for the PR body: task summaries, verification, final review evidence and verdict, finding dispositions and the stop boundary. Full receipts stay in OH's external history. A compact publication identifier lets reconciliation recognize a description update; it grants nothing.
+
+`oh ci-wait` follows the published head's checks to a result. A successful push isn't CI success, and a person merges.
+
+## Analytics
+
+`telemetry.py` indexes saved observations into a SQLite database. The index is derived data: it never grants work, makes no model calls, keeps missing measurements unknown and doesn't double-count subset counters. `oh rebuild` recreates it from saved events. The dashboard server (`server.py`) binds `127.0.0.1`, accepts only `localhost` and `127.0.0.1` hosts and same-origin requests, and serves read-only data. See [Dashboard and data](analytics.md).
+
+## Module reference
+
+| Module | Responsibility |
+|---|---|
+| `native.py` | Scope, attempt admission and binding, retention, candidate, checks, decisions, completion and standalone feedback helpers |
+| `decisions.py` | Binds a native answer to a presented effect |
+| `authority.py` | Native human and child provenance |
+| `prepared.py` | Immutable bounded scope, prepared without granting it |
+| `recovery.py` | Human-selected delivery recovery |
+| `cancellation.py` | Native interruption records and owned command cleanup |
+| `processes.py` | Bounded configured-check subprocesses |
+| `verification.py`, `checks.py` | Project checks, reuse fingerprints and logs |
+| `handoff.py` | Bounded evidence packets |
+| `review.py`, `review_report.py` | Standalone review subjects and small review decisions |
+| `retention.py` | Immutable report selection, shared by completion and recovery |
+| `workflow.py` | Durable workflow facts and the historical journal reader |
+| `registry.py` | Project profiles and checkout identities |
+| `workspace.py` | Lossless branch parking in one checkout |
+| `branches.py` | Base branch selection and history |
+| `plans.py`, `design_parse.py` | Roadmaps, design docs and decision records |
+| `publication.py`, `delivery_verify.py` | PR summaries and pre-publication verification |
+| `config.py`, `profiles.py` | Settings, validation, migrations and portable profiles |
+| `hosts.py`, `capabilities.py` | Host executables, subscription sign-in, model catalog |
+| `installation.py`, `updater.py` | Packaging, shared-core install and `oh-update` |
+| `mcp_server.py` | Codex MCP tools; it launches no model subprocesses and shows no questions |
+| `telemetry.py`, `server.py`, `service.py` | Analytics index, dashboard server and auto-start service |
+| `system.py`, `storage.py` | OS differences, paths, locks and state files |

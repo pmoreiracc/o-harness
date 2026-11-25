@@ -1,90 +1,72 @@
 # Contributing
 
-## Issues
+Contributions to OH start as issues. Open one in [GitHub Issues](https://github.com/pmoreiracc/o-harness/issues) to report a bug, describe a problem you hit, or propose a feature.
 
-- **Bug:** include the OH version (`version` in `~/.local/share/o-harness/runtime/active.json`),
-  your host and OS, steps to reproduce, and what you expected. Never post credentials,
-  transcripts or your OH data folder.
-- **Feature:** open an issue to agree on the problem and scope before building it. Small
-  fixes can go straight to a PR.
-- **Security:** see [SECURITY.md](SECURITY.md). Don't open a public issue.
+## Open an issue
 
-## Development
+- **Bugs.** Include the OH version (the `version` field in `~/.local/share/o-harness/runtime/active.json`), your host and OS, the steps to reproduce, and what you expected. Never post credentials, transcripts or your OH data folder.
+- **Features.** Describe the problem you want solved and how you work today.
+- **Security problems.** Follow [SECURITY.md](SECURITY.md). Don't open a public issue.
 
-You need Python 3.12+, Git, Node.js and Bash. Deterministic checks need no AI credentials. Live sanity and the nightly catalog use native subscriptions.
+## Build and test OH locally
 
-To develop OH with OH, import this repository's settings once in your fresh clone, before any OH
-command: `oh profile-import integrations/oh-profile.json`. OH never reads settings from a repository
-by itself, so this is your choice to run its checks: when OH delivers a task here it runs only the
-tests the change affects (`integrations/test.sh affected`) and the syntax checks.
+The rest of this page describes how OH is built and tested, for reproducing an issue or running OH from source.
+
+### Set up
+
+Building and testing OH needs Python 3.12+, Git, Node.js and Bash. Deterministic tests need no AI credentials. Live sanity and the nightly catalog use real Claude and ChatGPT subscription sign-ins.
+
+OH is developed with OH. To use the project's own checks, import this repository's settings once in your clone, before any other OH command:
 
 ```sh
-bash integrations/test.sh core     # fast deterministic core during development
-bash integrations/test.sh pr origin/main  # final local selection, also used by PR CI
-bash integrations/test.sh native   # full deterministic suite, normally nightly
-bash integrations/test.sh syntax   # Python, JavaScript and shell syntax
+oh profile-import integrations/oh-profile.json
 ```
 
-1. Fork the repository and branch from `main`.
-2. Read `config/invariants.json` and the code you are changing. Make the smallest complete
-   change.
-3. Follow [Choosing coverage for a change](docs/development-testing.md#choosing-coverage-for-a-change)
-   to select the tests for your fix or feature and decide where they run.
-4. For dashboard changes, check it in a browser at desktop and narrow widths.
-5. Run [full live sanity](docs/cli-acceptance.md#live-sanity) on both Mac CLIs before every PR.
-   Open a PR against `main` that explains the problem, the new behavior, how you checked it
-   and any limits. Keep docs in sync with what the code actually does.
+OH never reads settings from a repository on its own, so this import is how you opt in to its checks. When OH delivers a task here, it runs the tests the change affects (`integrations/test.sh affected`) and the syntax checks.
 
-Runtime filesystem paths use `oh.system.Path`: it preserves ordinary path strings in
-saved records and adds Windows' extended-path prefix only for filesystem calls. Use
-`str(path)` for saved identities and external process working directories; use
-`os.fspath(path)` for a filesystem API that requires a string.
-Use `system.file_uri` for SQLite file URIs so long paths and filename punctuation survive.
-Use `storage.state_mkdir` for state subdirectories: Windows children inherit the data
-root's existing host access, while Unix keeps private modes. `state_path` repairs only
-the old Python-private directory ACL on accessed paths below that root; custom ACLs,
-unrelated directories and the root policy are preserved. Do not reset permissions recursively.
-Use `system.temporary_directory` (or `make_temp_directory` for separately managed cleanup)
-for OH scratch directories so sandboxed Windows commands retain their parent's access too.
+### Run the tests
 
-OH changes receive one independent review, followed by regression and live acceptance
-proof for any repairs. See [development testing](docs/development-testing.md) for scope,
-fast local checks, final verification and cleanup. Only maintainers merge.
-Maintainers decide when to publish releases. For local testing, see
-[local builds](docs/installation.md#local-build).
+```sh
+bash integrations/test.sh core               # fast deterministic core, during development
+bash integrations/test.sh pr origin/main     # final local selection, the same one CI runs
+bash integrations/test.sh native             # full deterministic suite, usually nightly
+bash integrations/test.sh syntax             # Python, JavaScript and shell syntax
+```
 
-Windows PR jobs log why a test was selected, the digest of all selected test IDs,
-and when each module starts. A change to a shared `test_fixtures_*.py` module
-selects its consumers, while editing a consumer alone does not select its siblings.
-Keep normal LF fixture writes portable. Mark tests that deliberately exercise
-Windows-specific behavior with a comment naming the behavior.
-The required `windows` check waits for both partitions of the same selection.
-Each test runs in one partition, with shared module and class setup kept together.
-Each job logs the full test ID digest for timing comparisons and an assignment
-digest that the required check uses to verify the two jobs agreed on the split.
+### Code conventions
 
-When comparing Windows test performance, use the same expanded test IDs on the
-baseline and candidate and repeat on the same runner image. Compare test time
-and total job time separately. For coverage changes, account for which cases
-moved between PR and full-suite coverage. Nightly retains full Windows discovery. Release verifies the candidate package and installation on all three operating systems.
+Paths and temporary files:
 
-## Try the local source in Claude Code and Codex
+- Use `oh.system.Path` for runtime filesystem paths. It keeps ordinary path strings in saved records and adds Windows' extended-path prefix only for filesystem calls.
+- Use `str(path)` for saved identities and for working directories of external processes. Use `os.fspath(path)` for a filesystem API that needs a string.
+- Use `system.file_uri` for SQLite file URIs, so long paths and punctuation in file names work.
+- Use `storage.state_mkdir` for state subdirectories. On Windows, children inherit the data root's existing access; on Unix, private modes are kept. `state_path` repairs only the old Python-private directory ACL on paths below that root and leaves custom ACLs alone. Don't reset permissions recursively.
+- Use `system.temporary_directory`, or `make_temp_directory` when you manage cleanup yourself, for OH scratch directories, so sandboxed Windows commands keep their parent's access.
+
+Windows tests:
+
+- Keep normal fixture writes portable, with LF line endings. Mark tests that deliberately exercise Windows-specific behavior with a comment naming the behavior.
+- Windows CI jobs log why each test was selected, a digest of all selected test IDs, and when each module starts. Changing a shared `test_fixtures_*.py` module selects its consumers; editing one consumer doesn't select its siblings.
+- The selection runs in two partitions, with module and class setup kept together. The required `windows` check waits for both and uses an assignment digest to confirm they agreed on the split.
+- To compare Windows test performance, run the same expanded test IDs on the baseline and the candidate on the same runner image. Compare test time and total job time separately, and account for cases that moved between per-change and full-suite coverage.
+
+Nightly runs full Windows discovery. Each release verifies the candidate package and installation on Linux, macOS and Windows. To try a package locally, see [Local build](docs/installation.md#local-build). How changes are scoped, reviewed and accepted is in [Developing and testing OH](docs/development-testing.md).
+
+## Run local source with `oh-dev`
+
+`oh-dev` packages your working checkout as a separate development plugin and switches both hosts to it, in any repository.
 
 ### One-time setup
 
-Use the OH checkout where you actually edit code. Its current branch and uncommitted files
-will be packaged for the development plugin, even when you use OH in another repository.
-The checkout must contain `integrations/oh_dev.py`.
+Use the OH checkout where you edit code. Its current branch and uncommitted files are packaged, even when you use OH in another repository. The checkout must contain `integrations/oh_dev.py`, and Python 3.12+ and both host CLIs must be installed.
 
-For Bash or Zsh, add this alias to your shell profile (`~/.bashrc` or `~/.zshrc`), replacing
-both paths with absolute paths. Find your Python path with
-`python3 -I -c 'import sys; print(sys.executable)'`:
+For Bash or Zsh, add this alias to `~/.bashrc` or `~/.zshrc`, with absolute paths. Find your Python path with `python3 -I -c 'import sys; print(sys.executable)'`.
 
 ```sh
 alias oh-dev="'/absolute/path/to/python3' -I '/absolute/path/to/o-harness/integrations/oh_dev.py'"
 ```
 
-For PowerShell, add this to `$PROFILE`, replacing both paths:
+For PowerShell, add this to `$PROFILE`. Windows PowerShell and PowerShell 7 have separate profiles; add it to each one you use.
 
 ```powershell
 $ohDevPython = 'C:\absolute\path\to\python.exe'
@@ -92,10 +74,7 @@ $ohDevScript = 'C:\absolute\path\to\o-harness\integrations\oh_dev.py'
 function oh-dev { & $ohDevPython -I $ohDevScript @args }
 ```
 
-Reload your profile (`. $PROFILE` in PowerShell) or open a new terminal. Windows PowerShell
-and PowerShell 7 have separate profiles; add the same function to each one you use.
-Python 3.12+ and both host CLIs must be installed.
-Once, from that OH checkout, register its checks in normal OH data if it is not already registered:
+Reload your profile or open a new terminal. Then, once, from the OH checkout, register its checks if it isn't registered yet:
 
 ```sh
 oh-dev exec profile-import integrations/oh-profile.json
@@ -103,93 +82,38 @@ oh-dev exec profile-import integrations/oh-profile.json
 
 ### Everyday use
 
-From any directory, run `oh-dev on` to switch or `oh-dev off` to switch back. No repeated
-alias setup, profile import, commit, push or version bump is needed.
+| Command | What it does |
+|---|---|
+| `oh-dev on` | Builds a fixed snapshot of your checkout and enables it in both hosts |
+| `oh-dev off` | Restores the released plugin |
+| `oh-dev status` | Shows each host's mode, snapshot version, source revision and build path |
+| `oh-dev build` | Builds a snapshot without switching hosts |
+| `oh-dev on --build <path>` | Enables an earlier `oh-dev build` snapshot |
+| `oh-dev on --live` | Loads runtime, workflows, prompts, config and dashboard directly from the checkout |
+| `oh-dev exec <command>` | Runs an `oh` command with the selected development runtime and data |
+| `oh-dev dashboard --host codex` | Reopens the development dashboard without rebuilding |
 
-`oh-dev on` builds a fixed snapshot and enables it as a separate development plugin in
-**both hosts**, for fresh sessions in **any repository**. Each build gets a unique version
-such as `0.5.0-SNAPSHOT.1790853731453599000`, shared by both plugins and their packaged engine.
-It prints its version and folder under `~/.local/share/oh-dev/builds/`. Uncommitted edits are
-included; later edits and commits do not change the snapshot. This is the default for testing
-OH while OH itself changes. Run `on` again when you want a new build.
-It also starts or refreshes a background development dashboard/collector at
-<http://localhost:4319> and opens it in your browser. No extra terminal is required.
+Add `--host codex` or `--host claude` to `on`, `off` or `status` to select one host. Start new host sessions after switching.
 
-Codex development builds show **OH DEV** with the development OH icon; releases show **OH**
-with the violet icon. Bundled skills use the matching icon, including in live development builds.
+Each `oh-dev on` build gets a unique version, such as `0.5.0-SNAPSHOT.1790853731453599000`, shared by both plugins and their engine, and lives under `~/.local/share/oh-dev/builds/`. Uncommitted edits are included; later edits don't change the snapshot, so run `on` again for a new build. Live builds are marked `-SNAPSHOT.live.<build-id>`, and their skills and hook definitions refresh on each `on`. Keep a build folder while sessions or runs use it.
 
-`oh-dev off` restores the previous released-plugin enablement. `oh-dev status` shows each
-host's mode, snapshot version, source revision and build path. Add `--host codex` or
-`--host claude` to `on`, `off` or `status` to select one host.
-`off` opens the release dashboard at <http://localhost:4318>, keeping the existing release
-service intact. The managed dev dashboard stops when the last host leaves development;
-otherwise it follows a remaining host’s selected build. Dashboard/browser failures produce
-a short recovery instruction and never undo a successful plugin switch.
-Released plugin files are retained. Changing your terminal's directory does not change the
-source checkout. To use another checkout, run `off` with the old definition first, then
-update the saved definition and reload your profile.
+In Codex, development builds show **OH DEV** with the development icon; releases show **OH** with the violet icon.
 
-To build without changing either host, or reuse an earlier build:
+### Development dashboard
 
-```sh
-oh-dev build
-oh-dev on --build /absolute/path/printed/by/build
-```
+`oh-dev on` also starts the development dashboard at <http://localhost:4319> and opens it. `oh-dev off` opens the release dashboard at <http://localhost:4318> and leaves the release service as it is. The development dashboard stops when the last host leaves development. `oh-dev exec serve` runs it in the foreground on port 4319. No OS service is installed for development.
 
-The folder must be a complete `oh-dev build` snapshot. Both hosts are packaged even when
-only one is selected for activation. Keep build folders while their sessions or runs are in use.
-Snapshots use the existing packager, including the platform launchers, and retain their own
-runtime, workflows, hooks and development adapter; release manifests and release version
-ordering are not changed.
+### Shared or isolated data
 
-For rapid iteration against another repository, `oh-dev on --live` keeps the old behavior:
-runtime, workflows, prompts, config and dashboard come directly from the linked checkout.
-Skills and hook definitions refresh on each `on`. Live plugin versions are marked
-`-SNAPSHOT.live.<build-id>`. Finish active live runs before editing OH's source.
+By default, `oh-dev on` and `oh-dev build` use your normal OH projects, settings and history, and update them in place. For disposable tests, add `--isolated-data` to use `~/.local/share/oh-dev/data` instead; it also works with `--live` and `--host`. The choice is frozen into each build. `oh-dev status` shows which one is selected.
 
-Start fresh host sessions after switching or refreshing. Finish active OH runs before
-selecting a different build; `off` restores plugin enablement but does not stop a run.
-Project-level plugin overrides take precedence; remove an OH override before testing there.
+If the hosts use different builds or data, choose one with `oh-dev exec --host codex <command>` or `oh-dev exec --host claude <command>`. To import a profile for an isolated test, run `oh-dev on --isolated-data` first, then `oh-dev exec profile-import ...`.
 
-Codex trusts each hook's current definition separately from enabling the plugin. A change
-to a hook timeout also requires new trust. `oh-dev on` and `oh-dev status --host codex`
-report OH DEV hook trust from a fresh CLI process. If review is needed, open Terminal in
-the project, run `codex`, enter `/hooks`, and review and trust the current OH DEV hooks.
-Then start fresh Codex sessions. This inventory does not prove that an existing desktop
-session loaded or executed the hooks. An unavailable inventory is reported as unknown;
-OH never writes hook trust on the person's behalf.
+### Things to know
 
-Builds and switching state live in `~/.local/share/oh-dev`. No consumer files or
-OS services are installed. `oh-dev exec` uses the selected development runtime and data.
-
-`oh-dev on` and `oh-dev build` use **shared storage by default**: your normal OH projects,
-settings and history through every entry point, including
-MCP, native hooks and worker commands. This is real work: its history is updated in place.
-The installed release engine is not replaced. For disposable tests, use
-`oh-dev on --isolated-data` (or `oh-dev build --isolated-data`), which selects
-`~/.local/share/oh-dev/data`. The flag also works with `on --live` and `--host`.
-Each new build defaults to shared storage; isolation is not a persistent preference.
-`--shared-data` remains accepted for compatibility.
-The data location is frozen into each build; `on --build` reuses that choice, including
-older isolated builds. A conflicting explicit storage flag is rejected; omit `--build`
-to build with the requested store. `oh-dev status` reports the selected location.
-Do not mix release helpers with DEV in the same session.
-
-```sh
-oh-dev exec status
-oh-dev dashboard --host codex   # reopen/retry without rebuilding
-oh-dev exec serve             # foreground fallback; defaults to 4319
-```
-
-If the hosts use different builds or data stores, select `oh-dev exec --host codex <command>` or
-`oh-dev exec --host claude <command>`. Before development is enabled, `exec` uses the source
-checkout with shared storage so the one-time profile import still works. To import a
-profile for an isolated test, first run `oh-dev on --isolated-data`, then `oh-dev exec profile-import ...`.
-
-Development launchers refuse `setup` and service installation/removal. If switching fails,
-run `oh-dev off --host <reported-host>`, fix the reported cause, and retry.
-The installation tests `test_development_switch_restores_both_hosts_after_refresh_and_failure`,
-`test_development_bridges_use_live_source_and_isolated_data` and
-`test_development_snapshot_freezes_all_entries_and_exec_selects_it` cover switching,
-restoration, source isolation and selecting the packaged runtime. Generated plugins,
-host settings and development data are not committed.
+- Finish active OH runs before switching to a different build. `off` restores the plugin but doesn't stop a run.
+- Don't mix release helpers and DEV in the same session.
+- Project-level plugin overrides take precedence. Remove an OH override in a project before testing there.
+- Codex trusts each hook definition separately. `oh-dev on` and `oh-dev status --host codex` report OH DEV hook trust. If a review is needed, run `codex` in the project, enter `/hooks`, trust the current OH DEV hooks, and start new sessions. OH never writes hook trust for you.
+- Development launchers refuse `setup` and service installation. If switching fails, run `oh-dev off --host <reported-host>`, fix the reported cause, and retry.
+- Generated plugins, host settings and development data aren't committed.

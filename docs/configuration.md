@@ -1,25 +1,28 @@
 # Configuration
 
-The easy way: `/oh-config` (Codex: `$oh-config`). With nothing after it, it lists every
-setting with its value and meaning. Or say what you want, for example
-`/oh-config let OH run 15 tasks per batch`; it shows and applies the authorized change.
-If the request leaves a real choice, the agent asks through the native host or chat.
-There is no separate OH confirmation menu.
+The quickest way to see or change a setting is `/oh-config` (Codex: `$oh-config`). With nothing after it, it lists every setting with its value and meaning. Or say what you want:
 
-## Your settings file
+```text
+/oh-config let OH run 15 tasks per batch
+```
 
-All your settings live in one file that belongs to you: `~/.config/o-harness/settings.json`
-(or `$XDG_CONFIG_HOME/o-harness/settings.json`). OH creates it when you register a project,
-and never puts anything in your repositories. `oh config open` opens it. If you run OH with
-its own data folder (`OH_DATA_HOME`), that folder keeps its own settings in
-`<OH_DATA_HOME>/config/settings.json`, so it never reads or changes yours.
+OH shows the change and applies it. If the request leaves a real choice open, the agent asks.
 
-OH remembers where your settings are. If a process looks elsewhere, for example a host that
-doesn't see the `XDG_CONFIG_HOME` your shell sets, or the file disappears, OH stops and says
-so instead of using its defaults. `oh config open` or `oh config set` starts a new file.
+## Settings file
 
-Top-level values apply to every project. A project's section under `projects`, named as you
-named the project at `oh init`, overrides them for that project and holds its checks:
+All settings live in one file outside your repositories:
+
+```text
+~/.config/o-harness/settings.json
+```
+
+With an absolute `XDG_CONFIG_HOME`, the file is `$XDG_CONFIG_HOME/o-harness/settings.json`. An installation with its own `OH_DATA_HOME` keeps a separate file at `<OH_DATA_HOME>/config/settings.json` and never reads or changes yours. OH creates the file when you register your first project. `oh config open` opens it.
+
+Settings apply in three layers. Each layer overrides the one before it, key by key:
+
+1. OH's defaults (`config/defaults.json` in this repository).
+2. Your top-level settings, for every project.
+3. The project's section, `projects.<name>`, which also holds its checks.
 
 ```json
 {
@@ -35,146 +38,65 @@ named the project at `oh init`, overrides them for that project and holds its ch
 }
 ```
 
-Leave out anything you don't want to change: OH's defaults fill the rest, so a better
-default in a new release still reaches you. The `$schema` line makes VS Code, Cursor and
-JetBrains explain each key, suggest allowed values and underline mistakes.
+Set only what you want to change. Everything else follows OH's defaults, so improved defaults in a new release reach you automatically. The `$schema` line points to a schema OH writes next to the file for the running version, so VS Code, Cursor and JetBrains editors describe each key, suggest allowed values and flag mistakes.
 
-Each layer overrides the one before it, key by key:
+OH validates the whole file each time it reads it. An unknown key, an invalid value, a duplicate key or broken JSON stops OH with the file and the exact key named, such as `projects.my-app.review_rounds`. OH also records where your settings live. If a process looks somewhere else, for example a host that doesn't see the `XDG_CONFIG_HOME` your shell sets, OH stops and says so instead of falling back to defaults.
 
-1. OH's defaults (`config/defaults.json` in this repository)
-2. Your top-level settings, for every project
-3. The project's section, `projects.<name>`
+## Change settings from the command line
 
-A section belongs to one repository: `oh init` asks unrelated repositories for different
-names, while sibling worktrees join their repository's project. Historical same-name
-profiles of a verified Git repository can share the section without merging their IDs,
-work or approvals. New worktrees prefer the present main checkout's profile when these
-records coexist; `oh config` names the project an unregistered checkout would join.
-A same-path restore retaining the saved Git history keeps its registration and name.
-`oh rename <new name>` renames a project and its section; it refuses a name whose section
-already holds other settings. If a section is left from an earlier project with that name,
-`oh init` says which settings in it apply.
-Renaming a historical same-repository profile copies its shared settings and leaves the
-original section for its peers. Private documents owned by that profile retain their
-location; a folder owned by a sibling is left untouched and the new name gets its own
-folder. Conflicting explicit private locations still require resolution.
+| Command | Effect |
+|---|---|
+| `oh config` | Lists every setting with its value, source, allowed values and meaning, plus this project's checks |
+| `oh config set <key> <value>` | Sets the value for this project |
+| `oh config set <key> <value> --global` | Sets the value for every project |
+| `oh config unset <key> [--global]` | Returns to the value from the layer below |
+| `oh config open` | Opens `settings.json` in your editor |
 
-## Changing settings
+A value that starts with `@` is read from a file, for example `oh config set checks @checks.json`.
 
-- `oh config` lists every setting with its value, where it comes from, the allowed values
-  and its meaning, plus this project's checks.
-- `oh config set <key> <value>` changes this project's value; add `--global` to change it
-  for every project.
-- `oh config unset <key>` (optionally `--global`) goes back to the value from the layer before.
-- `oh config open` opens the file, if you prefer to edit it yourself.
+OH captures settings when a run is prepared, so a change applies to the next run you start, including in the same chat. A running batch and its **continue** checkpoints keep the settings the run was approved with.
 
-OH checks the whole file each time it reads it. An unknown key, a bad value, a key written
-twice or broken JSON stops OH with the file and the exact key named, such as
-`projects.my-app.review_rounds`.
-Settings are captured when a run is prepared, so a change applies to the next run you start;
-**continue** keeps the settings the run was approved with. Each prepared approval and each
-**continue** checkpoint repeats the numbers it covers, for example "Runs 5 of 12 tasks, then
-asks you to continue, up to 3 review rounds each".
+## Settings reference
 
-Updates never rewrite your settings. If a release renames or removes a setting, OH moves it
-for you once and keeps the previous file in `backups/` next to `settings.json`. Settings
-files from older versions of OH (`checks.json`, `config.json` and `config.local.json` in a
-project's OH folder, and `settings/defaults.json`) are moved into `settings.json` the same
-way, and each project keeps the values it had. A file OH can't move (a value it doesn't
-accept, or a value its section already sets differently) stays where it is and stops only
-its own project, or all historical profiles sharing that repository's section (the shared
-`settings/defaults.json` stops every project), with the reason named. Same-name profiles
-from unrelated repositories still need distinct names through `oh rename`.
-An unverifiable legacy registration keeps its settings files in place until identity
-is restored; a failed verification does not retire its settings. Files of registrations that were replaced, or of
-deleted checkouts whose name another project now uses, are kept in `backups/` without being
-applied.
+| Setting | Default | Allowed values | What it controls |
+|---|---|---|---|
+| `tasks_per_batch` | `5` | 1–100 | Tasks one approval covers. Each **continue** approves this many more. |
+| `review_rounds` | `3` | 1–100 | Review rounds a task may use before OH asks you |
+| `base_branch` | empty | branch name | Branch new work starts from and PRs target. Empty detects `origin/HEAD`, then `main`, then `master`. |
+| `plans.location` | `ask` | `ask`, `repo`, `private` | Where roadmaps, design docs and decision records live |
+| `plans.private_folder` | `~/oh-plans` | absolute or `~/` path | Parent folder for private plans. Each project gets a subfolder named after it. |
+| `plans.roadmap` | `docs/roadmap.md` | relative `.md` path | Roadmap file, relative to where plans live |
+| `plans.designs` | `docs/design` | relative path | Design docs folder |
+| `plans.decisions` | `docs/decisions` | relative path | Decision records (ADRs) folder |
+| `models.<host>.<profile>.model` | see [Models](#models) | model name | Model for a profile |
+| `models.<host>.<profile>.effort` | see [Models](#models) | see [Models](#models) | Reasoning effort for a profile |
+| `context.handoff_chars` | `12000` | 1000–100000 | Maximum task context sent inline to an agent. Full scope and evidence are passed by reference. |
+| `context.result_chars` | `4000` | 1000–100000 | Maximum feedback text kept in agent prompts |
+| `checks` | none | list | Commands that must pass before OH commits a task. See [Checks](#checks). |
 
-Native agents are instructed not to hand-edit OH settings or evidence; their actual
-filesystem permissions remain host-owned. Use `oh config set/unset` for validated changes.
-`oh backup` includes `settings.json`.
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `tasks_per_batch` | 5 | Tasks approved per batch, and per **continue** (1–100) |
-| `review_rounds` | 3 | Review rounds each task may use before OH asks you (1–100) |
-| `context.handoff_chars` | 12000 | Maximum inline task context; complete scope and evidence are referenced externally |
-| `context.result_chars` | 4000 | Maximum concise feedback retained in attempt summaries |
-| `plans.location` | ask | Where roadmaps, design docs and decisions live: `repo` (committed in the repository) or `private` (OH's folder) |
-| `plans.private_folder` | ~/oh-plans | Parent of visible private project plan folders; absolute or home-relative |
-| `plans.roadmap` | docs/roadmap.md | Roadmap file, relative to where plans live |
-| `plans.designs` | docs/design | Design docs folder |
-| `plans.decisions` | docs/decisions | Decision records (ADRs) folder |
-
-Worker context compaction follows the native host/model settings. OH no longer overrides it
-with a fixed token threshold. Older `context.compact_at_tokens` settings are removed through
-the existing migration with a backup.
-
-`oh plans path` shows where a project's plans live; `oh plans check` checks the roadmap and
-design docs against their rules. `oh plans list` shows each initiative's design and approval
-status. New private plans live at `~/oh-plans/<project name>/`; the relative document paths
-above apply inside that folder. Renaming a project preserves its existing document folder.
-Folders remain reserved to their project after rename or checkout deletion, including case-only
-aliases. OH refuses an existing unowned folder; preserve its contents and choose another project
-name or `plans.private_folder`. Only explicit checkout replacement can transfer ownership, without
-transferring approvals, including when a reserved folder has no documents yet. Settings changes
-reserve the affected private folders before saving; a collision leaves the settings unchanged.
-Private edits hold both the project lock and the canonical folder lock.
-Private plans from older installations remain at their existing OH state path; `plans path`
-is authoritative. `init --replace` preserves that document location but creates fresh checkout
-authority. Profile export excludes private documents and approvals explicitly; copy those
-documents separately when moving machines and review them again. `oh backup` covers OH state,
-not the external `~/oh-plans` folder: include your visible plan folder in your regular backups.
-
-`max_escalations` is retired. OH removes it from older settings through the existing
-migration, preserving a backup. Checks are repaired automatically on the current profile;
-only a blocking defect family appearing in a second independent review escalates the
-implementer. No Retry approval is required for delivery.
+`<host>` is `claude` or `codex`. `<profile>` is `simple`, `standard`, `complex`, `review` or `insights`.
 
 ## Models
 
-OH labels each task **simple**, **standard** or **complex** before it starts, then picks
-that profile's model and effort for the fresh native implementation agent. Reviews have
-a separate profile. These settings do not change the coordinating chat's model.
-The retained `insights` settings preserve compatibility, but new dashboard analysis
-and the retired `oh suggest` entry are unavailable in this candidate.
+Before each delivery task, a fresh read-only assessment agent, using the `standard` profile, reads the task and the relevant code and rates it **simple**, **standard** or **complex**. When it's uncertain, it picks complex. The implementation agent then uses that profile's model and effort. The rating carries over to repairs and to resumed work. Reviews use the `review` profile.
 
-| Profile | Claude | Codex |
-|---|---|---|
-| simple | haiku / high | gpt-6-luna / high |
-| standard | sonnet / medium | gpt-6.1-sol / medium |
-| complex | opus / high | gpt-6-astra / high |
-| review | opus / high | gpt-6.1-sol / high |
-| insights | opus / high | gpt-6-astra / high |
+| Profile | Used for | Claude | Codex |
+|---|---|---|---|
+| `simple` | Small, bounded tasks | `haiku` / `high` | `gpt-6-luna` / `high` |
+| `standard` | Ordinary tasks, and task assessment | `sonnet` / `medium` | `gpt-6.1-sol` / `medium` |
+| `complex` | Cross-cutting or safety-sensitive tasks, and repairs after the same blocking finding appears in two reviews | `opus` / `high` | `gpt-6-astra` / `high` |
+| `review` | Independent reviews | `opus` / `high` | `gpt-6.1-sol` / `high` |
+| `insights` | Dashboard analysis, which is off in v1.0 | `opus` / `high` | `gpt-6-astra` / `high` |
 
-If Codex's CLI catalog omits the requested model, OH continues with the newest listed earlier
-version in the same family that supports the requested effort. For example, `gpt-6.1-sol / high`
-can use `gpt-6-sol / high`. OH gives a short notice with the update command and `$oh-config`,
-and records the actual model before admitting the attempt; saved settings, scope and review
-allowances stay unchanged. This works during an existing run. A changed CLI executable refreshes
-capability discovery. `$oh-config` changes apply to new OH runs, including in the same chat.
-No compatible earlier model, unsupported effort, discovery failure or a rejected native request
-still fails visibly with a recovery step; OH never switches to another family or paid API calls.
-OH does not change the model of the session you are talking to; select that in your
-host app or CLI. Native execution and Stop support still require the validation described
-in [usage](usage.md); configured model names alone do not establish host availability.
+Effort values are `low`, `medium`, `high`, `xhigh` and `max` for Claude, plus `ultra` for Codex.
 
-Older `models.<host>.orchestrator` settings migrate to `models.<host>.insights` with a backup,
-preserving model and effort overrides. Old leaf names remain accepted by `config set/unset`,
-and old exported profiles remain importable; `oh-config` and new exports show only `insights`.
-If saved settings are read-only, OH interprets the old names in memory without rewriting them.
-Existing runs retain their frozen settings. An older executable may require restoring the
-settings backup after a downgrade; development and release settings remain separate.
+These profiles set the agents OH starts. The model of the chat you're talking to stays whatever you selected in your host.
 
-Compatibility coverage: `test_renamed_settings_are_moved_once_with_a_backup`,
-`test_a_read_only_settings_folder_never_stops_oh`,
-`test_an_imported_profile_keeps_only_what_differs_from_your_settings` and
-`test_editors_get_a_schema_for_the_running_version`.
+OH checks that the model and effort are available before it starts each agent. If your Codex CLI doesn't list the configured model, OH uses the newest earlier version of the same model family that supports the requested effort, for example `gpt-6-sol` for `gpt-6.1-sol`, and tells you, with the update command and `$oh-config`. Your saved settings don't change. If no compatible model exists, OH stops with a recovery step. It never switches to another model family or to paid API calls.
 
 ## Checks
 
-A project's `checks` list the commands that must pass before OH commits a task. Set them
-with `oh config set checks '<JSON list>'`, which replaces the whole list:
+A project's `checks` are the commands that must pass before OH commits a task. Set them with `oh config set checks '<JSON list>'`, which replaces the whole list:
 
 ```json
 [
@@ -183,29 +105,68 @@ with `oh config set checks '<JSON list>'`, which replaces the whole list:
 ]
 ```
 
-Commands run without a shell. `when` limits a check to changes matching those paths.
-`inputs` and `toolchain` let OH reuse a passing result when nothing relevant changed; leave
-them out if you're unsure. `modes` picks when a check runs (`review`, `pre-push`, `ci`).
+| Field | Required | What it does |
+|---|---|---|
+| `name` | yes | Name shown in results |
+| `command` | yes | Program and arguments, run from the repository root without a shell. `{base}` and `{mode}` are replaced. |
+| `when` | no | Runs the check only when a changed path matches one of these patterns |
+| `inputs` | no | Repository paths whose contents decide whether a passing result can be reused |
+| `toolchain` | no | Version commands whose output also decides reuse, such as `["node", "--version"]` |
+| `modes` | no | When the check runs: `review`, `pre-push`, `ci`. All of them by default. |
+| `timeout_seconds` | no | Seconds before the check is stopped. 900 by default. |
 
-A cancelled or timed-out check fails even if its cleanup exits with code `0`. OH skips
-the remaining checks and cannot advance that attempt to review or commit. `oh verify`
-returns failure, and task and PR summaries label the result failed while retaining the
-actual exit code and cancellation reason.
+Leave out `inputs` and `toolchain` if you're unsure. Without `inputs`, OH reuses a passing result only when nothing in the checkout changed.
 
-Checks and toolchain probes retain complete stdout and stderr in OH's external
-`verification/<project-id>/logs/` folder. Verification results, saved status and
-subsequent agent packets expose `logs` references to capture records containing
-the stream paths, byte counts and SHA-256 hashes. Inline output stays bounded;
-read the referenced files when a noisy check hides its original error.
-Logs remain available after failure, timeout or cancellation. A helper killed
-before finalization leaves its initial record and captured bytes, with unknown
-exit status and hashes rather than a claimed result. Logs are private local
-diagnostics; do not copy them into public issues or PRs.
+`oh verify` runs the checks by hand. A cancelled or timed-out check counts as failed even if its cleanup exits with `0`. OH skips the remaining checks, and the task doesn't move on to review or commit. Results keep the real exit code and the reason.
 
+Every check keeps its complete stdout and stderr in OH's data folder under `verification/<project-id>/logs/`, with byte counts and SHA-256 hashes. Agents see a bounded excerpt and a reference to the full log, so a noisy check can't hide its original error. Logs stay after failures, timeouts and cancellations. They can contain source code, so keep them out of public issues and PRs.
 
-Before each new Deliver task, a fresh read-only assessment uses the configured `standard`
-profile to examine the actual scope and relevant code. Its difficulty, rationale, references,
-uncertainty and usage stay in OH's external records, and select the configured simple, standard
-or complex implementation profile. Material uncertainty selects complex. The rating is reused
-for repairs and resume; already-started older tasks retain their original selection. Consumer
-design documents contain no model or effort recommendations.
+A delivery keeps the checks it started with. See [Known limits](known-limits.md) for correcting a check environment mid-delivery.
+
+## Plans
+
+`plans.location` decides where planning documents live:
+
+- `repo` commits them to the repository, through normal branches and PRs.
+- `private` keeps them in `~/oh-plans/<project name>/`, outside the checkout. The `plans.roadmap`, `plans.designs` and `plans.decisions` paths apply inside that folder.
+- `ask` asks the first time you plan in the project.
+
+| Command | Shows |
+|---|---|
+| `oh plans path` | Where this project's plans live |
+| `oh plans check` | Whether the roadmap and design docs follow their rules |
+| `oh plans list` | Each initiative's design and approval status |
+
+Each private folder belongs to one project, including after a rename, and OH won't take over an existing folder it doesn't own. Pick another project name or `plans.private_folder` instead.
+
+`oh backup` covers OH's data, not `~/oh-plans`. Include your private plans folder in your regular backups.
+
+## Projects
+
+A project's section in `projects` is named after the project, as named at `oh init`. Each repository gets its own name, and worktrees of the same repository share their project's section.
+
+- `oh rename <new name>` renames a project and its section. OH refuses a name whose section already holds other settings.
+- When `oh init` finds a section left by an earlier project with the same name, it tells you which of its settings apply.
+- `oh config` names the project an unregistered checkout would join.
+
+## Share a project setup
+
+```sh
+oh profile-export ~/my-app-profile.json
+oh profile-import ~/my-app-profile.json --name my-app
+```
+
+An export contains the project profile, its effective settings and its check definitions. It never includes sessions, credentials, evidence, approvals or private plan documents. Export to a new file outside the checkout.
+
+Import into an unregistered checkout. OH registers it and keeps only the settings that differ from yours, so your own settings and later defaults still apply.
+
+## Updates and older settings
+
+Updates never rewrite your settings silently. When a release renames or removes a setting, OH moves it once and saves the previous file in `backups/` next to `settings.json`. Settings files from older OH versions (`checks.json`, `config.json`, `config.local.json` and `settings/defaults.json`) move into `settings.json` the same way, and each project keeps its values. If OH can't move a value, it leaves that file in place and stops only the affected project, naming the reason.
+
+Recent moves:
+
+- `models.<host>.orchestrator` became `models.<host>.insights`. The old names still work with `oh config set` and `unset` and in older exported profiles.
+- `max_escalations` and `context.compact_at_tokens` were removed. Agent context compaction follows your host's settings.
+
+`oh backup` includes `settings.json`. Use `oh config set` and `unset` for changes; OH's agents are instructed not to edit settings by hand.
