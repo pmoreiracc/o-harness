@@ -673,9 +673,37 @@ document.querySelector('.skip').addEventListener('click', event => {
   $('content').focus();
 });
 window.addEventListener('hashchange', showView);
-window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+const themeMedia = window.matchMedia('(prefers-color-scheme: light)');
+const themeKey = 'oh-dashboard-theme';
+const themeUrl = new URL(location.href);
+const requestedTheme = themeUrl.searchParams.get('theme');
+let themePreference;
+try {
+  themePreference = localStorage.getItem(themeKey);
+} catch {
+  // The theme still works when browser storage is unavailable.
+}
+
+function applyTheme(preference) {
+  if (preference === 'light' || preference === 'dark') {
+    themePreference = preference;
+    try { localStorage.setItem(themeKey, preference); } catch { /* Optional persistence. */ }
+  }
+  const dark = themePreference === 'dark' || (themePreference !== 'light' && !themeMedia.matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  $('theme').setAttribute('aria-pressed', String(dark));
   for (const canvas of document.querySelectorAll('canvas.spark')) canvas.drawSpark?.();
+}
+
+applyTheme(requestedTheme);
+if (requestedTheme === 'dark' || requestedTheme === 'light') {
+  themeUrl.searchParams.delete('theme');
+  history.replaceState(history.state, '', themeUrl);
+}
+$('theme').addEventListener('click', () => {
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 });
+themeMedia.addEventListener('change', () => applyTheme());
 setInterval(() => {
   if (!document.hidden && !state.request && !document.querySelector('dialog[open]')) refresh();
 }, 12000);
