@@ -1,45 +1,45 @@
 # Dashboard and data
 
-The dashboard at <http://localhost:4318> shows how your OH runs are going: tokens, time, review results and how much work finished without you stepping in. It reads a local SQLite database built from OH's saved records and never calls a model. It counts work done through OH from the moment you install it.
+The dashboard at <http://localhost:4318> shows recorded deliveries, review rounds, elapsed
+task time, agent time and token observations. It reads OH's local analytics index and works
+offline.
 
 ## Start the dashboard
 
-On macOS and Windows, `oh service-install` starts the dashboard at login and keeps it running. `oh service-uninstall` removes it. On Linux, run `oh serve`, or run it under your own service manager.
-
-The dashboard service also collects new observations. To run one collection pass by hand, use `oh collect`.
+On macOS and Windows, `oh service-install` starts the dashboard at login and keeps it running.
+`oh service-uninstall` removes it. On Linux, run `oh serve`, or run it under your own service
+manager. The dashboard service also collects new observations. Run `oh collect` for a single pass.
 
 ## Views
 
 | View | Shows |
 |---|---|
-| **Overview** | Usage over time, effort by difficulty, the models doing the work, agent time by model, quality alongside efficiency, and operations and recovery |
-| **Task explorer** | Recent tasks. Select one to see its attempts, checks and timeline. |
-| **Improvements** | Suggestions saved by earlier versions |
+| **Overview** | Collector health, delivery and review metrics, trends, and the seven most recent indexed tasks in the period |
+| **Tasks** | All matching indexed tasks. Open a task to see its available attempts, checks, and review outcomes. Filter by work, difficulty, version, model, or phase and compare deliveries with a previous period, custom dates, or another version. |
+| **Data health** | Collector status, last observation, recorded collection gaps, last invalid-record batch, usage coverage, observed CI results, and suggestions saved by earlier versions |
 
-Filter by **Project**, **Work**, **Difficulty**, **Version**, **Spending model**, **Spending phase** and dates. **Compare with** sets the baseline: the **Previous period** or **Custom dates**. You can also compare OH versions.
+Choose a project and a calendar range from the top bar. Dates are grouped in UTC. Charts group
+ranges longer than 45 days by month.
 
 ## Measures
 
 | Measure | What it means |
 |---|---|
-| **Observed tokens** | Input plus output tokens the host reported in the selected period. Includes cached input. |
-| **Average task time** | Wall-clock time per completed task |
-| **Reviews per task** | Review rounds used by completed tasks |
-| **Completed autonomously** | Completed tasks that finished without a human intervention |
-| **First-review acceptance** | Completed tasks whose first review was clean |
-| **Tokens / completed task** | All tokens of completed tasks, including repairs |
-| **Cached input share** | The part of input served from cache. Cached tokens still count toward usage. |
-| **Agent time by model** | Time the models reported, with how much of it was measured |
+| **Tasks delivered** | Completed tasks among the tasks that started in the selected dates. The delivery chart groups all recorded completions by their finish dates. |
+| **Review rounds per task** | Recorded review attempts for delivered tasks with a completion count. |
+| **Time per task** | Average elapsed time for timed, delivered tasks. If a recorded duration is unavailable, OH uses the indexed task start and finish. Elapsed time can include time spent waiting for a decision. |
+| **Agent time** | Duration recorded for individual attempts, grouped by step and model. Coverage counts identify partially timed groups. |
+| **Observed tokens** | Input plus output the host reported. Cached input is part of input. Days with incomplete components are omitted from the stacked usage chart. |
+| **Usage coverage** | Share of attempts started in the period whose indexed usage observations include input and output. Older observations can appear in the usage chart on the day the host reported them. |
+| **Tokens per delivered task** | **Not measured yet.** Full task attribution depends on [passive observation recovery](https://github.com/pmoreiracc/o-harness/issues/109). Historical observations remain readable when the index has coverage. |
+| **Live activity and pending decisions** | **Not measured yet.** An open record in the task index can outlast the native session. Use the native host for current progress and decisions. |
 
-When a value wasn't observed, the dashboard shows **—** or a coverage note instead of an estimate. **Recorded task usage coverage** shows how many attempts have usage data. Usage is shown in tokens, not converted to money or to a share of your subscription limit.
+Time and review comparisons match difficulty cohorts with at least ten measured tasks per
+period. A dash or **Not measured yet** means the index lacks the needed evidence. The
+dashboard keeps the last successful view clearly marked as stale when a refresh fails.
 
-Comparisons weight each difficulty level equally in both periods, so a harder mix of work doesn't read as a regression. A change is shown once at least 10 matched completed tasks back it. Comparisons show what changed, not why.
-
-CI results appear when the agent follows a published PR's checks to a result (`oh ci-wait`), or after you run `oh observe-ci` once they finish.
-
-## Improvements
-
-New analysis is off in v1.0: the **Improvements** view shows **Analysis unavailable**, and the button runs nothing. Suggestions saved by earlier versions stay readable. Their savings figures are estimates.
+CI results appear after `oh ci-wait` or `oh observe-ci` records them. New analysis is off in v1.0.
+Saved suggestions remain available under Data health and retain their original status.
 
 ## Privacy
 

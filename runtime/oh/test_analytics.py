@@ -60,6 +60,69 @@ class AnalyticsTest(unittest.TestCase):
         self.assertIn('unavailable',sent[0][1]['error'])
         self.assertEqual(overview({})['summary'],before['summary'])
 
+    def test_dashboard_counts_deliveries_beyond_task_pages_and_keeps_unmeasured_work_unknown(self):
+        from .dashboard import PAGE_SIZE, snapshot
+        with connect() as db:
+            fixture(db, days=105)
+            db.execute("UPDATE tasks SET started='2026-11-20T01:00:00+00:00', "
+                       "ended='2026-11-20T01:21:00+00:00', wall_ms=NULL")
+            db.execute("UPDATE tasks SET started='2026-11-19T23:00:00+00:00' WHERE run='run-0'")
+            db.execute("UPDATE tasks SET expected_attempts=3, expected_reviews=NULL WHERE run='run-1'")
+            db.execute("UPDATE attempts SET duration_ms=NULL WHERE run='run-1' AND role='review'")
+            db.execute("DELETE FROM usage WHERE attempt='run-1-review'")
+            db.execute("INSERT INTO collector_state VALUES('gap:task:run-2:1','Missing task start')")
+            db.execute("INSERT INTO collector_state VALUES('invalid_events','[{},{}]')")
+            bounds = {'from': '2026-11-20T00:00:00+00:00', 'to': '2026-11-21T00:00:00+00:00'}
+            data = snapshot(db, bounds)
+            filtered = snapshot(db, bounds | {'model': 'gpt-5.6-sol', 'phase': 'assessment'})
+            final_page = snapshot(db, bounds, 100)
+        self.assertEqual(len(data['tasks']), PAGE_SIZE)
+        self.assertEqual(len(final_page['tasks']), 4)
+        self.assertEqual(data['started'], 103)
+        self.assertEqual(data['delivered'], 103)
+        self.assertEqual(sum(day['delivered'] for day in data['delivery']), 105)
+        self.assertEqual(sum(day['timed'] for day in data['cohort']), 103)
+        self.assertEqual(sum(day['elapsed_ms'] for day in data['cohort']), 103 * 21 * 60000)
+        self.assertEqual(sum(day['reviewed'] for day in data['cohort']), 102)
+        self.assertEqual(filtered['task_count'], 0)
+        partial = next(task for task in data['tasks'] if task['run'] == 'run-1')
+        self.assertIsNone(partial['observed_tokens'])
+        self.assertIsNone(partial['agent_ms'])
+        self.assertEqual(partial['review_outcomes'], ['clean'])
+        self.assertEqual(data['health']['invalid_records'], 2)
+        self.assertEqual(data['health']['gaps'], ['Missing task start'])
+
+    def test_dashboard_http_projection_and_fonts_use_local_only_read_paths(self):
+        from types import SimpleNamespace
+        from .server import Handler
+
+        with connect() as db:
+            fixture(db, days=2)
+            db.execute('DELETE FROM usage')
+        sent = []
+        handler = SimpleNamespace(
+            trusted=lambda: True, path='/api/dashboard?offset=0&project=ui-test-project',
+            send=lambda *args: sent.append(args))
+        with patch('oh.transcripts.poll', side_effect=AssertionError('Dashboard GET cannot poll transcripts')):
+            Handler.do_GET(handler)
+        status, data = sent.pop()
+        self.assertEqual(status, 200)
+        self.assertEqual(data['task_count'], 2)
+        self.assertEqual(data['coverage'], {'attempts': 4, 'measured': 0})
+        self.assertEqual(data['usage'], [])
+        self.assertTrue(all(task['observed_tokens'] is None for task in data['tasks']))
+        handler.path = '/api/dashboard?offset=-1'
+        Handler.do_GET(handler)
+        self.assertEqual(sent.pop()[0], 400)
+        handler.path = '/fonts/inter.ttf'
+        Handler.do_GET(handler)
+        status, body, content_type = sent.pop()
+        self.assertEqual((status, content_type), (200, 'font/ttf'))
+        self.assertTrue(body.startswith(b'\x00\x01\x00\x00'))
+        handler.trusted = lambda: False
+        Handler.do_GET(handler)
+        self.assertEqual(sent.pop()[0], 403)
+
     def test_invalid_event_does_not_block_valid_events(self):
         emit('usage','p',attempt='bad',response_id='bad',source='fixture',input=2,cached=3)
         emit('usage','p',attempt='good',response_id='good',source='fixture',input=10,output=2)
@@ -144,16 +207,22 @@ class AnalyticsTest(unittest.TestCase):
             restore(target)
 
     def test_partial_groups_and_attempt_time_do_not_present_exact_totals(self):
+        from .observability import details
+
         with connect() as db:
             fixture(db,days=1)
             attempt=db.execute("SELECT id FROM attempts WHERE role='implementation'").fetchone()[0]
             ingest(db,{'id':identifier(),'kind':'usage','at':'2026-09-25','project':'ui-test-project','attempt':attempt,
               'payload':{'response_id':'partial','source':'fixture','input':100,'output':None}})
             data=analytics(db,{'from':'2000','to':'2100'})
+            detail=details(db,'run-0','1')
             self.assertIsNone(data['summary']['output']);self.assertIsNone(data['summary']['tokens_per_completed'])
             self.assertIsNone(data['tasks'][0]['input']);self.assertIsNone(data['difficulty'][0]['tokens'])
             self.assertIsNone(next(m for m in data['models'] if m['role']=='implementation')['tokens'])
             self.assertEqual(next(m for m in data['model_times'] if m['role']=='implementation')['duration_ms'],500000)
+        attempts={item['role']:item for item in detail['attempts']}
+        self.assertIsNone(attempts['implementation']['observed_tokens'])
+        self.assertEqual(attempts['review']['observed_tokens'],7000)
 
     def test_running_tasks_do_not_lower_completed_review_average(self):
         with connect() as db:

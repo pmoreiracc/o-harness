@@ -34,7 +34,10 @@ def observe_ci(root):
 
 
 def details(db,run,task):
-    attempts=rows(db,'SELECT * FROM attempts WHERE run=? AND task=? ORDER BY started',(run,task))
+    attempts=rows(db,'''SELECT a.*,
+        (SELECT SUM(u.input+u.output) FROM usage u WHERE u.attempt=a.id
+         HAVING COUNT(*)>0 AND COUNT(u.input+u.output)=COUNT(*)) observed_tokens
+        FROM attempts a WHERE a.run=? AND a.task=? ORDER BY a.started,a.id''',(run,task))
     events=rows(db,'SELECT at,kind,payload FROM events WHERE run=? AND task=? ORDER BY at LIMIT 300',(run,task))
     verification=[]
     for event in events:
@@ -58,5 +61,17 @@ def metrics(db,filters):
       SUM(CASE WHEN e.kind='attempt.finished' AND json_extract(e.payload,'$.outcome') IN ('failed','interrupted','history_changed') THEN 1 ELSE 0 END) interrupted_attempts,
       SUM(CASE WHEN e.kind='task.finished' THEN json_extract(e.payload,'$.recovered') END) recovered_tasks
       """+base,args).fetchone())
-    ci=dict(db.execute("WITH observed AS (SELECT json_extract(e.payload,'$.conclusion') conclusion,json_extract(e.payload,'$.status') status,ROW_NUMBER() OVER(PARTITION BY json_extract(e.payload,'$.databaseId') ORDER BY e.at DESC) ordinal"+base+" AND e.kind='ci.observed') SELECT SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) ci_completed,SUM(CASE WHEN status='completed' AND conclusion IN ('failure','timed_out','action_required') THEN 1 ELSE 0 END) ci_failures FROM observed WHERE ordinal=1",args).fetchone())
-    return result|ci
+    return result | observed_ci(db, base, args)
+
+
+def ci_metrics(db, filters):
+    where = ' FROM events e WHERE e.at>=? AND e.at<?'
+    args = [filters['from'], filters['to']]
+    if filters.get('project'):
+        where += ' AND e.project=?'
+        args.append(filters['project'])
+    return observed_ci(db, where, args)
+
+
+def observed_ci(db, base, args):
+    return dict(db.execute("WITH observed AS (SELECT json_extract(e.payload,'$.conclusion') conclusion,json_extract(e.payload,'$.status') status,ROW_NUMBER() OVER(PARTITION BY json_extract(e.payload,'$.databaseId') ORDER BY e.at DESC) ordinal"+base+" AND e.kind='ci.observed') SELECT SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) ci_completed,SUM(CASE WHEN status='completed' AND conclusion IN ('failure','timed_out','action_required') THEN 1 ELSE 0 END) ci_failures FROM observed WHERE ordinal=1",args).fetchone())
