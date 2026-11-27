@@ -324,6 +324,17 @@ class AnalyticsTest(unittest.TestCase):
         events=[json.loads(p.read_text()) for p in (home/'spool').glob('*.json')]
         self.assertEqual([e['kind'] for e in events],['collection.gap']);self.assertFalse((home/'sources/s.json').exists())
 
+    def test_unreadable_legacy_source_does_not_block_new_events(self):
+        home=Path(self.tmp.name)
+        (home/'sources').mkdir()
+        (home/'sources/broken.json').write_text('unparseable',encoding='utf-8')
+        emit('usage','p',attempt='a',response_id='response',source='fixture',input=10,output=2)
+        self.assertEqual(collect(),1)
+        self.assertEqual(collect(),0)
+        with connect(readonly=True) as db:
+            self.assertEqual(db.execute('SELECT SUM(input+output) FROM usage').fetchone()[0],12)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM collector_state WHERE value LIKE '%%legacy usage source%%'").fetchone()[0],1)
+
     def test_missing_attempt_start_is_visible_then_reconciled(self):
         emit('task.started','p','r','t',title='Task',difficulty='standard',rubric=1)
         emit('usage','p','r','t','a',response_id='response',source='fixture',input=10,output=2)
@@ -374,3 +385,174 @@ class AnalyticsTest(unittest.TestCase):
             self.assertFalse(analytics(db,filters)['summary']['coordinator_usage_complete'])
             ingest(db,{'id':identifier(),'kind':'usage','at':'2026-02-10','project':'p','run':'r','attempt':'missing','payload':{'response_id':'missing','source':'fixture','input':10,'output':2}})
             self.assertTrue(analytics(db,filters)['summary']['coordinator_usage_complete'])
+            def add(kind, run, attempt=None, **payload):
+                ingest(db,{'id':identifier(),'at':'2026-02-10','kind':kind,'project':'p',
+                           'run':run,'task':None,'attempt':attempt,'payload':payload})
+
+            add('run.started','r',name='Legacy',work_kind='product',host='codex',version='old',config_hash='x')
+            add('run.started','native',name='Native',work_kind='product',host='codex',version='new',
+                config_hash='x',workflow='deliver')
+            add('attempt.started','native','native-worker',role='implementation',phase='implementation',host='codex',model='m')
+            self.assertTrue(analytics(db,filters|{'version':'old'})['summary']['coordinator_usage_complete'])
+            self.assertFalse(analytics(db,filters)['summary']['coordinator_usage_complete'])
+
+
+    def test_native_measurements_replay_distinguishes_child_and_coordinator_usage(self):
+        from .storage import Journal
+        from .telemetry import rebuild
+
+        home = Path(self.tmp.name)
+        native_homes = {'CODEX_HOME':str(home/'codex'), 'CLAUDE_CONFIG_DIR':str(home/'claude')}
+        project = identifier()
+        paths = []
+
+        def at(minute):
+            return f'2026-11-27T12:{minute:02}:00.000+00:00'
+
+        def write(path, entries):
+            path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text(''.join(json.dumps(entry)+'\n' for entry in entries),encoding='utf-8',newline='\n')
+            paths.append(path)
+
+        def codex_record(kind, payload, minute):
+            return {'timestamp':at(minute),'type':kind,'payload':payload}
+
+        def claude_record(parent, msg, minute, usage, content=(), agent=None):
+            return {'timestamp':at(minute),'type':'assistant','sessionId':parent,'agentId':agent,
+                    'message':{'id':msg,'model':'claude-fixture','usage':usage,'content':list(content)}}
+
+        def usage(parent, resp, i, o, minute):
+            return codex_record('token_usage_record',{'thread_id':parent,'turn_id':'turn',
+                'response_id':resp,'usage':{'input_tokens':i,'cached_input_tokens':5,
+                                           'output_tokens':o,'reasoning_output_tokens':1}},minute)
+
+        with patch.dict(os.environ,native_homes):
+            for host, workflow, number in [('codex','deliver',1),('claude','propose',2)]:
+                run, attempt, parent, child, call = [identifier() for _ in range(5)]
+                if host == 'codex':
+                    bound = home/'codex'/'sessions'/('child-'+child+'.jsonl')
+                    owner = bound.parent/('parent-'+parent+'.jsonl')
+                    write(bound,[
+                        codex_record('session_meta',{'id':child,'model_provider':'openai','parent_thread_id':parent},1),
+                        usage(child,'codex-child',40,10,2), usage(child,'codex-child',40,10,2),
+                        usage(parent,'wrong-thread',500,10,2),
+                    ])
+                    child_records = bound.read_text(encoding='utf-8')
+                    bound.unlink()  # The finished journal can reach OH before the transcript is saved.
+                    delayed_child = bound, child_records
+                    write(owner,[
+                        usage(parent,'unallocated-other-turn',1000,20,1),
+                        codex_record('response_item',{'type':'function_call','name':'spawn_agent','call_id':call},2),
+                        usage(parent,'codex-parent',80,10,2),
+                        codex_record('event_msg',{'type':'item_completed','thread_id':parent,'turn_id':'turn',
+                            'item':{'type':'SubAgentActivity','id':call,'agent_thread_id':child,'model':'gpt-fixture'}},2),
+                        codex_record('response_item',{'type':'function_call_output','call_id':call},2),
+                    ])
+                else:
+                    owner = home/'claude'/'projects'/'fixture'/(parent+'.jsonl')
+                    bound = owner.parent/parent/'subagents'/('agent-'+child+'.jsonl')
+                    counters = {'input_tokens':5,'cache_read_input_tokens':10,'cache_creation_input_tokens':20}
+                    write(bound,[claude_record(parent,'claude-child',2,counters|{'output_tokens':2},agent=child),
+                                 claude_record(parent,'claude-child',2,counters|{'output_tokens':6},agent=child)])
+                    spawn = {'type':'tool_use','id':call,'name':'Agent'}
+                    write(owner,[
+                        claude_record(parent,'mixed',1,counters|{'output_tokens':100},[spawn,spawn|{'id':'another-call'}]),
+                        claude_record(parent,'claude-parent',2,counters|{'output_tokens':7},[spawn]),
+                        claude_record(parent,'not-evidence',3,counters|{'output_tokens':999}),
+                    ])
+                journal = Journal(project,run)
+                tasks = [{'id':str(n+1),'title':'A task','instructions':'Do work'} for n in range(number)]
+                parent_ref = {'host':host,'session':parent,'transcript_path':str(owner)}
+                entries = [
+                    (0,'run.started',{'id':run,'project':project,'host':host,'native_version':2,'workflow':workflow,
+                     'name':'Fixture','work_kind':'product','harness_version':'1.0.1','config_hash':'x',
+                     'human':parent_ref,'tasks':tasks}),
+                    (1,'task.started',{'task':'1'}),
+                    (1,'attempt.started',{'id':attempt,'task':'1','role':'assessment','profile':{'model':'assessor'}}),
+                    (1,'native.child.bound',{'attempt':attempt,'child':{'parent_session':parent,'child_session':child,
+                         'tool_use_id':call,'transcript_path':str(bound)}}),
+                    (4,'attempt.finished',{'id':attempt,'outcome':'assessed','duration_ms':101}),
+                    (4,'task.assessed',{'task':'1','attempt':attempt,'difficulty':'complex','rationale':'Saved rating'}),
+                    (5,'verification',{'task':'1','checks':[{'duration_ms':20},{'duration_ms':999,'reused':True}]}),
+                    (6,'task.completed',{'task':'1'}),
+                ]
+                for minute,kind,record in entries:
+                    with patch('oh.storage.now',return_value=at(minute)):
+                        journal.append(kind,record)
+
+            self.assertGreater(collect(),0)
+            with connect(readonly=True) as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM usage WHERE source='native.child.codex'").fetchone()[0],0)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM usage WHERE source='native.child.claude'").fetchone()[0],1)
+            delayed_child[0].write_text(delayed_child[1],encoding='utf-8',newline='\n')
+            self.assertGreater(collect(),0)
+            self.assertEqual(collect(),0)
+            filters={'from':'2026-11-27T00:00:00.000+00:00','to':'2026-11-28T00:00:00.000+00:00'}
+            with connect(readonly=True) as db:
+                rows_before = [tuple(row) for row in db.execute('SELECT source,input,cached,output FROM usage ORDER BY source')]
+                self.assertEqual(rows_before,[
+                    ('native.anchor.claude',35,10,7), ('native.anchor.codex',80,5,10),
+                    ('native.child.claude',35,10,6), ('native.child.codex',40,5,10),
+                ])
+                delivers = analytics(db,filters|{'workflow':'deliver'})
+                proposes = analytics(db,filters|{'workflow':'propose'})
+                task = delivers['tasks'][0]
+                self.assertEqual((task['difficulty'],task['wall_ms']),('complex',300000))
+                self.assertEqual((task['observed_worker_tokens'],task['observed_coordinator_tokens']),(50,90))
+                self.assertIsNone(delivers['summary']['tokens_per_completed'])
+                self.assertFalse(delivers['summary']['coordinator_usage_complete'])
+                self.assertIsNone(proposes['tasks'][0]['observed_coordinator_tokens'])
+                self.assertEqual(delivers['operations']['verification_ms'],20)
+                self.assertEqual(delivers['operations']['checks_reused'],1)
+                self.assertEqual({row['workflow'] for row in proposes['workflow_usage']},{'propose'})
+            for path in paths:
+                path.unlink()
+            self.assertGreater(rebuild()['events'],4)
+            with connect(readonly=True) as db:
+                self.assertEqual([tuple(row) for row in db.execute('SELECT source,input,cached,output FROM usage ORDER BY source')],
+                                 rows_before)
+            self.assertEqual(collect(),0)
+            with connect(readonly=True) as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM usage').fetchone()[0],4)
+                self.assertGreater(db.execute("SELECT COUNT(*) FROM collector_state WHERE key LIKE 'gap:native:%'").fetchone()[0],0)
+
+
+    def test_native_restart_and_delivery_recovery_replace_stale_completed_measurements(self):
+        from .storage import Journal
+        from .telemetry import rebuild
+
+        def at(minute):
+            return f'2026-11-27T12:{minute:02}:00.000+00:00'
+
+        def state(run):
+            with connect(readonly=True) as db:
+                return tuple(db.execute('SELECT status,started,ended,wall_ms FROM tasks WHERE run=?',(run,)).fetchone())
+
+        for transition, change in [
+            ('workflow.restarted',{'branch':'new','base':'base'}),
+            ('delivery.recovered',{'branch':'new','base':'base','done':[],'summaries':[],'granted':['1'],'restart':True}),
+        ]:
+            with self.subTest(transition=transition):
+                project, run = identifier(), identifier()
+                journal = Journal(project,run)
+                def append(minute,kind,data):
+                    with patch('oh.storage.now',return_value=at(minute)):
+                        journal.append(kind,data)
+                append(0,'run.started',{'id':run,'project':project,'host':'codex','native_version':2,'workflow':'deliver',
+                    'name':'Fixture','work_kind':'product','harness_version':'1.0.1','config_hash':'x',
+                    'human':{'host':'codex','session':'coordinator'},
+                    'tasks':[{'id':'1','title':'Task','instructions':'Do work'}]})
+                append(1,'task.started',{'task':'1'})
+                append(2,'task.completed',{'task':'1'})
+                collect()
+                self.assertEqual(state(run),('completed',at(1),at(2),60000))
+                append(3,transition,change)
+                collect()
+                self.assertEqual(state(run),('unknown',at(1),None,None))
+                rebuild()
+                self.assertEqual(state(run),('unknown',at(1),None,None))
+                append(4,'task.started',{'task':'1'})
+                collect()
+                self.assertEqual(state(run),('running',at(4),None,None))
+                rebuild()
+                self.assertEqual(state(run),('running',at(4),None,None))

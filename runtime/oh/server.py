@@ -32,7 +32,7 @@ def filters(query):
     result['from']=a.astimezone(timezone.utc).isoformat(timespec='milliseconds')
     result['to']=b.astimezone(timezone.utc).isoformat(timespec='milliseconds')
     if a>=b or (b-a).days>3660:raise ValueError('Choose a valid range of up to ten years')
-    for key in ('project','difficulty','kind','version','model','phase'):
+    for key in ('project','difficulty','kind','version','model','phase','workflow'):
         if query.get(key):result[key]=query[key][0]
     return result
 

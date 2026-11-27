@@ -48,9 +48,9 @@ def details(db,run,task):
 
 def metrics(db,filters):
     where=['e.at>=?','e.at<?'];args=[filters['from'],filters['to']]
-    for field,column in [('project','e.project'),('kind','r.work_kind'),('version','r.version'),('difficulty','t.difficulty')]:
+    for field,column in [('project','e.project'),('kind','r.work_kind'),('version','r.version'),('workflow','r.workflow'),('difficulty','t.difficulty')]:
         if filters.get(field):where.append(column+'=?');args.append(filters[field])
-    base=' FROM events e LEFT JOIN runs r ON r.id=e.run LEFT JOIN tasks t ON t.run=e.run AND t.id=e.task WHERE '+' AND '.join(where)
+    base=' FROM events e LEFT JOIN analytics_runs r ON r.id=e.run LEFT JOIN tasks t ON t.run=e.run AND t.id=e.task WHERE '+' AND '.join(where)
     result=dict(db.execute("""SELECT
       SUM(CASE WHEN e.kind='phase.finished' AND json_extract(e.payload,'$.phase')='verification' THEN json_extract(e.payload,'$.duration_ms') END) verification_ms,
       SUM(CASE WHEN e.kind='phase.finished' THEN json_extract(e.payload,'$.reused') END) checks_reused,

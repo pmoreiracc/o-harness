@@ -21,6 +21,9 @@ CREATE INDEX IF NOT EXISTS events_run_task ON events(run,task,kind);
 CREATE TABLE IF NOT EXISTS runs(
  id TEXT PRIMARY KEY, project TEXT NOT NULL, name TEXT, work_kind TEXT NOT NULL,
  host TEXT, version TEXT, config_hash TEXT, started TEXT, status TEXT);
+CREATE TABLE IF NOT EXISTS native_runs(run TEXT PRIMARY KEY, workflow TEXT NOT NULL);
+CREATE VIEW IF NOT EXISTS analytics_runs AS
+ SELECT r.*, n.workflow FROM runs r LEFT JOIN native_runs n ON n.run=r.id;
 CREATE TABLE IF NOT EXISTS tasks(
  run TEXT NOT NULL, id TEXT NOT NULL, title TEXT, difficulty TEXT,
  rubric INTEGER, status TEXT, started TEXT, ended TEXT, wall_ms REAL,
@@ -79,9 +82,9 @@ def connect(path=None,*,readonly=False):
                 connection.execute('ALTER TABLE attempts ADD COLUMN project TEXT')
                 connection.execute('CREATE INDEX IF NOT EXISTS attempts_project ON attempts(project,started)')
             columns={r[1] for r in connection.execute('PRAGMA table_info(tasks)')}
-            for name,kind in [('expected_attempts','INTEGER'),('expected_reviews','INTEGER'),('confirmed_interventions','INTEGER'),('first_review','TEXT')]:
+            for name,kind in [('native_measurement','INTEGER NOT NULL DEFAULT 0'),('expected_attempts','INTEGER'),('expected_reviews','INTEGER'),('confirmed_interventions','INTEGER'),('first_review','TEXT')]:
                 if name not in columns:connection.execute(f'ALTER TABLE tasks ADD COLUMN {name} {kind}')
-            connection.execute('INSERT OR IGNORE INTO schema_version VALUES(3)')
+            connection.execute('INSERT OR IGNORE INTO schema_version VALUES(4)')
             connection.commit()
         return connection
     except BaseException:
@@ -127,13 +130,14 @@ def usage_values(payload):
     return values
 
 
-def ingest(connection, event):
+def ingest(connection, event, *, reproject=False):
     p = event['payload']; kind = event['kind']
     cursor = connection.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
         (event['id'], event['at'], kind, event['project'], event.get('run'), event.get('task'),
          event.get('attempt'), event.get('agent'), json.dumps(p)))
-    if not cursor.rowcount:
-        return
+    added=bool(cursor.rowcount)
+    if not added and not reproject:
+        return False
     if event.get('run') and kind!='run.started' and not connection.execute('SELECT 1 FROM runs WHERE id=?',(event['run'],)).fetchone():
         connection.execute('INSERT INTO runs(id,project,name,work_kind,started,status) VALUES(?,?,?,?,?,?)',(event['run'],event['project'],'Unknown run (missing start)','unknown',event['at'],'unknown'))
         connection.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',('gap:run:'+event['run'],'Missing run start observation'))
@@ -145,21 +149,39 @@ def ingest(connection, event):
         connection.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',('gap:attempt:'+event['attempt'],'Missing attempt start; timestamp is first observed event'))
     if kind=='collection.gap':connection.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',('gap:'+event['id'],p.get('reason','Missing observation')))
     if kind == 'run.started':
-        connection.execute('INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,work_kind=excluded.work_kind,host=excluded.host,version=excluded.version,config_hash=excluded.config_hash,started=excluded.started',
-            (event['run'], event['project'], p.get('name'), p['work_kind'], p['host'],
-             p['version'], p['config_hash'], event['at'], 'running'))
+        if p.get('workflow'):
+            connection.execute('INSERT OR REPLACE INTO native_runs VALUES(?,?)',(event['run'],p['workflow']))
+        connection.execute('''INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET name=excluded.name,work_kind=excluded.work_kind,
+            host=excluded.host,version=excluded.version,config_hash=excluded.config_hash,
+            started=CASE WHEN ? OR NOT EXISTS(SELECT 1 FROM native_runs WHERE run=runs.id)
+                         THEN excluded.started ELSE runs.started END''',
+            (event['run'],event['project'],p.get('name'),p['work_kind'],p['host'],
+             p['version'],p['config_hash'],event['at'],'running',bool(p.get('workflow'))))
         connection.execute('DELETE FROM collector_state WHERE key=?',('gap:run:'+event['run'],))
     elif kind == 'run.status':
         connection.execute('UPDATE runs SET status=? WHERE id=?', (p['status'], event['run']))
     elif kind == 'task.started':
-        connection.execute('INSERT INTO tasks(run,id,title,difficulty,rubric,status,started) VALUES(?,?,?,?,?,?,?) ON CONFLICT(run,id) DO UPDATE SET title=excluded.title,difficulty=excluded.difficulty,rubric=excluded.rubric,started=excluded.started',
-            (event['run'], event['task'], p['title'], p['difficulty'], p['rubric'], 'running', event['at']))
+        connection.execute('''INSERT INTO tasks(run,id,title,difficulty,rubric,status,started,native_measurement)
+            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(run,id) DO UPDATE SET title=excluded.title,rubric=excluded.rubric,
+            difficulty=CASE WHEN excluded.native_measurement THEN excluded.difficulty ELSE COALESCE(tasks.difficulty,excluded.difficulty) END,
+            started=CASE WHEN NOT tasks.native_measurement OR excluded.native_measurement THEN excluded.started ELSE tasks.started END,
+            status=CASE WHEN excluded.native_measurement THEN excluded.status ELSE tasks.status END,
+            ended=CASE WHEN NOT excluded.native_measurement THEN tasks.ended END,
+            wall_ms=CASE WHEN NOT excluded.native_measurement THEN tasks.wall_ms END,
+            expected_attempts=CASE WHEN NOT excluded.native_measurement THEN tasks.expected_attempts END,
+            expected_reviews=CASE WHEN NOT excluded.native_measurement THEN tasks.expected_reviews END,
+            first_review=CASE WHEN NOT excluded.native_measurement THEN tasks.first_review END,
+            confirmed_interventions=CASE WHEN NOT excluded.native_measurement THEN tasks.confirmed_interventions END,
+            native_measurement=MAX(tasks.native_measurement,excluded.native_measurement)''',
+            (event['run'],event['task'],p['title'],p['difficulty'],p['rubric'],p.get('status','running'),event['at'],bool(p.get('native'))))
         connection.execute('DELETE FROM collector_state WHERE key=?',('gap:task:'+event['run']+':'+event['task'],))
     elif kind == 'task.finished':
-        connection.execute('UPDATE tasks SET status=?,ended=?,wall_ms=? WHERE run=? AND id=?',
-            (p['status'], event['at'], p.get('wall_ms'), event['run'], event['task']))
-        db_values=(p.get('expected_attempts'),p.get('expected_reviews'),p.get('confirmed_interventions'),p.get('first_review'),event['run'],event['task'])
-        connection.execute('UPDATE tasks SET expected_attempts=?,expected_reviews=?,confirmed_interventions=?,first_review=? WHERE run=? AND id=?',db_values)
+        connection.execute('''UPDATE tasks SET status=?,ended=?,wall_ms=?,expected_attempts=?,expected_reviews=?,
+            confirmed_interventions=COALESCE(?,confirmed_interventions),first_review=COALESCE(?,first_review)
+            WHERE run=? AND id=? AND (? OR NOT native_measurement)''',
+            (p['status'],event['at'],p.get('wall_ms'),p.get('expected_attempts'),p.get('expected_reviews'),
+             p.get('confirmed_interventions'),p.get('first_review'),event['run'],event['task'],bool(p.get('native'))))
     elif kind == 'task.intervention':
         connection.execute('UPDATE tasks SET intervention_count=intervention_count+1 WHERE run=? AND id=?',
             (event['run'], event['task']))
@@ -179,18 +201,20 @@ def ingest(connection, event):
         connection.execute('INSERT INTO usage VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET input=MAX(COALESCE(usage.input,excluded.input),COALESCE(excluded.input,usage.input)),cached=MAX(COALESCE(usage.cached,excluded.cached),COALESCE(excluded.cached,usage.cached)),output=MAX(COALESCE(usage.output,excluded.output),COALESCE(excluded.output,usage.output)),reasoning=MAX(COALESCE(usage.reasoning,excluded.reasoning),COALESCE(excluded.reasoning,usage.reasoning))',
             (p['response_id'],event['attempt'],event['at'],u['input'],u['cached'],u['output'],u['reasoning'],
              p.get('model'),p['source'],p.get('context_tokens')))
+    return added
 
 
 @state_writer
 def collect(limit=2000):
     from .transcripts import poll
+    from .native_measurements import collect as collect_native
     poll()
     home = state_home()
     with lock(home / 'collector.lock'):
         # Unprocessed files only; dashboard reads never visit transcripts or receipts.
         paths = sorted(state_path(home / 'spool',directory=True).glob('*.json'), key=lambda p: p.stat().st_mtime_ns)[:limit]
         gaps=list(state_path(home/'gaps',directory=True).glob('*.json'))
-        if not paths and not gaps:return 0
+        if not paths and not gaps and not (home/'projects').is_dir():return 0
         with connect() as db:
             for gap in gaps:
                 db.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',('gap:'+gap.stem,json.dumps(read_json(gap))))
@@ -204,7 +228,10 @@ def collect(limit=2000):
                 finally:db.execute('RELEASE event')
             if invalid:
                 db.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',('invalid_events',json.dumps([{'file':p.name,'error':e} for p,e in invalid])))
-            db.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)', ('last_ingested', now()))
+            measured=collect_native(home,db)
+            if paths or gaps or measured:
+                db.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)', ('last_ingested', now()))
+        if not paths and not gaps:return measured
         # Archive only after committing. A crash here replays safely by ID.
         archive = home / 'events'
         state_mkdir(archive)
@@ -217,7 +244,7 @@ def collect(limit=2000):
         from .backup import sync_parent
         for folder in {home,home/'spool',archive,quarantine,home/'gaps',gap_archive}:
             if folder.exists():sync_parent(folder/'.entry')
-        return len(paths)
+        return len(paths) + measured
 
 
 def rows(db, sql, args=()):
@@ -227,28 +254,33 @@ def rows(db, sql, args=()):
 def analytics(db, filters):
     where = ['t.started >= ?', 't.started < ?']
     args = [filters['from'], filters['to']]
-    for field, col in [('project','r.project'),('difficulty','t.difficulty'),('kind','r.work_kind'),('version','r.version')]:
+    for field, col in [('project','r.project'),('difficulty','t.difficulty'),('kind','r.work_kind'),('version','r.version'),('workflow','r.workflow')]:
         if filters.get(field):
             where.append(col + '=?');args.append(filters[field])
     predicate = ' AND '.join(where)
     # Pre-aggregate independent children before joining so attempts never multiply usage.
-    cohort = f'''WITH selected AS (SELECT t.*,r.project,r.name,r.work_kind,r.host,r.version FROM tasks t
-      JOIN runs r ON r.id=t.run WHERE {predicate}),
+    cohort = f'''WITH selected AS (SELECT t.*,r.project,r.name,r.work_kind,r.host,r.version,r.workflow FROM tasks t
+      JOIN analytics_runs r ON r.id=t.run WHERE {predicate}),
       au AS (SELECT a.id,a.run,a.task,a.role,a.model,a.effort,a.phase,a.duration_ms,a.outcome,a.substantive,
         SUM(u.input) input,SUM(u.cached) cached,SUM(u.output) output,SUM(u.reasoning) reasoning,
-        MAX(u.context_tokens) context_tokens,COUNT(u.id) usage_rows,SUM(CASE WHEN u.input IS NOT NULL AND u.output IS NOT NULL THEN 1 ELSE 0 END) observations
+        SUM(u.input+u.output) observed_tokens,MAX(u.context_tokens) context_tokens,COUNT(u.id) usage_rows,SUM(CASE WHEN u.input IS NOT NULL AND u.output IS NOT NULL THEN 1 ELSE 0 END) observations
         FROM attempts a JOIN selected selected_task ON selected_task.run=a.run AND selected_task.id=a.task LEFT JOIN usage u ON u.attempt=a.id GROUP BY a.id),
       totals AS (SELECT s.*,
-        CASE WHEN COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
+        CASE WHEN s.workflow IS NULL AND COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
           AND COUNT(au.id)>=COALESCE(s.expected_attempts,COUNT(au.id)) THEN SUM(au.input) END input,
-        CASE WHEN COUNT(au.cached)=COUNT(au.id) THEN SUM(au.cached) END cached,
-        CASE WHEN COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
+        CASE WHEN s.workflow IS NULL AND COUNT(au.cached)=COUNT(au.id) THEN SUM(au.cached) END cached,
+        CASE WHEN s.workflow IS NULL AND COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
           AND COUNT(au.id)>=COALESCE(s.expected_attempts,COUNT(au.id)) THEN SUM(au.output) END output,SUM(au.reasoning) reasoning,
         COALESCE(s.expected_reviews,SUM(CASE WHEN au.role='review' THEN 1 ELSE 0 END)) reviews,
         SUM(CASE WHEN au.role='review' AND au.substantive=1 THEN 1 ELSE 0 END) substantive_reviews,
         SUM(CASE WHEN au.role='review' AND au.outcome='clean' THEN 1 ELSE 0 END) clean_reviews,
-        SUM(au.duration_ms) agent_ms,COUNT(au.id) attempts,
-        SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END) measured_attempts
+        SUM(CASE WHEN s.workflow IS NULL OR (au.role!='orchestrator' AND au.phase!='correction') THEN au.duration_ms END) agent_ms,
+        COUNT(CASE WHEN s.workflow IS NULL OR (au.role!='orchestrator' AND au.phase!='correction') THEN au.id END) attempts,
+        SUM(CASE WHEN (s.workflow IS NULL OR (au.role!='orchestrator' AND au.phase!='correction'))
+            AND au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END) measured_attempts,
+        SUM(CASE WHEN s.workflow IS NOT NULL AND au.role!='orchestrator' AND au.phase!='correction' THEN au.observed_tokens END) observed_worker_tokens,
+        SUM(CASE WHEN s.workflow IS NOT NULL AND au.role='orchestrator' AND au.phase='coordination' THEN au.observed_tokens END) observed_coordinator_tokens,
+        SUM(CASE WHEN s.workflow IS NOT NULL AND au.phase='correction' THEN au.observed_tokens END) observed_correction_tokens
         FROM selected s LEFT JOIN au ON au.run=s.run AND au.task=s.id GROUP BY s.run,s.id)'''
     summary = dict(db.execute(cohort + ''' SELECT COUNT(*) tasks,
       SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) completed,
@@ -273,15 +305,15 @@ def analytics(db, filters):
     # Include analysis, orchestration, unfinished and failed work without multiplying joins.
     spending_where=['u.at >= ?','u.at < ?'];spending_args=[filters['from'],filters['to']]
     for field,col in [('project','COALESCE(a.project,r.project)'),('difficulty','t.difficulty'),
-                      ('kind','r.work_kind'),('version','r.version')]:
+                      ('kind','r.work_kind'),('version','r.version'),('workflow','r.workflow')]:
         if filters.get(field):spending_where.append(col+'=?');spending_args.append(filters[field])
     for field,col in [('model','COALESCE(u.model,a.model)'),('phase','a.phase')]:
         if filters.get(field):spending_where.append(col+'=?');spending_args.append(filters[field])
     spending=dict(db.execute('''SELECT CASE WHEN COUNT(u.input)=COUNT(*) THEN SUM(u.input) END input,CASE WHEN COUNT(u.cached)=COUNT(*) THEN SUM(u.cached) END cached,
       CASE WHEN COUNT(u.output)=COUNT(*) THEN SUM(u.output) END output,CASE WHEN COUNT(u.reasoning)=COUNT(*) THEN SUM(u.reasoning) END reasoning,COUNT(u.id) observations,SUM(CASE WHEN u.input IS NULL OR u.output IS NULL THEN 1 ELSE 0 END) incomplete_observations
-      FROM usage u LEFT JOIN attempts a ON a.id=u.attempt LEFT JOIN runs r ON r.id=a.run
+      FROM usage u LEFT JOIN attempts a ON a.id=u.attempt LEFT JOIN analytics_runs r ON r.id=a.run
       LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE '''+' AND '.join(spending_where),spending_args).fetchone())
-    joins=' FROM usage u LEFT JOIN attempts a ON a.id=u.attempt LEFT JOIN runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE '+' AND '.join(spending_where)
+    joins=' FROM usage u LEFT JOIN attempts a ON a.id=u.attempt LEFT JOIN analytics_runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE '+' AND '.join(spending_where)
     series=rows(db,'SELECT substr(u.at,1,10) day,CASE WHEN COUNT(u.input)=COUNT(*) THEN SUM(u.input) END input,CASE WHEN COUNT(u.cached)=COUNT(*) THEN SUM(u.cached) END cached,CASE WHEN COUNT(u.output)=COUNT(*) THEN SUM(u.output) END output'+joins+' GROUP BY day ORDER BY day',spending_args)
     models=rows(db,'SELECT t.difficulty,COALESCE(u.model,a.model) model,a.role,a.effort,COUNT(DISTINCT a.id) attempts,COUNT(*) observations,SUM(CASE WHEN u.input IS NULL OR u.output IS NULL THEN 1 ELSE 0 END) incomplete_observations,CASE WHEN COUNT(u.input)=COUNT(*) AND COUNT(u.output)=COUNT(*) THEN SUM(u.input+u.output) END tokens'+joins+' GROUP BY t.difficulty,COALESCE(u.model,a.model),a.role,a.effort ORDER BY tokens DESC',spending_args)
     summary.update(spending)
@@ -289,23 +321,31 @@ def analytics(db, filters):
     # Include attempts overlapping the window, even if they began earlier.
     coord_where=["a.role='orchestrator'",'a.started < ?','(a.ended IS NULL OR a.ended >= ?)']
     coord_args=[filters['to'],filters['from']]
-    for field,col in [('project','COALESCE(a.project,r.project)'),('difficulty','t.difficulty'),('kind','r.work_kind'),('version','r.version'),('model','a.model'),('phase','a.phase')]:
+    for field,col in [('project','COALESCE(a.project,r.project)'),('difficulty','t.difficulty'),('kind','r.work_kind'),('version','r.version'),('workflow','r.workflow'),('model','a.model'),('phase','a.phase')]:
         if filters.get(field):coord_where.append(col+'=?');coord_args.append(filters[field])
     coverage=dict(db.execute('''SELECT COUNT(*) attempts,
       SUM(CASE WHEN EXISTS(SELECT 1 FROM usage u WHERE u.attempt=a.id AND u.at>=? AND u.at<?)
        AND NOT EXISTS(SELECT 1 FROM usage u WHERE u.attempt=a.id AND u.at>=? AND u.at<? AND (u.input IS NULL OR u.output IS NULL)) THEN 1 ELSE 0 END) measured
-      FROM attempts a LEFT JOIN runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE '''+' AND '.join(coord_where),[filters['from'],filters['to'],filters['from'],filters['to'],*coord_args]).fetchone())
-    summary['coordinator_usage_complete']=bool(coverage['attempts'] and coverage['attempts']==coverage['measured'])
+      FROM attempts a LEFT JOIN analytics_runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE '''+' AND '.join(coord_where),[filters['from'],filters['to'],filters['from'],filters['to'],*coord_args]).fetchone())
+    partial_native = db.execute(
+        "SELECT 1 FROM attempts a JOIN analytics_runs r ON r.id=a.run "
+        "LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE r.workflow IS NOT NULL AND " +
+        ' AND '.join(coord_where[1:]) + ' LIMIT 1', coord_args).fetchone()
+    summary['coordinator_usage_complete']=bool(coverage['attempts'] and coverage['attempts']==coverage['measured'] and not partial_native)
+    workflow_usage=rows(db, """
+        SELECT COALESCE(r.workflow,'unknown') workflow,a.role,a.phase,
+            COUNT(DISTINCT a.id) measured_attempts,SUM(u.input+u.output) observed_tokens
+        """ + joins + " AND u.input IS NOT NULL AND u.output IS NOT NULL GROUP BY workflow,a.role,a.phase",spending_args)
     # Duration counts each attempt once, using its start-time cohort, not usage rows.
     duration_where=['a.started >= ?','a.started < ?'];duration_args=[filters['from'],filters['to']]
-    for field,col in [('project','COALESCE(a.project,r.project)'),('difficulty','t.difficulty'),('kind','r.work_kind'),('version','r.version'),('model','a.model'),('phase','a.phase')]:
+    for field,col in [('project','COALESCE(a.project,r.project)'),('difficulty','t.difficulty'),('kind','r.work_kind'),('version','r.version'),('workflow','r.workflow'),('model','a.model'),('phase','a.phase')]:
         if filters.get(field):duration_where.append(col+'=?');duration_args.append(filters[field])
-    model_times=rows(db,"SELECT t.difficulty,a.model,a.role,a.effort,COUNT(*) attempts,COUNT(a.duration_ms) measured_attempts,CASE WHEN COUNT(a.duration_ms)=COUNT(*) THEN SUM(a.duration_ms) END duration_ms FROM attempts a LEFT JOIN runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE "+' AND '.join(duration_where)+' GROUP BY t.difficulty,a.model,a.role,a.effort',duration_args)
-    phases=rows(db,"SELECT a.phase,COUNT(*) attempts,COUNT(a.duration_ms) measured_attempts,SUM(a.duration_ms) observed_ms,MAX((SELECT MAX(u.context_tokens) FROM usage u WHERE u.attempt=a.id)) peak_context FROM attempts a LEFT JOIN runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE "+' AND '.join(duration_where)+' GROUP BY a.phase',duration_args)
+    model_times=rows(db,"SELECT t.difficulty,a.model,a.role,a.effort,COUNT(*) attempts,COUNT(a.duration_ms) measured_attempts,CASE WHEN COUNT(a.duration_ms)=COUNT(*) THEN SUM(a.duration_ms) END duration_ms FROM attempts a LEFT JOIN analytics_runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE "+' AND '.join(duration_where)+' GROUP BY t.difficulty,a.model,a.role,a.effort',duration_args)
+    phases=rows(db,"SELECT a.phase,COUNT(*) attempts,COUNT(a.duration_ms) measured_attempts,SUM(a.duration_ms) observed_ms,MAX((SELECT MAX(u.context_tokens) FROM usage u WHERE u.attempt=a.id)) peak_context FROM attempts a LEFT JOIN analytics_runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE "+' AND '.join(duration_where)+' GROUP BY a.phase',duration_args)
     from .observability import metrics
     operations=metrics(db,filters)
     latest = db.execute("SELECT value FROM collector_state WHERE key='last_ingested'").fetchone()
-    return {'summary':summary,'difficulty':difficulties,'series':series,'models':models,'model_times':model_times,'phases':phases,'operations':operations,'tasks':tasks,
+    return {'summary':summary,'difficulty':difficulties,'series':series,'models':models,'model_times':model_times,'phases':phases,'operations':operations,'tasks':tasks,'workflow_usage':workflow_usage,
       'freshness':latest[0] if latest else None,
       'collection_gaps':rows(db,"SELECT value FROM collector_state WHERE key='invalid_events' OR key LIKE 'gap:%'"),
       'projects':rows(db,'SELECT DISTINCT project id,name,work_kind FROM runs'),
@@ -317,6 +357,7 @@ def analytics(db, filters):
 def rebuild():
     """Recreate derived analytics from retained events without touching task authority."""
     import os,shutil
+    from .native_measurements import replay
     with snapshot_guard(exclusive=True):
         home=state_home();temporary=Path(make_temp_directory(prefix='.rebuild-',dir=home))
         try:
@@ -343,6 +384,7 @@ def rebuild():
             events.sort(key=lambda e:(e['at'],e.get('recorded_ns',e['_mtime'])))
             with connect(temporary/'analytics.sqlite3') as db:
                 for event in events:ingest(db,event)
+                native_events=replay(home,db)
                 for record in recommendations:
                     db.execute('INSERT OR IGNORE INTO recommendations VALUES(?,?,?,?,?)',tuple(record[k] for k in ('id','created','evidence_hash','status','payload')))
                 for gap in (home/'gaps').rglob('*.json'):
@@ -360,5 +402,5 @@ def rebuild():
             replace(temporary/'analytics.sqlite3',old)
             from .backup import sync_parent
             sync_parent(old)
-            return {'status':'rebuilt','events':len(events),'authority':'preserved'}
+            return {'status':'rebuilt','events':len(events)+native_events,'authority':'preserved'}
         finally:shutil.rmtree(temporary)
