@@ -274,16 +274,22 @@ input[type=date], .control { padding: 6px 10px; }
 .task-snapshot-status { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px 14px; padding: 12px 14px; }
 .task-snapshot-status p { font-size: 13px; }
 .task-snapshot-status p:empty { display: none; }
-#task-detail-measures { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; border-top: 1px solid var(--rule); padding: 12px 14px; }
+#task-detail-measures { display: grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap: 12px; border-top: 1px solid var(--rule); padding: 12px 14px; }
 #task-detail-measures dt { color: var(--muted); font-size: 11px; }
 #task-detail-measures dd { margin-top: 3px; overflow-wrap: anywhere; font-size: 13px; font-weight: 550; }
 .task-history-section { margin-top: 18px; }
 .latest-review { background: var(--inset); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
 .latest-review p, .history-empty { font-size: 13px; }
 .history-empty { margin-top: 6px; }
-.review-history { margin-top: 8px; }
-.review-history summary { cursor: pointer; padding: 6px 2px; width: fit-content; color: var(--secondary); }
-.review-history summary span { color: var(--muted); margin-left: 4px; }
+.activity-history { margin-top: 16px; border: 1px solid var(--rule); border-radius: 8px; background: var(--inset); }
+.activity-history summary { cursor: pointer; padding: 12px; color: var(--fg); }
+.activity-history summary::marker { color: var(--muted); }
+.activity-history summary:focus-visible { outline-offset: -2px; }
+.activity-summary { display: inline-flex; width: calc(100% - 1.15rem); align-items: baseline; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap; }
+.activity-summary > span { font-size: 13px; font-weight: 600; }
+.activity-body { border-top: 1px solid var(--rule); padding: 10px 12px 12px; }
+.activity-body p { font-size: 13px; }
+.activity-notes, .activity-checks { border-top: 1px solid var(--rule); margin-top: 10px; padding-top: 8px; }
 .history-list { list-style: none; margin: 3px 0 0; padding: 0; }
 .history-list li { padding: 8px 0; border-bottom: 1px solid var(--rule); overflow-wrap: anywhere; }
 .history-list li:last-child { border-bottom: 0; }

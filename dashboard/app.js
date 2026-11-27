@@ -605,12 +605,10 @@ function taskSnapshot(task) {
 
   const level = difficulty.find(([key]) => key === task.difficulty);
   const reviewRounds = task.expected_reviews ?? (task.review_outcomes.length || null);
-  const measures = [
-    ['Difficulty', level ? swatch(level[2]) + level[1] : 'Unrated'],
-    ['Review rounds', reviewRounds ?? 'Unavailable'],
-    ['Agent time', task.agent_ms == null ? unavailable : duration(task.agent_ms)],
-    ['Observed tokens', task.observed_tokens == null ? unavailable : compact(task.observed_tokens)],
-  ];
+  const measures = [['Difficulty', level ? swatch(level[2]) + level[1] : 'Unrated']];
+  if (reviewRounds != null) measures.push(['Review rounds', reviewRounds]);
+  if (task.agent_ms != null) measures.push(['Agent time', duration(task.agent_ms)]);
+  if (task.observed_tokens != null) measures.push(['Observed tokens', compact(task.observed_tokens)]);
   html('task-detail-measures', measures.map(([name,value]) => '<div><dt>' + name + '</dt><dd>' + value + '</dd></div>').join(''));
 }
 
@@ -638,42 +636,65 @@ function attemptMeta(attempt) {
 
 function historyEntry(title, attempt) {
   const [outcome, tone] = attemptStatus(attempt);
-  return '<li><div class="history-entry-title"><strong>' + escape(title) + '</strong><span class="pill ' +
-    tone + '">' + outcome + '</span></div>' + attemptMeta(attempt) + '</li>';
+  const routine = ['assessed','reported','completed','implemented'].includes(attempt.outcome);
+  const badge = routine ? '' : '<span class="pill ' + tone + '">' + outcome + '</span>';
+  return '<li><div class="history-entry-title"><strong>' + escape(title) + '</strong>' +
+    badge + '</div>' + attemptMeta(attempt) + '</li>';
 }
 
-function taskHistory(data) {
-  const reviews = data.attempts.filter(attempt => attempt.role === 'review');
-  const work = data.attempts.filter(attempt => attempt.role !== 'review');
+function implementationAttempt(attempt) {
+  return attempt.role === 'implementation' ||
+    (attempt.role !== 'review' && ['implementation','repair'].includes(attempt.phase));
+}
+
+function activityHistory(task, attempts, checks) {
+  const implementations = attempts.filter(implementationAttempt).length;
+  const reviewCount = attempts.filter(attempt => attempt.role === 'review').length;
+  let implementationIndex = 0, reviewIndex = 0;
+  const timeline = attempts.map(attempt => {
+    if (attempt.role === 'review') return historyEntry('Review ' + ++reviewIndex, attempt);
+    if (implementationAttempt(attempt)) return historyEntry('Implementation attempt ' + ++implementationIndex, attempt);
+    return historyEntry(cap(attempt.phase || attempt.role || 'Unknown step'), attempt);
+  });
+  const count = implementations ? plural(implementations, 'implementation attempt') :
+    reviewCount ? plural(reviewCount, 'review') : plural(attempts.length, 'recorded attempt');
+  const historyCount = attempts.length ? '<small>' + count + '</small>' : '';
+  const note = implementations > 1
+    ? '<p>Implementation attempts are separate passes on the same task.</p>' : '';
+  const checksList = checks.length ? '<ul class="history-list">' + checks.map(check => {
+    const parts = [taskTime(check.started), check.duration_ms == null ? '' : '<span>' + duration(check.duration_ms) + '</span>',
+      check.reused == null ? '' : '<span>' + plural(check.reused, 'reused check') + '</span>'].filter(Boolean);
+    return '<li><strong>Verification recorded</strong>' +
+      (parts.length ? '<div class="history-meta">' + parts.join('') + '</div>' : '') + '</li>';
+  }).join('') + '</ul>' : '';
+  const gaps = [
+    task.agent_ms == null ? 'agent time' : '',
+    task.observed_tokens == null ? 'token usage' : '',
+  ].filter(Boolean);
+  const notes = (checks.length ? '' : '<p>No check results are recorded here.</p>') +
+    (gaps.length ? '<p>Complete totals for ' + gaps.join(' and ') + ' are unavailable.</p>' : '');
+  return '<details class="activity-history"><summary><span class="activity-summary">' +
+    '<span>Activity history</span>' + historyCount + '</span></summary><div class="activity-body">' + note +
+    (timeline.length ? '<ol class="history-list">' + timeline.join('') + '</ol>' : '<p>No work attempts are recorded here.</p>') +
+    (notes ? '<div class="activity-notes">' + notes + '</div>' : '') +
+    (checks.length ? '<section class="activity-checks"><h3>Verification</h3>' + checksList + '</section>' : '') +
+    '</div></details>';
+}
+
+function taskHistory(task, data) {
+  const latest = data.attempts.findLast(attempt => attempt.role === 'review');
   const checks = data.verification.filter(check => check.phase === 'verification');
-  const latest = reviews.at(-1);
   const latestCopy = {
-    blocking: 'The reviewer recorded blocking findings. Open the review in your host for details.',
-    needs_resolution: 'The reviewer recorded findings. Open the review in your host for details.',
+    blocking: 'Open the review in your host to see the blocking findings.',
+    needs_resolution: 'Open the review in your host to see the findings.',
     review_incomplete: 'This attempt has no complete review result.',
   };
   const latestNote = latest && Object.hasOwn(latestCopy, latest.outcome) ? '<p>' + latestCopy[latest.outcome] + '</p>' : '';
   const latestReview = latest
-    ? '<div class="latest-review"><strong>' + attemptStatus(latest)[0] + '</strong>' + latestNote + attemptMeta(latest) + '</div>'
+    ? '<div class="latest-review"><strong>' + attemptStatus(latest)[0] + '</strong>' + latestNote + '</div>'
     : '<p class="history-empty">No review result is recorded here.</p>';
-  const reviewsList = reviews.length
-    ? '<ol class="history-list">' + reviews.map((review, index) => historyEntry('Review ' + (index + 1), review)).join('') + '</ol>' : '';
-  const workList = work.length
-    ? '<ol class="history-list">' + work.map(attempt => historyEntry(cap(attempt.phase || attempt.role || 'Unknown step'), attempt)).join('') + '</ol>'
-    : '<p class="history-empty">No other work attempts are recorded here.</p>';
-  const checksList = checks.length
-    ? '<ul class="history-list">' + checks.map(check => {
-      const parts = [taskTime(check.started), check.duration_ms == null ? '' : '<span>' + duration(check.duration_ms) + '</span>',
-        check.reused == null ? '' : '<span>' + plural(check.reused, 'reused check') + '</span>'].filter(Boolean);
-      return '<li><strong>Verification recorded</strong>' +
-        (parts.length ? '<div class="history-meta">' + parts.join('') + '</div>' : '') + '</li>';
-    }).join('') + '</ul>'
-    : '<p class="history-empty">No check results are recorded here.</p>';
-  html('detail-content', '<section class="task-history-section"><h3>Latest review</h3>' + latestReview +
-    (reviewsList ? '<details class="review-history"><summary>Review history <span>' + reviews.length +
-      '</span></summary>' + reviewsList + '</details>' : '') + '</section>' +
-    '<section class="task-history-section"><h3>Checks</h3>' + checksList + '</section>' +
-    '<section class="task-history-section"><h3>Work attempts</h3>' + workList + '</section>');
+  html('detail-content', '<section class="task-history-section"><h3>Latest review</h3>' + latestReview + '</section>' +
+    activityHistory(task, data.attempts, checks));
 }
 
 async function loadTaskHistory(detailState) {
@@ -689,7 +710,7 @@ async function loadTaskHistory(detailState) {
     const {task} = detailState;
     const data = await get('/api/task?' + new URLSearchParams({run: task.run, task: task.id}), request.signal);
     if (state.detail !== detailState || detailState.request !== request || !$('detail').open) return;
-    taskHistory(data);
+    taskHistory(task, data);
     const lastFinish = detailState.task.status === 'completed' ? data.events.findLast(event => event.kind === 'task.finished') : null;
     const finishedAt = lastFinish && taskTime(lastFinish.at);
     if (finishedAt) html('task-detail-status-note', 'Completed ' + finishedAt);
