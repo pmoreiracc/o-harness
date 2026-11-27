@@ -38,7 +38,7 @@
     <h1 class="sr-only" id="view-heading">Overview</h1>
     <div class="notice" id="error" role="alert" hidden>
       <div><strong>Dashboard data could not refresh.</strong><p id="error-message" class="mono"></p>
-        <p>If the error persists, run <code>oh rebuild</code> to rebuild the local index.</p></div>
+        <p>Retry to reconnect to the local dashboard.</p></div>
       <button type="button" class="control" id="retry">Retry</button>
     </div>
     <span id="stale-tag" class="pill neutral" hidden>Stale</span>
@@ -170,21 +170,43 @@
       <a class="text-link" href="#data-health">Data health →</a>
     </section>
 
-    <section data-views="data-health" id="health-view" hidden>
-      <article class="card health-card">
-        <div class="card-heading"><div><h2>Data health</h2><p>Local collection and measurement coverage</p></div></div>
-        <dl id="health-details" class="health-details"></dl>
-        <p id="health-recovery" hidden>To preserve the current records, run <code>oh backup &lt;folder&gt;</code>.
-          If the index needs to be recreated from saved events, run <code>oh rebuild</code>.</p>
-      </article>
-      <article class="card health-card" id="gaps-panel" hidden>
-        <div class="card-heading"><h3>Collection gaps</h3></div>
-        <ul id="gap-list"></ul>
-      </article>
-      <article class="card health-card" id="suggestions-panel" hidden>
-        <div class="card-heading"><div><h3>Saved suggestions</h3><p>Earlier suggestions reflect estimates from their original observations.</p></div></div>
-        <div id="saved-suggestions"></div>
-      </article>
+    <section class="data-health" data-views="data-health" id="health-view" aria-label="Data health" hidden>
+      <header class="card health-summary" id="health-summary">
+        <div>
+          <p class="section-label">Data health</p>
+          <h2 id="data-health-title">Checking the local index…</h2>
+          <p id="data-health-message"></p>
+        </div>
+        <dl class="health-service" aria-label="Index-wide collector status">
+          <div><dt>Collector</dt><dd id="data-health-collector">Checking…</dd></div>
+          <div><dt>Last observation</dt><dd id="data-health-observation">—</dd></div>
+        </dl>
+      </header>
+
+      <div class="health-grid" id="health-measurement" hidden>
+        <section class="card health-card" aria-labelledby="coverage-heading">
+          <div class="card-heading"><div><h3 id="coverage-heading">Measurement coverage</h3><p id="coverage-selection"></p></div></div>
+          <ul class="health-coverage" id="health-coverage"></ul>
+          <p class="health-ci" id="health-ci" hidden></p>
+        </section>
+        <section class="card health-card" aria-labelledby="gaps-heading">
+          <div class="card-heading"><div><h3 id="gaps-heading">What’s missing</h3><p>Limits of the current dashboard</p></div></div>
+          <ul class="health-limits" id="health-limits"></ul>
+        </section>
+      </div>
+
+      <div class="health-secondary" id="health-secondary" hidden>
+        <details class="card health-disclosure" id="collection-diagnostics">
+          <summary>Collection diagnostics <small>Whole index</small></summary>
+          <dl class="health-diagnostics" id="health-diagnostics"></dl>
+          <ul id="gap-list" hidden></ul>
+          <p id="health-recovery" class="health-recovery" hidden>Some records need attention. If the local index is damaged, use <code>oh backup &lt;folder&gt;</code> before rebuilding it with <code>oh rebuild</code>.</p>
+        </details>
+        <details class="card health-disclosure" id="suggestions-panel" hidden>
+          <summary>Saved suggestions <small>Earlier observations</small></summary>
+          <div id="saved-suggestions" class="saved-suggestions"></div>
+        </details>
+      </div>
     </section>
     </div>
   </main>

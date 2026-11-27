@@ -407,6 +407,107 @@ function renderOptions(data) {
   if (!$('comparison').value) $('comparison').value = 'previous';
 }
 
+const healthDate = new Intl.DateTimeFormat('en', {dateStyle:'medium', timeZone:'UTC'});
+
+function coverageRow(name, measured, total, unit) {
+  const ratio = total ? measured / total : 0;
+  const rounded = Math.round(ratio * 100);
+  const value = !total ? 'No records' : measured > 0 && rounded === 0 ? '<1%' :
+    measured < total && rounded === 100 ? '<100%' : rounded + '%';
+  const tone = !total ? 'neutral' : measured === total ? 'delivered' : 'finding';
+  const count = total ? number.format(measured) + ' of ' + number.format(total) + ' ' + unit :
+    'No records in this selection';
+  const bar = total ? '<div class="health-meter" aria-hidden="true"><i style="width:' +
+    ratio * 100 + '%"></i></div>' : '';
+  return '<li><div><strong>' + name + '</strong><span class="pill ' + tone + '">' + escape(value) +
+    '</span></div><p>' + count + '</p>' + bar + '</li>';
+}
+
+function healthVerdict(data, failed, delayed, incomplete) {
+  if (failed) return ['bad', 'The dashboard couldn’t refresh',
+    data ? 'The measurements below are from the last successful refresh.' : 'Retry to reconnect to the local dashboard.'];
+  if (!data) return ['neutral', 'Checking the local index…', ''];
+  if (delayed) return ['warn', 'The collector is delayed',
+    'New observations may take longer to appear. The coverage below reflects the index as recorded.'];
+  if (incomplete) return ['warn', 'Some collection records need attention',
+    'Review the collection diagnostics below. Dashboard measurements reflect the data available in the index.'];
+  const {attempts, measured} = data.coverage;
+  if (!attempts) return ['neutral', 'No indexed attempts in this selection',
+    'Choose a wider date range or a different project to look for recorded activity.'];
+  if (!measured) return ['warn', 'No complete token records',
+    'Attempts in this selection lack complete input and output records. Deliveries, reviews and recorded agent timings are still available when indexed.'];
+  if (measured < attempts) return ['warn', 'Token usage is partially recorded',
+    'The usage charts reflect observed tokens. Use the coverage below to see how much of the selected activity reported usage.'];
+  return ['good', 'Every selected attempt has token records',
+    'Attempt coverage follows start dates. Complete delivery cost also needs coordination usage and reliable task attribution.'];
+}
+
+function renderDataHealth(data, {failed, delayed, incomplete, collector, heartbeat}) {
+  const [tone, title, message] = healthVerdict(data, failed, delayed, incomplete);
+  $('health-summary').dataset.tone = tone;
+  label('data-health-title', title);
+  label('data-health-message', message);
+  const serviceTone = failed ? 'red' : delayed || !heartbeat ? 'amber' : 'green';
+  html('data-health-collector', '<i class="dot ' + serviceTone + '" aria-hidden="true"></i>' +
+    escape(failed ? 'Status unavailable' : collector));
+  const metrics = data?.health;
+  label('data-health-observation', metrics?.freshness ? relative(metrics.freshness) : 'None recorded');
+  $('health-measurement').hidden = !data;
+  $('health-secondary').hidden = !data;
+  if (!data) return;
+
+  const {attempts, measured} = data.coverage;
+  const project = data.projects.find(item => item.id === data.range.project)?.name;
+  const from = healthDate.format(Date.parse(data.range.from));
+  const through = healthDate.format(Date.parse(data.range.to) - 1);
+  label('coverage-selection', (project || (data.range.project ? 'Selected project' : 'All projects')) +
+    ' · ' + (from === through ? from : from + ' – ' + through) + ' · UTC');
+
+  const rated = sum(data.cohort.filter(row => difficulty.slice(0,3).some(([level]) => level === row.difficulty)), 'delivered');
+  const timed = sum(data.phases, 'timed');
+  const runningSteps = sum(data.phases, 'attempts');
+  html('health-coverage', [
+    coverageRow('Token usage', measured, attempts, 'indexed attempts started in the period'),
+    coverageRow('Agent time', timed, runningSteps, 'assessment, implementation and review attempts'),
+    coverageRow('Difficulty ratings', rated, data.delivered, 'delivered tasks started in the period'),
+    coverageRow('Review-round counts', sum(data.cohort, 'reviewed'), data.delivered, 'delivered tasks started in the period'),
+  ].join(''));
+
+  const limits = [
+    ['Complete delivery cost', 'Needs token observations for the work, with enough attribution to count a task’s full cost.'],
+    ['Live progress and pending decisions', 'Check Codex or Claude for live progress and choices awaiting an answer.'],
+    ['Coordination time', 'Time spent coordinating a run is not measured yet.'],
+  ];
+  html('health-limits', limits.map(([name, description]) => '<li><strong>' + name + '</strong><p>' + description + '</p></li>').join(''));
+
+  const gaps = metrics.gaps;
+  const invalid = metrics.invalid_records;
+  const lastBatch = metrics.last_ingested;
+  const diagnostics = [
+    ['Last indexed batch', lastBatch ? relative(lastBatch) : 'None recorded'],
+    ['Collection gaps', number.format(gaps.length)],
+    ['Invalid records', invalid == null ? 'Count unavailable' : invalid ? number.format(invalid) + ' in the last recorded invalid batch' : 'No invalid batch recorded'],
+  ];
+  html('health-diagnostics', diagnostics.map(([name,value]) =>
+    '<div><dt>' + name + '</dt><dd>' + escape(value) + '</dd></div>').join(''));
+  $('gap-list').hidden = !gaps.length;
+  html('gap-list', gaps.map(gap => {
+    let message = gap;
+    try { message = JSON.parse(gap)?.reason ?? gap; } catch { /* Legacy gaps are plain text. */ }
+    return '<li>' + escape(message) + '</li>';
+  }).join(''));
+  $('health-recovery').hidden = !incomplete;
+
+  const ci = metrics.ci;
+  $('health-ci').hidden = !ci.ci_completed;
+  if (ci.ci_completed) label('health-ci', number.format(ci.ci_failures) + ' of ' +
+    plural(ci.ci_completed, 'recorded CI result') + ' failed after review in this selection.');
+  $('suggestions-panel').hidden = !metrics.suggestions.length;
+  html('saved-suggestions', metrics.suggestions.map(item => '<article><strong>' +
+    escape(item.title) + '</strong><p>' + escape(item.explanation) + '</p>' +
+    '<small>' + escape(item.status) + '</small></article>').join(''));
+}
+
 function renderHealth() {
   const {data, health, error, lastRefresh} = state;
   const metrics = data?.health;
@@ -453,31 +554,7 @@ function renderHealth() {
   $('health-count').hidden = !issueCount;
   $('stale-tag').hidden = !failed || !data;
   $('dashboard-data').classList.toggle('stale', Boolean(failed && data));
-  if (!data) return;
-  const ci = metrics.ci;
-  const rows = [
-    ['Collector', collector],
-    ['Last observation', freshness ? relative(freshness) : unavailable],
-    ['Last indexed batch', metrics.last_ingested ? relative(metrics.last_ingested) : unavailable],
-    ['Collection gaps', gaps],
-    ['Invalid records', invalid == null ? unavailable : invalid + ' in the last recorded invalid batch'],
-    ['Attempt usage coverage', attempts ? coverage.measured + ' of ' + attempts + ' indexed attempts (' + coverageLabel + ')' : unavailable],
-    ['Live run progress and pending decisions', unavailable],
-    ['Complete delivery token totals', unavailable],
-    ['CI failures after review', ci.ci_completed ? ci.ci_failures + ' of ' + ci.ci_completed + ' completed CI runs' : unavailable],
-  ];
-  html('health-details', rows.map(([name, value]) => '<div><dt>' + name + '</dt><dd>' + escape(value) + '</dd></div>').join(''));
-  $('gaps-panel').hidden = !gaps;
-  html('gap-list', metrics.gaps.map(gap => {
-    let message = gap;
-    try { message = JSON.parse(gap).reason ?? gap; } catch { /* Legacy gaps are plain text. */ }
-    return '<li>' + escape(message) + '</li>';
-  }).join(''));
-  $('suggestions-panel').hidden = !metrics.suggestions.length;
-  html('saved-suggestions', metrics.suggestions.map(item => '<article class="detail-row"><strong>' +
-    escape(item.title) + '</strong><p>' + escape(item.explanation) + '</p>' +
-    '<small>' + escape(item.status) + '</small></article>').join(''));
-  $('health-recovery').hidden = !(incomplete || failed);
+  if (state.view === 'data-health') renderDataHealth(data, {failed, delayed, incomplete, collector, heartbeat});
 }
 
 function render() {
