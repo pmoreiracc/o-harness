@@ -142,7 +142,7 @@
           <p id="task-comparison"></p>
         </div>
         <div class="table-wrap" role="region" aria-label="Recorded tasks" tabindex="0">
-          <table role="table">
+          <table class="task-table" role="table">
             <thead role="rowgroup">
               <tr><th scope="col">Status</th><th scope="col">Task</th><th scope="col">Difficulty</th><th scope="col">Review rounds</th><th scope="col">Agent time</th><th scope="col">Tokens</th><th scope="col">Started</th></tr>
             </thead>
@@ -202,9 +202,36 @@
   </dialog>
 
   <dialog id="detail" aria-labelledby="task-detail-title">
-    <form method="dialog"><button class="icon-button close" aria-label="Close task details">×</button></form>
-    <h2 id="task-detail-title">Task details</h2>
-    <div id="detail-content" aria-live="polite"></div>
+    <div class="task-detail">
+      <header class="task-detail-header">
+        <div>
+          <p id="task-detail-project"></p>
+          <h2 id="task-detail-title">Task details</h2>
+          <p id="task-detail-subject"></p>
+          <p id="task-detail-start"></p>
+        </div>
+        <form method="dialog"><button class="icon-button" type="submit" aria-label="Close task details" autofocus>×</button></form>
+      </header>
+      <div class="task-detail-scroll" role="region" aria-label="Recorded task information" tabindex="0">
+        <section class="task-snapshot" aria-label="Task snapshot">
+          <div class="task-snapshot-status">
+            <div><h3>Task status</h3><p id="task-detail-status-note"></p></div>
+            <span class="pill" id="task-detail-status"></span>
+          </div>
+          <dl id="task-detail-measures"></dl>
+        </section>
+        <p id="task-detail-loading" role="status" hidden></p>
+        <div id="task-detail-error" class="task-detail-message" role="alert" hidden>
+          <p>Task history couldn’t load.</p>
+          <button class="control" type="button" id="retry-task-history">Retry</button>
+        </div>
+        <div id="detail-content" hidden></div>
+      </div>
+      <footer class="task-detail-footer">
+        <p>From OH’s local analytics index</p>
+        <button class="control download-history" type="button" id="download-task-history" disabled>Download task history<span aria-hidden="true">↓</span></button>
+      </footer>
+    </div>
   </dialog>
 </body>
 </html>

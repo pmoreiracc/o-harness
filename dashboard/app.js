@@ -361,7 +361,7 @@ function renderTasks(data) {
     const markers = results.slice(0, 12).map(([, color]) => swatch(color, 'round')).join('');
     const description = results.length ? ' · ' + results.map(([text]) => text.toLowerCase()).join(', ') : '';
     const pill = '<span class="pill ' + tone + '">' + escape(status) + '</span>';
-    return '<tr role="row"><td class="task-status">' + pill + '</td><td class="task-name"><button type="button" class="task-button" data-run="' +
+    return '<tr role="row" class="task-row"><td class="task-status">' + pill + '</td><td class="task-name"><button type="button" class="task-button" data-run="' +
       escape(task.run) + '" data-task="' + escape(task.id) + '">' + escape(task.title || 'Untitled task') +
       '</button><small class="task-label"><span class="mono">' + escape(task.name || task.run) +
       '</span> · task ' + escape(task.id) + '</small></td><td class="task-difficulty">' +
@@ -573,35 +573,170 @@ function showView() {
   refresh();
 }
 
-async function detail(run, taskId) {
+const taskDateFormat = new Intl.DateTimeFormat(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+
+function taskDate(value) {
+  const date = new Date(value);
+  return value && Number.isFinite(date.getTime()) ? taskDateFormat.format(date) : '';
+}
+
+function taskTime(value) {
+  const formatted = taskDate(value);
+  return formatted ? '<time datetime="' + escape(value) + '" title="' + escape(value) + '">' + escape(formatted) + '</time>' : '';
+}
+
+function taskSnapshot(task) {
+  const [text, tone] = taskStatus(task);
+  const feedback = task.status === 'feedback';
+  const message = {
+    'Stopped': 'The indexed run was stopped.',
+    'Failed': 'The indexed run ended in failure.',
+    'Open in index': 'No completion is recorded. Check your host for the current state.',
+    'Unknown': 'The index has no confirmed task status.',
+  };
+  label('task-detail-project', (task.name || 'Unknown project') + ' · ' + (feedback ? 'Standalone review' : 'Task ' + task.id));
+  label('task-detail-title', feedback ? 'Review details' : 'Task details');
+  label('task-detail-subject', task.title || (feedback ? 'Untitled review' : 'Untitled task'));
+  const started = taskTime(task.started);
+  html('task-detail-start', started ? 'Started ' + started : '');
+  label('task-detail-status', text);
+  $('task-detail-status').className = 'pill ' + tone;
+  label('task-detail-status-note', message[text] ?? '');
+
+  const level = difficulty.find(([key]) => key === task.difficulty);
+  const reviewRounds = task.expected_reviews ?? (task.review_outcomes.length || null);
+  const measures = [
+    ['Difficulty', level ? swatch(level[2]) + level[1] : 'Unrated'],
+    ['Review rounds', reviewRounds ?? 'Unavailable'],
+    ['Agent time', task.agent_ms == null ? unavailable : duration(task.agent_ms)],
+    ['Observed tokens', task.observed_tokens == null ? unavailable : compact(task.observed_tokens)],
+  ];
+  html('task-detail-measures', measures.map(([name,value]) => '<div><dt>' + name + '</dt><dd>' + value + '</dd></div>').join(''));
+}
+
+function attemptStatus(attempt) {
+  const outcome = attempt.outcome;
+  if (outcome === 'clean') return ['Clean', 'delivered'];
+  if (outcome === 'blocking') return ['Blocking findings', 'finding'];
+  if (outcome === 'needs_resolution') return ['Findings recorded', 'finding'];
+  if (outcome === 'review_incomplete') return ['Review incomplete', 'neutral'];
+  if (outcome === 'assessed') return ['Assessed', 'neutral'];
+  if (['reported','completed','implemented'].includes(outcome)) return ['Result recorded', 'neutral'];
+  if (['cancelled','abandoned','interrupted','failed','unfinished','blocked'].includes(outcome)) return [cap(outcome), 'neutral'];
+  return ['Outcome unavailable', 'neutral'];
+}
+
+function attemptMeta(attempt) {
+  const parts = [
+    attempt.model ? '<span>' + escape(attempt.model) + '</span>' : '',
+    attempt.duration_ms == null ? '' : '<span>' + duration(attempt.duration_ms) + '</span>',
+    attempt.observed_tokens == null ? '' : '<span>' + compact(attempt.observed_tokens) + ' observed tokens</span>',
+    taskTime(attempt.started),
+  ].filter(Boolean);
+  return parts.length ? '<div class="history-meta">' + parts.join('') + '</div>' : '';
+}
+
+function historyEntry(title, attempt) {
+  const [outcome, tone] = attemptStatus(attempt);
+  return '<li><div class="history-entry-title"><strong>' + escape(title) + '</strong><span class="pill ' +
+    tone + '">' + outcome + '</span></div>' + attemptMeta(attempt) + '</li>';
+}
+
+function taskHistory(data) {
+  const reviews = data.attempts.filter(attempt => attempt.role === 'review');
+  const work = data.attempts.filter(attempt => attempt.role !== 'review');
+  const checks = data.verification.filter(check => check.phase === 'verification');
+  const latest = reviews.at(-1);
+  const latestCopy = {
+    blocking: 'The reviewer recorded blocking findings. Open the review in your host for details.',
+    needs_resolution: 'The reviewer recorded findings. Open the review in your host for details.',
+    review_incomplete: 'This attempt has no complete review result.',
+  };
+  const latestNote = latest && Object.hasOwn(latestCopy, latest.outcome) ? '<p>' + latestCopy[latest.outcome] + '</p>' : '';
+  const latestReview = latest
+    ? '<div class="latest-review"><strong>' + attemptStatus(latest)[0] + '</strong>' + latestNote + attemptMeta(latest) + '</div>'
+    : '<p class="history-empty">No review result is recorded here.</p>';
+  const reviewsList = reviews.length
+    ? '<ol class="history-list">' + reviews.map((review, index) => historyEntry('Review ' + (index + 1), review)).join('') + '</ol>' : '';
+  const workList = work.length
+    ? '<ol class="history-list">' + work.map(attempt => historyEntry(cap(attempt.phase || attempt.role || 'Unknown step'), attempt)).join('') + '</ol>'
+    : '<p class="history-empty">No other work attempts are recorded here.</p>';
+  const checksList = checks.length
+    ? '<ul class="history-list">' + checks.map(check => {
+      const parts = [taskTime(check.started), check.duration_ms == null ? '' : '<span>' + duration(check.duration_ms) + '</span>',
+        check.reused == null ? '' : '<span>' + plural(check.reused, 'reused check') + '</span>'].filter(Boolean);
+      return '<li><strong>Verification recorded</strong>' +
+        (parts.length ? '<div class="history-meta">' + parts.join('') + '</div>' : '') + '</li>';
+    }).join('') + '</ul>'
+    : '<p class="history-empty">No check results are recorded here.</p>';
+  html('detail-content', '<section class="task-history-section"><h3>Latest review</h3>' + latestReview +
+    (reviewsList ? '<details class="review-history"><summary>Review history <span>' + reviews.length +
+      '</span></summary>' + reviewsList + '</details>' : '') + '</section>' +
+    '<section class="task-history-section"><h3>Checks</h3>' + checksList + '</section>' +
+    '<section class="task-history-section"><h3>Work attempts</h3>' + workList + '</section>');
+}
+
+async function loadTaskHistory(detailState) {
+  detailState.request?.abort();
+  const request = new AbortController();
+  detailState.request = request;
+  $('task-detail-error').hidden = true;
+  $('detail-content').hidden = true;
+  $('download-task-history').disabled = true;
+  label('task-detail-loading', 'Loading task history…');
+  $('task-detail-loading').hidden = false;
+  try {
+    const {task} = detailState;
+    const data = await get('/api/task?' + new URLSearchParams({run: task.run, task: task.id}), request.signal);
+    if (state.detail !== detailState || detailState.request !== request || !$('detail').open) return;
+    taskHistory(data);
+    const lastFinish = detailState.task.status === 'completed' ? data.events.findLast(event => event.kind === 'task.finished') : null;
+    const finishedAt = lastFinish && taskTime(lastFinish.at);
+    if (finishedAt) html('task-detail-status-note', 'Completed ' + finishedAt);
+    detailState.data = data;
+    $('detail-content').hidden = false;
+    $('download-task-history').disabled = !data.attempts.length && !data.events.length && !data.verification.length;
+  } catch (error) {
+    if (state.detail === detailState && detailState.request === request && error.name !== 'AbortError') {
+      $('task-detail-error').hidden = false;
+    }
+  } finally {
+    if (state.detail === detailState && detailState.request === request) $('task-detail-loading').hidden = true;
+  }
+}
+
+function detail(trigger) {
+  const dialog = $('detail');
+  if (dialog.open) return;
+  const {run,task:taskId} = trigger.dataset;
   const task = state.data?.tasks.find(task => task.run === run && task.id === taskId);
   if (!task) return;
-  state.detail?.abort();
-  const request = new AbortController();
-  state.detail = request;
-  label('task-detail-title', task.title || 'Task details');
-  label('detail-content', 'Loading task details…');
-  $('detail').showModal();
-  try {
-    const data = await get('/api/task?' + new URLSearchParams({run, task: taskId}), request.signal);
-    if (request !== state.detail) return;
-    const phase = name => cap(name || 'Unknown step');
-    const attempts = data.attempts.map(attempt => '<div class="detail-row"><strong>' + escape(phase(attempt.phase)) +
-      '</strong> · ' + escape(attempt.outcome?.replaceAll('_', ' ') ?? 'Outcome unavailable') +
-      '<p>' + escape(attempt.model || 'Unknown model') + ' · ' + escape(duration(attempt.duration_ms)) + ' · ' +
-      (attempt.observed_tokens == null ? unavailable : compact(attempt.observed_tokens) + ' observed tokens') + '</p>' +
-      '<small>' + escape(attempt.started) + '</small></div>').join('');
-    const checks = data.verification.filter(check => check.phase === 'verification').map(check => '<div class="detail-row"><strong>' + escape(phase(check.phase)) +
-      '</strong> · ' + duration(check.duration_ms) +
-      (check.reused == null ? '' : ' · ' + plural(check.reused, 'reused check')) + '</div>').join('');
-    html('detail-content', '<p>' + escape((task.name || task.run) + ' · task ' + task.id + ' · ' +
-      taskStatus(task)[0] + (task.difficulty ? ' · ' + task.difficulty : '')) + '</p><h3>Attempts and reviews</h3>' +
-      (attempts || '<p>No attempts recorded.</p>') + '<h3>Checks</h3>' + (checks || '<p>No check details recorded.</p>') +
-      '<details class="detail-evidence"><summary>Recorded events and evidence</summary><pre>' +
-      escape(JSON.stringify(data.events, null, 2)) + '</pre></details>');
-  } catch (error) {
-    if (state.detail === request && error.name !== 'AbortError') label('detail-content', error.message);
-  }
+  state.detail?.request?.abort();
+  const detailState = {task, trigger};
+  state.detail = detailState;
+  taskSnapshot(task);
+  trigger.focus({preventScroll:true});
+  dialog.showModal();
+  dialog.querySelector('.task-detail-scroll').scrollTop = 0;
+  loadTaskHistory(detailState);
+}
+
+function downloadTaskHistory() {
+  const {task, data} = state.detail ?? {};
+  if (!data || !$('detail').open) return;
+  const content = {
+    task: {run: task.run, id: task.id, title: task.title, project: task.name},
+    attempts: data.attempts, verification: data.verification, events: data.events,
+    event_limit: 300,
+  };
+  const blob = new Blob([JSON.stringify(content, null, 2) + '\n'], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const id = [task.run,task.id].join('-').replace(/[^a-z0-9_-]/gi,'-').slice(0,100);
+  link.href = url;
+  link.download = 'oh-task-history-' + id + '.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function selectRange() {
@@ -623,10 +758,27 @@ function openDates(mode) {
   dialog.showModal();
 }
 
-$('detail').addEventListener('close', () => { state.detail?.abort(); state.detail = null; });
+$('detail').addEventListener('close', () => {
+  if ($('detail').open) return;
+  const detailState = state.detail;
+  state.detail = null;
+  detailState?.request?.abort();
+  if (detailState) {
+    const {run, id} = detailState.task;
+    const target = detailState.trigger.isConnected ? detailState.trigger :
+      [...$('rows').querySelectorAll('.task-button')].find(button => button.dataset.run === run && button.dataset.task === id);
+    (target ?? $('rows').closest('.table-wrap')).focus({preventScroll:true});
+  }
+});
+$('retry-task-history').addEventListener('click', () => {
+  if (!state.detail) return;
+  $('detail').querySelector('.task-detail-scroll').focus({preventScroll:true});
+  loadTaskHistory(state.detail);
+});
+$('download-task-history').addEventListener('click', downloadTaskHistory);
 $('rows').addEventListener('click', event => {
   const button = event.target.closest('tr')?.querySelector('.task-button');
-  if (button) detail(button.dataset.run, button.dataset.task);
+  if (button) detail(button);
 });
 $('prev-page').addEventListener('click', () => { state.offset -= state.data.page_size; refresh(); });
 $('next-page').addEventListener('click', () => { state.offset += state.data.page_size; refresh(); });
