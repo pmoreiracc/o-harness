@@ -60,6 +60,69 @@ class AnalyticsTest(unittest.TestCase):
         self.assertIn('unavailable',sent[0][1]['error'])
         self.assertEqual(overview({})['summary'],before['summary'])
 
+    def test_dashboard_counts_deliveries_beyond_task_pages_and_keeps_unmeasured_work_unknown(self):
+        from .dashboard import PAGE_SIZE, snapshot
+        with connect() as db:
+            fixture(db, days=105)
+            db.execute("UPDATE tasks SET started='2026-11-20T01:00:00+00:00', "
+                       "ended='2026-11-20T01:21:00+00:00', wall_ms=NULL")
+            db.execute("UPDATE tasks SET started='2026-11-19T23:00:00+00:00' WHERE run='run-0'")
+            db.execute("UPDATE tasks SET expected_attempts=3, expected_reviews=NULL WHERE run='run-1'")
+            db.execute("UPDATE attempts SET duration_ms=NULL WHERE run='run-1' AND role='review'")
+            db.execute("DELETE FROM usage WHERE attempt='run-1-review'")
+            db.execute("INSERT INTO collector_state VALUES('gap:task:run-2:1','Missing task start')")
+            db.execute("INSERT INTO collector_state VALUES('invalid_events','[{},{}]')")
+            bounds = {'from': '2026-11-20T00:00:00+00:00', 'to': '2026-11-21T00:00:00+00:00'}
+            data = snapshot(db, bounds)
+            filtered = snapshot(db, bounds | {'model': 'gpt-5.6-sol', 'phase': 'assessment'})
+            final_page = snapshot(db, bounds, 100)
+        self.assertEqual(len(data['tasks']), PAGE_SIZE)
+        self.assertEqual(len(final_page['tasks']), 4)
+        self.assertEqual(data['started'], 103)
+        self.assertEqual(data['delivered'], 103)
+        self.assertEqual(sum(day['delivered'] for day in data['delivery']), 105)
+        self.assertEqual(sum(day['timed'] for day in data['cohort']), 103)
+        self.assertEqual(sum(day['elapsed_ms'] for day in data['cohort']), 103 * 21 * 60000)
+        self.assertEqual(sum(day['reviewed'] for day in data['cohort']), 102)
+        self.assertEqual(filtered['task_count'], 0)
+        partial = next(task for task in data['tasks'] if task['run'] == 'run-1')
+        self.assertIsNone(partial['observed_tokens'])
+        self.assertIsNone(partial['agent_ms'])
+        self.assertEqual(partial['review_outcomes'], ['clean'])
+        self.assertEqual(data['health']['invalid_records'], 2)
+        self.assertEqual(data['health']['gaps'], ['Missing task start'])
+
+    def test_dashboard_http_projection_and_fonts_use_local_only_read_paths(self):
+        from types import SimpleNamespace
+        from .server import Handler
+
+        with connect() as db:
+            fixture(db, days=2)
+            db.execute('DELETE FROM usage')
+        sent = []
+        handler = SimpleNamespace(
+            trusted=lambda: True, path='/api/dashboard?offset=0&project=ui-test-project',
+            send=lambda *args: sent.append(args))
+        with patch('oh.transcripts.poll', side_effect=AssertionError('Dashboard GET cannot poll transcripts')):
+            Handler.do_GET(handler)
+        status, data = sent.pop()
+        self.assertEqual(status, 200)
+        self.assertEqual(data['task_count'], 2)
+        self.assertEqual(data['coverage'], {'attempts': 4, 'measured': 0})
+        self.assertEqual(data['usage'], [])
+        self.assertTrue(all(task['observed_tokens'] is None for task in data['tasks']))
+        handler.path = '/api/dashboard?offset=-1'
+        Handler.do_GET(handler)
+        self.assertEqual(sent.pop()[0], 400)
+        handler.path = '/fonts/inter.ttf'
+        Handler.do_GET(handler)
+        status, body, content_type = sent.pop()
+        self.assertEqual((status, content_type), (200, 'font/ttf'))
+        self.assertTrue(body.startswith(b'\x00\x01\x00\x00'))
+        handler.trusted = lambda: False
+        Handler.do_GET(handler)
+        self.assertEqual(sent.pop()[0], 403)
+
     def test_invalid_event_does_not_block_valid_events(self):
         emit('usage','p',attempt='bad',response_id='bad',source='fixture',input=2,cached=3)
         emit('usage','p',attempt='good',response_id='good',source='fixture',input=10,output=2)
@@ -144,16 +207,22 @@ class AnalyticsTest(unittest.TestCase):
             restore(target)
 
     def test_partial_groups_and_attempt_time_do_not_present_exact_totals(self):
+        from .observability import details
+
         with connect() as db:
             fixture(db,days=1)
             attempt=db.execute("SELECT id FROM attempts WHERE role='implementation'").fetchone()[0]
             ingest(db,{'id':identifier(),'kind':'usage','at':'2026-09-25','project':'ui-test-project','attempt':attempt,
               'payload':{'response_id':'partial','source':'fixture','input':100,'output':None}})
             data=analytics(db,{'from':'2000','to':'2100'})
+            detail=details(db,'run-0','1')
             self.assertIsNone(data['summary']['output']);self.assertIsNone(data['summary']['tokens_per_completed'])
             self.assertIsNone(data['tasks'][0]['input']);self.assertIsNone(data['difficulty'][0]['tokens'])
             self.assertIsNone(next(m for m in data['models'] if m['role']=='implementation')['tokens'])
             self.assertEqual(next(m for m in data['model_times'] if m['role']=='implementation')['duration_ms'],500000)
+        attempts={item['role']:item for item in detail['attempts']}
+        self.assertIsNone(attempts['implementation']['observed_tokens'])
+        self.assertEqual(attempts['review']['observed_tokens'],7000)
 
     def test_running_tasks_do_not_lower_completed_review_average(self):
         with connect() as db:
@@ -255,6 +324,17 @@ class AnalyticsTest(unittest.TestCase):
         events=[json.loads(p.read_text()) for p in (home/'spool').glob('*.json')]
         self.assertEqual([e['kind'] for e in events],['collection.gap']);self.assertFalse((home/'sources/s.json').exists())
 
+    def test_unreadable_legacy_source_does_not_block_new_events(self):
+        home=Path(self.tmp.name)
+        (home/'sources').mkdir()
+        (home/'sources/broken.json').write_text('unparseable',encoding='utf-8')
+        emit('usage','p',attempt='a',response_id='response',source='fixture',input=10,output=2)
+        self.assertEqual(collect(),1)
+        self.assertEqual(collect(),0)
+        with connect(readonly=True) as db:
+            self.assertEqual(db.execute('SELECT SUM(input+output) FROM usage').fetchone()[0],12)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM collector_state WHERE value LIKE '%%legacy usage source%%'").fetchone()[0],1)
+
     def test_missing_attempt_start_is_visible_then_reconciled(self):
         emit('task.started','p','r','t',title='Task',difficulty='standard',rubric=1)
         emit('usage','p','r','t','a',response_id='response',source='fixture',input=10,output=2)
@@ -305,3 +385,343 @@ class AnalyticsTest(unittest.TestCase):
             self.assertFalse(analytics(db,filters)['summary']['coordinator_usage_complete'])
             ingest(db,{'id':identifier(),'kind':'usage','at':'2026-02-10','project':'p','run':'r','attempt':'missing','payload':{'response_id':'missing','source':'fixture','input':10,'output':2}})
             self.assertTrue(analytics(db,filters)['summary']['coordinator_usage_complete'])
+            def add(kind, run, attempt=None, **payload):
+                ingest(db,{'id':identifier(),'at':'2026-02-10','kind':kind,'project':'p',
+                           'run':run,'task':None,'attempt':attempt,'payload':payload})
+
+            add('run.started','r',name='Legacy',work_kind='product',host='codex',version='old',config_hash='x')
+            add('run.started','native',name='Native',work_kind='product',host='codex',version='new',
+                config_hash='x',workflow='deliver')
+            add('attempt.started','native','native-worker',role='implementation',phase='implementation',host='codex',model='m')
+            self.assertTrue(analytics(db,filters|{'version':'old'})['summary']['coordinator_usage_complete'])
+            self.assertFalse(analytics(db,filters)['summary']['coordinator_usage_complete'])
+
+
+    def test_native_measurements_replay_distinguishes_child_and_coordinator_usage(self):
+        from .storage import Journal
+        from .telemetry import rebuild
+
+        home = Path(self.tmp.name)
+        native_homes = {'CODEX_HOME':str(home/'codex'), 'CLAUDE_CONFIG_DIR':str(home/'claude')}
+        project = identifier()
+        paths = []
+
+        def at(minute):
+            return f'2026-11-27T12:{minute:02}:00.000+00:00'
+
+        def write(path, entries):
+            path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text(''.join(json.dumps(entry)+'\n' for entry in entries),encoding='utf-8',newline='\n')
+            paths.append(path)
+
+        def codex_record(kind, payload, minute):
+            return {'timestamp':at(minute),'type':kind,'payload':payload}
+
+        def claude_record(parent, msg, minute, usage, content=(), agent=None):
+            return {'timestamp':at(minute),'type':'assistant','sessionId':parent,'agentId':agent,
+                    'message':{'id':msg,'model':'claude-fixture','usage':usage,'content':list(content)}}
+
+        def usage(parent, resp, i, o, minute):
+            return codex_record('token_usage_record',{'thread_id':parent,'turn_id':'turn',
+                'response_id':resp,'usage':{'input_tokens':i,'cached_input_tokens':5,
+                                           'output_tokens':o,'reasoning_output_tokens':1}},minute)
+
+        with patch.dict(os.environ,native_homes):
+            for host, workflow, number in [('codex','deliver',1),('claude','propose',2)]:
+                run, attempt, parent, child, call = [identifier() for _ in range(5)]
+                if host == 'codex':
+                    bound = home/'codex'/'sessions'/('child-'+child+'.jsonl')
+                    owner = bound.parent/('parent-'+parent+'.jsonl')
+                    write(bound,[
+                        codex_record('session_meta',{'id':child,'model_provider':'openai','parent_thread_id':parent},1),
+                        usage(child,'codex-child',40,10,2), usage(child,'codex-child',40,10,2),
+                        usage(parent,'wrong-thread',500,10,2),
+                    ])
+                    child_records = bound.read_text(encoding='utf-8')
+                    bound.unlink()  # The finished journal can reach OH before the transcript is saved.
+                    delayed_child = bound, child_records
+                    write(owner,[
+                        usage(parent,'unallocated-other-turn',1000,20,1),
+                        codex_record('response_item',{'type':'function_call','name':'spawn_agent','call_id':call},2),
+                        usage(parent,'codex-parent',80,10,2),
+                        codex_record('event_msg',{'type':'item_completed','thread_id':parent,'turn_id':'turn',
+                            'item':{'type':'SubAgentActivity','id':call,'agent_thread_id':child,'model':'gpt-fixture'}},2),
+                        codex_record('response_item',{'type':'function_call_output','call_id':call},2),
+                    ])
+                else:
+                    owner = home/'claude'/'projects'/'fixture'/(parent+'.jsonl')
+                    bound = owner.parent/parent/'subagents'/('agent-'+child+'.jsonl')
+                    counters = {'input_tokens':5,'cache_read_input_tokens':10,'cache_creation_input_tokens':20}
+                    write(bound,[claude_record(parent,'claude-child',2,counters|{'output_tokens':2},agent=child),
+                                 claude_record(parent,'claude-child',2,counters|{'output_tokens':6},agent=child)])
+                    spawn = {'type':'tool_use','id':call,'name':'Agent'}
+                    write(owner,[
+                        claude_record(parent,'mixed',1,counters|{'output_tokens':100},[spawn,spawn|{'id':'another-call'}]),
+                        claude_record(parent,'claude-parent',2,counters|{'output_tokens':7},[spawn]),
+                        claude_record(parent,'not-evidence',3,counters|{'output_tokens':999}),
+                    ])
+                journal = Journal(project,run)
+                tasks = [{'id':str(n+1),'title':'A task','instructions':'Do work'} for n in range(number)]
+                parent_ref = {'host':host,'session':parent,'transcript_path':str(owner)}
+                entries = [
+                    (0,'run.started',{'id':run,'project':project,'host':host,'native_version':2,'workflow':workflow,
+                     'name':'Fixture','work_kind':'product','harness_version':'1.0.1','config_hash':'x',
+                     'human':parent_ref,'tasks':tasks}),
+                    (1,'task.started',{'task':'1'}),
+                    (1,'attempt.started',{'id':attempt,'task':'1','role':'assessment','profile':{'model':'assessor'}}),
+                    (1,'native.child.bound',{'attempt':attempt,'child':{'parent_session':parent,'child_session':child,
+                         'tool_use_id':call,'transcript_path':str(bound)}}),
+                    (4,'attempt.finished',{'id':attempt,'outcome':'assessed','duration_ms':101}),
+                    (4,'task.assessed',{'task':'1','attempt':attempt,'difficulty':'complex','rationale':'Saved rating'}),
+                    (5,'verification',{'task':'1','checks':[{'duration_ms':20},{'duration_ms':999,'reused':True}]}),
+                    (6,'task.completed',{'task':'1'}),
+                ]
+                for minute,kind,record in entries:
+                    with patch('oh.storage.now',return_value=at(minute)):
+                        journal.append(kind,record)
+
+            self.assertGreater(collect(),0)
+            with connect(readonly=True) as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM usage WHERE source='native.child.codex'").fetchone()[0],0)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM usage WHERE source='native.child.claude'").fetchone()[0],1)
+            delayed_child[0].write_text(delayed_child[1],encoding='utf-8',newline='\n')
+            self.assertGreater(collect(),0)
+            self.assertEqual(collect(),0)
+            filters={'from':'2026-11-27T00:00:00.000+00:00','to':'2026-11-28T00:00:00.000+00:00'}
+            with connect(readonly=True) as db:
+                rows_before = [tuple(row) for row in db.execute('SELECT source,input,cached,output FROM usage ORDER BY source')]
+                self.assertEqual(rows_before,[
+                    ('native.anchor.claude',35,10,7), ('native.anchor.codex',80,5,10),
+                    ('native.child.claude',35,10,6), ('native.child.codex',40,5,10),
+                ])
+                delivers = analytics(db,filters|{'workflow':'deliver'})
+                proposes = analytics(db,filters|{'workflow':'propose'})
+                task = delivers['tasks'][0]
+                self.assertEqual((task['difficulty'],task['wall_ms']),('complex',300000))
+                self.assertEqual((task['observed_worker_tokens'],task['observed_coordinator_tokens']),(50,90))
+                self.assertIsNone(delivers['summary']['tokens_per_completed'])
+                self.assertFalse(delivers['summary']['coordinator_usage_complete'])
+                self.assertIsNone(proposes['tasks'][0]['observed_coordinator_tokens'])
+                self.assertEqual(delivers['operations']['verification_ms'],20)
+                self.assertEqual(delivers['operations']['checks_reused'],1)
+                self.assertEqual({row['workflow'] for row in proposes['workflow_usage']},{'propose'})
+            for path in paths:
+                path.unlink()
+            self.assertGreater(rebuild()['events'],4)
+            with connect(readonly=True) as db:
+                self.assertEqual([tuple(row) for row in db.execute('SELECT source,input,cached,output FROM usage ORDER BY source')],
+                                 rows_before)
+            self.assertEqual(collect(),0)
+            with connect(readonly=True) as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM usage').fetchone()[0],4)
+                self.assertGreater(db.execute("SELECT COUNT(*) FROM collector_state WHERE key LIKE 'gap:native:%'").fetchone()[0],0)
+
+
+    def test_native_restart_and_delivery_recovery_replace_stale_completed_measurements(self):
+        from .storage import Journal
+        from .telemetry import rebuild
+
+        def at(minute):
+            return f'2026-11-27T12:{minute:02}:00.000+00:00'
+
+        def state(run):
+            with connect(readonly=True) as db:
+                return tuple(db.execute('SELECT status,started,ended,wall_ms FROM tasks WHERE run=?',(run,)).fetchone())
+
+        for transition, change in [
+            ('workflow.restarted',{'branch':'new','base':'base'}),
+            ('delivery.recovered',{'branch':'new','base':'base','done':[],'summaries':[],'granted':['1'],'restart':True}),
+        ]:
+            with self.subTest(transition=transition):
+                project, run = identifier(), identifier()
+                journal = Journal(project,run)
+                def append(minute,kind,data):
+                    with patch('oh.storage.now',return_value=at(minute)):
+                        journal.append(kind,data)
+                append(0,'run.started',{'id':run,'project':project,'host':'codex','native_version':2,'workflow':'deliver',
+                    'name':'Fixture','work_kind':'product','harness_version':'1.0.1','config_hash':'x',
+                    'human':{'host':'codex','session':'coordinator'},
+                    'tasks':[{'id':'1','title':'Task','instructions':'Do work'}]})
+                append(1,'task.started',{'task':'1'})
+                append(2,'task.completed',{'task':'1'})
+                collect()
+                self.assertEqual(state(run),('completed',at(1),at(2),60000))
+                append(3,transition,change)
+                collect()
+                self.assertEqual(state(run),('unknown',at(1),None,None))
+                rebuild()
+                self.assertEqual(state(run),('unknown',at(1),None,None))
+                append(4,'task.started',{'task':'1'})
+                collect()
+                self.assertEqual(state(run),('running',at(4),None,None))
+                rebuild()
+                self.assertEqual(state(run),('running',at(4),None,None))
+
+    def test_verified_delivery_cost_across_host_turns(self):
+        from .dashboard import snapshot
+        from .native import _human_key
+        from .storage import Journal, digest
+        from .telemetry import rebuild
+
+        home = Path(self.tmp.name)
+        filters = {'from':'2026-11-27T00:00:00.000+00:00','to':'2026-11-28T00:00:00.000+00:00'}
+        source_files = []
+
+        def at(m):
+            return f'2026-11-27T12:{m:02}:00.000+00:00'
+
+        def write(path, rows):
+            path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8',newline='\n')
+            source_files.append(path)
+
+        def codex(kind, m, **data):
+            return {'type':kind,'timestamp':at(m),'payload':data}
+
+        def codex_event(kind, m, turn, **data):
+            return codex('event_msg',m,type=kind,turn_id=turn,**data)
+
+        def codex_turn(session, turn, m, total, prior=None):
+            user = codex_event('user_message',m,turn,thread_id=session,message=turn)
+            counters = {'input_tokens':total,'cached_input_tokens':5,'output_tokens':10}
+            summed = {key:value+((prior or {}).get(key,0)) for key,value in counters.items()}
+            return user, counters, [
+                codex_event('task_started',m,turn),user,
+                codex('token_usage_record',m+1,thread_id=session,turn_id=turn,response_id=session+'-'+turn,usage=counters),
+                codex_event('token_count',m+1,turn,info={'total_token_usage':summed}),
+                codex_event('task_complete',m+3,turn),
+            ]
+
+        def claude(kind, session, m, **data):
+            return {'type':kind,'sessionId':session,'timestamp':at(m),**data}
+
+        def claude_reply(session, request, m, tokens, **fields):
+            counters = {'input_tokens':tokens-5,'cache_read_input_tokens':5,'cache_creation_input_tokens':0,'output_tokens':10}
+            return [
+                claude('api-request',session,m,id=request,**fields),
+                claude('assistant',session,m+1,requestRef=request,
+                       message={'id':request,'model':'fixture','usage':counters},**fields),
+            ]
+
+        expected = {}
+        with patch.dict(os.environ,{'CODEX_HOME':str(home/'codex'),'CLAUDE_CONFIG_DIR':str(home/'claude')}):
+            for case,host,size in [('single','codex',1),('shared','claude',2),('missing','claude',1),
+                                   ('unassigned','codex',1)]:
+                project,run,session = (identifier() for _ in range(3))
+                tasks=[{'id':str(i+1),'title':'Fixture','instructions':'Do work'} for i in range(size)]
+                directory = home/host/('sessions' if host=='codex' else 'projects')
+                transcript = directory/(session+'.jsonl')
+                work, publish = 'delivery', 'publish'
+                if host == 'codex':
+                    start, totals, work_rows = codex_turn(session,work,0,40)
+                    resumed, more, resume_rows = codex_turn(session,'resume',5,12,totals)
+                    totals = {key:value+more[key] for key,value in totals.items()}
+                    before_grant = {'input_tokens':400,'cached_input_tokens':50,'output_tokens':25}
+                    running = ({key:value+before_grant[key] for key,value in totals.items()}
+                               if case=='unassigned' else totals)
+                    approval, publishing, publish_rows = codex_turn(session,publish,10,20,running)
+                    publish_rows[0]['timestamp'] = at(8)
+                    if case == 'unassigned':
+                        publish_rows[1:1] = [
+                            codex('token_usage_record',9,thread_id=session,turn_id=publish,response_id=session+'before',
+                                  usage=before_grant),
+                            codex_event('token_count',9,publish,info={'total_token_usage':running}),
+                        ]
+                    running = {key:value+publishing[key]+before_grant[key] for key,value in running.items()}
+                    publish_rows[-1]['timestamp'] = at(14)
+                    publish_rows[-1:-1] = [
+                        codex('token_usage_record',13,thread_id=session,turn_id=publish,response_id=session+'after',
+                              usage=before_grant),
+                        codex_event('token_count',13,publish,info={'total_token_usage':running}),
+                    ]
+                    foreign = codex_turn(session,'later',20,500)[2]
+                    parent = [codex('session_meta',0,id=session,model_provider='openai')] + work_rows + resume_rows + publish_rows + foreign
+                else:
+                    start = claude('user',session,0,promptId=work,message={'content':work})
+                    approval = claude('user',session,10,promptId=publish,message={'content':publish})
+                    work_rows = claude_reply(session,session+work,0,40)
+                    publish_rows = claude_reply(session,session+publish,10,20)
+                    parent = [start,*work_rows,claude('system',session,3,subtype='turn_duration'),
+                              approval,*publish_rows,claude('system',session,13,subtype='turn_duration')]
+                    parent += [claude('user',session,20,promptId='different',message={'content':'Different request'}),
+                               *claude_reply(session,session+'other',20,500)]
+                if case == 'missing':
+                    parent.insert(parent.index(publish_rows[-1]),claude('api-request',session,10,id='unmatched'))
+                write(transcript,parent)
+
+                def reference(turn, record):
+                    return {'host':host,'session':session,'turn':turn,'prompt':turn,'at':record['timestamp'],
+                            'transcript_path':str(transcript),'record_hashes':[digest(record)]}
+
+                journal = Journal(project,run)
+                def append(m,kind,data):
+                    with patch('oh.storage.now',return_value=at(m)):
+                        journal.append(kind,data)
+                append(0,'run.started',{'id':run,'project':project,'host':host,'native_version':2,'workflow':'deliver',
+                    'name':'Delivery','work_kind':'product','harness_version':'1.0.1','config_hash':'fixture',
+                    'human':reference(work,start),'tasks':tasks})
+                for task in tasks:
+                    attempt, child = identifier(), identifier()
+                    child_path = directory/(child+'.jsonl')
+                    if host=='codex':
+                        child_rows = [codex('session_meta',1,id=child,parent_thread_id=session,model_provider='openai')]
+                        child_rows += codex_turn(child,'child',1,15)[2]
+                    else:
+                        child_rows = claude_reply(session,child,1,15,agentId=child)
+                    write(child_path,child_rows)
+                    append(1,'task.started',{'task':task['id']})
+                    append(1,'attempt.started',{'id':attempt,'task':task['id'],'role':'implementation'})
+                    append(1,'native.child.bound',{'attempt':attempt,'child':{'parent_session':session,'child_session':child,
+                        'tool_use_id':'launch','transcript_path':str(child_path)}})
+                    append(2 if host=='claude' else 3,'attempt.finished',{'id':attempt,'outcome':'reported'})
+                    append(3,'task.completed',{'task':task['id']})
+                if host == 'codex':
+                    restored = reference('resume',resumed)
+                    append(6,'transition',{'events':[
+                        {'kind':'run.owner','data':{'human':restored}},
+                        {'kind':'decision','data':{'choice':'resume','source':_human_key(restored)}},
+                    ]})
+                source = reference(publish,approval)
+                key = _human_key(source)
+                (journal.path/'decisions').mkdir()
+                atomic_json(journal.path/'decisions'/(key+'.json'),{'human':source})
+                append(11,'decision',{'source':key,'choice':'pr','head':'head'})
+                append(11,'run.status',{'status':'pr'})
+                append(12,'publication.completed',{'run':run,'grant':key,'approved_head':'head'})
+                expected[case] = (project, None if case in ('missing','unassigned') else size*25+80+(22 if case=='single' else 0))
+
+            self.assertGreater(collect(),0)
+            with connect(readonly=True) as db:
+                for case,(project,total) in expected.items():
+                    with self.subTest(case=case):
+                        report = analytics(db,filters|{'project':project})
+                        cost = report['delivery_costs'][0]
+                        self.assertEqual((cost['observed_coordinator_tokens'],cost['observed_publication_tokens']),
+                                         (72 if case in ('single','unassigned') else 50,30))
+                        self.assertEqual(cost['total_tokens'],total)
+                        self.assertEqual(report['summary']['tokens_per_completed'],total if case=='single' else None)
+                        self.assertEqual(report['summary']['coordinator_usage_complete'],total is not None)
+                        dashboard = snapshot(db, filters | {'project':project})
+                        self.assertEqual(dashboard['delivery_costs'], [cost])
+                        self.assertEqual(dashboard['task_cost'], {
+                            'measured': int(case=='single'), 'average': total if case=='single' else None,
+                        })
+                        if total is not None:
+                            self.assertEqual(sum(cost[key] for key in (
+                                'observed_worker_tokens', 'observed_coordinator_tokens',
+                                'observed_publication_tokens')), total)
+                mixed = snapshot(db, filters)
+                self.assertEqual(mixed['task_cost'], {'measured':1, 'average':None})
+                self.assertEqual(snapshot(db, filters | {'to':at(0)})['delivery_costs'], [])
+                self.assertEqual(snapshot(db, filters | {'model':'fixture'})['delivery_costs'], [])
+                self.assertFalse(analytics(db,filters)['summary']['coordinator_usage_complete'])
+                self.assertEqual(db.execute('SELECT MAX(input) FROM usage').fetchone()[0],40)
+
+            # The rebuild needs only normalized observations and keeps unknown totals unknown.
+            for path in source_files:
+                path.unlink()
+            rebuild()
+            self.assertEqual(collect(),0)
+            with connect(readonly=True) as db:
+                result = analytics(db,filters)
+                self.assertEqual({v['total_tokens'] for v in result['delivery_costs']},{127,130,None})

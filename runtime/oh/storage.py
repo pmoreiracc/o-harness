@@ -293,9 +293,13 @@ class Journal:
         self.path = state_path(state_home() / 'projects' / validate_id(project_id) / 'runs' / validate_id(run_id),directory=True)
 
     def records(self):
+        return self.read_records(self.path)
+
+    @staticmethod
+    def read_records(directory):
         previous = None
         records = []
-        for index, path in enumerate(sorted(self.path.glob('*.json')), 1):
+        for index, path in enumerate(sorted(directory.glob('*.json')), 1):
             record = read_json(path)
             if path.name != f'{index:06}.json' or record['sequence'] != index or record['previous'] != previous:
                 raise Refused('Incomplete or altered run journal; restore its backup')

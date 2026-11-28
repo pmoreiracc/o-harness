@@ -49,60 +49,74 @@ def poll():
     home=state_path(state_home()/'sources',directory=True)
     if not home.exists():return
     for file in home.glob('*.json'):
-        with lock(file.with_suffix('.lock')):
-            source=read_json(file);before=dict(source);path=Path(source['path'])
-            if not path.exists():continue
-            if path.stat().st_size<source['offset']:raise Refused('Coordinator transcript was truncated; usage requires reconciliation')
-            maximum=min(path.stat().st_size,source['end'] if source['end'] is not None else path.stat().st_size,source['offset']+2*1024*1024)
-            with path.open('rb') as stream:
-                stream.seek(source['offset'])
-                while stream.tell()<maximum:
-                    at=stream.tell();line=stream.readline(maximum-at)
-                    if source.get('skipping_record'):
-                        source['offset']=stream.tell()
-                        if line.endswith(b'\n'):source.pop('skipping_record',None)
-                        continue
-                    if not line.endswith(b'\n'):
-                        if maximum-at>=2*1024*1024 and stream.tell()==maximum:
-                            emit('collection.gap',source['project'],source['run'],reason='Oversized transcript record skipped; usage within it is unknown')
-                            source['skipping_record']=True;source['offset']=stream.tell()
-                        elif source['end'] is not None and stream.tell()>=source['end']:
-                            emit('collection.gap',source['project'],source['run'],reason='Transcript ended inside a record; terminal usage is unknown')
-                            source['offset']=source['end']
-                        break
-                    try:
-                        event=json.loads(line)
-                        if not isinstance(event,dict) or not isinstance(event.get('payload',{}),dict):raise ValueError('Invalid transcript record')
-                    except ValueError:
-                        emit('collection.gap',source['project'],source['run'],reason='Malformed transcript record skipped; usage within it is unknown')
-                        source['offset']=stream.tell();continue
-                    p=event.get('payload',{});usage=None
-                    if event.get('type')=='turn_context':
-                        source['model']=p.get('model');source['effort']=p.get('effort')
-                    if source['host']=='codex' and p.get('type')=='token_count' and p.get('info'):
-                        info=p['info'];total=info.get('total_token_usage') or {};old=source.get('totals')
-                        if total and total!=old:
-                            usage={key:(total.get(raw)-old.get(raw) if old and type(total.get(raw)) is int and type(old.get(raw)) is int and total[raw]>=old[raw] else None) for key,raw in KEYS.items()}
-                            if old is None:usage={key:info.get('last_token_usage',{}).get(raw) for key,raw in KEYS.items()}
-                            source['totals']=total
-                            usage['context_tokens']=info.get('last_token_usage',{}).get('input_tokens')
-                    elif source['host']=='claude' and event.get('type')=='assistant' and not event.get('isSidechain'):
-                        message=event.get('message',{});u=message.get('usage') or {}
-                        if u:
-                            parts=[u.get('input_tokens'),u.get('cache_read_input_tokens'),u.get('cache_creation_input_tokens')]
-                            usage={'input':sum(parts) if all(type(x) is int for x in parts) else None,
-                              'cached':u.get('cache_read_input_tokens'),'output':u.get('output_tokens'),'reasoning':None}
-                            source['model']=message.get('model');at=message.get('id',at)
-                    if usage:
-                        emit('usage',source['project'],source['run'],attempt=source['attempt'],
-                             response_id=digest({'session':source['session'],'response':at}),
-                             source='coordinator.'+source['host'],model=source.get('model'),**usage)
-                    source['offset']=stream.tell()
-            if source.get('end') is not None and source['offset']>=source['end']:
-                archive=home/'completed';archive.mkdir(exist_ok=True)
-                atomic_json(archive/file.name,source);file.unlink()
-            elif source!=before:atomic_json(file,source)
+        try:
+            poll_source(home,file)
+        except (OSError,Refused,ValueError,TypeError,KeyError,AttributeError):
+            # A historical source must not block the current collector or other sources.
+            gaps=state_home()/'gaps'
+            name=digest(['legacy-usage-source',file.name])+'.json'
+            try:
+                if not (gaps/name).exists() and not (gaps/'retained'/name).exists():
+                    atomic_json(gaps/name,{'kind':'legacy-usage','at':now(),
+                                           'reason':'A legacy usage source is unavailable or unreadable.'},immutable=True)
+            except (OSError,Refused):
+                pass
 
+
+def poll_source(home,file):
+    with lock(file.with_suffix('.lock')):
+        source=read_json(file);before=dict(source);path=Path(source['path'])
+        if not path.exists():return
+        if path.stat().st_size<source['offset']:raise Refused('Coordinator transcript was truncated; usage requires reconciliation')
+        maximum=min(path.stat().st_size,source['end'] if source['end'] is not None else path.stat().st_size,source['offset']+2*1024*1024)
+        with path.open('rb') as stream:
+            stream.seek(source['offset'])
+            while stream.tell()<maximum:
+                at=stream.tell();line=stream.readline(maximum-at)
+                if source.get('skipping_record'):
+                    source['offset']=stream.tell()
+                    if line.endswith(b'\n'):source.pop('skipping_record',None)
+                    continue
+                if not line.endswith(b'\n'):
+                    if maximum-at>=2*1024*1024 and stream.tell()==maximum:
+                        emit('collection.gap',source['project'],source['run'],reason='Oversized transcript record skipped; usage within it is unknown')
+                        source['skipping_record']=True;source['offset']=stream.tell()
+                    elif source['end'] is not None and stream.tell()>=source['end']:
+                        emit('collection.gap',source['project'],source['run'],reason='Transcript ended inside a record; terminal usage is unknown')
+                        source['offset']=source['end']
+                    break
+                try:
+                    event=json.loads(line)
+                    if not isinstance(event,dict) or not isinstance(event.get('payload',{}),dict):raise ValueError('Invalid transcript record')
+                except ValueError:
+                    emit('collection.gap',source['project'],source['run'],reason='Malformed transcript record skipped; usage within it is unknown')
+                    source['offset']=stream.tell();continue
+                p=event.get('payload',{});usage=None
+                if event.get('type')=='turn_context':
+                    source['model']=p.get('model');source['effort']=p.get('effort')
+                if source['host']=='codex' and p.get('type')=='token_count' and p.get('info'):
+                    info=p['info'];total=info.get('total_token_usage') or {};old=source.get('totals')
+                    if total and total!=old:
+                        usage={key:(total.get(raw)-old.get(raw) if old and type(total.get(raw)) is int and type(old.get(raw)) is int and total[raw]>=old[raw] else None) for key,raw in KEYS.items()}
+                        if old is None:usage={key:info.get('last_token_usage',{}).get(raw) for key,raw in KEYS.items()}
+                        source['totals']=total
+                        usage['context_tokens']=info.get('last_token_usage',{}).get('input_tokens')
+                elif source['host']=='claude' and event.get('type')=='assistant' and not event.get('isSidechain'):
+                    message=event.get('message',{});u=message.get('usage') or {}
+                    if u:
+                        parts=[u.get('input_tokens'),u.get('cache_read_input_tokens'),u.get('cache_creation_input_tokens')]
+                        usage={'input':sum(parts) if all(type(x) is int for x in parts) else None,
+                          'cached':u.get('cache_read_input_tokens'),'output':u.get('output_tokens'),'reasoning':None}
+                        source['model']=message.get('model');at=message.get('id',at)
+                if usage:
+                    emit('usage',source['project'],source['run'],attempt=source['attempt'],
+                         response_id=digest({'session':source['session'],'response':at}),
+                         source='coordinator.'+source['host'],model=source.get('model'),**usage)
+                source['offset']=stream.tell()
+        if source.get('end') is not None and source['offset']>=source['end']:
+            archive=home/'completed';archive.mkdir(exist_ok=True)
+            atomic_json(archive/file.name,source);file.unlink()
+        elif source!=before:atomic_json(file,source)
 
 @state_writer
 def end_run(run):
