@@ -10,7 +10,18 @@ import threading
 import socketserver
 from urllib.parse import parse_qs, urlparse
 from .config import HOME
-from .telemetry import analytics, collect, connect, rows
+from .dashboard import snapshot
+from .storage import now
+from .telemetry import analytics, collect, connect
+
+
+DASHBOARD_ASSETS = {
+    '/': ('index.html', 'text/html'),
+    '/app.js': ('app.js', 'text/javascript'),
+    '/style.css': ('style.css', 'text/css'),
+    **{f'/fonts/{name}.ttf': (f'fonts/{name}.ttf', 'font/ttf')
+       for name in ('inter', 'space-grotesk', 'jetbrains-mono')},
+}
 
 
 def filters(query):
@@ -21,7 +32,7 @@ def filters(query):
     result['from']=a.astimezone(timezone.utc).isoformat(timespec='milliseconds')
     result['to']=b.astimezone(timezone.utc).isoformat(timespec='milliseconds')
     if a>=b or (b-a).days>3660:raise ValueError('Choose a valid range of up to ten years')
-    for key in ('project','difficulty','kind','version','model','phase'):
+    for key in ('project','difficulty','kind','version','model','phase','workflow'):
         if query.get(key):result[key]=query[key][0]
     return result
 
@@ -63,12 +74,17 @@ class Handler(BaseHTTPRequestHandler):
     def send(self,code,body,kind='application/json'):
         data=(json.dumps(body).encode() if kind=='application/json' else body)
         self.send_response(code)
-        self.send_header('Content-Type',kind+'; charset=utf-8')
+        self.send_header('Content-Type',kind if kind.startswith('font/') else kind+'; charset=utf-8')
         self.send_header('Content-Length',str(len(data)))
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
-        self.end_headers();self.wfile.write(data)
+        try:
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError,ConnectionResetError):
+            # Refresh and navigation can cancel an in-flight response.
+            pass
 
     def trusted(self):
         return self.headers.get('Host') in (f'localhost:{self.server.server_port}',f'127.0.0.1:{self.server.server_port}')
@@ -78,17 +94,31 @@ class Handler(BaseHTTPRequestHandler):
         url=urlparse(self.path);query=parse_qs(url.query)
         try:
             if url.path=='/api/overview':self.send(200,overview(query))
+            elif url.path=='/api/dashboard':
+                selected=filters(query)
+                comparison={}
+                if query.get('baseline_version'):
+                    comparison={key:selected[key] for key in ('from','to')}
+                    comparison['version']=query['baseline_version'][0]
+                elif query.get('baseline_from') and query.get('baseline_to'):
+                    comparison=filters({'from':query['baseline_from'],'to':query['baseline_to']})
+                offset=int(query.get('offset',['0'])[0])
+                if not 0 <= offset < 2**31:raise ValueError('Invalid task offset')
+                with connect(readonly=True) as db:
+                    # Keep all parts of a refresh on one SQLite snapshot.
+                    db.execute('BEGIN')
+                    result=snapshot(db,selected,offset,comparison)
+                self.send(200,result)
             elif url.path=='/api/task':
                 with connect(readonly=True) as db:
                     from .observability import details
                     detail=details(db,query['run'][0],query['task'][0])
                 self.send(200,detail)
-            elif url.path=='/api/health':self.send(200,{'ok':True,'collector_error':self.server.collector_error,'analysis_error':self.server.analysis_error,'analysis_running':self.server.analysis_lock.locked(),'analysis_result':self.server.analysis_result}|self.server.identity)
+            elif url.path=='/api/health':self.send(200,{'ok':True,'collector_error':self.server.collector_error,'collector_checked':getattr(self.server,'collector_checked',None),'analysis_error':self.server.analysis_error,'analysis_running':self.server.analysis_lock.locked(),'analysis_result':self.server.analysis_result}|self.server.identity)
             elif url.path=='/api/session':self.send(200,{'token':self.server.token})
-            elif url.path in ('/','/app.js','/style.css'):
-                name={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}[url.path]
-                kind={'/':'text/html','/app.js':'text/javascript','/style.css':'text/css'}[url.path]
-                self.send(200,(HOME/'dashboard'/name).read_bytes(),kind)
+            elif url.path in DASHBOARD_ASSETS:
+                path, kind = DASHBOARD_ASSETS[url.path]
+                self.send(200,(HOME/'dashboard'/path).read_bytes(),kind)
             else:self.send(404,{'error':'Not found'})
         except (ValueError,KeyError) as exc:self.send(400,{'error':str(exc)})
         except Exception:self.send(503,{'error':'Analytics temporarily unavailable; task evidence is unaffected'})
@@ -146,7 +176,8 @@ def serve(port=4318):
     def collector():
         while not stop.is_set():
             if not dashboard_current() and not server.analysis_lock.locked():server.shutdown();return
-            try:collect();server.collector_error=None
+            try:
+                collect();server.collector_checked=now();server.collector_error=None
             except Exception as exc:server.collector_error=str(exc)
             # After an upgrade the service exits; launchd restarts it through bin/oh on the active core.
             if follows and active()!=HOME.name:

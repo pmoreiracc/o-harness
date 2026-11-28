@@ -1,18 +1,265 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OH · Harness health</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>OH · Overview</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
 <body>
-<aside><a class="brand" href="/" aria-label="OH home">OH<span>o-harness</span></a><div class="workspace"><span class="avatar">P</span><div>Your workspace<small>Local · Private by default</small></div></div><p class="nav-label">WORKSPACE</p><nav aria-label="Dashboard views"><button class="nav active" data-view="overview"><span>◫</span> Overview</button><button class="nav" data-view="runs"><span>≋</span> Task explorer</button><button class="nav" data-view="ideas"><span>✧</span> Improvements <b id="idea-count">0</b></button></nav><div class="aside-bottom"><span class="live-dot"></span> <span id="service-status">Connecting</span><small>Your agents. Your standards.</small></div></aside>
-<main><header class="page-header"><div class="dashboard-heading"><h1>Harness health</h1><p id="environment" class="environment" role="status">Connecting to dashboard…</p></div><div class="header-actions"><span class="privacy">◉ &nbsp; Stored locally</span><button id="refresh" class="button secondary">↻ Refresh</button></div></header>
-<details class="filter-panel"><summary>Filters &amp; comparison <span id="filter-summary"></span></summary><section class="filters" aria-label="Dashboard filters"><label>Project<select id="project"><option value="">All projects</option></select></label><label>Work<select id="kind"><option value="">All work</option><option value="product">Product</option><option value="harness">Harness</option></select></label><label>Difficulty<select id="difficulty"><option value="">All difficulties</option><option value="simple">Simple</option><option value="standard">Standard</option><option value="complex">Complex</option></select></label><label>Version<select id="version"><option value="">All versions</option></select></label><label>Spending model<select id="model"><option value="">All models</option></select></label><label>Spending phase<select id="phase"><option value="">All phases</option><option value="implementation">Implementation</option><option value="repair">Repair</option><option value="review">Review</option><option value="coordination">Coordination</option><option value="analysis">Analysis</option></select></label><label>From<input id="from" type="date"></label><label>To<input id="to" type="date"></label><label>Compare with<select id="comparison"><option value="previous">Previous period</option><option value="custom">Custom dates</option></select></label><label class="custom hidden">Baseline from<input id="baseline-from" type="date"></label><label class="custom hidden">Baseline to<input id="baseline-to" type="date"></label></section></details>
-<div id="error" class="notice error hidden" role="alert"></div>
-<section id="health" class="health"><span class="health-icon">◌</span><div><strong>Building your baseline</strong><p>Real observations will appear as OH runs tasks.</p></div><span class="tag">No invented scores</span></section>
-<div data-panel="overview">
-<section class="metrics" id="metrics" aria-label="Key metrics"></section>
-<section class="chart-grid usage-row"><article class="card wide"><div class="card-heading"><div><h2>Usage over time</h2><p>Observed tokens · cached input is part of input</p></div><div class="legend"><span><i class="swatch fresh"></i>Fresh input</span><span><i class="swatch cached"></i>Cached</span><span><i class="swatch output"></i>Output</span></div></div><div id="usage-chart" class="chart"></div><div class="chart-footer"><span id="coverage">Waiting for usage data</span><span>No subscription percentage estimates</span></div></article><article class="card"><div class="card-heading"><div><h2>Effort by difficulty</h2><p>Average task time · comparable cohorts</p></div></div><div id="difficulty-chart"></div></article></section>
-<section class="chart-grid"><article class="card"><div class="card-heading"><div><h2>Models doing the work</h2><p>Usage by model, role, and difficulty</p></div></div><div id="models"></div><h3>Agent time by model</h3><p>Attempts started in this period; each counted once.</p><div id="model-times"></div></article><article class="card wide"><div class="card-heading"><div><h2>Quality alongside efficiency</h2><p>Lower usage only helps when the work stays good.</p></div></div><div id="quality"></div><h3>Operations and recovery</h3><div id="operations"></div></article></section>
-</div>
-<section class="card task-section" data-panel="runs"><div class="card-heading"><div><h2>Recent tasks</h2><p>Follow a task from implementation through review.</p></div><span id="task-count" class="tag"></span></div><div class="table-wrap"><table><thead><tr><th>Task / project</th><th>Difficulty</th><th>Outcome</th><th>Tokens</th><th>Time</th><th>Reviews</th></tr></thead><tbody id="tasks"></tbody></table></div></section>
-<section class="improvements" data-panel="ideas"><div class="card-heading"><div><div class="eyebrow">A BETTER HARNESS, ONE CHANGE AT A TIME</div><h2>Where to improve next</h2><p>Evidence first. Estimated savings, with the assumptions attached.</p></div><button id="analyze" class="button" disabled aria-describedby="analysis-status">Analysis unavailable</button></div><p id="analysis-status" role="status">New analysis is unavailable in this candidate. Saved analytics and suggestions remain available.</p><div id="suggestions" class="suggestion-grid"></div><p class="footnote">Saved suggestions reflect earlier observations. Estimated savings remain hypotheses, not measured results.</p></section>
-<footer><span id="freshness">No events collected yet</span><span>OH · Local analytics</span></footer>
-</main><dialog id="detail" aria-labelledby="task-detail-title"><button id="close-detail" class="close" aria-label="Close task details">×</button><div id="detail-content"></div></dialog>
-</body></html>
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="topbar">
+    <div class="wrap header-content">
+      <a class="brand" href="#overview" aria-label="OH overview"><svg class="wordmark" viewBox="0 0 186 112" aria-hidden="true"><path class="oh-accent" d="M106 104.5H174V104.35H175.16V103.9H176.25V103.18H177.18V102.25H177.9V101.16H178.35V100H178.5V12H186V112H106ZM18.93 103.67C19.93 103.91 20.95 104.08 21.99 104.19C23.3 104.4 24.64 104.5 26 104.5H54C55.36 104.5 56.7 104.4 58.01 104.19C60.7 103.9 63.27 103.2 65.65 102.15C68.15 101.18 70.47 99.83 72.53 98.17C74.69 96.59 76.59 94.69 78.17 92.53C79.83 90.47 81.18 88.15 82.15 85.65C83.2 83.27 83.9 80.7 84.19 78.01C84.4 76.7 84.5 75.36 84.5 74V26C84.5 24.64 84.4 23.3 84.19 21.99C84.08 20.95 83.91 19.93 83.67 18.93C86.09 21.17 88.07 23.86 89.5 26.86V97.14C85.33 105.92 76.37 112 66 112H38C30.46 112 23.68 108.79 18.93 103.67Z"/>
+<path class="oh-letters" d="M26 0H54C68.36 0 80 11.64 80 26V74C80 88.36 68.36 100 54 100H26C11.64 100 0 88.36 0 74V26C0 11.64 11.64 0 26 0ZM94 0H114V41H154V0H174V100H154V59H114V100H94ZM30 18C24.48 18 20 22.48 20 28V72C20 77.52 24.48 82 30 82H50C55.52 82 60 77.52 60 72V28C60 22.48 55.52 18 50 18Z"/></svg>o-harness</a>
+      <nav aria-label="Dashboard views">
+        <a href="#overview" data-view="overview" aria-current="page">Overview</a>
+        <a href="#tasks" data-view="tasks">Tasks <span class="nav-count" id="nav-count" hidden></span></a>
+        <a href="#data-health" data-view="data-health">Data health <span class="nav-count warn" id="health-count" hidden></span></a>
+      </nav>
+      <div class="toolbar">
+        <select id="project" aria-label="Project"><option value="">All projects</option></select>
+        <div class="range" aria-label="Date range" role="group">
+          <button type="button" data-days="7" aria-pressed="false">7d</button>
+          <button type="button" data-days="14" aria-pressed="true">14d</button>
+          <button type="button" data-days="30" aria-pressed="false">30d</button>
+          <button type="button" id="custom" aria-pressed="false">Custom</button>
+        </div>
+        <span class="environment" id="environment">Connecting</span>
+        <span class="freshness"><i class="dot" id="live-dot" aria-hidden="true"></i><span id="freshness">Connecting</span></span>
+        <button class="icon-button" id="theme" type="button" aria-label="Dark mode" aria-pressed="false" title="Dark mode">◐</button>
+        <button class="icon-button" id="refresh" type="button" aria-label="Refresh" title="Refresh dashboard">↻</button>
+      </div>
+    </div>
+  </header>
+  <main id="content" class="wrap" tabindex="-1">
+    <h1 class="sr-only" id="view-heading">Overview</h1>
+    <div class="notice" id="error" role="alert" hidden>
+      <div><strong>Dashboard data could not refresh.</strong><p id="error-message" class="mono"></p>
+        <p>Retry to reconnect to the local dashboard.</p></div>
+      <button type="button" class="control" id="retry">Retry</button>
+    </div>
+    <span id="stale-tag" class="pill neutral" hidden>Stale</span>
+    <div id="dashboard-data" class="loading">
+    <div data-views="overview">
+      <section class="card hero" id="vision" aria-label="Current activity">
+        <div class="hero-summary">
+          <div class="health-label" id="health-label"><i class="dot" aria-hidden="true"></i>Connecting</div>
+          <div class="hero-title" id="hero-title" role="status">Loading recorded activity…</div>
+          <p id="delivery-summary">Loading recorded task activity…</p>
+          <ol id="empty-start" hidden>
+            <li>Open <code>/oh-start</code> in Claude Code or <code>$oh-start</code> in Codex.</li>
+            <li>Select work and approve the scope in your host.</li>
+            <li>Return here to see recorded progress.</li>
+          </ol>
+          <dl class="hero-counts">
+            <div><dt>active runs</dt><dd aria-label="Not measured yet">—</dd></div>
+            <div><dt>waiting on you</dt><dd class="amber" aria-label="Not measured yet">—</dd></div>
+            <div><dt>data gaps</dt><dd id="gap-count">—</dd></div>
+          </dl>
+        </div>
+        <div class="right-now">
+          <div class="card-heading">
+            <h2>Right now</h2>
+            <span class="muted">Read-only · act in your host</span>
+          </div>
+          <article class="now-card">
+            <div class="now-heading">
+              <div><h3>Active runs</h3><p>Live task progress</p></div>
+              <span class="pill neutral">Not measured yet</span>
+            </div>
+            <div class="steps" aria-label="Run steps">
+              <div>Assess</div><div>Implement</div><div>Review</div><div>Deliver</div>
+            </div>
+          </article>
+          <article class="now-card now-waiting">
+            <div class="now-heading">
+              <div><h3>Waiting for you</h3><p>Pending decisions in your host</p></div>
+              <span class="pill neutral">Not measured yet</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="performance-heading">
+        <h2 class="section-label" id="performance-heading">Performance · Last 14 days</h2>
+        <div class="metrics">
+          <article class="card metric" id="delivered-metric"></article>
+          <article class="card metric" id="review-metric"></article>
+          <article class="card metric" id="time-metric"></article>
+          <article class="card metric" id="token-metric"></article>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="trends-heading">
+        <h2 class="section-label" id="trends-heading">Trends</h2>
+        <div class="trends">
+          <article class="card trend">
+            <div class="card-heading">
+              <div><h3 id="delivery-trend-title">Delivered tasks per day</h3><p>By difficulty, from the assessment</p></div>
+              <div class="legend" id="delivery-legend"></div>
+            </div>
+            <div id="delivery-chart" class="chart"></div>
+          </article>
+          <article class="card trend">
+            <div class="card-heading"><div><h3>Where agent time goes</h3><p id="phase-summary"></p></div></div>
+            <div id="phases" class="phase-list"></div>
+            <div class="card-footer"><span>Recorded attempt durations</span><span>Coordination time is unavailable</span></div>
+          </article>
+          <article class="card trend">
+            <div class="card-heading">
+              <div><h3 id="usage-trend-title">Tokens per day</h3><p>Observed by the host · cached input counts toward usage</p></div>
+              <div class="legend" id="usage-legend"></div>
+            </div>
+            <div id="usage-chart" class="chart"></div>
+            <div class="card-footer" id="usage-summary"></div>
+          </article>
+          <article class="card trend">
+            <div class="card-heading"><div><h3>Models doing the work</h3><p>Top 4 by observed agent time</p></div></div>
+            <div id="models" class="model-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section card delivery-cost-card" aria-labelledby="delivery-cost-heading">
+        <h2 id="delivery-cost-heading">Delivery token costs</h2>
+        <p>Tokens for the work, coordination, and pull request publication. Runs are grouped by start date.</p>
+        <div id="delivery-costs"></div>
+      </section>
+    </div>
+
+    <section class="section task-section" data-views="overview tasks" aria-labelledby="tasks-heading">
+      <h2 class="section-label" id="drill-label">Drill down</h2>
+      <div class="card task-card">
+        <div class="card-heading">
+          <div><h2 id="tasks-heading">Recent tasks</h2><p>Select a task to see its attempts, checks and reviews</p></div>
+          <a class="text-link" id="all-tasks" href="#tasks">All tasks →</a>
+        </div>
+        <div class="task-filters" id="task-filters" hidden>
+          <label>Work <select id="kind"><option value="">All work</option></select></label>
+          <label>Difficulty <select id="difficulty"><option value="">All difficulties</option></select></label>
+          <label>Version <select id="version"><option value="">All versions</option></select></label>
+          <label>Model <select id="model"><option value="">All models</option></select></label>
+          <label>Phase <select id="phase"><option value="">All phases</option></select></label>
+          <label>Compare with <select id="comparison"><option value="previous">Previous period</option></select></label>
+          <button type="button" class="control" id="edit-baseline" hidden>Edit dates</button>
+          <p id="task-comparison"></p>
+        </div>
+        <div class="table-wrap" role="region" aria-label="Recorded tasks" tabindex="0">
+          <table class="task-table" role="table">
+            <thead role="rowgroup">
+              <tr><th scope="col">Status</th><th scope="col">Task</th><th scope="col">Difficulty</th><th scope="col">Review rounds</th><th scope="col">Agent time</th><th scope="col">Tokens</th><th scope="col">Started</th></tr>
+            </thead>
+            <tbody id="rows" role="rowgroup"><tr><td colspan="7">Loading recorded tasks…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="table-footer">
+          <div class="legend" id="review-legend"></div>
+          <span>— means not all attempts reported usage</span>
+        </div>
+        <div class="pagination" id="pagination" hidden>
+          <button class="control" type="button" id="prev-page">Previous</button>
+          <span id="page-status" role="status"></span>
+          <button class="control" type="button" id="next-page">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card status-footer" data-views="overview" aria-label="Data health summary">
+      <div><i class="dot" id="collector-dot" aria-hidden="true"></i><strong id="collector-status">Connecting</strong></div>
+      <div>Last observation <strong id="last-observation">—</strong></div>
+      <div>Collection gaps <strong id="footer-gaps">—</strong></div>
+      <div>Invalid records <strong id="invalid-records">—</strong></div>
+      <div>Usage coverage <strong id="footer-coverage">—</strong></div>
+      <a class="text-link" href="#data-health">Data health →</a>
+    </section>
+
+    <section class="data-health" data-views="data-health" id="health-view" aria-label="Data health" hidden>
+      <header class="card health-summary" id="health-summary">
+        <div>
+          <p class="section-label">Data health</p>
+          <h2 id="data-health-title">Checking the local index…</h2>
+          <p id="data-health-message"></p>
+        </div>
+        <dl class="health-service" aria-label="Index-wide collector status">
+          <div><dt>Collector</dt><dd id="data-health-collector">Checking…</dd></div>
+          <div><dt>Last observation</dt><dd id="data-health-observation">—</dd></div>
+        </dl>
+      </header>
+
+      <div class="health-grid" id="health-measurement" hidden>
+        <section class="card health-card" aria-labelledby="coverage-heading">
+          <div class="card-heading"><div><h3 id="coverage-heading">Measurement coverage</h3><p id="coverage-selection"></p></div></div>
+          <ul class="health-coverage" id="health-coverage"></ul>
+          <p class="health-ci" id="health-ci" hidden></p>
+        </section>
+        <section class="card health-card" aria-labelledby="gaps-heading">
+          <div class="card-heading"><div><h3 id="gaps-heading">What’s missing</h3><p>Limits of the current dashboard</p></div></div>
+          <ul class="health-limits" id="health-limits"></ul>
+        </section>
+      </div>
+
+      <div class="health-secondary" id="health-secondary" hidden>
+        <details class="card health-disclosure" id="collection-diagnostics">
+          <summary>Collection diagnostics <small>Whole index</small></summary>
+          <dl class="health-diagnostics" id="health-diagnostics"></dl>
+          <ul id="gap-list" hidden></ul>
+          <p id="health-recovery" class="health-recovery" hidden>Some records need attention. If the local index is damaged, use <code>oh backup &lt;folder&gt;</code> before rebuilding it with <code>oh rebuild</code>.</p>
+        </details>
+        <details class="card health-disclosure" id="suggestions-panel" hidden>
+          <summary>Saved suggestions <small>Earlier observations</small></summary>
+          <div id="saved-suggestions" class="saved-suggestions"></div>
+        </details>
+      </div>
+    </section>
+    </div>
+  </main>
+
+  <dialog id="date-dialog" aria-labelledby="date-title">
+    <form id="date-form" method="dialog">
+      <h2 id="date-title">Custom date range</h2>
+      <p>Dates are grouped by calendar day in UTC.</p>
+      <div class="date-fields">
+        <label>From <input id="date-from" type="date" required></label>
+        <label>Through <input id="date-to" type="date" required></label>
+      </div>
+      <div class="dialog-actions"><button class="control" value="cancel" formnovalidate>Cancel</button><button class="control primary" value="apply">Apply</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="detail" aria-labelledby="task-detail-title">
+    <div class="task-detail">
+      <header class="task-detail-header">
+        <div>
+          <p id="task-detail-project"></p>
+          <h2 id="task-detail-title">Task details</h2>
+          <p id="task-detail-subject"></p>
+          <p id="task-detail-start"></p>
+        </div>
+        <form method="dialog"><button class="icon-button" type="submit" aria-label="Close task details" autofocus>×</button></form>
+      </header>
+      <div class="task-detail-scroll" role="region" aria-label="Recorded task information" tabindex="0">
+        <section class="task-snapshot" aria-label="Task snapshot">
+          <div class="task-snapshot-status">
+            <div><h3>Task status</h3><p id="task-detail-status-note"></p></div>
+            <span class="pill" id="task-detail-status"></span>
+          </div>
+          <dl id="task-detail-measures"></dl>
+        </section>
+        <p id="task-detail-loading" role="status" hidden></p>
+        <div id="task-detail-error" class="task-detail-message" role="alert" hidden>
+          <p>Task history couldn’t load.</p>
+          <button class="control" type="button" id="retry-task-history">Retry</button>
+        </div>
+        <div id="detail-content" hidden></div>
+      </div>
+      <footer class="task-detail-footer">
+        <p>From OH’s local analytics index</p>
+        <button class="control download-history" type="button" id="download-task-history" disabled>Download task history<span aria-hidden="true">↓</span></button>
+      </footer>
+    </div>
+  </dialog>
+</body>
+</html>
