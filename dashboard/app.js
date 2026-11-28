@@ -259,7 +259,7 @@ function renderOverview(data) {
     'The host usage reports lack one or more token components.' : 'No token usage observed in this period.');
   const coverageRatio = coverage.attempts ? coverage.measured / coverage.attempts : null;
   const coverageText = coverageRatio == null ? 'Attempt coverage unavailable' :
-    'Measured on ' + percent(coverageRatio) + ' of attempts';
+    'Measured on ' + percent(coverageRatio) + ' of worker attempts';
   const tokenTotal = usage.some(row => row.tokens != null) ? compact(sum(usage, 'tokens')) + ' observed tokens' : unavailable;
   const incomplete = usage.length - usableDays.length;
   const chartedDays = usableDays.filter(row => usagePoints.some(bucket =>
@@ -294,17 +294,58 @@ function renderOverview(data) {
   html('time-metric', metric({title: 'Time per task', hint: 'elapsed, delivered',
     value: wall[0], suffix: wall[1] ?? '', note: delta(timeChange, 'same difficulty mix', false) +
       (timed && timed < delivered ? ' · ' + timed + '/' + delivered + ' timed' : ''), bottom: sparkline}));
-  const fill = coverageRatio == null ? '' : '<span class="coverage-track" aria-hidden="true"><span style="width:' +
-    percent(coverageRatio) + '"></span></span>';
-  html('token-metric', metric({title: 'Tokens per delivered task', hint: 'incl. repairs',
-    note: 'Complete task usage is unavailable', bottom: sparkline + '<div class="coverage">' + fill + coverageText + '</div>'}));
+  const taskCost = data.task_cost;
+  const attributed = delivered ? taskCost.measured / delivered : 0;
+  const taskCoverage = delivered ? '<div class="coverage"><span class="coverage-track" aria-hidden="true"><span style="width:' +
+    percent(attributed) + '"></span></span>' + taskCost.measured + '/' + delivered + ' tasks fully measured</div>' : '';
+  const taskCostNote = taskCost.average != null ? 'Includes coordination and publication' :
+    delivered ? 'Full cost must be attributable to each task' : 'No deliveries in this period';
+  html('token-metric', metric({title: 'Tokens per delivered task', hint: 'average',
+    value: taskCost.average == null ? null : compact(taskCost.average),
+    note: taskCostNote, bottom: taskCoverage}));
   spark('delivered-metric', delivery.length ? deliveredPoints.map(item => item.values.reduce((a, b) => a + b, 0)) : [], 'teal');
   spark('time-metric', days.map(day => {
     const rows = inBucket(cohort, day), count = sum(rows, 'timed');
     return count ? sum(rows, 'elapsed_ms') / count : null;
   }), 'blue');
-  spark('token-metric', usagePoints.map(item => item.values?.reduce((a, b) => a + b, 0)), 'purple');
   renderAgentTime(data);
+  renderDeliveryCosts(data.delivery_costs, data.projects);
+}
+
+function renderDeliveryCosts(costs, projects) {
+  const more = $('more-delivery-costs');
+  const summaryFocused = more?.firstElementChild === document.activeElement;
+  if (!costs.length) {
+    html('delivery-costs', '<p class="delivery-cost-empty"><strong>' + unavailable +
+      '</strong> · No delivery token records in this selection.</p>');
+    return;
+  }
+  const projectNames = new Map(projects.map(project => [project.id, project.name]));
+  const ordered = [...costs.filter(cost => cost.total_tokens != null), ...costs.filter(cost => cost.total_tokens == null)];
+  function render(cost) {
+    const verified = cost.total_tokens != null;
+    const project = projectNames.get(cost.project) || cost.name;
+    const title = cost.task_title || cost.name || project || 'Delivery';
+    const host = {codex: 'Codex', claude: 'Claude'}[cost.host];
+    const metadata = [project !== title ? project : null, host, taskDateFormat.format(Date.parse(cost.started)),
+      verified ? null : 'Observed tokens only'];
+    const components = [
+      ['Workers', cost.observed_worker_tokens], ['Coordinator', cost.observed_coordinator_tokens],
+      ['Publication', cost.observed_publication_tokens], [verified ? 'Verified total' : 'Full cost', cost.total_tokens],
+    ];
+    return '<article class="delivery-cost-row"><div><h3>' + escape(title) + '</h3><p>' +
+      escape(metadata.filter(Boolean).join(' · ')) +
+      '</p></div><dl>' + components.map(([name, amount], i) =>
+      '<div' + (i === 3 && verified ? ' class="verified-cost"' : '') + '><dt>' + name + '</dt><dd' +
+      (amount == null ? ' class="missing-cost">' + unavailable : '>' + number.format(amount)) +
+      '</dd></div>').join('') + '</dl></article>';
+  }
+  const rest = ordered.slice(4);
+  html('delivery-costs', ordered.slice(0, 4).map(render).join('') + (rest.length ?
+    '<details id="more-delivery-costs"' + (more?.open ? ' open' : '') + '><summary>' +
+      rest.length + (rest.length === 1 ? ' more delivery' : ' more deliveries') + '</summary>' +
+      rest.map(render).join('') + '</details>' : ''));
+  if (summaryFocused) $('more-delivery-costs')?.firstElementChild.focus({preventScroll: true});
 }
 
 function renderAgentTime({phases, models}) {
@@ -438,8 +479,8 @@ function healthVerdict(data, failed, delayed, incomplete) {
     'Attempts in this selection lack complete input and output records. Deliveries, reviews and recorded agent timings are still available when indexed.'];
   if (measured < attempts) return ['warn', 'Token usage is partially recorded',
     'The usage charts reflect observed tokens. Use the coverage below to see how much of the selected activity reported usage.'];
-  return ['good', 'Every selected attempt has token records',
-    'Attempt coverage follows start dates. Complete delivery cost also needs coordination usage and reliable task attribution.'];
+  return ['good', 'Every selected worker attempt has token records',
+    'Full delivery costs also require verified coordination and publication usage.'];
 }
 
 function renderDataHealth(data, {failed, delayed, incomplete, collector, heartbeat}) {
@@ -467,14 +508,15 @@ function renderDataHealth(data, {failed, delayed, incomplete, collector, heartbe
   const timed = sum(data.phases, 'timed');
   const runningSteps = sum(data.phases, 'attempts');
   html('health-coverage', [
-    coverageRow('Token usage', measured, attempts, 'indexed attempts started in the period'),
+    coverageRow('Worker token usage', measured, attempts, 'worker attempts started in the period'),
+    coverageRow('Full task token cost', data.task_cost.measured, data.delivered, 'delivered tasks with a verified and attributable cost'),
     coverageRow('Agent time', timed, runningSteps, 'assessment, implementation and review attempts'),
     coverageRow('Difficulty ratings', rated, data.delivered, 'delivered tasks started in the period'),
     coverageRow('Review-round counts', sum(data.cohort, 'reviewed'), data.delivered, 'delivered tasks started in the period'),
   ].join(''));
 
   const limits = [
-    ['Complete delivery cost', 'Needs token observations for the work, with enough attribution to count a task’s full cost.'],
+    ['Shared delivery costs', 'The Overview shows verified totals by delivery. Costs shared by several tasks stay with the delivery.'],
     ['Live progress and pending decisions', 'Check Codex or Claude for live progress and choices awaiting an answer.'],
     ['Coordination time', 'Time spent coordinating a run is not measured yet.'],
   ];
@@ -548,7 +590,7 @@ function renderHealth() {
   const coverage = data?.coverage;
   const attempts = coverage?.attempts ?? 0;
   const coverageLabel = attempts ? percent(coverage.measured / attempts) : '—';
-  html('footer-coverage', coverageLabel + (attempts ? ' <span class="muted">of attempts</span>' : ''));
+  html('footer-coverage', coverageLabel + (attempts ? ' <span class="muted">of worker attempts</span>' : ''));
   const issueCount = (gaps ?? 0) + (invalid ?? (metrics ? 1 : 0)) + (failed ? 1 : 0);
   label('health-count', issueCount ? compact(issueCount) : '');
   $('health-count').hidden = !issueCount;

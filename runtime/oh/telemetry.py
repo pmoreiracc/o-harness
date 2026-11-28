@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS runs(
  id TEXT PRIMARY KEY, project TEXT NOT NULL, name TEXT, work_kind TEXT NOT NULL,
  host TEXT, version TEXT, config_hash TEXT, started TEXT, status TEXT);
 CREATE TABLE IF NOT EXISTS native_runs(run TEXT PRIMARY KEY, workflow TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS delivery_costs(
+ run TEXT PRIMARY KEY, task TEXT, input INTEGER, cached INTEGER, output INTEGER);
 CREATE VIEW IF NOT EXISTS analytics_runs AS
  SELECT r.*, n.workflow FROM runs r LEFT JOIN native_runs n ON n.run=r.id;
 CREATE TABLE IF NOT EXISTS tasks(
@@ -148,6 +150,19 @@ def ingest(connection, event, *, reproject=False):
         connection.execute('INSERT INTO attempts(id,run,task,role,phase,started,project) VALUES(?,?,?,?,?,?,?)',(event['attempt'],event.get('run'),event.get('task'),'unknown','unknown',event['at'],event['project']))
         connection.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',('gap:attempt:'+event['attempt'],'Missing attempt start; timestamp is first observed event'))
     if kind=='collection.gap':connection.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',('gap:'+event['id'],p.get('reason','Missing observation')))
+    if kind == 'delivery.cost':
+        identities = p.get('ids') or []
+        owned, inputs, cached, outputs = connection.execute("""
+            SELECT COUNT(*), SUM(u.input),
+              CASE WHEN COUNT(u.cached)=COUNT(*) THEN SUM(u.cached) END, SUM(u.output)
+            FROM json_each(?) j JOIN usage u ON u.id=j.value JOIN attempts a ON a.id=u.attempt
+            WHERE a.run=? AND u.input IS NOT NULL AND u.output IS NOT NULL""",
+            (json.dumps(identities),event['run'])).fetchone()
+        present = connection.execute("""SELECT COUNT(*) FROM usage u
+            JOIN attempts a ON a.id=u.attempt WHERE a.run=?""",(event['run'],)).fetchone()[0]
+        measured = bool(owned and present == owned == len(identities))
+        totals = (p.get('task_id'), inputs, cached, outputs) if measured else (None, None, None, None)
+        connection.execute('INSERT OR REPLACE INTO delivery_costs VALUES(?,?,?,?,?)',(event['run'],*totals))
     if kind == 'run.started':
         if p.get('workflow'):
             connection.execute('INSERT OR REPLACE INTO native_runs VALUES(?,?)',(event['run'],p['workflow']))
@@ -251,6 +266,28 @@ def rows(db, sql, args=()):
     return [dict(row) for row in db.execute(sql, args)]
 
 
+def delivery_cost_rows(db, filters):
+    # A run-wide cost cannot be attributed to a model, phase or difficulty subset.
+    if any(filters.get(key) for key in ('difficulty', 'model', 'phase')):
+        return []
+    run_filters = ["r.workflow='deliver'", 'r.started >= ?', 'r.started < ?']
+    run_args = [filters['from'],filters['to']]
+    for field,col in [('project','r.project'),('kind','r.work_kind'),('version','r.version'),('workflow','r.workflow')]:
+        if filters.get(field):
+            run_filters.append(col+'=?')
+            run_args.append(filters[field])
+    return rows(db, """
+        SELECT r.id run,r.name,r.project,r.started,r.status,r.host,t.title task_title,
+          SUM(CASE WHEN a.role!='orchestrator' THEN u.input+u.output END) observed_worker_tokens,
+          SUM(CASE WHEN a.role='orchestrator' AND a.phase!='publication' THEN u.input+u.output END) observed_coordinator_tokens,
+          SUM(CASE WHEN a.role='orchestrator' AND a.phase='publication' THEN u.input+u.output END) observed_publication_tokens,
+          c.input+c.output total_tokens
+        FROM analytics_runs r JOIN delivery_costs c ON r.id=c.run
+        LEFT JOIN tasks t ON t.run=c.run AND t.id=c.task
+        LEFT JOIN attempts a ON r.id=a.run LEFT JOIN usage u ON a.id=u.attempt
+        WHERE """+' AND '.join(run_filters)+' GROUP BY r.id ORDER BY r.started DESC,r.id LIMIT 100',run_args)
+
+
 def analytics(db, filters):
     where = ['t.started >= ?', 't.started < ?']
     args = [filters['from'], filters['to']]
@@ -258,7 +295,9 @@ def analytics(db, filters):
         if filters.get(field):
             where.append(col + '=?');args.append(filters[field])
     predicate = ' AND '.join(where)
-    # Pre-aggregate independent children before joining so attempts never multiply usage.
+    costs_available = db.execute("SELECT 1 FROM sqlite_master WHERE name='delivery_costs'").fetchone()
+    task_costs = ('LEFT JOIN delivery_costs dc ON dc.run=s.run AND dc.task=s.id' if costs_available else
+                  'LEFT JOIN (SELECT NULL run, NULL task, NULL input, NULL cached, NULL output) dc ON 0')    # Pre-aggregate independent children before joining so attempts never multiply usage.
     cohort = f'''WITH selected AS (SELECT t.*,r.project,r.name,r.work_kind,r.host,r.version,r.workflow FROM tasks t
       JOIN analytics_runs r ON r.id=t.run WHERE {predicate}),
       au AS (SELECT a.id,a.run,a.task,a.role,a.model,a.effort,a.phase,a.duration_ms,a.outcome,a.substantive,
@@ -266,10 +305,10 @@ def analytics(db, filters):
         SUM(u.input+u.output) observed_tokens,MAX(u.context_tokens) context_tokens,COUNT(u.id) usage_rows,SUM(CASE WHEN u.input IS NOT NULL AND u.output IS NOT NULL THEN 1 ELSE 0 END) observations
         FROM attempts a JOIN selected selected_task ON selected_task.run=a.run AND selected_task.id=a.task LEFT JOIN usage u ON u.attempt=a.id GROUP BY a.id),
       totals AS (SELECT s.*,
-        CASE WHEN s.workflow IS NULL AND COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
+        CASE WHEN dc.input IS NOT NULL THEN dc.input WHEN s.workflow IS NULL AND COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
           AND COUNT(au.id)>=COALESCE(s.expected_attempts,COUNT(au.id)) THEN SUM(au.input) END input,
-        CASE WHEN s.workflow IS NULL AND COUNT(au.cached)=COUNT(au.id) THEN SUM(au.cached) END cached,
-        CASE WHEN s.workflow IS NULL AND COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
+        CASE WHEN dc.input IS NOT NULL THEN dc.cached WHEN s.workflow IS NULL AND COUNT(au.cached)=COUNT(au.id) THEN SUM(au.cached) END cached,
+        CASE WHEN dc.output IS NOT NULL THEN dc.output WHEN s.workflow IS NULL AND COUNT(au.id)=SUM(CASE WHEN au.observations>0 AND au.observations=au.usage_rows THEN 1 ELSE 0 END)
           AND COUNT(au.id)>=COALESCE(s.expected_attempts,COUNT(au.id)) THEN SUM(au.output) END output,SUM(au.reasoning) reasoning,
         COALESCE(s.expected_reviews,SUM(CASE WHEN au.role='review' THEN 1 ELSE 0 END)) reviews,
         SUM(CASE WHEN au.role='review' AND au.substantive=1 THEN 1 ELSE 0 END) substantive_reviews,
@@ -281,7 +320,7 @@ def analytics(db, filters):
         SUM(CASE WHEN s.workflow IS NOT NULL AND au.role!='orchestrator' AND au.phase!='correction' THEN au.observed_tokens END) observed_worker_tokens,
         SUM(CASE WHEN s.workflow IS NOT NULL AND au.role='orchestrator' AND au.phase='coordination' THEN au.observed_tokens END) observed_coordinator_tokens,
         SUM(CASE WHEN s.workflow IS NOT NULL AND au.phase='correction' THEN au.observed_tokens END) observed_correction_tokens
-        FROM selected s LEFT JOIN au ON au.run=s.run AND au.task=s.id GROUP BY s.run,s.id)'''
+        FROM selected s LEFT JOIN au ON au.run=s.run AND au.task=s.id {task_costs} GROUP BY s.run,s.id)'''
     summary = dict(db.execute(cohort + ''' SELECT COUNT(*) tasks,
       SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) completed,
       SUM(input) input,SUM(cached) cached,SUM(output) output,SUM(reasoning) reasoning,
@@ -327,10 +366,14 @@ def analytics(db, filters):
       SUM(CASE WHEN EXISTS(SELECT 1 FROM usage u WHERE u.attempt=a.id AND u.at>=? AND u.at<?)
        AND NOT EXISTS(SELECT 1 FROM usage u WHERE u.attempt=a.id AND u.at>=? AND u.at<? AND (u.input IS NULL OR u.output IS NULL)) THEN 1 ELSE 0 END) measured
       FROM attempts a LEFT JOIN analytics_runs r ON r.id=a.run LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE '''+' AND '.join(coord_where),[filters['from'],filters['to'],filters['from'],filters['to'],*coord_args]).fetchone())
+    partial_where = ['r.workflow IS NOT NULL', *coord_where[1:]]
+    if costs_available:
+        partial_where.append(
+            'NOT EXISTS(SELECT 1 FROM delivery_costs c WHERE c.run=r.id AND c.input IS NOT NULL AND c.output IS NOT NULL)')
     partial_native = db.execute(
         "SELECT 1 FROM attempts a JOIN analytics_runs r ON r.id=a.run "
-        "LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE r.workflow IS NOT NULL AND " +
-        ' AND '.join(coord_where[1:]) + ' LIMIT 1', coord_args).fetchone()
+        "LEFT JOIN tasks t ON t.run=a.run AND t.id=a.task WHERE " +
+        ' AND '.join(partial_where) + ' LIMIT 1', coord_args).fetchone()
     summary['coordinator_usage_complete']=bool(coverage['attempts'] and coverage['attempts']==coverage['measured'] and not partial_native)
     workflow_usage=rows(db, """
         SELECT COALESCE(r.workflow,'unknown') workflow,a.role,a.phase,
@@ -345,7 +388,8 @@ def analytics(db, filters):
     from .observability import metrics
     operations=metrics(db,filters)
     latest = db.execute("SELECT value FROM collector_state WHERE key='last_ingested'").fetchone()
-    return {'summary':summary,'difficulty':difficulties,'series':series,'models':models,'model_times':model_times,'phases':phases,'operations':operations,'tasks':tasks,'workflow_usage':workflow_usage,
+    delivery_costs = delivery_cost_rows(db, filters) if costs_available else []
+    return {'delivery_costs':delivery_costs,'summary':summary,'difficulty':difficulties,'series':series,'models':models,'model_times':model_times,'phases':phases,'operations':operations,'tasks':tasks,'workflow_usage':workflow_usage,
       'freshness':latest[0] if latest else None,
       'collection_gaps':rows(db,"SELECT value FROM collector_state WHERE key='invalid_events' OR key LIKE 'gap:%'"),
       'projects':rows(db,'SELECT DISTINCT project id,name,work_kind FROM runs'),

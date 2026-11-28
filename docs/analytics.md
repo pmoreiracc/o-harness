@@ -30,13 +30,19 @@ ranges longer than 45 days by month.
 | **Time per task** | Average elapsed time for timed, delivered tasks. If a recorded duration is unavailable, OH uses the indexed task start and finish. Elapsed time can include time spent waiting for a decision. |
 | **Agent time** | Duration recorded for individual attempts, grouped by step and model. Coverage counts identify partially timed groups. |
 | **Observed tokens** | Input plus output the host reported. Cached input is part of input. Days with incomplete components are omitted from the stacked usage chart. |
-| **Usage coverage** | Share of attempts started in the period whose indexed usage observations include input and output. Older observations can appear in the usage chart on the day the host reported them. |
-| **Tokens per delivered task** | **Not measured yet.** Full task attribution depends on [passive observation recovery](https://github.com/pmoreiracc/o-harness/issues/109). Historical observations remain readable when the index has coverage. |
+| **Usage coverage** | Share of worker attempts started in the period whose indexed usage observations include input and output. The usage chart groups observations by the day the host reported them. |
+| **Delivery token costs** | Indexed delivery runs started in the selected period, with observed worker, coordinator, and publication subtotals. A verified total requires complete native evidence through publication. Older or incomplete runs may show partial observations. |
+| **Tokens per delivered task** | Average across delivered tasks started in the period, available when every task has an attributable verified total. Shared costs stay with the delivery. |
 | **Live activity and pending decisions** | **Not measured yet.** An open record in the task index can outlast the native session. Use the native host for current progress and decisions. |
 
 Time and review comparisons match difficulty cohorts with at least ten measured tasks per
 period. A dash or **Not measured yet** means the index lacks the needed evidence. The
 dashboard keeps the last successful view clearly marked as stale when a refresh fails.
+
+The collector recovers difficulty, elapsed task time, review counts, and usage from
+saved native runs and their matching host records. It deduplicates responses and keeps
+cached input within input and reasoning within output. Rebuilding the index replays
+saved observations even when the original host transcript is unavailable.
 
 CI results appear after `oh ci-wait` or `oh observe-ci` records them. New analysis is off in v1.0.
 Saved suggestions remain available under Data health and retain their original status.

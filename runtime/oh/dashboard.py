@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 
-from .telemetry import rows
+from .telemetry import delivery_cost_rows, rows
 
 PAGE_SIZE = 20
 DIFFICULTIES = ('simple', 'standard', 'complex')
@@ -30,7 +30,7 @@ ATTEMPTS = """
         SELECT a.id, a.model, a.duration_ms,
                CASE a.phase WHEN 'repair' THEN 'implementation' ELSE a.phase END phase
         FROM attempts a LEFT JOIN runs r ON r.id=a.run
-        WHERE a.started>=:start AND a.started<:end
+        WHERE a.started>=:start AND a.started<:end AND a.role!='orchestrator'
           AND (:project IS NULL OR COALESCE(a.project,r.project)=:project)
     ), observations AS (
         SELECT a.id,
@@ -72,23 +72,32 @@ def matched_change(current, previous, value, sample):
     return sum(weight * new for weight, new, _ in same_mix) / baseline - 1 if baseline else None
 
 
+def task_cost_coverage(db, params, tasks):
+    return dict(db.execute(tasks + """
+        SELECT COUNT(c.input+c.output) measured,
+               CASE WHEN COUNT(*)=COUNT(c.input+c.output) THEN AVG(c.input+c.output) END average
+        FROM facts t LEFT JOIN delivery_costs c ON c.run=t.run AND c.task=t.id
+        WHERE t.status='completed' AND NOT t.missing_start
+    """, params).fetchone())
+
+
 def task_rows(db, params, tasks):
     page = rows(db, tasks + """
         SELECT run,id,title,difficulty,status,CASE WHEN NOT missing_start THEN started END started,
                name,run_status,expected_reviews,
-               (SELECT SUM(a.duration_ms) FROM attempts a WHERE a.run=t.run AND a.task=t.id
+               (SELECT SUM(a.duration_ms) FROM attempts a WHERE a.run=t.run AND a.task=t.id AND a.role!='orchestrator' AND a.phase!='correction'
                 HAVING COUNT(*)=COUNT(a.duration_ms)
                    AND (COUNT(*)=t.expected_attempts OR t.status='feedback')) agent_ms,
                CASE WHEN expected_attempts>0 THEN
                  (SELECT SUM(tokens) FROM (
                     SELECT SUM(u.input+u.output) tokens
-                    FROM attempts a LEFT JOIN usage u ON u.attempt=a.id WHERE a.run=t.run AND a.task=t.id
+                    FROM attempts a LEFT JOIN usage u ON u.attempt=a.id WHERE a.run=t.run AND a.task=t.id AND a.role!='orchestrator' AND a.phase!='correction'
                     GROUP BY a.id HAVING COUNT(u.id)>0 AND COUNT(u.input+u.output)=COUNT(u.id)
                   ) HAVING COUNT(*)=t.expected_attempts AND
-                      (SELECT COUNT(*) FROM attempts a WHERE a.run=t.run AND a.task=t.id)=t.expected_attempts)
+                      (SELECT COUNT(*) FROM attempts a WHERE a.run=t.run AND a.task=t.id AND a.role!='orchestrator' AND a.phase!='correction')=t.expected_attempts)
                END observed_tokens,
                (SELECT json_group_array(outcome) FROM
-                    (SELECT a.outcome FROM attempts a WHERE a.run=t.run AND a.task=t.id
+                    (SELECT a.outcome FROM attempts a WHERE a.run=t.run AND a.task=t.id AND a.role!='orchestrator' AND a.phase!='correction'
                      AND a.role='review' ORDER BY a.started,a.id)) review_outcomes
         FROM facts t ORDER BY t.started DESC,run,id LIMIT :limit OFFSET :offset
     """, params)
@@ -203,6 +212,8 @@ def snapshot(db, bounds, offset=0, comparison=None):
             'delivery_samples': {
                 'reviews_change': matched_change(current, previous, 'reviews', 'reviewed'),
                 'time_change': matched_change(current, previous, 'elapsed_ms', 'timed')},
+            'delivery_costs': delivery_cost_rows(db, bounds),
+            'task_cost': task_cost_coverage(db, params, tasks),
             'tasks': task_rows(db, params, tasks), 'projects': projects, 'options': filter_options(db),
             'health': diagnostics(db) | {'ci': ci_metrics(db, bounds),
                 'suggestions': [json.loads(item['payload']) | {'status': item['status']}

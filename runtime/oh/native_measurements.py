@@ -278,8 +278,13 @@ def codex_anchor(records, binding):
     return []
 
 
-def host_events(state, completed, cache, run_start):
+def host_events(directory, state, records, completed, cache):
+    from .delivery_usage import delivery_windows, worker_complete
+
+    run_start = records[0]['at']
     sources, events, missing = {}, [], 0
+    delivery = state['workflow'] == 'deliver'
+    verified_workers = set()
 
     def read(host, value):
         path = bound_path(host,value)
@@ -301,6 +306,30 @@ def host_events(state, completed, cache, run_start):
         cache.move_to_end(identity)
         return cache[identity]
 
+    phase_values = {}
+    scoped_complete = False
+    if delivery:
+        try:
+            coordinator, publication, scoped_complete = delivery_windows(directory, state, records, read)
+            phase_values = {'coordination': coordinator, 'publication': publication}
+        except SOURCE_ERRORS:
+            pass
+
+    def coordinator_event(host, phase, value, task=None):
+        attempt = digest(['native.coordinator',state['id'],host,phase])
+        events.append(event(state,'attempt.started',run_start,task=task,attempt=attempt,
+                            role='orchestrator',phase=phase,host=host,model=None))
+        source = 'native.'+phase+'.'+host
+        events.append(event(state,'usage',value['at'],task=task,attempt=attempt,source=source,
+                            **{key:v for key,v in value.items() if key not in ('at','host')}))
+
+    task = state['tasks'][0]['id'] if len(state['tasks']) == 1 and delivery else None
+    for phase, rows in phase_values.items():
+        for value in rows:
+            coordinator_event(value['host'],
+                              phase, value, task if phase == 'coordination' else None)
+    broader = {value['response_id'] for rows in phase_values.values() for value in rows}
+
     for attempt in state['attempts']:
         host = attempt.get('host')
         binding = attempt.get('native_child')
@@ -313,23 +342,25 @@ def host_events(state, completed, cache, run_start):
             first, last = (timestamp(attempt.get(key)) for key in ('started_at','finished_at'))
             if not first or not last:
                 continue
-            records, incomplete = read(host,binding['transcript_path'])
-            child = child_usage(host,records,binding)
+            history, incomplete = read(host,binding['transcript_path'])
+            child = child_usage(host,history,binding)
             scoped = [value for value in child if first <= value['at'] <= last]
             if incomplete or not scoped or any(v['input'] is None or v['output'] is None for v in scoped):
                 missing += 1
+            if delivery and scoped_complete and not incomplete and worker_complete(host,history,binding,scoped):
+                verified_workers.add(attempt['id'])
             correction = completed.get(attempt['task']) and first > completed[attempt['task']]
             for value in scoped:
                 events.append(event(state,'usage',value['at'],task=attempt['task'],attempt=attempt['id'],
                                     source='native.correction.'+host if correction else 'native.child.'+host,
                                     **{key:v for key,v in value.items() if key != 'at'}))
-            records, _ = read(host,parent.get('transcript_path'))
-            anchored = (codex_anchor if host == 'codex' else claude_anchor)(records,binding)
+            history, _ = read(host,parent.get('transcript_path'))
+            anchored = (codex_anchor if host == 'codex' else claude_anchor)(history,binding)
             phase = 'correction' if correction else 'coordination'
             task = attempt['task'] if state['workflow'] == 'deliver' and len(state['tasks']) == 1 and not correction else None
             coordinator = digest(['native.coordinator',state['id'],host,phase])
             for value in anchored:
-                if not first <= value['at'] <= last:
+                if not first <= value['at'] <= last or value['response_id'] in broader:
                     continue
                 events.append(event(state,'attempt.started',run_start,task=task,attempt=coordinator,
                                     role='orchestrator',phase=phase,host=host,model=None))
@@ -337,7 +368,20 @@ def host_events(state, completed, cache, run_start):
                                     **{key:v for key,v in value.items() if key != 'at'}))
         except SOURCE_ERRORS:
             missing += 1  # A bad source cannot suppress other attempts or journal facts.
-    return sources, events, missing
+    complete = (delivery and scoped_complete and state.get('published')
+                and len(verified_workers) == len(state['attempts']) > 0
+                and bool(state['done']) and set(state['task_started']) == set(state['done']))
+    if not complete:
+        return sources, events, missing, None
+    usage = {item['payload']['response_id'] for item in events if item['kind']=='usage'}
+    # All attributed responses must be complete. An extra anchored response
+    # outside the verified windows shows that those windows did not cover the run.
+    if any(item['kind']=='usage' and item['payload']['source'].startswith('native.anchor.') for item in events):
+        return sources, events, missing, None
+    cost = event(state,'delivery.cost',records[-1]['at'], revision=records[-1]['hash'],
+                 task_id=state['done'][0] if len(state['done']) == 1 else None,
+                 ids=sorted(usage))
+    return sources, events, missing, cost
 
 
 def apply_bundle(db, bundle):
@@ -346,7 +390,10 @@ def apply_bundle(db, bundle):
     # restart can remove a completion while the start itself was seen before.
     facts = sum(ingest(db,item,reproject=item['kind'] in ('task.started','task.finished'))
                 for item in bundle['facts'])
-    return facts + sum(ingest(db,item) for item in bundle['usage'])
+    observed = sum(ingest(db,item) for item in bundle['usage'])
+    if cost := bundle.get('cost'):
+        observed += ingest(db,cost,reproject=True)
+    return facts + observed
 
 
 def replay(home, db):
@@ -368,7 +415,7 @@ def collect(home, db, limit=JOURNAL_BATCH):
         row = db.execute('SELECT value FROM collector_state WHERE key=?',(cursor_key,)).fetchone()
         cursor = json.loads(row[0]) if row else {}
         retry_due = cursor.get('pending') and time.time() - cursor.get('checked',0) >= RETRY_SECONDS
-        if (not retry_due and signature == cursor.get('journal') and cursor.get('roots') == roots
+        if (not retry_due and signature == cursor.get('journal') and cursor.get('roots') == roots and cursor.get('delivery_cost_version') == 1
                 and all(stamp(Path(p)) == st for p,st in cursor.get('sources',{}).items())):
             continue
         if not limit:
@@ -385,7 +432,7 @@ def collect(home, db, limit=JOURNAL_BATCH):
             if (state['id'], state['project']) != (directory.name,directory.parent.parent.name):
                 raise Refused('Run journal does not match its stored identity')
             facts, completed = journal_events(state,records)
-            sources, new, missing = host_events(state,completed,cache,records[0]['at'])
+            sources, new, missing, cost = host_events(directory,state,records,completed,cache)
             pending = bool(missing)
             out = home/'native-observations'
             state_mkdir(out)
@@ -394,7 +441,11 @@ def collect(home, db, limit=JOURNAL_BATCH):
             old = {item['id']:item for item in previous['usage']}
             old.update((item['id'],item) for item in new)
             raw_usage = sorted(old.values(),key=lambda item:(item['at'],item['kind']!='attempt.started',item['id']))
-            bundle = {'facts':facts,'usage':raw_usage}
+            if not cost and (previous.get('cost') or {}).get('payload',{}).get('revision') == records[-1]['hash']:
+                cost = previous['cost']  # verified normalized evidence survives missing transcripts
+            if state['workflow'] == 'deliver' and not cost:
+                cost = event(state,'delivery.cost',records[-1]['at'],revision=records[-1]['hash'])
+            bundle = {'facts':facts,'usage':raw_usage,'cost':cost}
             if bundle != previous:
                 atomic_json(file,bundle)
             recorded = apply_bundle(db,bundle)
@@ -412,6 +463,6 @@ def collect(home, db, limit=JOURNAL_BATCH):
         finally:
             db.execute('INSERT OR REPLACE INTO collector_state VALUES(?,?)',
                        (cursor_key,json.dumps({'journal':signature,'sources':sources,'roots':roots,
-                                                       'pending':pending,'checked':time.time()})))
+                                                       'pending':pending,'checked':time.time(),'delivery_cost_version':1})))
             db.execute('RELEASE native_measurement')
     return max(0,indexed)
